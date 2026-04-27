@@ -143,10 +143,12 @@ function parseCdOffersText(text) {
       continue;
     }
 
-    // Remaining tokens between state and end = restriction state codes
+    // Remaining tokens between state and end = restriction state codes.
+    // The PDF sometimes extracts comma-separated restrictions as "OH," "TX";
+    // normalize punctuation before deciding whether a token is valid.
     const restrictionTokens = tokens.slice(rateIdx + 5);
-    const restrictions = restrictionTokens.filter(t => STATE_RE.test(t));
-    if (restrictionTokens.length !== restrictions.length) {
+    const { restrictions, unrecognized } = normalizeRestrictions(restrictionTokens);
+    if (unrecognized.length) {
       result.warnings.push(`Unrecognized tokens in restrictions: ${line}`);
     }
 
@@ -182,6 +184,27 @@ function normalizeCpnFreq(s) {
   const lower = s.toLowerCase();
   if (lower === 'semi-annually') return 'semiannually';
   return lower;
+}
+
+function normalizeRestrictions(tokens) {
+  const restrictions = [];
+  const unrecognized = [];
+  for (const token of tokens || []) {
+    const parts = String(token)
+      .split(',')
+      .map(part => part.trim().replace(/^[^A-Z]+|[^A-Z]+$/gi, '').toUpperCase())
+      .filter(Boolean);
+
+    if (!parts.length) continue;
+    for (const part of parts) {
+      if (STATE_RE.test(part)) {
+        if (!restrictions.includes(part)) restrictions.push(part);
+      } else {
+        unrecognized.push(token);
+      }
+    }
+  }
+  return { restrictions, unrecognized };
 }
 
 module.exports = { parseCdOffersText };

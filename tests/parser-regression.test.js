@@ -14,9 +14,27 @@ const { saveCdHistorySnapshot, summarizeWeeklyCdHistory } = require('../server/c
 
 const ROOT = path.join(__dirname, '..');
 const CURRENT_DIR = path.join(ROOT, 'data', 'current');
+const ARCHIVE_DIR = path.join(ROOT, 'data', 'archive');
 
 function currentFile(name) {
-  return path.join(CURRENT_DIR, name);
+  const current = path.join(CURRENT_DIR, name);
+  if (fs.existsSync(current)) return current;
+
+  const dateMatch = name.match(/(\d{4})(\d{2})(\d{2})/);
+  if (dateMatch) {
+    const archiveDate = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+    const archived = path.join(ARCHIVE_DIR, archiveDate, name);
+    if (fs.existsSync(archived)) return archived;
+  }
+
+  if (fs.existsSync(ARCHIVE_DIR)) {
+    for (const archiveDate of fs.readdirSync(ARCHIVE_DIR)) {
+      const archived = path.join(ARCHIVE_DIR, archiveDate, name);
+      if (fs.existsSync(archived)) return archived;
+    }
+  }
+
+  return current;
 }
 
 async function pdfText(filename) {
@@ -57,9 +75,17 @@ async function assertCdParser() {
     cusip: '651023KN2',
     settle: '2026-04-29',
     issuerState: 'MA',
-    restrictions: ['TX'],
+    restrictions: ['CA', 'TX'],
     couponFrequency: 'at maturity'
   });
+
+  const commaRestrictions = parseCdOffersText([
+    '4/27/2026 Daily CD Rates',
+    'TERM NAME RATE MATURITY CUSIP SETTLE STATE RESTRICTIONS CPN_FREQ',
+    '3m THIRD FED SAV&LN CLEVLND 3.90 8/10/2026 88413QKB3 5/11/2026 OH FL, OH, TX at maturity'
+  ].join('\n'));
+  assert.strictEqual(commaRestrictions.warnings.length, 0);
+  assert.deepStrictEqual(commaRestrictions.offerings[0].restrictions, ['FL', 'OH', 'TX']);
 }
 
 async function assertMuniParser() {
