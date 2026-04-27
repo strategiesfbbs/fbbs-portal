@@ -1,9 +1,11 @@
 # Uploaded documents — stored per-install, never committed
 data/current/*
 data/archive/*
+data/cd-history/*
 data/audit.log
 !data/current/.gitkeep
 !data/archive/.gitkeep
+!data/cd-history/.gitkeep
 
 # Node / IIS logs
 node_modules/

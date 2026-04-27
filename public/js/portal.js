@@ -39,7 +39,7 @@
   };
 
   const VALID_PAGES = ['home', 'dashboard', 'econ', 'cd', 'cdoffers', 'munioffers',
-                       'explorer', 'muni-explorer', 'agencies', 'corporates',
+                       'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'archive', 'upload', 'builder', 'admin'];
 
   // ============ Utilities ============
@@ -304,6 +304,7 @@
     }
 
     if (pageName === 'archive') loadArchive();
+    if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'explorer') loadOfferings();
     if (pageName === 'muni-explorer') loadMuniOfferings();
     if (pageName === 'agencies') loadAgencies();
@@ -911,6 +912,95 @@
           publish.textContent = 'Publish Dashboard';
         }
       });
+    }
+  }
+
+  // ============ Weekly CD Recap ============
+
+  async function loadCdRecap() {
+    const body = document.getElementById('cdRecapBody');
+    const stat = document.getElementById('cdRecapStat');
+    const sub = document.getElementById('cdRecapSub');
+    const kicker = document.getElementById('cdRecapKicker');
+    const grid = document.getElementById('cdRecapStatusGrid');
+    if (body) {
+      body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--text3)">Loading weekly CD recap&hellip;</td></tr>';
+    }
+    try {
+      const res = await fetch('/api/cd-recap/weekly', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const recap = await res.json();
+
+      if (stat) stat.textContent = formatNumber(recap.uniqueCusips || 0);
+      if (sub) {
+        sub.textContent = `${formatShortDate(recap.weekStart)} through ${formatShortDate(recap.weekEnd)} · ${formatNumber(recap.snapshotCount)} daily snapshot${recap.snapshotCount === 1 ? '' : 's'}`;
+      }
+      if (kicker) {
+        kicker.textContent = `${formatNumber(recap.duplicateRowsRemoved || 0)} duplicate CUSIP row${recap.duplicateRowsRemoved === 1 ? '' : 's'} removed`;
+      }
+      if (grid) {
+        const snapshotDates = Array.isArray(recap.snapshotDates) && recap.snapshotDates.length
+          ? recap.snapshotDates.map(formatShortDate).join(', ')
+          : 'No snapshots yet';
+        const tiles = [
+          { label: 'Week Range', value: `${formatShortDate(recap.weekStart)} - ${formatShortDate(recap.weekEnd)}` },
+          { label: 'Daily Snapshots', value: formatNumber(recap.snapshotCount || 0) },
+          { label: 'Raw Rows', value: formatNumber(recap.rawRows || 0) },
+          { label: 'Unique CUSIPs', value: formatNumber(recap.uniqueCusips || 0) },
+          { label: 'Recap Terms', value: formatNumber(recap.recapTermUniqueCusips || 0) },
+          { label: 'Snapshot Dates', value: snapshotDates }
+        ];
+        grid.innerHTML = tiles.map(t => `
+          <div class="stat-tile">
+            <span>${escapeHtml(t.label)}</span>
+            <strong>${escapeHtml(String(t.value))}</strong>
+          </div>
+        `).join('');
+      }
+      renderCdRecapTable(recap);
+    } catch (err) {
+      console.error('Failed to load weekly CD recap:', err);
+      if (body) {
+        body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--danger)">
+          Failed to load weekly CD recap: ${escapeHtml(err.message)}
+        </td></tr>`;
+      }
+      showToast('Could not load weekly CD recap: ' + err.message, true);
+    }
+  }
+
+  function renderCdRecapTable(recap) {
+    const body = document.getElementById('cdRecapBody');
+    if (!body) return;
+    const terms = Array.isArray(recap.terms) ? recap.terms : [];
+    if (!terms.length || !recap.snapshotCount) {
+      body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--text3)">
+        Upload Daily CD Offers PDFs to build a weekly recap history.
+      </td></tr>`;
+      return;
+    }
+    body.innerHTML = terms.map(t => {
+      const top = Array.isArray(t.top) && t.top.length
+        ? t.top.map(o => `${escapeHtml(o.name || 'Issuer')} ${formatPercentTile(o.rate, 2)} ${escapeHtml(o.cusip || '')}`).join('<br>')
+        : '<span style="color:var(--text3)">No issues</span>';
+      return `
+        <tr>
+          <td><strong>${escapeHtml(t.label || t.term)}</strong></td>
+          <td style="text-align:right">${formatNumber(t.uniqueCusips || 0)}</td>
+          <td style="text-align:right">${t.issueShare == null ? '—' : (t.issueShare * 100).toFixed(0) + '%'}</td>
+          <td class="rate-cell" style="text-align:right">${formatPercentTile(t.medianRate, 2)}</td>
+          <td style="text-align:right">${formatPercentTile(t.minRate, 2)}</td>
+          <td style="text-align:right">${formatPercentTile(t.maxRate, 2)}</td>
+          <td>${top}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function setupCdRecap() {
+    const refresh = document.getElementById('refreshCdRecapBtn');
+    if (refresh) {
+      refresh.addEventListener('click', () => loadCdRecap());
     }
   }
 
@@ -2142,6 +2232,7 @@
     setupUpload();
     setupGlobalSearch();
     setupDashboardBuilder();
+    setupCdRecap();
     setupOfferingsFilters();
     setupMuniFilters();
     setupAgencyFilters();

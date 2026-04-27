@@ -31,6 +31,11 @@ const { parseMuniOffersText } = require('./muni-offers-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
 const { parseCorporatesFiles } = require('./corporates-parser');
 const { generateDashboard, TEMPLATE_PATH } = require('./dashboard-generator');
+const {
+  ensureCdHistoryDir,
+  saveCdHistorySnapshot,
+  summarizeWeeklyCdHistory
+} = require('./cd-history');
 
 // ---------- Config ----------
 
@@ -43,6 +48,7 @@ const DATA_DIR = process.env.DATA_DIR
   : path.join(ROOT, 'data');
 const CURRENT_DIR = path.join(DATA_DIR, 'current');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
+const CD_HISTORY_DIR = path.join(DATA_DIR, 'cd-history');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
 
@@ -61,12 +67,13 @@ function log(level, ...args) {
 
 // ---------- Setup ----------
 
-[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR].forEach(dir => {
+[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, CD_HISTORY_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('info', 'Created data directory:', dir);
   }
 });
+ensureCdHistoryDir(CD_HISTORY_DIR);
 
 // ---------- Constants ----------
 
@@ -455,6 +462,24 @@ function loadCurrentOfferings() {
   }
 }
 
+function seedCdHistoryFromCurrentPackage() {
+  const current = loadCurrentOfferings();
+  if (!current || !current.asOfDate || !Array.isArray(current.offerings)) return;
+  const target = path.join(CD_HISTORY_DIR, `${current.asOfDate}.json`);
+  if (fs.existsSync(target)) return;
+  try {
+    saveCdHistorySnapshot(CD_HISTORY_DIR, current, {
+      uploadedAt: current.extractedAt || new Date().toISOString(),
+      uploadDate: current.asOfDate
+    });
+    log('info', `Seeded CD history from current package for ${current.asOfDate}`);
+  } catch (err) {
+    log('warn', 'Could not seed CD history from current package:', err.message);
+  }
+}
+
+seedCdHistoryFromCurrentPackage();
+
 function loadArchivedOfferings(date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const offPath = path.join(ARCHIVE_DIR, date, OFFERINGS_FILENAME);
@@ -791,6 +816,7 @@ async function handleUpload(req, res) {
   let offeringsCount = null;
   let offeringsWarnings = [];
   let offeringsAsOfDate = null;
+  let cdHistorySnapshot = null;
   const cdOffersFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'cdoffers');
   if (cdOffersFile) {
     const extracted = await extractOfferings(cdOffersFile.data);
@@ -810,6 +836,10 @@ async function handleUpload(req, res) {
           path.join(CURRENT_DIR, OFFERINGS_FILENAME),
           JSON.stringify(offPayload, null, 2)
         );
+        cdHistorySnapshot = saveCdHistorySnapshot(CD_HISTORY_DIR, offPayload, {
+          uploadedAt: offPayload.extractedAt,
+          uploadDate: todayStamp()
+        });
         log('info', `Extracted ${offeringsCount} offerings from CD Offers PDF`);
       } catch (err) {
         log('error', 'Failed to write offerings JSON:', err.message);
@@ -989,6 +1019,7 @@ async function handleUpload(req, res) {
     publishedBy: meta.publishedBy,
     files: saved.map(s => ({ type: s.type, filename: s.filename, size: s.size })),
     offeringsCount,
+    cdHistorySnapshot,
     muniOfferingsCount,
     agencyCount,
     agencyFileDate,
@@ -1010,6 +1041,7 @@ async function handleUpload(req, res) {
     meta,
     offeringsCount,
     offeringsWarnings,
+    cdHistorySnapshot,
     muniOfferingsCount,
     muniOfferingsWarnings,
     agencyCount,
@@ -1064,6 +1096,11 @@ const server = http.createServer(async (req, res) => {
         });
       }
       return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/cd-recap/weekly' && req.method === 'GET') {
+      const anchorDate = typeof parsed.query.anchorDate === 'string' ? parsed.query.anchorDate : null;
+      return sendJSON(res, 200, summarizeWeeklyCdHistory(CD_HISTORY_DIR, { anchorDate }));
     }
 
     if (pathname === '/api/muni-offerings' && req.method === 'GET') {

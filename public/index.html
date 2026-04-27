@@ -45,6 +45,10 @@
         <span class="nav-icon">&#9632;</span>
         <span class="nav-label">CD Offerings</span>
       </a>
+      <a class="nav-link" data-page="cd-recap" href="#cd-recap">
+        <span class="nav-icon">&#9632;</span>
+        <span class="nav-label">Weekly CD Recap</span>
+      </a>
       <a class="nav-link" data-page="munioffers" href="#munioffers">
         <span class="nav-icon">&#9632;</span>
         <span class="nav-label">Muni Offerings</span>
@@ -681,6 +685,64 @@
       <div id="builderChecks" class="check-list">
         <div class="global-empty">Generate a draft to run preflight checks.</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== WEEKLY CD RECAP PAGE ========== -->
+<div class="page" id="p-cd-recap">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Weekly CD <strong>Recap</strong></h2>
+        <p class="hero-sub" id="cdRecapSub">Loading weekly CD issuance summary&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="cdRecapStat">&mdash;</div>
+        <div class="lbl">Unique CUSIPs</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Unique Issuance Summary</h3>
+      <div class="kicker" id="cdRecapKicker">&mdash;</div>
+    </div>
+
+    <div class="builder-panel cd-recap-panel">
+      <div class="builder-copy">
+        <h3>Recap Method</h3>
+        <p>Daily CD Offers uploads are retained as dated snapshots. The weekly recap combines the week&rsquo;s uploads, removes duplicate CUSIPs, then calculates issue counts and median coupons by term.</p>
+      </div>
+      <div class="builder-actions">
+        <button type="button" class="doc-btn" id="refreshCdRecapBtn">Refresh Summary</button>
+      </div>
+    </div>
+
+    <div class="builder-status-grid" id="cdRecapStatusGrid"></div>
+
+    <div class="section-title-bar compact-title">
+      <h3>Median Coupon &amp; Issue Count</h3>
+      <div class="kicker">Deduped by CUSIP</div>
+    </div>
+    <div class="explorer-table-wrap">
+      <table class="explorer-table">
+        <thead>
+          <tr>
+            <th>Term</th>
+            <th style="text-align:right">Unique CUSIPs</th>
+            <th style="text-align:right">Share</th>
+            <th style="text-align:right">Median Rate</th>
+            <th style="text-align:right">Low</th>
+            <th style="text-align:right">High</th>
+            <th>Top Issues</th>
+          </tr>
+        </thead>
+        <tbody id="cdRecapBody">
+          <tr><td colspan="7" style="text-align:center;padding:36px;color:var(--text3)">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </div>
