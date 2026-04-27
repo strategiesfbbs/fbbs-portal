@@ -1,0 +1,16 @@
+# Uploaded documents — stored per-install, never committed
+data/current/*
+data/archive/*
+data/audit.log
+!data/current/.gitkeep
+!data/archive/.gitkeep
+
+# Node / IIS logs
+node_modules/
+iisnode/
+*.log
+npm-debug.log*
+
+# OS junk
+.DS_Store
+Thumbs.db

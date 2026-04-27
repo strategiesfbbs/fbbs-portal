@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FBBS Market Intelligence Dashboard — {{DATE}}</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    /* FBBS Brand Palette */
+    --racing-green: #00402B;
+    --hookers-green: #436F59;
+    --tea-green: #C4D79B;
+    --ash-gray: #AEC3B0;
+    --battleship-gray: #9B9B99;
+    /* UI mappings */
+    --bg: #ffffff;
+    --bg2: #f5f5f3;
+    --bg3: #ebebea;
+    --text: #1a1a18;
+    --text2: #6b6b67;
+    --text3: #9b9b97;
+    --border: rgba(0,0,0,0.12);
+    --border2: rgba(0,0,0,0.22);
+    --green: #436F59;
+    --green-bg: #C4D79B33;
+    --green-text: #00402B;
+    --blue: #4A7FC1;
+    --blue-bg: #E6F1FB;
+    --blue-text: #0C447C;
+    --amber-bg: #FAEEDA;
+    --amber-text: #633806;
+    --red-bg: #FCEBEB;
+    --red-text: #791F1F;
+    --info-border: #185FA5;
+    --success-text: #27500A;
+    --danger-text: #791F1F;
+    --radius: 8px;
+    --radius-lg: 12px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: #f0efed;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+    padding: 24px 16px 48px;
+  }
+
+  .page { max-width: 1080px; margin: 0 auto; }
+
+  /* Header */
+  .header {
+    background: var(--racing-green);
+    border-radius: var(--radius-lg);
+    padding: 20px 28px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .header-left h1 { font-size: 20px; font-weight: 600; color: #ffffff; }
+  .header-left p { font-size: 12px; color: rgba(255,255,255,0.6); margin-top: 3px; }
+  .header-right { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .live-badge {
+    background: rgba(46,158,107,0.25);
+    color: #9FE1CB;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(46,158,107,0.4);
+    letter-spacing: 0.5px;
+  }
+  .inst-badge {
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.6);
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+
+  /* KPI grid */
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 10px; }
+  .kpi {
+    background: var(--bg);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    border: 0.5px solid var(--border);
+  }
+  .kpi .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.4px; }
+  .kpi .val { font-size: 24px; font-weight: 600; }
+  .kpi .sub { font-size: 11px; color: var(--text3); margin-top: 3px; }
+  .kpi.up .val { color: var(--green); }
+  .kpi.dn .val { color: #A32D2D; }
+  .kpi.neutral .val { color: var(--text); }
+
+  /* Tabs */
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 0;
+    border-bottom: 1.5px solid var(--border);
+    margin-top: 20px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    appearance: none;
+    -webkit-appearance: none;
+    border: none;
+    outline: none;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 18px;
+    cursor: pointer;
+    color: var(--text2);
+    border-radius: 8px 8px 0 0;
+    border: 0.5px solid transparent;
+    border-bottom: none;
+    position: relative;
+    bottom: -1.5px;
+    background: transparent;
+    transition: background 0.15s;
+  }
+  .tab:hover:not(.active) { background: var(--bg3); color: var(--text); }
+  .tab.active {
+    color: var(--text);
+    background: var(--bg);
+    border-color: var(--border);
+    border-bottom-color: var(--bg);
+  }
+
+  .panel { display: none; background: var(--bg); border: 0.5px solid var(--border); border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg); padding: 24px; }
+  .panel.active { display: block; }
+
+  /* Cards */
+  .card {
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 16px 20px;
+    margin-bottom: 14px;
+  }
+  .card-flush { background: var(--bg); border: 0.5px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 14px; overflow: hidden; }
+
+  .strat-card { border: 0.5px solid var(--border); border-radius: var(--radius-lg); margin-bottom: 12px; background: var(--bg); overflow: hidden; }
+  .strat-card.featured { border: 2px solid var(--info-border); }
+  .card-header { padding: 14px 18px 12px; border-bottom: 0.5px solid rgba(0,0,0,0.08); }
+  .card-header-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .strat-title { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.4; }
+  .featured-badge { background: var(--blue-bg); color: var(--blue-text); font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 20px; white-space: nowrap; flex-shrink: 0; }
+  .buyer-row { display: flex; gap: 5px; flex-wrap: wrap; }
+  .card-body { padding: 12px 18px 14px; }
+  .card-body p { font-size: 13px; color: var(--text2); line-height: 1.65; margin-bottom: 12px; }
+  .detail-row { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 10px; border-top: 0.5px solid rgba(0,0,0,0.07); }
+  .detail-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--bg2); border: 0.5px solid rgba(0,0,0,0.1); border-radius: 6px; padding: 4px 9px; font-size: 11px; }
+  .detail-chip .dc-label { color: var(--text3); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
+  .detail-chip .dc-val { font-weight: 600; color: var(--text); }
+  .detail-chip.dc-highlight { background: #E1F5EE; border-color: rgba(15,110,86,0.2); }
+  .detail-chip.dc-highlight .dc-label { color: #0F6E56; }
+  .detail-chip.dc-highlight .dc-val { color: #085041; }
+  .detail-chip.dc-warn { background: var(--red-bg); border-color: rgba(163,45,45,0.15); }
+  .detail-chip.dc-warn .dc-label { color: #A32D2D; }
+  .detail-chip.dc-warn .dc-val { color: var(--red-text); }
+  .cusip-row { font-size: 11px; color: var(--text3); margin-top: 8px; line-height: 1.6; }
+  .cusip-row span { color: var(--text2); }
+  .legend-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--bg2); border: 0.5px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; font-size: 12px; color: var(--text2); }
+  .legend-bar .lbl { font-weight: 600; color: var(--text); margin-right: 4px; }
+  .legend-bar .sep { color: rgba(0,0,0,0.2); margin: 0 2px; }
+  .strat-body { font-size: 13px; color: var(--text2); line-height: 1.65; }
+
+  .section-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Pills */
+  .pill { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 20px; margin-right: 4px; margin-bottom: 4px; font-weight: 500; }
+  .pill-blue { background: var(--blue-bg); color: var(--blue-text); }
+  .pill-green { background: var(--green-bg); color: var(--green-text); }
+  .pill-amber { background: var(--amber-bg); color: var(--amber-text); }
+  .pill-red { background: var(--red-bg); color: var(--red-text); }
+  .pill-gray { background: var(--bg3); color: var(--text2); }
+
+  /* Buyer badges */
+  .buyer-badge { display: inline-block; font-size: 11px; padding: 2px 9px; border-radius: 12px; font-weight: 600; margin-right: 4px; }
+  .tag-scorp { background: #EEEDFE; color: #3C3489; }
+  .tag-ccorp { background: #E1F5EE; color: #085041; }
+  .tag-ria { background: #FAEEDA; color: #633806; }
+
+  /* Highlight box */
+  .highlight-box {
+    background: var(--blue-bg);
+    border: 0.5px solid rgba(24,95,165,0.25);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .highlight-box .hl-label { font-size: 11px; color: var(--blue-text); font-weight: 700; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .highlight-box .hl-val { font-size: 14px; font-weight: 600; color: var(--text); }
+  .highlight-box .hl-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+  .warn-box {
+    background: var(--red-bg);
+    border: 0.5px solid rgba(163,45,45,0.2);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    color: var(--red-text);
+  }
+
+  /* Tables */
+  .bond-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .bond-table th { text-align: left; padding: 8px 10px; font-weight: 600; font-size: 11px; color: var(--text2); border-bottom: 1px solid var(--border); white-space: nowrap; background: var(--bg2); text-transform: uppercase; letter-spacing: 0.3px; }
+  .bond-table td { padding: 7px 10px; border-bottom: 0.5px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  .bond-table tr:last-child td { border-bottom: none; }
+  .bond-table tbody tr:hover td { background: var(--bg2); }
+  .ytw { font-weight: 700; color: var(--green); }
+  .spd-pos { color: var(--success-text); font-weight: 600; }
+  .spd-neg { color: var(--danger-text); font-weight: 600; }
+
+  /* Two col */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+
+  /* CD cells */
+  .cd-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
+  .cd-cell { border: 0.5px solid var(--border); border-radius: var(--radius); padding: 12px; text-align: center; background: var(--bg); }
+  .cd-cell.best { border: 2px solid var(--green); background: var(--green-bg); }
+  .cd-cell .cd-term { font-size: 11px; color: var(--text2); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; }
+  .cd-cell.best .cd-term { color: var(--green-text); }
+  .cd-cell .cd-rate { font-size: 20px; font-weight: 700; color: var(--text); }
+  .cd-cell.best .cd-rate { color: var(--green); }
+  .cd-cell .cd-vs { font-size: 11px; margin-top: 3px; color: var(--success-text); font-weight: 600; }
+
+  /* Sector filter */
+  .filter-row { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; align-items: center; }
+  .filter-label { font-size: 12px; color: var(--text2); font-weight: 500; }
+  .filter-btn {
+    font-size: 12px; padding: 4px 14px; border-radius: 20px; cursor: pointer;
+    border: 0.5px solid var(--border2); background: var(--bg); color: var(--text2);
+    font-family: inherit; transition: all 0.1s;
+  }
+  .filter-btn:hover { background: var(--bg3); }
+  .filter-btn.active { background: var(--blue-bg); color: var(--blue-text); border-color: rgba(24,95,165,0.3); font-weight: 600; }
+
+  /* Sector badge */
+  .sector-badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; background: var(--bg3); color: var(--text2); font-weight: 500; }
+
+  /* MMD grid */
+  .mmd-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .mmd-cell { background: var(--bg2); border-radius: var(--radius); padding: 12px 14px; }
+  .mmd-cell .mc-label { font-size: 11px; color: var(--text2); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; }
+  .mmd-cell .mc-val { font-size: 22px; font-weight: 700; }
+  .mmd-cell .mc-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
+  /* Chart */
+  .chart-wrap { position: relative; width: 100%; height: 240px; margin-bottom: 12px; }
+
+  /* Context strip */
+  .context-strip {
+    background: var(--bg2);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    font-size: 13px;
+    color: var(--text2);
+    line-height: 1.65;
+    margin-bottom: 16px;
+  }
+
+  /* RV comparison grid */
+  .rv-spread-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 16px; }
+  .rv-cell { background: var(--bg2); border-radius: var(--radius); padding: 10px; text-align: center; }
+  .rv-cell .rv-term { font-size: 11px; color: var(--text2); margin-bottom: 3px; }
+  .rv-cell .rv-val { font-size: 15px; font-weight: 700; }
+  .rv-cell .rv-spd { font-size: 11px; margin-top: 2px; font-weight: 600; }
+
+  /* Footer */
+  .footer {
+    margin-top: 28px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text3);
+    line-height: 1.6;
+    padding: 0 20px;
+  }
+
+  @media (max-width: 700px) {
+    .kpi-grid { grid-template-columns: 1fr 1fr; }
+    .two-col { grid-template-columns: 1fr; }
+    .cd-grid { grid-template-columns: repeat(3, 1fr); }
+    .mmd-grid { grid-template-columns: 1fr 1fr; }
+    .rv-spread-grid { grid-template-columns: repeat(3, 1fr); }
+    .fit-matrix, .inventory-strip { grid-template-columns: 1fr; }
+    .tab { font-size: 12px; padding: 6px 12px; }
+    .panel { padding: 16px; }
+  }
+
+  /* ===== SALES TOOLS — Audience/TEY/Search bar ===== */
+  .sales-bar {
+    background: var(--racing-green);
+    border-radius: var(--radius);
+    padding: 10px 18px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+  .sales-bar label { font-size: 11px; font-weight: 700; color: rgba(255,255,255,0.65); text-transform: uppercase; letter-spacing: 0.4px; display: block; margin-bottom: 3px; }
+  .sales-bar select, .sales-bar input[type="text"] {
+    background: rgba(255,255,255,0.12); color: #fff; border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 6px; padding: 5px 10px; font-size: 12px; font-family: inherit;
+    min-width: 160px;
+  }
+  .sales-bar select option { background: #00402B; color: #fff; }
+  .sales-bar input[type="range"] { accent-color: #C4D79B; width: 110px; cursor: pointer; }
+  .sales-bar .tey-display { font-size: 14px; font-weight: 700; color: #C4D79B; min-width: 34px; }
+  .sales-bar input[type="text"] { width: 100%; }
+  .sales-bar input[type="text"]::placeholder { color: rgba(255,255,255,0.4); }
+  .sales-bar .sb-sep { width: 1px; height: 28px; background: rgba(255,255,255,0.2); }
+
+  /* Sticky table headers */
+  .scroll-table { max-height: 480px; overflow-y: auto; border-radius: var(--radius); }
+  .scroll-table table { width: 100%; }
+  .scroll-table thead th { position: sticky; top: 0; z-index: 2; background: var(--bg2) !important; box-shadow: 0 1px 0 var(--border); }
+
+  /* TEY highlight column */
+  .tey-col { color: #0F6E56; font-weight: 700; }
+  .tey-col.beats { background: #E1F5EE; }
+
+  /* Top picks cards on Strategies overview */
+  .picks-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+  .pick-card { border-left: 4px solid var(--racing-green); background: #fafafa; border-radius: 0 var(--radius) var(--radius) 0; padding: 10px 14px; cursor: pointer; transition: background 0.15s; }
+  .pick-card:hover { background: #f0f8f4; }
+  .pick-card .pc-type { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--hookers-green); margin-bottom: 3px; }
+  .pick-card .pc-title { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.35; margin-bottom: 4px; }
+  .pick-card .pc-why { font-size: 11px; color: var(--text2); line-height: 1.5; }
+  .pick-card .pc-yield { font-size: 14px; font-weight: 700; color: var(--green); }
+
+
+
+  /* Audience fit matrix */
+  .fit-matrix { display:grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 0 0 18px; }
+  .fit-card { background: linear-gradient(180deg, #ffffff 0%, #f8faf8 100%); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; box-shadow: 0 8px 20px rgba(0,0,0,0.04); }
+  .fit-card.ccorp { border-top: 4px solid var(--racing-green); }
+  .fit-card.scorp { border-top: 4px solid var(--hookers-green); }
+  .fit-card.ria { border-top: 4px solid #9C7A18; }
+  .fit-top { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 8px; }
+  .fit-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .fit-kicker { font-size: 10px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text3); }
+  .fit-chip { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 4px 10px; }
+  .fit-card.ccorp .fit-chip { background:#E1F5EE; color:#085041; }
+  .fit-card.scorp .fit-chip { background:#EEF6EF; color:#2D5C48; }
+  .fit-card.ria .fit-chip { background:#FAEEDA; color:#633806; }
+  .fit-blurb { font-size: 12px; color: var(--text2); line-height: 1.6; margin-bottom: 12px; }
+  .fit-list { display:grid; gap:8px; margin-bottom: 12px; }
+  .fit-idea { background: var(--bg2); border-radius: 10px; padding: 9px 10px; border: 1px solid rgba(0,0,0,0.05); }
+  .fit-idea strong { display:block; font-size:12px; color:var(--text); margin-bottom: 2px; }
+  .fit-idea span { font-size:11px; color: var(--text2); line-height: 1.45; }
+  .fit-actions { display:flex; gap:8px; flex-wrap:wrap; }
+  .fit-btn { appearance:none; border:none; background: var(--racing-green); color:#fff; padding:8px 12px; border-radius:8px; font-size:12px; font-weight:600; cursor:pointer; }
+  .fit-btn.alt { background: var(--bg3); color: var(--text); }
+  .inventory-strip { display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; margin: 0 0 18px; }
+  .inventory-card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+  .inventory-card .small { font-size:10px; letter-spacing:0.45px; text-transform:uppercase; color:var(--text3); font-weight:700; margin-bottom:5px; }
+  .inventory-card .big { font-size:20px; font-weight:700; color:var(--text); }
+  .inventory-card .note { font-size:11px; color:var(--text2); margin-top:3px; line-height:1.45; }
+
+  /* Search highlight */
+  mark { background: #FAEEDA; color: #633806; padding: 0 2px; border-radius: 2px; }
+
+  /* Corp table search-filtered rows */
+  .row-hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-left" style="display:flex;align-items:center;gap:18px;">
+      <img src="data:image/png;base64,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" alt="FBBS" style="height:54px;width:auto;">
+      <div>
+        <div style="font-size:17px;font-weight:600;color:#fff;letter-spacing:0.2px;">Market Intelligence Dashboard</div>
+        <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-top:2px;">First Bankers&#39; Banc Securities, Inc. &nbsp;·&nbsp; {{DATE}} &nbsp;·&nbsp; Morning Edition &nbsp;·&nbsp; Updated with live inventory</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="live-badge">● LIVE OFFERINGS</span>
+      <span class="inst-badge" id="muniBadge">{{MUNI_COUNT}} Munis</span>
+      <span class="inst-badge">{{AGENCY_COUNT}} Agencies</span>
+      <span class="inst-badge">{{CORP_COUNT}} Corp Ideas</span>
+      <span class="inst-badge">{{STRUCTURED_COUNT}} Structured</span>
+      <span class="inst-badge">For Institutional Use Only</span>
+    </div>
+  </div>
+
+  <!-- KPI ROWS -->
+  <div class="kpi-grid">
+    <div class="kpi {{UST_2Y_DIR}}"><div class="label">2-Yr Treasury</div><div class="val">{{UST_2Y}}</div><div class="sub">{{UST_2Y_SUB}}</div></div>
+    <div class="kpi {{UST_5Y_DIR}}"><div class="label">5-Yr Treasury</div><div class="val">{{UST_5Y}}</div><div class="sub">{{UST_5Y_SUB}}</div></div>
+    <div class="kpi {{UST_10Y_DIR}}"><div class="label">10-Yr Treasury</div><div class="val">{{UST_10Y}}</div><div class="sub">{{UST_10Y_SUB}}</div></div>
+    <div class="kpi {{FED_DIR}}"><div class="label">Fed Funds Effective</div><div class="val">{{FED_EFF}}</div><div class="sub">{{FED_SUB}}</div></div>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi {{DJIA_DIR}}"><div class="label">DJIA</div><div class="val">{{DJIA}}</div><div class="sub">{{DJIA_SUB}}</div></div>
+    <div class="kpi {{SP500_DIR}}"><div class="label">S&amp;P 500</div><div class="val">{{SP500}}</div><div class="sub">{{SP500_SUB}}</div></div>
+    <div class="kpi {{VIX_DIR}}"><div class="label">VIX</div><div class="val">{{VIX}}</div><div class="sub">{{VIX_SUB}}</div></div>
+    <div class="kpi {{WTI_DIR}}"><div class="label">Crude Oil (WTI)</div><div class="val">{{WTI}}</div><div class="sub">{{WTI_SUB}}</div></div>
+  </div>
+
+
+  <!-- SALES TOOLS BAR -->
+  <div class="sales-bar">
+    <div>
+      <label>Audience</label>
+      <select id="audienceSelect" onchange="onAudienceChange()">
+        <option value="scorp">S-Corp Bank</option>
+        <option value="ccorp" selected>C-Corp Bank</option>
+        <option value="ria">RIA / Money Manager</option>
+      </select>
+    </div>
+    <div class="sb-sep"></div>
+    <div>
+      <label>Tax Rate for TEY</label>
+      <div style="display:flex;gap:4px;margin-top:2px;">
+        <button class="tey-btn" data-rate="21" onclick="setTaxRate(21,this)" style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.15);color:#fff;font-size:11px;font-weight:600;cursor:pointer;">21%</button>
+        <button class="tey-btn" data-rate="25" onclick="setTaxRate(25,this)" style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.7);font-size:11px;font-weight:600;cursor:pointer;">25%</button>
+        <button class="tey-btn" data-rate="29.6" onclick="setTaxRate(29.6,this)" style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.7);font-size:11px;font-weight:600;cursor:pointer;">29.6%</button>
+        <button class="tey-btn" data-rate="35" onclick="setTaxRate(35,this)" style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.7);font-size:11px;font-weight:600;cursor:pointer;">35%</button>
+      </div>
+    </div>
+    <div style="font-size:11px;color:rgba(255,255,255,0.55);line-height:1.4;">Active rate: <strong id="taxRateDisplay" style="color:#C4D79B;font-size:13px;">21%</strong><br>TEY = YTW / (1 − tax rate). <em>Excludes TEFRA haircut &amp; disallowance.</em></div>
+    <input type="hidden" id="taxRateSlider" value="21">
+
+  </div>
+
+
+
+  <div class="fit-matrix">
+    <div class="fit-card ccorp">
+      <div class="fit-top">
+        <div>
+          <div class="fit-kicker">Best fit today</div>
+          <div class="fit-title">C-Corp Banks</div>
+        </div>
+        <span class="fit-chip">21% TEY view</span>
+      </div>
+      <div class="fit-blurb">{{CCORP_BLURB}}</div>
+      <div class="fit-list">
+        <div class="fit-idea"><strong>{{CCORP_IDEA1_TITLE}}</strong><span>{{CCORP_IDEA1_NOTE}}</span></div>
+        <div class="fit-idea"><strong>{{CCORP_IDEA2_TITLE}}</strong><span>{{CCORP_IDEA2_NOTE}}</span></div>
+        <div class="fit-idea"><strong>{{CCORP_IDEA3_TITLE}}</strong><span>{{CCORP_IDEA3_NOTE}}</span></div>
+      </div>
+      <div class="fit-actions">
+        <button class="fit-btn" onclick="chooseAudience('ccorp','strategies')">Set C-Corp view</button>
+        <button class="fit-btn alt" onclick="jumpToTab('agencies')">Open agencies</button>
+      </div>
+    </div>
+    <div class="fit-card scorp">
+      <div class="fit-top">
+        <div>
+          <div class="fit-kicker">Best fit today</div>
+          <div class="fit-title">S-Corp Banks</div>
+        </div>
+        <span class="fit-chip">29.6% TEY view</span>
+      </div>
+      <div class="fit-blurb">{{SCORP_BLURB}}</div>
+      <div class="fit-list">
+        <div class="fit-idea"><strong>{{SCORP_IDEA1_TITLE}}</strong><span>{{SCORP_IDEA1_NOTE}}</span></div>
+        <div class="fit-idea"><strong>{{SCORP_IDEA2_TITLE}}</strong><span>{{SCORP_IDEA2_NOTE}}</span></div>
+        <div class="fit-idea"><strong>{{SCORP_IDEA3_TITLE}}</strong><span>{{SCORP_IDEA3_NOTE}}</span></div>
+      </div>
+      <div class="fit-actions">
+        <button class="fit-btn" onclick="chooseAudience('scorp','strategies')">Set S-Corp view</button>
+        <button class="fit-btn alt" onclick="jumpToTab('munis')">Open munis</button>
+      </div>
+    </div>
+    <div class="fit-card ria">
+      <div class="fit-top">
+        <div>
+          <div class="fit-kicker">Best fit today</div>
+          <div class="fit-title">RIAs / Money Managers</div>
+        </div>
+        <span class="fit-chip">Taxable yield focus</span>
+      </div>
+      <div class="fit-blurb">{{RIA_BLURB}}</div>
+      <div class="fit-list">
+        <div class="fit-idea"><strong>{{RIA_IDEA1_TITLE}}</strong><span>{{RIA_IDEA1_NOTE}}</span></div>
+        <div class="fit-idea"><strong>{{RIA_IDEA2_TITLE}}</strong><span>{{RIA_IDEA2_NOTE}}</span></div>
+        <div class="fit-idea"><strong>{{RIA_IDEA3_TITLE}}</strong><span>{{RIA_IDEA3_NOTE}}</span></div>
+      </div>
+      <div class="fit-actions">
+        <button class="fit-btn" onclick="chooseAudience('ria','strategies')">Set RIA view</button>
+        <button class="fit-btn alt" onclick="jumpToTab('corps')">Open corporates</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="inventory-strip">
+    <div class="inventory-card"><div class="small">Tax-exempt muni inventory</div><div class="big"><span id="muniInvCount">{{MUNI_INV_COUNT}}</span> line items</div><div class="note">{{MUNI_INV_NOTE}}</div></div>
+    <div class="inventory-card"><div class="small">Agency shelf</div><div class="big">{{AGENCY_SHELF_COUNT}} highlighted structures</div><div class="note">{{AGENCY_SHELF_NOTE}}</div></div>
+    <div class="inventory-card"><div class="small">Taxable ideas</div><div class="big">{{CORP_IDEAS_COUNT}} corp selections</div><div class="note">{{CORP_IDEAS_NOTE}}</div></div>
+    <div class="inventory-card"><div class="small">FDIC CD curve</div><div class="big">{{CD_CURVE_COUNT}} curve points</div><div class="note">{{CD_CURVE_NOTE}}</div></div>
+  </div>
+
+  <!-- TABS -->
+  <div class="tab-bar">
+    <button type="button" class="tab active" data-tab="strategies">📋 Strategies</button>
+    <button type="button" class="tab" data-tab="relval">📊 Relative Value</button>
+    <button type="button" class="tab" data-tab="munis">🏛 Municipals</button>
+    <button type="button" class="tab" data-tab="agencies">🏦 Agencies</button>
+    <button type="button" class="tab" data-tab="cds">💵 CDs</button>
+    <button type="button" class="tab" data-tab="corps">🏢 Corporates</button>
+    <button type="button" class="tab" data-tab="brokeredcds">🏦 Brokered CDs</button>
+    <button type="button" class="tab" data-tab="mbscmo">📐 MBS / CMO</button>
+  </div>
+
+  <!-- ========== STRATEGIES ========== -->
+  <div id="panel-strategies" class="panel active">
+    <div class="context-strip">
+      <strong>Market Context {{DATE}}:</strong> {{STRATEGIES_CONTEXT_NARRATIVE}}
+    </div>
+
+    <div class="legend-bar">
+      <span class="lbl">Best suited for:</span>
+      <span class="buyer-badge tag-scorp">S-Corp Bank</span>
+      <span class="sep">·</span>
+      <span class="buyer-badge tag-ccorp">C-Corp Bank</span>
+      <span class="sep">·</span>
+      <span class="buyer-badge tag-ria">RIA / Money Manager</span>
+      <span style="margin-left:6px;font-size:11px;">— shown on each strategy below</span>
+    </div>
+
+
+    <!-- ===== TOP PICKS — live audience-aware ===== -->
+    <div id="topPicksSection" style="margin-bottom:18px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div class="section-title" style="margin:0;">Today's Top Picks — <span id="audienceLabel" style="color:var(--racing-green);">C-Corp Bank</span></div>
+        <div style="font-size:11px;color:var(--text3);">Updates with audience selector above</div>
+      </div>
+      <div class="picks-grid" id="topPicksGrid">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!--
+      STRATEGY CARDS — 5 to 6 cards rebuilt fresh daily.
+      First card has class="strat-card featured" + ★ Strategy of the Day badge.
+      Each card structure:
+        <div class="strat-card [featured]">
+          <div class="card-header">
+            <div class="card-header-top">
+              <div class="strat-title">{title}</div>
+              [<span class="featured-badge">★ Strategy of the Day</span>]
+            </div>
+            <div class="buyer-row">
+              <span class="buyer-badge tag-scorp">S-Corp Bank</span>  (use only applicable badges)
+              <span class="buyer-badge tag-ccorp">C-Corp Bank</span>
+              <span class="buyer-badge tag-ria">RIA / Money Manager</span>
+            </div>
+          </div>
+          <div class="card-body">
+            <p>{2-3 sentence rationale referencing today's market levels}</p>
+            <div class="detail-row">
+              <div class="detail-chip dc-highlight"><span class="dc-label">{label}</span><span class="dc-val">{value}</span></div>
+              ... 4-7 chips total. Use dc-warn class for "Avoid" chips.
+            </div>
+            <div class="cusip-row">CUSIP <span>{cusip}</span> · {details}</div>  (optional)
+          </div>
+        </div>
+      Suggested set: 1) Strategy of the Day, 2) Callable Agency Ladder, 3) Muni Barbell,
+      4) CD + Agency Bullet Blend, 5) IG Corporate Sector Rotation, 6) optional Taxable Muni feature.
+    -->
+{{STRATEGY_CARDS_HTML}}
+  </div>
+
+  <!-- ========== RELATIVE VALUE ========== -->
+  <div id="panel-relval" class="panel" style="display:none">
+    <div class="section-title">Yield Comparison by Term — All Sectors ({{DATE}})</div>
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px;background:var(--bg2);border-radius:6px;padding:8px 12px;border:0.5px solid var(--border);">📌 <strong>Note:</strong> CD yields shown are <strong>investor/buy-side offering rates</strong> from the FBBS retail CD run — not brokered CD all-in funding costs. Brokered CD pricing (bank funding) is found in the Brokered CDs tab.</div>
+    <div class="chart-wrap"><canvas id="rvChart"></canvas></div>
+    <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:12px;color:var(--text2);margin-bottom:20px;">
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#4A7FC1;display:inline-block;border-radius:2px;"></span>US Treasury</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#2E9E6B;display:inline-block;border-radius:2px;"></span>CD (Investor Yield)</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#C97A2A;display:inline-block;border-radius:2px;"></span>US Agency</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#7A5CC2;display:inline-block;border-radius:2px;"></span>AA Corp</span>
+    </div>
+    <div class="two-col">
+      <div>
+        <div class="section-title">Retail CD Offering Yield vs. US Treasury ({{DATE}})</div>
+        <div class="card-flush">
+          <table class="bond-table">
+            <thead><tr><th>Term</th><th>CD Yield (Investor)</th><th>UST</th><th>Spread</th><th>Verdict</th></tr></thead>
+            <tbody>
+              <!-- One <tr> per term: Term | CD Yield | UST | Spread (use class spd-pos/spd-neg) | Verdict -->
+              {{RV_CD_VS_UST_ROWS}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div class="section-title">Muni Tax-Equivalent Yield vs. UST</div>
+        <div class="card-flush">
+          <table class="bond-table">
+            <thead><tr><th>Term</th><th>Muni YTW</th><th>TEY @21%</th><th>TEY @29.6%</th></tr></thead>
+            <tbody>
+              <!-- One <tr> per term: Term | Muni YTW | TEY @21% | TEY @29.6% (apply class="ytw" to a TEY cell to highlight) -->
+              {{RV_MUNI_TEY_ROWS}}
+            </tbody>
+          </table>
+        </div>
+        <div class="section-title" style="margin-top:14px;">Corp Spread vs. UST (AA rated)</div>
+        <div class="card-flush">
+          <table class="bond-table">
+            <thead><tr><th>Term</th><th>Corp Yield</th><th>vs. UST</th></tr></thead>
+            <tbody>
+              <!-- One <tr> per term: Term | Corp Yield | Spread (use class spd-pos/spd-neg) -->
+              {{RV_CORP_SPREAD_ROWS}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="highlight-box">
+      <div class="hl-label">Key Takeaway</div>
+      <div class="hl-val">{{RV_KEY_TAKEAWAY}}</div>
+    </div>
+  </div>
+
+  <!-- ========== MUNICIPALS ========== -->
+  <div id="panel-munis" class="panel" style="display:none">
+    <div class="mmd-grid">
+      <div class="mmd-cell"><div class="mc-label">AAA MMD 5yr ({{MMD_5Y_LABEL}})</div><div class="mc-val">{{MMD_5Y}}</div><div class="mc-sub">{{MMD_5Y_RATIO}}</div></div>
+      <div class="mmd-cell"><div class="mc-label">AAA MMD 10yr ({{MMD_10Y_LABEL}})</div><div class="mc-val">{{MMD_10Y}}</div><div class="mc-sub">{{MMD_10Y_RATIO}}</div></div>
+      <div class="mmd-cell"><div class="mc-label">AAA MMD 20yr ({{MMD_20Y_LABEL}})</div><div class="mc-val">{{MMD_20Y}}</div><div class="mc-sub">{{MMD_20Y_RATIO}}</div></div>
+    </div>
+
+    <div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--radius);padding:10px 14px;margin-bottom:14px;font-size:11px;color:var(--text2);">
+      <span style="font-weight:700;color:var(--text);margin-right:8px;">MMD AAA Scale ({{MMD_AS_OF_SHORT}} close, 5% cpn):</span>
+      1yr <strong>{{MMD_1Y}}</strong> &nbsp;·&nbsp; 2yr <strong>{{MMD_SCALE_2Y}}</strong> &nbsp;·&nbsp; 3yr <strong>{{MMD_3Y}}</strong> &nbsp;·&nbsp; 5yr <strong>{{MMD_SCALE_5Y}}</strong> &nbsp;·&nbsp; 7yr <strong>{{MMD_7Y}}</strong> &nbsp;·&nbsp; 10yr <strong>{{MMD_SCALE_10Y}}</strong> &nbsp;·&nbsp; 15yr <strong>{{MMD_15Y}}</strong> &nbsp;·&nbsp; 20yr <strong>{{MMD_SCALE_20Y}}</strong> &nbsp;·&nbsp; 25yr <strong>{{MMD_25Y}}</strong> &nbsp;·&nbsp; 30yr <strong>{{MMD_30Y}}</strong>
+      <span style="margin-left:10px;color:var(--text3);">Source: MMD {{MMD_AS_OF_DATE}}</span>
+    </div>
+    <div class="highlight-box">
+      <div class="hl-label">★ Bond of the Day — Municipal (Tax-Exempt)</div>
+      <div class="hl-val">{{BOTD_HEADLINE}}</div>
+      <div class="hl-sub">TAX-EXEMPT · TEY: <strong id="botdTEY">{{BOTD_TEY}}</strong> @ <span id="botdRateLabel">{{BOTD_TEY_RATE}}</span>% · {{BOTD_NARRATIVE}} CUSIP {{BOTD_CUSIP}} · Settle {{BOTD_SETTLE}}</div>
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+      <div style="font-size:13px;font-weight:600;color:var(--text);text-transform:uppercase;letter-spacing:0.5px;">Muni Inventory — {{DATE}}</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="text" id="muniSearch" placeholder="Search issuer, state, CUSIP, rating…" oninput="filterMuniRows()"
+          style="background:var(--bg2);border:0.5px solid var(--border2);border-radius:6px;padding:6px 12px;font-size:12px;font-family:inherit;color:var(--text);width:260px;">
+        <span id="muniSearchCount" style="font-size:11px;color:var(--text3);white-space:nowrap;"></span>
+      </div>
+    </div>
+    <div class="section-title" style="margin-bottom:6px;">BQ Offerings — Bank Qualified, High-Grade</div>
+    <div class="card-flush scroll-table" style="margin-bottom:16px;">
+      <table class="bond-table" id="bqMuniTable">
+        <thead><tr><th>Issuer</th><th>St</th><th>Cpn</th><th>Maturity</th><th>Call</th><th class="tey-col">TEY <span id="teyRateLabel" style="font-weight:400;color:var(--text3);font-size:10px;"></span></th><th>YTW</th><th>YTM</th><th>Price</th><th>Rating</th><th>Enhancement</th><th>Qty</th></tr></thead>
+        <tbody id="muniSearchable">
+          <!--
+            BQ MUNI ROWS — One <tr> per BQ offering. 12 columns (locked order):
+              Issuer | St | Cpn | Maturity | Call | TEY (use tey-cell) | YTW | YTM | Price | Rating | Enhancement | Qty
+            Each .tey-cell MUST carry data-ytw="X.XXX" and data-ytm="X.XXX" attributes.
+            The TEY column displays "—" — JS fills it from data-ytw on render.
+            Enhancement pills: <span class="pill pill-blue">BAM</span> / <span class="pill pill-green">PSF-GTD</span> / etc.
+          -->
+          {{BQ_MUNI_ROWS}}
+</tbody>
+      </table>
+    </div>
+
+    <div class="section-title" style="margin-top:14px;margin-bottom:6px;">Standard Offerings — Intermediate &amp; Long</div>
+    <div class="card-flush scroll-table">
+      <table class="bond-table" id="stdMuniTable">
+        <thead><tr><th>Issuer</th><th>St</th><th>Cpn</th><th>Maturity</th><th>Call</th><th class="tey-col">TEY <span class="teyRateLabel" style="font-weight:400;color:var(--text3);font-size:10px;"></span></th><th>YTW</th><th>YTM</th><th>Price</th><th>Rating</th><th>Enhancement</th><th>Qty</th></tr></thead>
+        <tbody id="stdMuniTableBody">
+          <!-- STANDARD MUNI ROWS — same 12-column structure as BQ table. data-ytw + data-ytm required on each tey-cell. -->
+          {{STD_MUNI_ROWS}}
+</tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:16px;">
+      <div class="section-title">Taxable Municipal Offerings · {{DATE}}</div>
+      <div class="card-flush">
+        <table class="bond-table">
+          <thead><tr><th>Issuer</th><th>St</th><th>Cpn</th><th>Maturity</th><th>Call</th><th>YTW</th><th>YTM</th><th>Price</th><th>Rating</th><th>CUSIP</th><th>Qty</th></tr></thead>
+          <tbody id="taxableMuniTableBody">
+            <!--
+              TAXABLE MUNI ROWS — 11 columns:
+                Issuer | St | Cpn | Maturity | Call | YTW | YTM | Price | Rating | CUSIP | Qty
+              YTW may be expressed as a spread quote (e.g. "+40/5YR") for taxable munis.
+            -->
+            {{TAXABLE_MUNI_ROWS}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== AGENCIES ========== -->
+  <div id="panel-agencies" class="panel" style="display:none">
+    <div class="section-title">Agency Bullets — Best Spread vs. Benchmark Today</div>
+    <div class="card-flush" style="margin-bottom:16px;">
+      <table class="bond-table">
+        <thead><tr><th>Issuer</th><th>Cpn</th><th>Maturity</th><th>YTM</th><th>Spread vs. Bench</th><th>Benchmark</th><th>Avail</th><th>CUSIP</th></tr></thead>
+        <tbody>
+          <!--
+            AGENCY BULLET ROWS — One <tr> per bond. 8 columns:
+              Issuer (FHLB / FFCB / FNMA / FHLM) | Cpn | Maturity | YTM (class="ytw") |
+              Spread (class spd-pos or spd-neg) | Benchmark (e.g. "5Y UST") | Avail | CUSIP
+          -->
+          {{AGENCY_BULLET_ROWS}}
+</tbody>
+      </table>
+    </div>
+
+    <div class="section-title">Callable Highlights — Near-Term Call, High Coupon Income</div>
+    <div class="card-flush">
+      <table class="bond-table">
+        <thead><tr><th>Issuer</th><th>Cpn</th><th>Final Mty</th><th>Next Call</th><th>Call Type</th><th>YTNC</th><th>YTM</th><th>Avail</th><th>CUSIP</th></tr></thead>
+        <tbody>
+          <!--
+            AGENCY CALLABLE ROWS — 9 columns:
+              Issuer | Cpn | Final Mty | Next Call | Call Type (Quarterly/Monthly/Anytime) |
+              YTNC | YTM (class="ytw") | Avail | CUSIP
+          -->
+          {{AGENCY_CALLABLE_ROWS}}
+</tbody>
+      </table>
+    </div>
+    <div class="highlight-box" style="margin-top:14px;">
+      <div class="hl-label">Agency Note</div>
+      <div class="hl-val">{{AGENCY_NOTE}}</div>
+    </div>
+  </div>
+
+  <!-- ========== CDs ========== -->
+  <div id="panel-cds" class="panel" style="display:none">
+    <div class="section-title">Sweet Spot: 6 Month – 5 Year (Where CDs Outperform Treasuries)</div>
+    <div class="cd-grid">
+      <!--
+        SWEET SPOT GRID — 5 cells. Use class="cd-cell" or "cd-cell best" for highlighted picks.
+        Each cell: <div class="cd-cell[ best]"><div class="cd-term">{label}</div><div class="cd-rate">{rate}%</div><div class="cd-vs">{spread} vs UST</div></div>
+      -->
+      {{CD_SWEET_SPOT_GRID}}
+    </div>
+
+    <div class="highlight-box">
+      <div class="hl-label">{{CD_BEST_RATE_LABEL}}</div>
+      <div class="hl-val">{{CD_BEST_RATE_NARRATIVE}}</div>
+      <div class="hl-sub">{{CD_BEST_RATE_DETAILS}}</div>
+    </div>
+
+    <div class="warn-box">
+      <strong>⚠ {{CD_WARN_TITLE}}</strong> {{CD_WARN_BODY}}
+    </div>
+
+    <div class="chart-wrap" style="height:210px;margin-bottom:14px;"><canvas id="cdChart"></canvas></div>
+    <div style="display:flex;gap:16px;font-size:12px;color:var(--text2);margin-bottom:20px;flex-wrap:wrap;">
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:10px;background:#2E9E6B;display:inline-block;border-radius:2px;"></span>CD Rate</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:10px;background:#4A7FC1;display:inline-block;border-radius:2px;"></span>UST Yield</span>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <div class="section-title">Best Issuers — Short End (≤12 months)</div>
+        <div class="card-flush">
+          <table class="bond-table">
+            <thead><tr><th>Term</th><th>Top Issuer</th><th>Rate</th><th>Cpn Freq</th><th>CUSIP</th></tr></thead>
+            <tbody>
+              <!-- Short end (≤12mo) issuers — 5 cols: Term | Top Issuer | Rate (class="ytw") | Cpn Freq | CUSIP -->
+              {{CD_SHORT_END_ROWS}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <div class="section-title">Best Issuers — Core Range (18mo–5yr)</div>
+        <div class="card-flush">
+          <table class="bond-table">
+            <thead><tr><th>Term</th><th>Top Issuer</th><th>Rate</th><th>Cpn Freq</th><th>CUSIP</th></tr></thead>
+            <tbody>
+              <!-- Core range (18mo-5yr) issuers — same 5 cols. Use ★ in Term to mark best picks. -->
+              {{CD_CORE_RANGE_ROWS}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========== CORPORATES ========== -->
+  <div id="panel-corps" class="panel" style="display:none">
+    <div class="context-strip">
+      <strong>Market Opportunity:</strong> {{CORP_CONTEXT_NARRATIVE}}
+    </div>
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <span class="filter-label">Sector:</span>
+        <button class="filter-btn active" onclick="filterCorps('all',this)" data-sector="all">All</button>
+      <button class="filter-btn" onclick="filterCorps('Financial',this)" data-sector="Financial">Financial</button>
+      <button class="filter-btn" onclick="filterCorps('Industrial',this)" data-sector="Industrial">Industrial</button>
+      <button class="filter-btn" onclick="filterCorps('Technology',this)" data-sector="Technology">Technology</button>
+      <button class="filter-btn" onclick="filterCorps('Communications',this)" data-sector="Communications">Comms</button>
+      <button class="filter-btn" onclick="filterCorps('Consumer',this)" data-sector="Consumer">Consumer</button>
+      <button class="filter-btn" onclick="filterCorps('Utilities',this)" data-sector="Utilities">Utilities</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <input type="text" id="corpsSearch" placeholder="Search issuer, ticker, CUSIP…" oninput="filterCorpRows()"
+          style="background:var(--bg2);border:0.5px solid var(--border2);border-radius:6px;padding:6px 12px;font-size:12px;font-family:inherit;color:var(--text);width:240px;">
+        <span id="corpSearchCount" style="font-size:11px;color:var(--text3);white-space:nowrap;"></span>
+      </div>
+    </div>
+
+    <div class="card-flush scroll-table">
+      <table class="bond-table" id="corpsTable">
+        <thead>
+          <tr><th>Issuer</th><th>Tkr</th><th>Coupon</th><th>Maturity</th><th>Next Call</th><th>YTM</th><th>Spread</th><th>Moody / S&amp;P</th><th>Sector</th><th>Avail</th></tr>
+        </thead>
+        <tbody>
+          <!--
+            CORPORATE ROWS — One <tr data-sector="..."> per bond. 10 columns:
+              Issuer | Tkr | Coupon | Maturity | Next Call | YTM (class="ytw") |
+              Spread (class spd-pos/spd-neg) | Moody / S&P | Sector badge | Avail
+            data-sector MUST be one of: Financial, Industrial, Technology, Communications, Consumer, Utilities
+            Sector badge: <span class="sector-badge">{Sector}</span> (Comms shown as label in badge if Communications)
+            Group rows by sector, separated by HTML comments for clarity.
+          -->
+          {{CORPORATE_ROWS}}
+        </tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:6px;">{{CORP_FOOTER_NOTE}}</div>
+  </div>
+
+
+  <!-- ========== BROKERED CDs ========== -->
+  <div id="panel-brokeredcds" class="panel" style="display:none">
+
+    <div class="context-strip">
+      <strong>Today's Commentary ({{DATE}}):</strong> {{BCD_COMMENTARY}}
+    </div>
+
+    <!-- Key stats row -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;">
+      <div class="kpi {{BCD_KPI1_DIR}}" style="margin:0;padding:12px 14px;">
+        <div class="label">{{BCD_KPI1_LABEL}}</div>
+        <div class="val" style="font-size:20px;">{{BCD_KPI1_VAL}}</div>
+        <div class="sub">{{BCD_KPI1_SUB}}</div>
+      </div>
+      <div class="kpi {{BCD_KPI2_DIR}}" style="margin:0;padding:12px 14px;">
+        <div class="label">{{BCD_KPI2_LABEL}}</div>
+        <div class="val" style="font-size:20px;">{{BCD_KPI2_VAL}}</div>
+        <div class="sub">{{BCD_KPI2_SUB}}</div>
+      </div>
+      <div class="kpi {{BCD_KPI3_DIR}}" style="margin:0;padding:12px 14px;">
+        <div class="label">{{BCD_KPI3_LABEL}}</div>
+        <div class="val" style="font-size:20px;">{{BCD_KPI3_VAL}}</div>
+        <div class="sub">{{BCD_KPI3_SUB}}</div>
+      </div>
+      <div class="kpi {{BCD_KPI4_DIR}}" style="margin:0;padding:12px 14px;">
+        <div class="label">{{BCD_KPI4_LABEL}}</div>
+        <div class="val" style="font-size:20px;">{{BCD_KPI4_VAL}}</div>
+        <div class="sub">{{BCD_KPI4_SUB}}</div>
+      </div>
+    </div>
+
+    <!-- Compliance notice -->
+    <div style="background:#FFF8E7;border:1px solid #F0C040;border-radius:8px;padding:12px 16px;margin-bottom:18px;font-size:12px;color:#5a4000;">
+      <strong>⚠ Regulatory Note:</strong> Brokered deposits are subject to FDIC brokered deposit rules. Only well-capitalized institutions may accept brokered deposits without a waiver. FDIC insurance applies up to $250,000 per depositor per institution. Callable CDs subject to lock-out periods. <strong>Please contact the trading desk for live, executable pricing — all indications subject to supply, volume, term, settlement, and best efforts vs. firm takedown.</strong>
+    </div>
+
+    <div class="two-col" style="gap:16px;">
+      <!-- Bullet CD Indications -->
+      <div>
+        <div class="section-title">Bullet CD Indications — All-In Cost Range</div>
+        <div class="card-flush">
+          <table class="bond-table">
+            <thead><tr><th>Term</th><th>All-In Cost Range</th><th>Mid</th><th>vs FHLB Topeka</th><th>vs SOFR</th><th>vs UST</th></tr></thead>
+            <tbody>
+              <!--
+                BULLET CD INDICATION ROWS — 6 cols:
+                  Term | All-In Cost Range | Mid | vs FHLB (spd-pos/neg) | vs SOFR (spd-pos/neg) | vs UST (spd-pos/neg)
+              -->
+              {{BCD_BULLET_ROWS}}
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px;">FHLB Topeka rates used as primary benchmark. Negative FHLB spread at 7yr–10yr indicates CD is cheaper than FHLB advance at those terms.</div>
+      </div>
+
+      <!-- Callable CD Indications -->
+      <div>
+        <div class="section-title">Callable CD Indications — All-In Cost Range (Subject to Lock-Out)</div>
+        <div class="card-flush">
+          <table class="bond-table">
+            <thead><tr><th>Term</th><th>All-In Cost Range</th><th>Premium vs Bullet</th><th>Lock-Out</th></tr></thead>
+            <tbody>
+              <!--
+                CALLABLE CD INDICATION ROWS — 4 cols:
+                  Term | All-In Cost Range | Premium vs Bullet | Lock-Out (Yes/No)
+              -->
+              {{BCD_CALLABLE_ROWS}}
+            </tbody>
+          </table>
+        </div>
+        <div style="font-size:11px;color:var(--text3);margin-top:5px;">Lock-out terms: 3mo, 6mo, 1yr, 2yr, 3yr, 5yr. Callable premium vs. bullet ~+5–10bp at 1yr, ~+15–25bp at 2yr–10yr.</div>
+
+        <!-- FBBS Value Prop box -->
+        <div class="highlight-box" style="margin-top:14px;">
+          <div class="hl-label">FBBS Brokered CD Capabilities</div>
+          <div class="hl-val">Best Efforts &amp; Firm Takedown · Any Term · $1MM – $500MM+</div>
+          <div class="hl-sub">
+            Bullet &amp; Callable &nbsp;·&nbsp; Flexible settlement &nbsp;·&nbsp; Internal &amp; External placement &nbsp;·&nbsp;
+            Source new funding, rollover, or contingency &nbsp;·&nbsp; No collateral posting &nbsp;·&nbsp;
+            Single Master CD (simplified operations) &nbsp;·&nbsp; No early withdrawal &nbsp;·&nbsp;
+            1 month – 30 year terms available upon request
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Benchmark rate comparison chart -->
+    <div class="section-title" style="margin-top:20px;">All-In CD Cost vs. Benchmark Rates</div>
+    <div class="chart-wrap" style="height:240px;margin-bottom:8px;"><canvas id="bcdChart"></canvas></div>
+    <div style="display:flex;gap:20px;font-size:12px;color:var(--text2);margin-bottom:6px;flex-wrap:wrap;">
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#00402B;display:inline-block;border-radius:2px;"></span>CD All-In Mid</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#436F59;display:inline-block;border-radius:2px;"></span>FHLB Topeka</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#AEC3B0;display:inline-block;border-radius:2px;"></span>SOFR</span>
+      <span style="display:flex;align-items:center;gap:6px;"><span style="width:14px;height:3px;background:#C4D79B;display:inline-block;border-radius:2px;"></span>US Treasury</span>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:20px;">CD all-in mid vs. FHLB Topeka, SOFR, and U.S. Treasury. Negative FHLB spread at 7yr–10yr signals CD is an attractive alternative to FHLB advances at those terms. Contact desk for live pricing.</div>
+
+    <!-- Supply conditions -->
+    <div class="section-title">Supply Conditions &amp; Desk Notes</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">
+      <div style="background:var(--green-bg);border:1px solid #C4D79B;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:11px;font-weight:700;color:var(--racing-green);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Bullet Supply</div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.6;">
+          <strong>Strong:</strong> 3mo – 1yr<br>
+          <strong>Healthy:</strong> 18mo – 3yr<br>
+          <strong>Lighter:</strong> 4yr+
+        </div>
+      </div>
+      <div style="background:var(--green-bg);border:1px solid #C4D79B;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:11px;font-weight:700;color:var(--racing-green);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Callable Supply</div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.6;">
+          <strong>Healthy:</strong> Across the curve<br>
+          <strong>Premium:</strong> +5–10bp @ 1yr<br>
+          <strong>Premium:</strong> +15–25bp @ 2yr–10yr
+        </div>
+      </div>
+      <div style="background:#FFF8E7;border:1px solid #F0C040;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:11px;font-weight:700;color:#5a4000;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Key Considerations</div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.6;">
+          Only <strong>well-capitalized</strong> banks may accept brokered deposits without waiver<br>
+          FDIC insured up to <strong>$250K</strong> per depositor per institution
+        </div>
+      </div>
+    </div>
+
+    <!-- Trading desk contacts -->
+    <div style="background:var(--bg2);border-radius:8px;padding:12px 16px;font-size:12px;color:var(--text2);">
+      <strong style="color:var(--text);">Trading Desk Contacts:</strong> &nbsp;
+      Josh Brenner (805) 301-3017 &nbsp;·&nbsp;
+      Ardi Baniahmad (646) 762-3835 &nbsp;·&nbsp;
+      Meghan Greenwood (646) 762-3836 &nbsp;·&nbsp;
+      <em>Please contact desk for live, executable pricing</em>
+    </div>
+
+  </div>
+
+  <!-- ========== MBS / CMO ========== -->
+  <div id="panel-mbscmo" class="panel" style="display:none">
+
+    <div style="text-align:center;padding:60px 20px;color:var(--text3);">
+      <div style="font-size:48px;margin-bottom:16px;opacity:0.3;">📐</div>
+      <div style="font-size:16px;font-weight:600;color:var(--text2);margin-bottom:6px;">No MBS / CMO Offering This Session</div>
+      <div style="font-size:12px;color:var(--text3);">Contact the trading desk for current structured product availability.</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:20px;">Trading Desk: Josh Brenner (805) 301-3017 &nbsp;·&nbsp; Ardi Baniahmad (646) 762-3835 &nbsp;·&nbsp; Meghan Greenwood (646) 762-3836</div>
+    </div>
+
+  </div>
+
+  <!-- FOOTER -->
+  <div class="context-strip" style="margin-top:20px;">
+    <strong>How to use this page:</strong> Start with the audience selector at the top, review the Top Picks grid and fit matrix, then move into the live inventory tabs. Tax-equivalent yields update instantly for tax-exempt munis, while taxable bonds remain audience-neutral and should be pitched on yield, spread, credit, and structure rather than tax treatment.
+  </div>
+
+  <div class="footer">
+    <p>*** All offerings are subject to change in price and/or availability ***</p>
+    <p style="margin-top:4px;">The information set forth was obtained from sources believed reliable but cannot be guaranteed for its accuracy or completeness. Neither the information nor any opinion expressed constitutes a solicitation for the purchase or sale of any security.</p>
+    <p style="margin-top:4px;"><strong>TEY methodology:</strong> Tax-equivalent yields shown throughout this dashboard are calculated as Yield-to-Worst (YTW) divided by (1 − marginal tax rate). <strong>TEY figures do not take into account TEFRA interest-expense haircuts, the 20% disallowance applicable to C-Corporation bank qualified holdings, or any state/local tax treatment.</strong> Bank buyers should consult their own tax and portfolio advisors to determine the after-tax yield applicable to their institution.</p>
+    <p style="margin-top:4px;">Investment products are not FDIC insured (unless noted), not guaranteed by a bank and may lose value. First Bankers' Banc Securities, Inc. is a member of FINRA/SIPC.</p>
+    <p style="margin-top:8px;font-weight:600;">FBBSinc.com &nbsp;·&nbsp; 888-726-2880 &nbsp;·&nbsp; St. Louis, MO | Overland Park, KS | Oklahoma City, OK | Denver, CO | Nashville, TN</p>
+  </div>
+
+</div><!-- end page -->
+
+<script>
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('active'); t.setAttribute('aria-selected','false'); });
+  document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('active'); p.style.display='none'; });
+  if (el) {
+    el.classList.add('active');
+    el.setAttribute('aria-selected','true');
+  } else {
+    var targetBtn = document.querySelector('.tab[data-tab="' + name + '"]');
+    if (targetBtn) { targetBtn.classList.add('active'); targetBtn.setAttribute('aria-selected','true'); }
+  }
+  var panel = document.getElementById('panel-' + name);
+  if (panel) { panel.classList.add('active'); panel.style.display='block'; }
+  if (name === 'munis') { var ms = document.getElementById('muniSearch'); if (ms && !ms.value) filterMuniRows(); }
+  if (name === 'corps') { filterCorpRows(); }
+  if (name === 'relval') setTimeout(buildRVChart, 60);
+  if (name === 'cds') setTimeout(buildCDChart, 60);
+  if (name === 'brokeredcds') setTimeout(buildBCDChart, 60);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  document.querySelectorAll('.tab').forEach(function(tab) {
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', tab.classList.contains('active') ? 'true' : 'false');
+    tab.addEventListener('click', function() {
+      switchTab(tab.dataset.tab, tab);
+    });
+  });
+});
+
+/* filterCorps now handled by sales tools engine below */
+
+let rvChartInst = null, cdChartInst = null;
+
+function buildRVChart() {
+  if (rvChartInst) { rvChartInst.destroy(); rvChartInst = null; }
+  const ctx = document.getElementById('rvChart');
+  if (!ctx) return;
+  rvChartInst = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: ['6Mo', '9Mo', '12Mo', '18Mo', '2Yr', '3Yr', '4Yr', '5Yr', '7Yr', '10Yr'],
+      datasets: [
+        { label: 'US Treasury', data: {{RV_UST_DATA}}, borderColor: '#4A7FC1', backgroundColor: 'rgba(74,127,193,0.08)', tension: 0.3, pointRadius: 4, borderWidth: 2.5, fill: false },
+        { label: 'CD (Investor Yield)', data: {{RV_CD_DATA}}, borderColor: '#2E9E6B', backgroundColor: 'rgba(46,158,107,0.08)', tension: 0.3, pointRadius: 4, borderWidth: 2.5, fill: false, spanGaps: false },
+        { label: 'US Agency', data: {{RV_AGENCY_DATA}}, borderColor: '#C97A2A', tension: 0.3, pointRadius: 4, borderWidth: 2.5, fill: false },
+        { label: 'AA Corp', data: {{RV_CORP_DATA}}, borderColor: '#7A5CC2', tension: 0.3, pointRadius: 4, borderWidth: 2.5, fill: false }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false, callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + '%' } } },
+      scales: {
+        y: { min: 3.5, max: 5.0, ticks: { callback: v => v.toFixed(2) + '%', font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.06)' } },
+        x: { ticks: { font: { size: 11 } }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+function buildCDChart() {
+  if (cdChartInst) { cdChartInst.destroy(); cdChartInst = null; }
+  const ctx = document.getElementById('cdChart');
+  if (!ctx) return;
+  cdChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: {{CD_CHART_LABELS}},
+      datasets: [
+        { label: 'CD Rate', data: {{CD_CHART_CD_DATA}}, backgroundColor: {{CD_CHART_CD_COLORS}}, borderRadius: 5 },
+        { label: 'UST', data: {{CD_CHART_UST_DATA}}, backgroundColor: '#4A7FC1', borderRadius: 5 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + '%' } } },
+      scales: {
+        y: { min: 3.5, max: 4.30, ticks: { callback: v => v.toFixed(2) + '%', font: { size: 11 } }, grid: { color: 'rgba(0,0,0,0.06)' } },
+        x: { ticks: { font: { size: 11 } }, grid: { display: false } }
+      }
+    }
+  });
+}
+
+let bcdChartInst = null;
+function buildBCDChart() {
+  const ctx = document.getElementById('bcdChart');
+  if (!ctx) return;
+  if (bcdChartInst) { bcdChartInst.destroy(); }
+  bcdChartInst = new Chart(ctx.getContext('2d'), {
+    type: 'line',
+    data: {
+      labels: ['3mo','6mo','9mo','12mo','18mo','2yr','3yr','4yr','5yr','7yr','10yr'],
+      datasets: [
+        { label: 'CD All-In Mid', data: {{BCD_CHART_CD_DATA}},
+          borderColor:'#00402B', backgroundColor:'rgba(0,64,43,0.08)', borderWidth:2.5, pointRadius:4, pointBackgroundColor:'#00402B', tension:0.35, fill:false },
+        { label: 'FHLB Topeka',   data: {{BCD_CHART_FHLB_DATA}},
+          borderColor:'#436F59', borderWidth:1.8, pointRadius:2, borderDash:[5,3], tension:0.35, fill:false },
+        { label: 'SOFR',          data: {{BCD_CHART_SOFR_DATA}},
+          borderColor:'#9B9B99', borderWidth:1.5, pointRadius:2, borderDash:[3,3], tension:0.35, fill:false },
+        { label: 'US Treasury',   data: {{BCD_CHART_UST_DATA}},
+          borderColor:'#C4D79B', borderWidth:1.8, pointRadius:2, tension:0.35, fill:false },
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ display:true, position:'top', labels:{ font:{size:11}, boxWidth:18, padding:16 } } },
+      scales:{
+        y:{ min:3.3, max:4.9, ticks:{ callback:v=>v.toFixed(2)+'%', font:{size:10} }, grid:{ color:'rgba(0,0,0,0.05)' } },
+        x:{ ticks:{ font:{size:10} }, grid:{ display:false } }
+      }
+    }
+  });
+}
+
+// ===================================================
+// FBBS SALES TOOLS ENGINE — v2 (clean)
+// ===================================================
+
+const PICKS_DATA = {{PICKS_DATA_JS}};
+/*
+  PICKS_DATA — JS array of audience-aware pick cards. Required shape:
+  [
+    { type: 'Callable Agency', audience: ['ccorp','scorp'],
+      title: 'FHLB 4.45% 3/26/31 \u2014 $100MM block',
+      yld: '4.43%',
+      why: 'CUSIP 3130B9WU0 \u00b7 Call 6/26/26 \u00b7 5yr ladder anchor \u00b7 20% risk weight',
+      tab: 'agencies' },
+    ...
+  ]
+  Rules:
+   - audience values: 'scorp' / 'ccorp' / 'ria' (any subset; empty array hides the pick)
+   - tab values: strategies / relval / munis / agencies / cds / corps / brokeredcds / mbscmo
+   - NO RAW APOSTROPHES inside single-quoted JS strings — use \u2019 for ' and \u2014 for em-dash
+   - Every featured CUSIP must have >= $250K available
+*/
+
+const AUDIENCE_LABELS = { scorp: 'S-Corp Bank', ccorp: 'C-Corp Bank', ria: 'RIA / Money Manager' };
+const DEFAULT_TAX     = { scorp: 29.6, ccorp: 21.0, ria: 35.0 };
+
+/* ---- helpers ---- */
+function getAudience() {
+  var el = document.getElementById('audienceSelect');
+  return el ? el.value : 'ccorp';
+}
+function getTaxRate() {
+  var el = document.getElementById('taxRateSlider');
+  return el ? parseFloat(el.value) : 21;
+}
+function getSearch() {
+  return ''; // global search removed; per-tab search used instead
+}
+
+/* ---- tax rate button click ---- */
+function setTaxRate(rate, btn) {
+  // Update hidden input (used by getTaxRate)
+  var slider = document.getElementById('taxRateSlider');
+  if (slider) slider.value = rate;
+  // Update display
+  var lbl = document.getElementById('taxRateDisplay');
+  if (lbl) lbl.textContent = rate + '%';
+  // Update button styles
+  document.querySelectorAll('.tey-btn').forEach(function(b) {
+    var isActive = parseFloat(b.dataset.rate) === parseFloat(rate);
+    b.style.background = isActive ? 'rgba(196,215,155,0.35)' : 'rgba(255,255,255,0.1)';
+    b.style.color = isActive ? '#fff' : 'rgba(255,255,255,0.7)';
+    b.style.borderColor = isActive ? '#C4D79B' : 'rgba(255,255,255,0.3)';
+  });
+  refreshSalesTools();
+}
+
+function chooseAudience(aud, tab) {
+  var sel = document.getElementById('audienceSelect');
+  if (sel) sel.value = aud;
+  onAudienceChange();
+  if (tab) jumpToTab(tab);
+}
+
+/* ---- event handlers (called from inline onchange/oninput) ---- */
+function onAudienceChange() {
+  var aud  = getAudience();
+  var rate = DEFAULT_TAX[aud];
+  setTaxRate(rate, null);
+}
+
+function onTaxRateChange() {
+  const rate  = getTaxRate();
+  const label = document.getElementById('taxRateDisplay');
+  if (label) label.textContent = rate.toFixed(1) + '%';
+  refreshSalesTools();
+}
+
+function onSearch() {
+  // Legacy: global search replaced by per-tab search inputs
+}
+
+/* ---- master refresh (safe to call anytime) ---- */
+function refreshSalesTools() {
+  renderTopPicks();
+  renderTEYColumns();
+}
+
+/* ---- top picks grid ---- */
+function renderTopPicks() {
+  const aud  = getAudience();
+  const grid = document.getElementById('topPicksGrid');
+  const lbl  = document.getElementById('audienceLabel');
+  if (!grid) return;
+  if (lbl) lbl.textContent = AUDIENCE_LABELS[aud] || aud;
+
+  const picks = PICKS_DATA.filter(p => p.audience.includes(aud)).slice(0, 6);
+  grid.innerHTML = picks.map(p =>
+    '<div class="pick-card" onclick="jumpToTab(\'' + p.tab + '\')">' +
+      '<div class="pc-type">' + p.type + '</div>' +
+      '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;">' +
+        '<div class="pc-title">' + p.title + '</div>' +
+        '<div class="pc-yield">' + p.yld  + '</div>' +
+      '</div>' +
+      '<div class="pc-why">' + p.why + '</div>' +
+    '</div>'
+  ).join('');
+}
+
+/* ---- TEY column update ---- */
+function renderTEYColumns() {
+  var rate = getTaxRate();
+
+  // Update TEY column header labels (there may be two — BQ and std tables)
+  document.querySelectorAll('.teyRateLabel, #teyRateLabel').forEach(function(lbl) {
+    lbl.textContent = '@ ' + rate.toFixed(1) + '%';
+  });
+
+  // Update every tey-cell in the muni tables
+  // TEY is always computed from Yield-to-Worst (YTW), never YTM.
+  // Falls back to data-ytm only if data-ytw is missing (legacy rows).
+  document.querySelectorAll('.tey-cell').forEach(function(cell) {
+    var ytw = parseFloat(cell.dataset.ytw);
+    if (isNaN(ytw)) { ytw = parseFloat(cell.dataset.ytm); }
+    if (isNaN(ytw)) return;
+    var tey = ytw / (1 - rate / 100);
+    cell.textContent = tey.toFixed(2) + '%';
+    // Green highlight if TEY >= 4.00% (competitive with taxables)
+    cell.className = 'tey-cell tey-col' + (tey >= 4.00 ? ' beats' : '');
+  });
+
+  // Update Bond of the Day TEY — always use YTW. For non-callable bonds YTW = YTM; for callables YTW < YTM.
+  var botd = document.getElementById('botdTEY');
+  if (botd) {
+    var botdYtw = {{BOTD_YTW_JS}}; // Bond of the Day YTW — used to compute live TEY at selected tax rate
+    var botdTey = botdYtw / (1 - rate / 100);
+    botd.textContent = botdTey.toFixed(2) + '%';
+    var botdRateLbl = document.getElementById('botdRateLabel');
+    if (botdRateLbl) { botdRateLbl.textContent = rate.toFixed(1); }
+  }
+}
+
+/* ---- muni row search filter ---- */
+function filterMuniRows() {
+  var el = document.getElementById('muniSearch');
+  var s = el ? el.value.toLowerCase().trim() : '';
+  var vis = 0;
+  var total = 0;
+  ['muniSearchable', 'stdMuniTableBody', 'taxableMuniTableBody'].forEach(function(id) {
+    var tbody = document.getElementById(id);
+    if (!tbody) return;
+    tbody.querySelectorAll('tr').forEach(function(row) {
+      total++;
+      var match = !s || row.textContent.toLowerCase().includes(s);
+      row.classList.toggle('row-hidden', !match);
+      if (match) vis++;
+    });
+  });
+  var cnt = document.getElementById('muniSearchCount');
+  if (cnt) cnt.textContent = s ? '(' + vis + ' of ' + total + ' shown)' : '';
+}
+
+/* ---- corp row search + sector filter ---- */
+function filterCorpRows() {
+  var el = document.getElementById('corpsSearch');
+  var s = el ? el.value.toLowerCase().trim() : '';
+  var btn = document.querySelector('.filter-btn.active');
+  var activeSector = btn ? btn.dataset.sector || btn.textContent.trim() : 'All';
+  var rows = document.querySelectorAll('#corpsTable tbody tr');
+  var vis = 0;
+  rows.forEach(function(row) {
+    var sector = row.dataset.sector || '';
+    var sectorOk = activeSector === 'all' || activeSector === 'All' || activeSector.startsWith('All') || sector === activeSector;
+    var searchOk = !s || row.textContent.toLowerCase().includes(s);
+    var show = sectorOk && searchOk;
+    row.classList.toggle('row-hidden', !show);
+    if (show) vis++;
+  });
+  var cnt = document.getElementById('corpSearchCount');
+  if (cnt) cnt.textContent = s ? '(' + vis + ' shown)' : '';
+}
+
+/* ---- sector button click (replaces original filterCorps) ---- */
+function filterCorps(sector, el) {
+  document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  el.classList.add('active');
+  filterCorpRows();
+}
+
+/* ---- jump to tab from pick card ---- */
+function jumpToTab(tabName) {
+  switchTab(tabName, document.querySelector('.tab[data-tab="' + tabName + '"]'));
+  window.scrollTo(0, 0);
+}
+
+/* ---- init ---- */
+function initDashboard() {
+  setTaxRate(21, null);
+  refreshSalesTools();
+  switchTab('strategies', document.querySelector('.tab[data-tab="strategies"]'));
+  updateMuniBadge();
+}
+
+function updateMuniBadge() {
+  var badge = document.getElementById('muniBadge');
+  if (!badge) return;
+  var total = 0;
+  ['muniSearchable', 'stdMuniTableBody', 'taxableMuniTableBody'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) total += el.querySelectorAll('tr').length;
+  });
+  badge.textContent = total + ' Munis';
+  var invCount = document.getElementById('muniInvCount');
+  if (invCount) invCount.textContent = total;
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initDashboard);
+} else {
+  initDashboard();
+}
+
+</script>
+</body>
+</html>

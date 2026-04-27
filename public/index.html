@@ -1,0 +1,1223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FBBS Market Intelligence Portal</title>
+<link rel="stylesheet" href="/css/portal.css">
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <img class="brand-logo" src="/assets/fbbs-logo.svg" alt="FBBS">
+    <div class="brand-text">
+      <h1>First Bankers' Banc Securities</h1>
+      <p>Market Intelligence Portal</p>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-section">
+      <div class="nav-section-title">Home</div>
+      <a class="nav-link" data-page="home" href="#home">
+        <span class="nav-icon">&#8962;</span>
+        <span class="nav-label">Dashboard</span>
+      </a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-title">Publications</div>
+      <a class="nav-link" data-page="dashboard" href="#dashboard">
+        <span class="nav-icon">&#9632;</span>
+        <span class="nav-label">FBBS Sales Dashboard</span>
+      </a>
+      <a class="nav-link" data-page="econ" href="#econ">
+        <span class="nav-icon">&#9632;</span>
+        <span class="nav-label">Economic Update</span>
+      </a>
+      <a class="nav-link" data-page="cd" href="#cd">
+        <span class="nav-icon">&#9632;</span>
+        <span class="nav-label">Brokered CD Sheet</span>
+      </a>
+      <a class="nav-link" data-page="cdoffers" href="#cdoffers">
+        <span class="nav-icon">&#9632;</span>
+        <span class="nav-label">CD Offerings</span>
+      </a>
+      <a class="nav-link" data-page="munioffers" href="#munioffers">
+        <span class="nav-icon">&#9632;</span>
+        <span class="nav-label">Muni Offerings</span>
+      </a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-title">Explorers</div>
+      <a class="nav-link" data-page="explorer" href="#explorer">
+        <span class="nav-icon">&#9679;</span>
+        <span class="nav-label">CD Explorer</span>
+      </a>
+      <a class="nav-link" data-page="muni-explorer" href="#muni-explorer">
+        <span class="nav-icon">&#9679;</span>
+        <span class="nav-label">Muni Explorer</span>
+      </a>
+      <a class="nav-link" data-page="agencies" href="#agencies">
+        <span class="nav-icon">&#9679;</span>
+        <span class="nav-label">Agencies</span>
+      </a>
+      <a class="nav-link" data-page="corporates" href="#corporates">
+        <span class="nav-icon">&#9679;</span>
+        <span class="nav-label">Corporates</span>
+      </a>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-title">Management</div>
+      <a class="nav-link" data-page="archive" href="#archive">
+        <span class="nav-icon">&#9776;</span>
+        <span class="nav-label">Archive</span>
+      </a>
+      <a class="nav-link" data-page="upload" href="#upload">
+        <span class="nav-icon">&#8593;</span>
+        <span class="nav-label">Upload</span>
+      </a>
+      <a class="nav-link" data-page="builder" href="#builder">
+        <span class="nav-icon">&#9733;</span>
+        <span class="nav-label">Dashboard Builder</span>
+      </a>
+      <a class="nav-link" data-page="admin" href="#admin">
+        <span class="nav-icon">&#9881;</span>
+        <span class="nav-label">Admin</span>
+      </a>
+    </div>
+  </nav>
+
+  <div class="sidebar-footer">
+    <a class="nav-link nav-cta" href="https://fbbsinc.com" target="_blank" rel="noopener">
+      <span class="nav-label">fbbsinc.com</span>
+      <span class="nav-icon">&#x2197;</span>
+    </a>
+    <div class="sidebar-phone">(888) 726-2880</div>
+    <div class="sidebar-disclaimer">For Institutional Use Only</div>
+  </div>
+</aside>
+
+<!-- MAIN AREA -->
+<div class="main-area">
+
+<!-- TOP STRIP (above content) -->
+<header class="top-strip">
+  <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="top-strip-date">
+    <span class="tsd-label">Today</span>
+    <span class="tsd-value" id="heroDate">&mdash;</span>
+  </div>
+  <div class="top-strip-links">
+    <a href="https://eportfolio.fbbsinc.com/ePortfolio/Account/Login" target="_blank" rel="noopener">Portfolio Accounting</a>
+    <a href="https://www.netxinvestor.com/nxi/login" target="_blank" rel="noopener">NETX Investor</a>
+  </div>
+</header>
+
+<!-- ========== HOME PAGE ========== -->
+<div class="page active" id="p-home">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Sales <strong>Command Center</strong></h2>
+        <p class="hero-sub" id="homeSubtitle">Loading status&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="homeStat">&mdash; / 8</div>
+        <div class="lbl">Documents Published</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Today's Market Snapshot</h3>
+      <div class="kicker" id="homeKicker">&mdash;</div>
+    </div>
+
+    <div class="quality-bar" id="homeQualityBar">
+      <div class="quality-item"><span class="q-label">Files</span><strong id="qualityFiles">—</strong></div>
+      <div class="quality-item"><span class="q-label">Dates</span><strong id="qualityDates">—</strong></div>
+      <div class="quality-item"><span class="q-label">Extracted</span><strong id="qualityCounts">—</strong></div>
+      <div class="quality-item"><span class="q-label">Parser Warnings</span><strong id="qualityWarnings">—</strong></div>
+    </div>
+
+    <div class="home-market-tiles" id="homeMarketTiles"></div>
+
+    <section class="universal-search-panel">
+      <div class="search-panel-head">
+        <div>
+          <h3>Search All Offerings</h3>
+          <p>Find bonds by issuer, ticker, CUSIP, sector, state, or rating.</p>
+        </div>
+        <button class="small-btn" data-goto="explorer">Open CD Explorer</button>
+      </div>
+      <div class="global-search-row">
+        <input type="text" id="globalSearchInput" placeholder="Search JPM, FHLB, Texas, 3133, A-rated, healthcare..." autocomplete="off">
+      </div>
+      <div class="global-results" id="globalSearchResults">
+        <div class="global-empty">Start typing to search CDs, munis, agencies, and corporates.</div>
+      </div>
+    </section>
+
+    <div class="section-title-bar compact-title">
+      <h3>Today's Publications</h3>
+      <div class="kicker">Files &amp; source documents</div>
+    </div>
+
+    <div class="docs-grid" id="homeDocsGrid">
+      <!-- populated by JS -->
+    </div>
+
+    <div class="publish-bar">
+      <div class="pb-text">Need to publish today's documents? Upload all eight items in one step.</div>
+      <button class="publish-btn" data-goto="upload">Go to Upload</button>
+    </div>
+  </div>
+</div>
+
+<!-- ========== DASHBOARD PAGE ========== -->
+<div class="page" id="p-dashboard">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>FBBS Sales <strong>Dashboard</strong></h2>
+        <p class="hero-sub" id="dashSub">Loading&hellip;</p>
+      </div>
+      <button class="publish-btn" id="dashOpenBtn">Open Full View &uarr;</button>
+    </div>
+  </section>
+  <div class="container">
+    <div class="viewer-wrap">
+      <div class="viewer-tabs">
+        <button class="v-tab active">FBBS Sales Dashboard (HTML)</button>
+        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
+        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
+        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
+        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
+      </div>
+      <div class="viewer-frame" id="dashFrame">
+        <div class="viewer-empty">
+          <div class="ff-kicker">No Document Loaded</div>
+          <h2>No dashboard has been uploaded yet</h2>
+          <p>Go to the Upload page to publish today's FBBS Sales Dashboard HTML.</p>
+          <button class="doc-btn" data-goto="upload">Go to Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== ECON UPDATE PAGE ========== -->
+<div class="page" id="p-econ">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Economic <strong>Update</strong></h2>
+        <p class="hero-sub" id="econSub">Loading&hellip;</p>
+      </div>
+      <button class="publish-btn" id="econDownloadBtn">Download PDF &darr;</button>
+    </div>
+  </section>
+  <div class="container">
+    <div class="viewer-wrap">
+      <div class="viewer-tabs">
+        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
+        <button class="v-tab active">Economic Update (PDF)</button>
+        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
+        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
+        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
+      </div>
+      <div class="viewer-frame" id="econFrame">
+        <div class="viewer-empty">
+          <div class="ff-kicker">No Document Loaded</div>
+          <h2>No Economic Update uploaded yet</h2>
+          <p>Go to the Upload page to publish today's Economic Update PDF.</p>
+          <button class="doc-btn" data-goto="upload">Go to Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== CD RATE SHEET PAGE ========== -->
+<div class="page" id="p-cd">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Brokered CD <strong>Rate Sheet</strong></h2>
+        <p class="hero-sub" id="cdSub">Loading&hellip;</p>
+      </div>
+      <button class="publish-btn" id="cdDownloadBtn">Download PDF &darr;</button>
+    </div>
+  </section>
+  <div class="container">
+    <div class="viewer-wrap">
+      <div class="viewer-tabs">
+        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
+        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
+        <button class="v-tab active">CD Rate Sheet (PDF)</button>
+        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
+        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
+      </div>
+      <div class="viewer-frame" id="cdFrame">
+        <div class="viewer-empty">
+          <div class="ff-kicker">No Document Loaded</div>
+          <h2>No CD Rate Sheet uploaded yet</h2>
+          <p>Go to the Upload page to publish today's Brokered CD Rate Sheet.</p>
+          <button class="doc-btn" data-goto="upload">Go to Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== CD OFFERINGS PAGE ========== -->
+<div class="page" id="p-cdoffers">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Daily CD <strong>Offerings</strong></h2>
+        <p class="hero-sub" id="cdoffersSub">Loading&hellip;</p>
+      </div>
+      <button class="publish-btn" id="cdoffersDownloadBtn">Download PDF &darr;</button>
+    </div>
+  </section>
+  <div class="container">
+    <div class="viewer-wrap">
+      <div class="viewer-tabs">
+        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
+        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
+        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
+        <button class="v-tab active">CD Offerings (PDF)</button>
+        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
+      </div>
+      <div class="viewer-frame" id="cdoffersFrame">
+        <div class="viewer-empty">
+          <div class="ff-kicker">No Document Loaded</div>
+          <h2>No CD Offerings sheet uploaded yet</h2>
+          <p>Go to the Upload page to publish today's Daily CD Offerings.</p>
+          <button class="doc-btn" data-goto="upload">Go to Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== MUNI OFFERINGS PAGE ========== -->
+<div class="page" id="p-munioffers">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Muni <strong>Offerings</strong></h2>
+        <p class="hero-sub" id="munioffersSub">Loading&hellip;</p>
+      </div>
+      <button class="publish-btn" id="munioffersDownloadBtn">Download PDF &darr;</button>
+    </div>
+  </section>
+  <div class="container">
+    <div class="viewer-wrap">
+      <div class="viewer-tabs">
+        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
+        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
+        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
+        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
+        <button class="v-tab active">Muni Offerings (PDF)</button>
+      </div>
+      <div class="viewer-frame" id="munioffersFrame">
+        <div class="viewer-empty">
+          <div class="ff-kicker">No Document Loaded</div>
+          <h2>No Muni Offerings sheet uploaded yet</h2>
+          <p>Go to the Upload page to publish today's Muni Offerings PDF.</p>
+          <button class="doc-btn" data-goto="upload">Go to Upload</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== ARCHIVE PAGE ========== -->
+<div class="page" id="p-archive">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Publication <strong>Archive</strong></h2>
+        <p class="hero-sub">Every daily package organized by date</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="archiveCount">&mdash;</div>
+        <div class="lbl">Archived Days</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <table class="archive-table">
+      <thead>
+        <tr>
+          <th style="width:140px">Date</th>
+          <th>Documents</th>
+          <th style="width:180px">Published</th>
+          <th style="width:120px;text-align:right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="archiveBody">
+        <tr><td colspan="4" style="text-align:center;padding:40px;color:var(--text3)">Loading archive&hellip;</td></tr>
+      </tbody>
+    </table>
+
+    <div class="legend-box">
+      <strong>Legend:</strong>
+      Green chip = document published. Gray chip = missing / not published. Click any chip to open that document.
+    </div>
+  </div>
+</div>
+
+<!-- ========== UPLOAD PAGE ========== -->
+<div class="page" id="p-upload">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Upload <strong>Today's Package</strong></h2>
+        <p class="hero-sub">Drop all eight items below &middot; Portal auto-detects file types</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="uploadStat">0 / 8</div>
+        <div class="lbl">Files Selected</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Daily Upload &middot; Eight Items</h3>
+      <div class="kicker" id="uploadDate">&mdash;</div>
+    </div>
+
+    <div class="quality-bar compact" id="uploadQualityBar">
+      <div class="quality-item"><span class="q-label">Current Files</span><strong id="uploadQualityFiles">—</strong></div>
+      <div class="quality-item"><span class="q-label">Date Check</span><strong id="uploadQualityDates">—</strong></div>
+      <div class="quality-item"><span class="q-label">Data Rows</span><strong id="uploadQualityCounts">—</strong></div>
+      <div class="quality-item"><span class="q-label">Warnings</span><strong id="uploadQualityWarnings">—</strong></div>
+    </div>
+
+    <form id="uploadForm" enctype="multipart/form-data">
+      <section class="upload-section">
+        <div class="upload-section-head">
+          <div>
+            <h4>Daily Publications</h4>
+            <p>Core documents sales teams open throughout the day.</p>
+          </div>
+          <span>HTML + PDFs</span>
+        </div>
+        <div class="upload-grid">
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>FBBS Sales Dashboard</span>
+            <span class="ft">.HTML</span>
+          </div>
+          <label class="drop-zone" data-slot="dashboard">
+            <input type="file" accept=".html,.htm" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop HTML File">Drop HTML File</h5>
+            <p data-default="or click to browse">or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-dashboard">
+            <span>Accepts: .html</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Economic Update</span>
+            <span class="ft">.PDF</span>
+          </div>
+          <label class="drop-zone" data-slot="econ">
+            <input type="file" accept=".pdf" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop PDF File">Drop PDF File</h5>
+            <p data-default="or click to browse">or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-econ">
+            <span>Accepts: .pdf</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Brokered CD Sheet</span>
+            <span class="ft">.PDF</span>
+          </div>
+          <label class="drop-zone" data-slot="cd">
+            <input type="file" accept=".pdf" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop PDF File">Drop PDF File</h5>
+            <p data-default="or click to browse">or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-cd">
+            <span>Accepts: .pdf</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        </div>
+      </section>
+
+      <section class="upload-section">
+        <div class="upload-section-head">
+          <div>
+            <h4>Offering PDFs</h4>
+            <p>PDFs parsed into searchable CD and muni explorer data.</p>
+          </div>
+          <span>Structured PDFs</span>
+        </div>
+        <div class="upload-grid">
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Daily CD Offerings</span>
+            <span class="ft">.PDF</span>
+          </div>
+          <label class="drop-zone" data-slot="cdoffers">
+            <input type="file" accept=".pdf" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop PDF File">Drop PDF File</h5>
+            <p data-default="or click to browse">or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-cdoffers">
+            <span>Accepts: .pdf</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Muni Offerings</span>
+            <span class="ft">.PDF</span>
+          </div>
+          <label class="drop-zone" data-slot="munioffers">
+            <input type="file" accept=".pdf" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop PDF File">Drop PDF File</h5>
+            <p data-default="or click to browse">or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-munioffers">
+            <span>Accepts: .pdf</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        </div>
+      </section>
+
+      <section class="upload-section">
+        <div class="upload-section-head">
+          <div>
+            <h4>Trader Excel Files</h4>
+            <p>Agency and corporate inventory workbooks from the desk.</p>
+          </div>
+          <span>XLSX</span>
+        </div>
+        <div class="upload-grid">
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Agencies &mdash; Bullets</span>
+            <span class="ft">.XLSX</span>
+          </div>
+          <label class="drop-zone" data-slot="agenciesBullets">
+            <input type="file" accept=".xlsx,.xls" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop Bullets File">Drop Bullets File</h5>
+            <p data-default="bullets_*.xlsx, or click to browse">bullets_*.xlsx, or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-agenciesBullets">
+            <span>Accepts: .xlsx</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Agencies &mdash; Callables</span>
+            <span class="ft">.XLSX</span>
+          </div>
+          <label class="drop-zone" data-slot="agenciesCallables">
+            <input type="file" accept=".xlsx,.xls" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop Callables File">Drop Callables File</h5>
+            <p data-default="callables_*.xlsx, or click to browse">callables_*.xlsx, or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-agenciesCallables">
+            <span>Accepts: .xlsx</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Corporates</span>
+            <span class="ft">.XLSX</span>
+          </div>
+          <label class="drop-zone" data-slot="corporates">
+            <input type="file" accept=".xlsx,.xls" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop Corporates File">Drop Corporates File</h5>
+            <p data-default="corporates_*.xlsx, or click to browse">corporates_*.xlsx, or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-corporates">
+            <span>Accepts: .xlsx</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+      </div>
+      </section>
+
+      <div class="publish-bar">
+        <div class="pb-text">Ready to publish? Today's documents will replace the current package (yesterday's gets archived automatically).</div>
+        <button type="submit" class="publish-btn" id="publishBtn">Publish Package</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ========== DASHBOARD BUILDER PAGE ========== -->
+<div class="page" id="p-builder">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Dashboard <strong>Builder</strong></h2>
+        <p class="hero-sub">Generate, preview, and publish the FBBS Sales Dashboard from portal data</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="builderStat">&mdash;</div>
+        <div class="lbl">Preflight</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Sales Dashboard Workflow</h3>
+      <div class="kicker" id="builderKicker">&mdash;</div>
+    </div>
+
+    <div class="builder-panel">
+      <div class="builder-copy">
+        <h3>Morning Process</h3>
+        <p>Upload the daily package first. Then generate a draft FBBS Sales Dashboard from the structured CD, muni, agency, and corporate data already parsed by the portal.</p>
+        <p>This first portal-owned version is source-backed and conservative. Macro, MMD, brokered CD, CD relative value, CMO, and trader commentary sections are marked as pending until those parsers are added.</p>
+      </div>
+      <div class="builder-actions">
+        <button type="button" class="doc-btn" id="generateDashboardBtn">Generate Draft</button>
+        <a class="doc-btn outline disabled-link" id="previewDashboardBtn" href="#" target="_blank" rel="noopener">Preview Draft</a>
+        <button type="button" class="doc-btn outline" id="publishDashboardBtn" disabled>Publish Dashboard</button>
+      </div>
+    </div>
+
+    <div class="builder-status-grid" id="builderStatusGrid"></div>
+
+    <div class="builder-checks">
+      <div class="section-title-bar compact-title">
+        <h3>Preflight Checks</h3>
+        <div class="kicker">Must pass before final publication</div>
+      </div>
+      <div id="builderChecks" class="check-list">
+        <div class="global-empty">Generate a draft to run preflight checks.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== OFFERINGS EXPLORER PAGE ========== -->
+<div class="page" id="p-explorer">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>CD Offerings <strong>Explorer</strong></h2>
+        <p class="hero-sub" id="explorerSub">Loading&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="explorerStat">&mdash;</div>
+        <div class="lbl">CDs Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Filter &amp; Sort CD Offerings</h3>
+      <div class="kicker" id="explorerKicker">&mdash;</div>
+    </div>
+
+    <div class="explorer-stats" id="cdStatTiles"></div>
+
+    <div class="explorer-filters">
+      <label class="ef-field">
+        <span>Search</span>
+        <input type="text" id="ef-search" placeholder="Issuer name, CUSIP&hellip;" autocomplete="off">
+      </label>
+      <label class="ef-field">
+        <span>Term</span>
+        <select id="ef-term">
+          <option value="">All terms</option>
+        </select>
+      </label>
+      <label class="ef-field">
+        <span>Min rate %</span>
+        <input type="number" id="ef-minrate" step="0.01" min="0" max="20" placeholder="e.g. 3.8">
+      </label>
+      <label class="ef-field">
+        <span>Issuer state</span>
+        <select id="ef-state">
+          <option value="">All states</option>
+        </select>
+      </label>
+      <label class="ef-field">
+        <span>Coupon freq</span>
+        <select id="ef-cpn">
+          <option value="">All</option>
+          <option value="at maturity">At maturity</option>
+          <option value="monthly">Monthly</option>
+          <option value="quarterly">Quarterly</option>
+          <option value="semiannually">Semiannually</option>
+          <option value="annually">Annually</option>
+        </select>
+      </label>
+      <label class="ef-field ef-check">
+        <input type="checkbox" id="ef-noRestrictions">
+        <span>Hide CDs with restrictions</span>
+      </label>
+      <div class="ef-actions">
+        <button type="button" class="small-btn" id="ef-reset">Reset</button>
+        <button type="button" class="small-btn" id="ef-export">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table">
+        <thead>
+          <tr>
+            <th data-sort="term" style="width:70px">Term</th>
+            <th data-sort="name">Issuer</th>
+            <th data-sort="rate" style="width:80px;text-align:right">Rate %</th>
+            <th data-sort="maturity" style="width:120px">Maturity</th>
+            <th data-sort="cusip" style="width:110px">CUSIP</th>
+            <th data-sort="settle" style="width:120px">Settle</th>
+            <th data-sort="issuerState" style="width:60px">State</th>
+            <th style="width:140px">Restrictions</th>
+            <th data-sort="couponFrequency" style="width:120px">Coupon</th>
+          </tr>
+        </thead>
+        <tbody id="explorerBody">
+          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="legend-box">
+      <strong>Tip:</strong>
+      Click a column header to sort. Restrictions list shows states where the CD cannot be purchased.
+      Data is extracted automatically from the Daily CD Offerings PDF on each publish.
+    </div>
+  </div>
+</div>
+
+<!-- ========== MUNI OFFERINGS EXPLORER PAGE ========== -->
+<div class="page" id="p-muni-explorer">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Muni Offerings <strong>Explorer</strong></h2>
+        <p class="hero-sub" id="muniExplorerSub">Loading&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="muniExplorerStat">&mdash;</div>
+        <div class="lbl">Bonds Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Filter &amp; Sort Muni Offerings</h3>
+      <div class="kicker" id="muniExplorerKicker">&mdash;</div>
+    </div>
+
+    <div class="explorer-stats" id="muniStatTiles"></div>
+
+    <div class="explorer-filters muni-filters">
+      <label class="ef-field">
+        <span>Search</span>
+        <input type="text" id="mf-search" placeholder="Issuer, CUSIP&hellip;" autocomplete="off">
+      </label>
+      <label class="ef-field">
+        <span>Section</span>
+        <select id="mf-section">
+          <option value="">All sections</option>
+          <option value="BQ">Bank Qualified</option>
+          <option value="Municipals">Municipals</option>
+          <option value="Taxable">Taxable Munis</option>
+        </select>
+      </label>
+      <label class="ef-field">
+        <span>State</span>
+        <select id="mf-state">
+          <option value="">All states</option>
+        </select>
+      </label>
+      <label class="ef-field">
+        <span>Min coupon %</span>
+        <input type="number" id="mf-minCoupon" step="0.01" min="0" max="20" placeholder="e.g. 4.0">
+      </label>
+      <label class="ef-field">
+        <span>Min YTW %</span>
+        <input type="number" id="mf-minYtw" step="0.01" min="0" max="20" placeholder="e.g. 3.0">
+      </label>
+      <label class="ef-field">
+        <span>Callable?</span>
+        <select id="mf-callable">
+          <option value="">Any</option>
+          <option value="callable">Callable only</option>
+          <option value="noncall">Non-callable only</option>
+        </select>
+      </label>
+      <label class="ef-field">
+        <span>Ratings</span>
+        <select id="mf-rated">
+          <option value="">Any</option>
+          <option value="both">Moody's &amp; S&amp;P</option>
+          <option value="moodys">Has Moody's</option>
+          <option value="sp">Has S&amp;P</option>
+          <option value="unrated">Unrated</option>
+        </select>
+      </label>
+      <div class="ef-actions">
+        <button type="button" class="small-btn" id="mf-reset">Reset</button>
+        <button type="button" class="small-btn" id="mf-export">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table muni-table">
+        <thead>
+          <tr>
+            <th data-sort="section" style="width:90px">Section</th>
+            <th style="width:110px">Ratings</th>
+            <th data-sort="quantity" style="width:80px;text-align:right">Qnty</th>
+            <th data-sort="issuerState" style="width:55px">ST</th>
+            <th data-sort="issuerName">Issuer</th>
+            <th data-sort="issueType" style="width:80px">Type</th>
+            <th data-sort="coupon" style="width:80px;text-align:right">Coupon %</th>
+            <th data-sort="maturity" style="width:120px">Maturity</th>
+            <th data-sort="callDate" style="width:120px">Call Date</th>
+            <th data-sort="ytw" style="width:90px;text-align:right">YTW / Sprd</th>
+            <th data-sort="price" style="width:85px;text-align:right">Price</th>
+            <th data-sort="cusip" style="width:100px">CUSIP</th>
+            <th style="width:140px">Credit Enh.</th>
+          </tr>
+        </thead>
+        <tbody id="muniExplorerBody">
+          <tr><td colspan="13" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="legend-box">
+      <strong>Tip:</strong>
+      Click a column header to sort. Taxable munis may show a spread (e.g. +40/5YR) in the YTW column instead of a yield.
+      "Section" reflects the PDF's grouping: BQ (bank-qualified), Municipals (standard tax-exempt), Taxable Munis.
+    </div>
+  </div>
+</div>
+
+<!-- ========== AGENCIES EXPLORER PAGE ========== -->
+<div class="page" id="p-agencies">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Agencies <strong>Explorer</strong></h2>
+        <p class="hero-sub" id="agenciesSub">Loading&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="agenciesStat">&mdash;</div>
+        <div class="lbl">Agencies Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Filter &amp; Sort Agencies</h3>
+      <div class="kicker" id="agenciesKicker">&mdash;</div>
+    </div>
+
+    <div class="explorer-stats" id="agencyStatTiles"></div>
+
+    <div class="agency-filters">
+      <div class="af-row">
+        <label class="ef-field af-search-field">
+          <span>Search (CUSIP or ticker)</span>
+          <input type="text" id="af-search" placeholder="e.g. 3133 or FHLB" autocomplete="off">
+        </label>
+
+        <div class="ef-field">
+          <span>Structure</span>
+          <div class="chk-group" id="af-structures">
+            <label class="chk-pill"><input type="checkbox" value="Bullet"><span>Bullet</span></label>
+            <label class="chk-pill"><input type="checkbox" value="Callable"><span>Callable</span></label>
+          </div>
+        </div>
+
+        <div class="ef-field af-flex">
+          <span>Issuer</span>
+          <div class="chk-group" id="af-tickers">
+            <!-- populated from data -->
+          </div>
+        </div>
+
+        <div class="ef-field af-flex">
+          <span>Call type</span>
+          <div class="chk-group" id="af-callTypes">
+            <!-- populated from data -->
+          </div>
+        </div>
+      </div>
+
+      <div class="af-row af-row-narrow">
+        <label class="ef-field">
+          <span>Maturity from</span>
+          <input type="date" id="af-matFrom">
+        </label>
+        <label class="ef-field">
+          <span>Maturity to</span>
+          <input type="date" id="af-matTo">
+        </label>
+        <label class="ef-field">
+          <span>Next call from</span>
+          <input type="date" id="af-callFrom">
+        </label>
+        <label class="ef-field">
+          <span>Next call to</span>
+          <input type="date" id="af-callTo">
+        </label>
+
+        <label class="ef-field">
+          <span>Min coupon %</span>
+          <input type="number" id="af-minCoupon" step="0.01" min="0" max="20" placeholder="e.g. 2.0">
+        </label>
+        <label class="ef-field">
+          <span>Max coupon %</span>
+          <input type="number" id="af-maxCoupon" step="0.01" min="0" max="20" placeholder="e.g. 6.0">
+        </label>
+
+        <label class="ef-field">
+          <span>Min YTM %</span>
+          <input type="number" id="af-minYtm" step="0.01" min="0" max="20" placeholder="3.5">
+        </label>
+
+        <label class="ef-field">
+          <span>Min YTNC %</span>
+          <input type="number" id="af-minYtnc" step="0.01" min="0" max="20" placeholder="0">
+        </label>
+
+        <label class="ef-field">
+          <span>Min price</span>
+          <input type="number" id="af-minPrice" step="0.01" min="0" max="200" placeholder="98">
+        </label>
+        <label class="ef-field">
+          <span>Max price</span>
+          <input type="number" id="af-maxPrice" step="0.01" min="0" max="200" placeholder="102">
+        </label>
+
+        <label class="ef-field">
+          <span>Min qty (MM)</span>
+          <input type="number" id="af-minQty" step="0.1" min="0" placeholder="1">
+        </label>
+
+        <div class="ef-actions af-actions">
+          <button type="button" class="small-btn" id="af-reset">Clear filters</button>
+          <button type="button" class="small-btn" id="af-export">Export CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table agency-table">
+        <thead>
+          <tr>
+            <th data-sort="structure" style="width:75px">Structure</th>
+            <th data-sort="ticker" style="width:70px">Issuer</th>
+            <th data-sort="cusip" style="width:100px">CUSIP</th>
+            <th data-sort="coupon" style="width:75px;text-align:right">Coupon %</th>
+            <th data-sort="maturity" style="width:110px">Maturity</th>
+            <th data-sort="nextCallDate" style="width:110px">Next Call</th>
+            <th data-sort="callType" style="width:95px">Call Type</th>
+            <th data-sort="ytm" style="width:80px;text-align:right">YTM %</th>
+            <th data-sort="ytnc" style="width:80px;text-align:right">YTNC %</th>
+            <th data-sort="askPrice" style="width:80px;text-align:right">Price</th>
+            <th data-sort="availableSize" style="width:75px;text-align:right">Qty (MM)</th>
+            <th data-sort="askSpread" style="width:75px;text-align:right">Spread</th>
+            <th data-sort="benchmark" style="width:95px">Bench</th>
+          </tr>
+        </thead>
+        <tbody id="agenciesBody">
+          <tr><td colspan="13" style="text-align:center;padding:40px;color:var(--text3)">Loading agencies&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="legend-box">
+      <strong>Tip:</strong>
+      YTNC and Spread/Benchmark columns are populated based on bond structure &mdash; callables get YTNC, bullets get Spread/Bench. Click column headers to sort; filter chips above for multi-select issuers and call types.
+    </div>
+  </div>
+</div>
+
+<!-- ========== CORPORATES EXPLORER PAGE ========== -->
+<div class="page" id="p-corporates">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Corporates <strong>Explorer</strong></h2>
+        <p class="hero-sub" id="corporatesSub">Loading&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="corporatesStat">&mdash;</div>
+        <div class="lbl">Bonds Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Filter &amp; Sort Corporates</h3>
+      <div class="kicker" id="corporatesKicker">&mdash;</div>
+    </div>
+
+    <div class="explorer-stats" id="corpStatTiles"></div>
+
+    <div class="agency-filters">
+      <div class="af-row corp-search-row">
+        <label class="ef-field af-search-field">
+          <span>Search ticker, issuer, or CUSIP</span>
+          <input type="text" id="cf-search" placeholder="Type JPM, JPMORGAN, 46625, etc." autocomplete="off">
+        </label>
+
+        <label class="ef-field">
+          <span>Credit tier</span>
+          <select id="cf-tier">
+            <option value="">Any</option>
+            <option value="IG">IG (Investment Grade)</option>
+            <option value="HY">HY (High Yield)</option>
+            <option value="AAA/AA">AAA / AA only</option>
+            <option value="A">A only</option>
+            <option value="BBB">BBB only</option>
+            <option value="NR">Unrated</option>
+          </select>
+        </label>
+
+        <label class="ef-field">
+          <span>Callable?</span>
+          <select id="cf-callable">
+            <option value="">Any</option>
+            <option value="callable">Callable only</option>
+            <option value="noncall">Non-callable only</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="af-row">
+        <div class="ef-field af-flex">
+          <span>Sector</span>
+          <div class="chk-group" id="cf-sectors"></div>
+        </div>
+        <div class="ef-field af-flex">
+          <span>Payment rank</span>
+          <div class="chk-group" id="cf-ranks"></div>
+        </div>
+      </div>
+
+      <div class="af-row af-row-narrow">
+        <label class="ef-field"><span>Maturity from</span><input type="date" id="cf-matFrom"></label>
+        <label class="ef-field"><span>Maturity to</span><input type="date" id="cf-matTo"></label>
+        <label class="ef-field"><span>Next call from</span><input type="date" id="cf-callFrom"></label>
+        <label class="ef-field"><span>Next call to</span><input type="date" id="cf-callTo"></label>
+
+        <label class="ef-field"><span>Min coupon %</span><input type="number" id="cf-minCoupon" step="0.01" min="0" max="20" placeholder="3"></label>
+        <label class="ef-field"><span>Max coupon %</span><input type="number" id="cf-maxCoupon" step="0.01" min="0" max="20" placeholder="7"></label>
+
+        <label class="ef-field"><span>Min YTM %</span><input type="number" id="cf-minYtm" step="0.01" min="0" max="20" placeholder="4"></label>
+
+        <label class="ef-field"><span>Min price</span><input type="number" id="cf-minPrice" step="0.01" min="0" max="200" placeholder="90"></label>
+        <label class="ef-field"><span>Max price</span><input type="number" id="cf-maxPrice" step="0.01" min="0" max="200" placeholder="110"></label>
+
+        <label class="ef-field"><span>Min qty (MM)</span><input type="number" id="cf-minQty" step="10" min="0" placeholder="500"></label>
+
+        <div class="ef-actions af-actions">
+          <button type="button" class="small-btn" id="cf-reset">Clear filters</button>
+          <button type="button" class="small-btn" id="cf-export">Export CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table corp-table">
+        <thead>
+          <tr>
+            <th data-sort="creditTier" style="width:72px">Tier</th>
+            <th style="width:110px">Ratings</th>
+            <th data-sort="issuerName">Issuer</th>
+            <th data-sort="ticker" style="width:70px">Tkr</th>
+            <th data-sort="sector" style="width:110px">Sector</th>
+            <th data-sort="paymentRank" style="width:100px">Rank</th>
+            <th data-sort="coupon" style="width:75px;text-align:right">Cpn %</th>
+            <th data-sort="maturity" style="width:105px">Maturity</th>
+            <th data-sort="nextCallDate" style="width:105px">Next Call</th>
+            <th data-sort="ytm" style="width:75px;text-align:right">YTM %</th>
+            <th data-sort="ytnc" style="width:75px;text-align:right">YTNC %</th>
+            <th data-sort="askPrice" style="width:75px;text-align:right">Price</th>
+            <th data-sort="availableSize" style="width:75px;text-align:right">Qty</th>
+            <th data-sort="cusip" style="width:95px">CUSIP</th>
+          </tr>
+        </thead>
+        <tbody id="corporatesBody">
+          <tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">Loading corporates&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="legend-box">
+      <strong>Tip:</strong>
+      Credit tier classification follows S&amp;P's letter grades (AAA/AA / A / BBB / HY / NR). "IG" = investment grade (BBB &amp; up). Amount outstanding in millions is sortable as Qty. Click column headers to sort.
+    </div>
+  </div>
+</div>
+
+<!-- ========== ADMIN PAGE ========== -->
+<div class="page" id="p-admin">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Admin &middot; <strong>Publish Log</strong></h2>
+        <p class="hero-sub">Audit trail of every package publish &mdash; newest first</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="adminStat">&mdash;</div>
+        <div class="lbl">Log Entries</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Publish History</h3>
+      <div class="kicker">Stored in data/audit.log</div>
+    </div>
+
+    <table class="archive-table">
+      <thead>
+        <tr>
+          <th style="width:170px">When</th>
+          <th style="width:120px">Package date</th>
+          <th style="width:140px">Published by</th>
+          <th>Files</th>
+          <th style="width:60px;text-align:right">CDs</th>
+          <th style="width:60px;text-align:right">Munis</th>
+          <th style="width:70px;text-align:right">Agencies</th>
+          <th style="width:70px;text-align:right">Corps</th>
+        </tr>
+      </thead>
+      <tbody id="adminBody">
+        <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3)">Loading audit log&hellip;</td></tr>
+      </tbody>
+    </table>
+
+    <div class="legend-box">
+      <strong>Note:</strong>
+      The audit log is an append-only file. Every publish writes a single JSON line including timestamp,
+      package date, file list, file sizes, and any validation warnings. Delete the file on the server to
+      clear it; restart not required.
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="footer-top">
+      <div class="footer-states">
+        ST. LOUIS, MO &middot; OVERLAND PARK, KS &middot; OKLAHOMA CITY, OK &middot; DENVER, CO &middot; NASHVILLE, TN &middot; MEMPHIS, TN
+      </div>
+      <div class="footer-badges">
+        <span>FINRA</span>
+        <span>MEMBER SIPC</span>
+        <span>MSRB</span>
+      </div>
+    </div>
+    <div class="footer-disclosure">
+      For Institutional Use Only. Investments are not FDIC insured, not bank guaranteed &amp; may lose value. Certificate of Deposit investments may qualify for FDIC insurance through the issuing bank.<br>
+      First Bankers' Banc Securities, Inc. is a member of FINRA/SIPC. Copyright &copy; 2026 FBBS, Inc.
+    </div>
+  </div>
+</footer>
+
+</div><!-- /.main-area -->
+
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<div class="toast" id="toast" role="status" aria-live="polite">Action completed</div>
+
+<script src="/js/portal.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "fbbs-portal",
+  "version": "1.4.1",
+  "private": true,
+  "description": "FBBS Market Intelligence Portal — internal web app for publishing the daily document package.",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node tests/parser-regression.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "pdf-parse": "^2.4.5",
+    "xlsx": "^0.18.5"
+  }
+}
