@@ -226,7 +226,7 @@
       : (qualitySummary.datesMatch ? 'Dates match' : 'Check dates');
     const warningsText = qualitySummary.warnings
       ? `${qualitySummary.warnings} warning${qualitySummary.warnings === 1 ? '' : 's'}`
-      : 'None';
+      : 'No warnings';
 
     setText('qualityFiles', fileText);
     setText('uploadQualityFiles', fileText);
@@ -2186,7 +2186,7 @@
           : '';
         const warnings = Array.isArray(e.warnings) && e.warnings.length
           ? `<div class="admin-warnings">${e.warnings.map(w => `&#9888; ${escapeHtml(w)}`).join('<br>')}</div>`
-          : '';
+          : '<div class="admin-clean">No warnings</div>';
         const cdCount = e.offeringsCount != null ? e.offeringsCount : '—';
         const muniCount = e.muniOfferingsCount != null ? e.muniOfferingsCount : '—';
         const agencyCountCell = e.agencyCount != null ? e.agencyCount : '—';
