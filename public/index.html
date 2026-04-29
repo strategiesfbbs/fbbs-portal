@@ -42,66 +42,40 @@
       </div>
     </div>
 
-    <div class="nav-section nav-group open" data-nav-group="cds">
-      <button class="nav-parent" type="button" aria-expanded="true" data-nav-toggle="cds">
-        <span class="nav-icon">CD</span>
-        <span class="nav-label">CDs</span>
+    <div class="nav-section nav-group open" data-nav-group="offerings">
+      <button class="nav-parent" type="button" aria-expanded="true" data-nav-toggle="offerings">
+        <span class="nav-icon">OF</span>
+        <span class="nav-label">Offerings</span>
         <span class="nav-caret">&#8250;</span>
       </button>
       <div class="nav-sub">
         <a class="nav-link nav-minor" data-page="explorer" href="#explorer">
           <span class="nav-label">CD Explorer</span>
         </a>
-        <a class="nav-link nav-minor" data-page="cdoffers" href="#cdoffers">
-          <span class="nav-label">Daily CD Offers</span>
+        <a class="nav-link nav-minor" data-page="muni-explorer" href="#muni-explorer">
+          <span class="nav-label">Muni Explorer</span>
         </a>
+        <a class="nav-link nav-minor" data-page="agencies" href="#agencies">
+          <span class="nav-label">Agency Explorer</span>
+        </a>
+        <a class="nav-link nav-minor" data-page="corporates" href="#corporates">
+          <span class="nav-label">Corporate Explorer</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-section nav-group" data-nav-group="cds">
+      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="cds">
+        <span class="nav-icon">CD</span>
+        <span class="nav-label">CDs</span>
+        <span class="nav-caret">&#8250;</span>
+      </button>
+      <div class="nav-sub">
         <a class="nav-link nav-minor" data-page="cd-recap" href="#cd-recap">
           <span class="nav-label">Weekly CD Recap</span>
         </a>
         <a class="nav-link nav-minor" data-page="cd" href="#cd">
           <span class="nav-label">Brokered CD Sheet</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="nav-section nav-group" data-nav-group="munis">
-      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="munis">
-        <span class="nav-icon">MU</span>
-        <span class="nav-label">Munis</span>
-        <span class="nav-caret">&#8250;</span>
-      </button>
-      <div class="nav-sub">
-        <a class="nav-link nav-minor" data-page="muni-explorer" href="#muni-explorer">
-          <span class="nav-label">Muni Explorer</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="munioffers" href="#munioffers">
-          <span class="nav-label">Muni Offerings</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="nav-section nav-group" data-nav-group="agencies">
-      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="agencies">
-        <span class="nav-icon">AG</span>
-        <span class="nav-label">Agencies</span>
-        <span class="nav-caret">&#8250;</span>
-      </button>
-      <div class="nav-sub">
-        <a class="nav-link nav-minor" data-page="agencies" href="#agencies">
-          <span class="nav-label">Agency Explorer</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="nav-section nav-group" data-nav-group="corporates">
-      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="corporates">
-        <span class="nav-icon">CO</span>
-        <span class="nav-label">Corporates</span>
-        <span class="nav-caret">&#8250;</span>
-      </button>
-      <div class="nav-sub">
-        <a class="nav-link nav-minor" data-page="corporates" href="#corporates">
-          <span class="nav-label">Corporate Explorer</span>
         </a>
       </div>
     </div>
@@ -175,49 +149,78 @@
   <section class="page-hero">
     <div class="page-hero-inner">
       <div>
-        <h2>Sales <strong>Command Center</strong></h2>
+        <h2>Portal <strong>Command Center</strong></h2>
         <p class="hero-sub" id="homeSubtitle">Loading status&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="homePackageStat">&mdash;</div>
+        <div class="lbl">Current Files</div>
       </div>
     </div>
   </section>
 
   <div class="container">
-    <div class="section-title-bar">
-      <h3>Today's Market Snapshot</h3>
+    <div class="home-section-row">
+      <div>
+        <h3>Market Snapshot</h3>
+        <p>Live totals from the current parsed offering files.</p>
+      </div>
       <div class="kicker" id="homeKicker">&mdash;</div>
     </div>
 
     <div class="home-market-tiles" id="homeMarketTiles"></div>
 
-    <section class="universal-search-panel">
-      <div class="search-panel-head">
-        <div>
-          <h3>Search All Offerings</h3>
-          <p>Find bonds by issuer, ticker, CUSIP, sector, state, or rating.</p>
-        </div>
-        <button class="small-btn" data-goto="explorer">Open CD Explorer</button>
-      </div>
-      <div class="global-search-row">
-        <input type="text" id="globalSearchInput" placeholder="Search JPM, FHLB, Texas, 3133, A-rated, healthcare..." autocomplete="off">
-      </div>
-      <div class="global-results" id="globalSearchResults">
-        <div class="global-empty">Start typing to search CDs, munis, agencies, and corporates.</div>
-      </div>
-    </section>
+    <section class="home-launch-grid" id="homeLaunchGrid"></section>
 
-    <div class="section-title-bar compact-title">
-      <h3>Today's Publications</h3>
-      <div class="kicker">Files &amp; source documents</div>
+    <div class="home-workspace">
+      <section class="home-primary-panel">
+        <div class="home-panel-head">
+          <div>
+            <span class="tool-eyebrow">Find Anything</span>
+            <h3>Search the portal</h3>
+            <p>Offerings, CUSIPs, issuers, ratings, states, and product inventory.</p>
+          </div>
+          <button class="small-btn" data-goto="explorer">Open CD Explorer</button>
+        </div>
+        <div class="global-search-row">
+          <input type="text" id="globalSearchInput" placeholder="Search JPM, FHLB, Texas, 3133, A-rated, healthcare..." autocomplete="off">
+        </div>
+        <div class="global-results" id="globalSearchResults">
+          <div class="global-empty">Start typing to search CDs, munis, agencies, and corporates.</div>
+        </div>
+      </section>
+
+      <aside class="home-side-panel">
+        <div class="home-panel-head compact">
+          <div>
+            <span class="tool-eyebrow">Next Best Actions</span>
+            <h3>Work queue</h3>
+          </div>
+        </div>
+        <div class="home-work-list" id="homeWorkList"></div>
+      </aside>
+    </div>
+
+    <div class="home-section-row">
+      <div>
+        <h3>Current Publications</h3>
+        <p>Raw source files remain one click away for viewing and download.</p>
+      </div>
+      <button class="small-btn" data-goto="upload">Upload Package</button>
     </div>
 
     <div class="docs-grid" id="homeDocsGrid">
       <!-- populated by JS -->
     </div>
 
-    <div class="publish-bar">
-      <div class="pb-text">Need to publish today's documents? Upload all eight items in one step.</div>
-      <button class="publish-btn" data-goto="upload">Go to Upload</button>
+    <div class="home-section-row">
+      <div>
+        <h3>Package Status</h3>
+        <p>Publish state, parser health, and date alignment for the current package.</p>
+      </div>
     </div>
+
+    <div class="home-status-strip bottom" id="homeStatusTiles"></div>
   </div>
 </div>
 
@@ -433,6 +436,10 @@
               <span>Annual Cost</span>
               <strong id="cdCalcAnnualCost">—</strong>
               <p id="cdCalcResultMeta">Choose a term and amount.</p>
+            </div>
+            <div class="cd-result-card">
+              <span>Cost Through Maturity</span>
+              <strong id="cdCalcTermCost">—</strong>
             </div>
             <div class="cd-result-card">
               <span>Monthly Equivalent</span>

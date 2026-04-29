@@ -60,13 +60,13 @@
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
-    { page: 'cdoffers', group: 'CDs', label: 'Daily CD Offers', description: 'View the daily CD offerings PDF', aliases: 'daily cd offerings offers pdf' },
+    { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
-    { page: 'explorer', group: 'CDs', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates' },
-    { page: 'munioffers', group: 'Munis', label: 'Muni Offerings', description: 'View the muni offerings PDF', aliases: 'municipal pdf munis' },
-    { page: 'muni-explorer', group: 'Munis', label: 'Muni Explorer', description: 'Filter, sort, and export muni offerings', aliases: 'municipal bonds state rating munis' },
-    { page: 'agencies', group: 'Agencies', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet' },
-    { page: 'corporates', group: 'Corporates', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector' },
+    { page: 'explorer', group: 'Offerings', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates offerings' },
+    { page: 'munioffers', group: 'Documents', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
+    { page: 'muni-explorer', group: 'Offerings', label: 'Muni Explorer', description: 'Filter, sort, and export muni offerings', aliases: 'municipal bonds state rating munis offerings' },
+    { page: 'agencies', group: 'Offerings', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
+    { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert salesforce' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
@@ -77,13 +77,11 @@
     dashboard: 'fbbs',
     econ: 'fbbs',
     cd: 'cds',
-    cdoffers: 'cds',
     'cd-recap': 'cds',
-    explorer: 'cds',
-    munioffers: 'munis',
-    'muni-explorer': 'munis',
-    agencies: 'agencies',
-    corporates: 'corporates',
+    explorer: 'offerings',
+    'muni-explorer': 'offerings',
+    agencies: 'offerings',
+    corporates: 'offerings',
     banks: 'banks'
   };
 
@@ -606,6 +604,117 @@
     ]);
   }
 
+  function renderHomeStatusTiles(filled) {
+    const pkg = currentPackage || {};
+    const dateText = qualitySummary.datesMatch == null
+      ? 'No date check'
+      : (qualitySummary.datesMatch ? 'Dates aligned' : 'Check dates');
+    const warningText = qualitySummary.warnings
+      ? `${qualitySummary.warnings} warning${qualitySummary.warnings === 1 ? '' : 's'}`
+      : 'Clean';
+
+    renderStatTiles('homeStatusTiles', [
+      { label: 'Package', value: `${filled} / ${TOTAL_SLOTS} files` },
+      { label: 'Published', value: pkg.publishedAt ? formatTime(pkg.publishedAt) : 'Not yet' },
+      { label: 'Data Health', value: warningText },
+      { label: 'Date Check', value: dateText }
+    ]);
+  }
+
+  function homeMissingDocs() {
+    const pkg = currentPackage || {};
+    return SLOTS
+      .filter(slot => !pkg[slot])
+      .map(slot => DOC_TYPES[slot].label);
+  }
+
+  function homeWorkItemHtml(item) {
+    return `
+      <button type="button" class="home-work-item ${item.tone || ''}" data-goto="${escapeHtml(item.page)}">
+        <span>${escapeHtml(item.kicker)}</span>
+        <strong>${escapeHtml(item.title)}</strong>
+        <em>${escapeHtml(item.detail)}</em>
+      </button>
+    `;
+  }
+
+  function renderHomeWorkList(filled) {
+    const target = document.getElementById('homeWorkList');
+    if (!target) return;
+    const pkg = currentPackage || {};
+    const missing = homeMissingDocs();
+    const items = [];
+
+    if (filled < TOTAL_SLOTS) {
+      items.push({
+        page: 'upload',
+        tone: 'attention',
+        kicker: 'Publish',
+        title: `${TOTAL_SLOTS - filled} file${TOTAL_SLOTS - filled === 1 ? '' : 's'} missing`,
+        detail: missing.slice(0, 2).join(', ') + (missing.length > 2 ? ` + ${missing.length - 2} more` : '')
+      });
+    } else {
+      items.push({
+        page: 'archive',
+        tone: 'ok',
+        kicker: 'Published',
+        title: `Package ready for ${formatShortDate(pkg.date)}`,
+        detail: `Last published ${formatTime(pkg.publishedAt)}`
+      });
+    }
+
+    if (qualitySummary.datesMatch === false || qualitySummary.warnings > 0) {
+      items.push({
+        page: 'upload',
+        tone: 'attention',
+        kicker: 'Review',
+        title: qualitySummary.datesMatch === false ? 'Date mismatch detected' : 'Parser warnings detected',
+        detail: qualitySummary.countsText || 'Review upload quality before sharing'
+      });
+    }
+
+    items.push({
+      page: 'banks',
+      kicker: 'Coverage',
+      title: 'Open bank tear sheets',
+      detail: 'Search banks, saved coverage, and notes'
+    });
+
+    items.push({
+      page: 'cd-recap',
+      kicker: 'CDs',
+      title: 'Review weekly CD recap',
+      detail: 'Deduped CUSIPs, term counts, and rate changes'
+    });
+
+    target.innerHTML = items.map(homeWorkItemHtml).join('');
+  }
+
+  function renderHomeLaunchGrid() {
+    const target = document.getElementById('homeLaunchGrid');
+    if (!target) return;
+    const cds = marketData.cds || [];
+    const munis = marketData.munis || [];
+    const agencies = marketData.agencies || [];
+    const corporates = marketData.corporates || [];
+    const cards = [
+      { page: 'banks', label: 'Banks', title: 'Bank Tear Sheets', detail: 'Call report tear sheets, saved banks, notes, and coverage status.', metric: 'Coverage workspace' },
+      { page: 'explorer', label: 'CDs', title: 'CD Explorer', detail: 'Search daily CD offerings by issuer, CUSIP, term, rate, and restrictions.', metric: `${formatNumber(cds.length)} CDs` },
+      { page: 'muni-explorer', label: 'Munis', title: 'Muni Explorer', detail: 'Browse municipal offerings by issuer, state, rating, yield, and call status.', metric: `${formatNumber(munis.length)} munis` },
+      { page: 'agencies', label: 'Agencies', title: 'Agency Explorer', detail: 'Review bullet and callable agencies with commission-adjusted context.', metric: `${formatNumber(agencies.length)} offerings` },
+      { page: 'corporates', label: 'Corporates', title: 'Corporate Explorer', detail: 'Filter corporate inventory by issuer, ticker, sector, yield, and rating.', metric: `${formatNumber(corporates.length)} bonds` }
+    ];
+
+    target.innerHTML = cards.map(card => `
+      <button type="button" class="home-launch-card" data-goto="${escapeHtml(card.page)}">
+        <span>${escapeHtml(card.label)}</span>
+        <strong>${escapeHtml(card.title)}</strong>
+        <em>${escapeHtml(card.detail)}</em>
+        <b>${escapeHtml(card.metric)}</b>
+      </button>
+    `).join('');
+  }
+
   async function fetchOptionalJson(path) {
     try {
       const res = await fetch(path, { cache: 'no-store' });
@@ -978,6 +1087,8 @@
 
     const subtitle = document.getElementById('homeSubtitle');
     const kicker = document.getElementById('homeKicker');
+    const packageStat = document.getElementById('homePackageStat');
+    if (packageStat) packageStat.textContent = `${filled}/${TOTAL_SLOTS}`;
 
     if (filled === 0) {
       subtitle.textContent = 'No documents published yet — go to Upload to publish today\'s package';
@@ -991,6 +1102,9 @@
     }
 
     renderQualityStatus(filled);
+    renderHomeStatusTiles(filled);
+    renderHomeWorkList(filled);
+    renderHomeLaunchGrid();
     renderHomeMarketTiles();
     renderGlobalSearch();
   }
@@ -1376,9 +1490,10 @@
     const amountInput = document.getElementById('cdCalcAmount');
     const rateInput = document.getElementById('cdCalcRate');
     const annualEl = document.getElementById('cdCalcAnnualCost');
+    const termEl = document.getElementById('cdCalcTermCost');
     const monthlyEl = document.getElementById('cdCalcMonthlyCost');
     const metaEl = document.getElementById('cdCalcResultMeta');
-    if (!amountInput || !rateInput || !annualEl || !monthlyEl || !metaEl) return;
+    if (!amountInput || !rateInput || !annualEl || !termEl || !monthlyEl || !metaEl) return;
 
     const terms = getBrokeredCdTerms();
     const selected = terms.find(term => term.months === selectedCdCalcTerm) || terms[0];
@@ -1388,13 +1503,16 @@
 
     if (!amount || isNaN(rate)) {
       annualEl.textContent = '—';
+      termEl.textContent = '—';
       monthlyEl.textContent = '—';
       metaEl.textContent = 'Enter an amount and rate to calculate cost.';
       return;
     }
 
     const annualCost = amount * (rate / 100);
+    const termCost = annualCost * (months / 12);
     annualEl.textContent = formatMoney(annualCost);
+    termEl.textContent = formatMoney(termCost);
     monthlyEl.textContent = formatMoney(annualCost / 12);
     metaEl.textContent = `${formatMoney(amount)} issued at ${formatPercentTile(rate, 3)} all-in mid for ${formatTermMonths(months)}`;
   }
@@ -1470,7 +1588,7 @@
       ? `${escapeHtml(day.publishedBy || 'Portal User')} · ${formatTime(day.publishedAt)}`
       : '—';
 
-    const viewFirst = day.dashboard || day.econ || day.cd || day.cdoffers;
+    const viewFirst = day.dashboard || day.econ || day.cd || day.cdoffers || day.munioffers;
     const viewLink = viewFirst ? `${basePath}${encodeURIComponent(viewFirst)}` : '#';
     const rowClass = isCurrent ? 'current-row' : '';
 
@@ -1484,6 +1602,7 @@
           ${chip(day.econ, 'Econ_Update.pdf')}
           ${chip(day.cd, 'CD_Rate_Sheet.pdf')}
           ${chip(day.cdoffers, 'CD_Offerings.pdf')}
+          ${chip(day.munioffers, 'Muni_Offerings.pdf')}
         </td>
         <td>${publishedText}</td>
         <td style="text-align:right">
@@ -2538,6 +2657,7 @@
           { label: 'Raw Rows', value: formatNumber(recap.rawRows || 0) },
           { label: 'Unique CUSIP Count', value: formatNumber(recap.uniqueCusips || 0) },
           { label: 'Charted Term CUSIP Count', value: formatNumber(recap.recapTermUniqueCusips || 0) },
+          { label: 'Last Refreshed', value: formatFullTimestamp(new Date().toISOString()) },
           { label: 'Snapshot Dates', value: snapshotDates }
         ];
         grid.innerHTML = tiles.map(t => `
