@@ -27,6 +27,14 @@ const {
   searchBankDatabase,
   writeBankDatabase
 } = require('../server/bank-data-importer');
+const {
+  addBankNote,
+  getBankCoverage,
+  listSavedBanks,
+  removeBankNote,
+  removeSavedBank,
+  upsertSavedBank
+} = require('../server/bank-coverage-store');
 
 const ROOT = path.join(__dirname, '..');
 const CURRENT_DIR = path.join(ROOT, 'data', 'current');
@@ -269,6 +277,51 @@ function assertBankDatabaseRoundTrip() {
   }
 }
 
+function assertBankCoverageStore() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-bank-coverage-'));
+  try {
+    const summary = {
+      id: 'bank-1',
+      displayName: 'Sample Bank, Springfield, IL',
+      name: 'Sample Bank',
+      city: 'Springfield',
+      state: 'IL',
+      certNumber: '12345',
+      primaryRegulator: 'FDIC',
+      period: '2025Q4',
+      totalAssets: 1000,
+      totalDeposits: 800
+    };
+
+    const saved = upsertSavedBank(tmp, summary, {
+      status: 'Prospect',
+      priority: 'High',
+      owner: 'FBBS',
+      nextActionDate: '2026-05-01'
+    });
+    assert.strictEqual(saved.bankId, 'bank-1');
+    assert.strictEqual(saved.status, 'Prospect');
+    assert.strictEqual(saved.priority, 'High');
+    assert.strictEqual(saved.owner, 'FBBS');
+
+    const rows = listSavedBanks(tmp);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(rows[0].displayName, 'Sample Bank, Springfield, IL');
+
+    const note = addBankNote(tmp, 'bank-1', 'Discussed CD ladder and muni needs.');
+    assert(note.id);
+    assert.strictEqual(getBankCoverage(tmp, 'bank-1').notes.length, 1);
+
+    removeBankNote(tmp, note.id);
+    assert.strictEqual(getBankCoverage(tmp, 'bank-1').notes.length, 0);
+
+    removeSavedBank(tmp, 'bank-1');
+    assert.strictEqual(listSavedBanks(tmp).length, 0);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function assertCdHistoryWeeklyDedupe() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-cd-history-'));
   const baseOfferings = [
@@ -381,6 +434,7 @@ function assertWeeklyCdWorksheetImport() {
   assertPackageReaderUsesSlotMetadata();
   assertAgencyCollectionPreservesCounterpart();
   assertBankDatabaseRoundTrip();
+  assertBankCoverageStore();
   assertCdHistoryWeeklyDedupe();
   assertWeeklyCdWorksheetImport();
   console.log('Parser regression tests passed.');

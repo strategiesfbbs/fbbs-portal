@@ -38,6 +38,14 @@ const {
   searchBankDatabase
 } = require('./bank-data-importer');
 const {
+  addBankNote,
+  getBankCoverage,
+  listSavedBanks,
+  removeBankNote,
+  removeSavedBank,
+  upsertSavedBank
+} = require('./bank-coverage-store');
+const {
   ensureCdHistoryDir,
   saveCdHistorySnapshot,
   summarizeWeeklyCdHistory
@@ -393,6 +401,42 @@ function parseMultipart(req, boundary, limit) {
 
         resolve({ files, fields });
       } catch (err) {
+        reject(err);
+      }
+    });
+  });
+}
+
+function readJsonBody(req, limit = 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    let aborted = false;
+
+    req.on('data', chunk => {
+      if (aborted) return;
+      size += chunk.length;
+      if (size > limit) {
+        aborted = true;
+        const err = new Error('Request body exceeds maximum allowed size');
+        err.statusCode = 413;
+        reject(err);
+        try { req.destroy(); } catch (_) {}
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('error', err => { if (!aborted) reject(err); });
+    req.on('end', () => {
+      if (aborted) return;
+      const text = Buffer.concat(chunks).toString('utf-8').trim();
+      if (!text) return resolve({});
+      try {
+        resolve(JSON.parse(text));
+      } catch (err) {
+        err.statusCode = 400;
+        err.message = 'Request body must be valid JSON';
         reject(err);
       }
     });
@@ -755,6 +799,55 @@ function getBankById(id) {
 
 function getBankDataStatus() {
   return getBankDatabaseStatus(BANK_REPORTS_DIR);
+}
+
+function getBankSummaryForCoverage(bankId) {
+  const data = getBankById(bankId);
+  if (!data || !data.bank || !data.bank.summary) return null;
+  return data.bank.summary;
+}
+
+async function handleSaveBankCoverage(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const bankId = String(body.bankId || '').trim();
+    if (!bankId) return sendJSON(res, 400, { error: 'Bank ID is required' });
+
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+
+    const saved = upsertSavedBank(BANK_REPORTS_DIR, summary, body);
+    appendAuditLog({
+      event: 'bank-coverage-save',
+      bankId,
+      status: saved.status,
+      priority: saved.priority
+    });
+    return sendJSON(res, 200, { saved });
+  } catch (err) {
+    log('error', 'Bank coverage save failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not save bank coverage' });
+  }
+}
+
+async function handleAddBankNote(req, res, bankId) {
+  try {
+    const body = await readJsonBody(req);
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+
+    upsertSavedBank(BANK_REPORTS_DIR, summary, body.coverage || {});
+    const note = addBankNote(BANK_REPORTS_DIR, bankId, body.text);
+    appendAuditLog({
+      event: 'bank-note-add',
+      bankId,
+      noteId: note && note.id
+    });
+    return sendJSON(res, 200, { note });
+  } catch (err) {
+    log('error', 'Bank note add failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not add bank note' });
+  }
 }
 
 async function handleBankDataUpload(req, res) {
@@ -1380,6 +1473,45 @@ const server = http.createServer(async (req, res) => {
         });
       }
       return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/bank-coverage' && req.method === 'GET') {
+      return sendJSON(res, 200, { savedBanks: listSavedBanks(BANK_REPORTS_DIR) });
+    }
+
+    if (pathname === '/api/bank-coverage' && req.method === 'POST') {
+      return await handleSaveBankCoverage(req, res);
+    }
+
+    const bankCoverageNoteMatch = pathname.match(/^\/api\/bank-coverage\/([^/]+)\/notes$/);
+    if (bankCoverageNoteMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankCoverageNoteMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return await handleAddBankNote(req, res, bankId);
+    }
+
+    const bankCoverageMatch = pathname.match(/^\/api\/bank-coverage\/([^/]+)$/);
+    if (bankCoverageMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankCoverageMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return sendJSON(res, 200, getBankCoverage(BANK_REPORTS_DIR, bankId));
+    }
+
+    if (bankCoverageMatch && req.method === 'DELETE') {
+      const bankId = safeDecodeURIComponent(bankCoverageMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      removeSavedBank(BANK_REPORTS_DIR, bankId);
+      appendAuditLog({ event: 'bank-coverage-remove', bankId });
+      return sendJSON(res, 200, { success: true });
+    }
+
+    const bankNoteMatch = pathname.match(/^\/api\/bank-coverage\/notes\/([^/]+)$/);
+    if (bankNoteMatch && req.method === 'DELETE') {
+      const noteId = safeDecodeURIComponent(bankNoteMatch[1]);
+      if (!noteId) return sendJSON(res, 400, { error: 'Invalid note ID' });
+      removeBankNote(BANK_REPORTS_DIR, noteId);
+      appendAuditLog({ event: 'bank-note-remove', noteId });
+      return sendJSON(res, 200, { success: true });
     }
 
     if (pathname === '/api/banks/status' && req.method === 'GET') {

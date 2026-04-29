@@ -26,6 +26,12 @@
   let cdRecapData = null;
   let bankDataStatus = null;
   let selectedBank = null;
+  let savedBanks = [];
+  let selectedTearSheetCoverage = null;
+  let selectedBankCoverage = null;
+  let selectedBankNotes = [];
+  let activeCoverageBankId = null;
+  let activeBankWorkspaceView = 'tear-sheet';
   let selectedFiles = {
     dashboard: null, econ: null, cd: null, cdoffers: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -96,6 +102,10 @@
   ];
 
   const COMMISSION_STORAGE_KEY = 'fbbs_commission_settings_v1';
+  const BANK_RECENT_STORAGE_KEY = 'fbbs_recent_banks_v1';
+  const MAX_RECENT_BANKS = 6;
+  const BANK_COVERAGE_STATUSES = ['Prospect', 'Client', 'Watchlist', 'Dormant'];
+  const BANK_COVERAGE_PRIORITIES = ['High', 'Medium', 'Low'];
   const COMMISSION_PRODUCT_LABELS = {
     agencies: 'Agencies',
     corporates: 'Corporates'
@@ -504,6 +514,29 @@
     return `${formatPercent(n, digits)}%`;
   }
 
+  function csvEscape(value) {
+    const s = String(value ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  function downloadCsv(filename, rows) {
+    const csv = rows.map(row => row.map(csvEscape).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  }
+
+  function slugifyFilename(value) {
+    return String(value || 'bank')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80) || 'bank';
+  }
+
   function setText(id, text) {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
@@ -719,7 +752,10 @@
     if (pageName === 'muni-explorer') loadMuniOfferings();
     if (pageName === 'agencies') loadAgencies();
     if (pageName === 'corporates') loadCorporates();
-    if (pageName === 'banks') loadBankStatus();
+    if (pageName === 'banks') {
+      loadBankStatus();
+      loadSavedBanks();
+    }
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'admin') loadAuditLog();
   }
@@ -1546,6 +1582,9 @@
     const input = document.getElementById('bankSearchInput');
     const btn = document.getElementById('bankSearchBtn');
     const upload = document.getElementById('bankWorkbookInput');
+    const clearRecent = document.getElementById('clearRecentBanksBtn');
+    const savedFilter = document.getElementById('bankSavedFilterInput');
+    setupBankWorkspaceTabs();
     if (input) {
       let t = null;
       input.addEventListener('input', () => {
@@ -1566,6 +1605,40 @@
       const file = e.target.files && e.target.files[0];
       if (file) uploadBankWorkbook(file);
     });
+    if (clearRecent) clearRecent.addEventListener('click', clearRecentBanks);
+    if (savedFilter) savedFilter.addEventListener('input', renderSavedBanks);
+    renderRecentBanks();
+    loadSavedBanks();
+  }
+
+  function setupBankWorkspaceTabs() {
+    document.querySelectorAll('[data-bank-view]').forEach(btn => {
+      btn.addEventListener('click', () => switchBankWorkspace(btn.dataset.bankView));
+    });
+  }
+
+  function switchBankWorkspace(view) {
+    const next = view === 'coverage' ? 'coverage' : 'tear-sheet';
+    activeBankWorkspaceView = next;
+    document.querySelectorAll('[data-bank-view]').forEach(btn => {
+      const active = btn.dataset.bankView === next;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-bank-view-panel]').forEach(panel => {
+      const active = panel.dataset.bankViewPanel === next;
+      panel.classList.toggle('active', active);
+      panel.hidden = !active;
+    });
+    if (next === 'coverage') {
+      if (!activeCoverageBankId && selectedTearSheetCoverage && selectedTearSheetCoverage.bankId) {
+        activeCoverageBankId = selectedTearSheetCoverage.bankId;
+        selectedBankCoverage = selectedTearSheetCoverage;
+      }
+      loadSavedBanks();
+      if (activeCoverageBankId) loadBankCoverage(activeCoverageBankId, { renderDetail: true });
+      else renderCoverageDetailEmpty();
+    }
   }
 
   async function readBankJson(res) {
@@ -1608,7 +1681,10 @@
       <button type="button" class="bank-result" data-bank-id="${escapeHtml(row.id)}">
         <strong>${escapeHtml(row.displayName || row.name || 'Bank')}</strong>
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
-        <em>${escapeHtml(row.period || '')}</em>
+        <div class="bank-result-meta">
+          <em>${escapeHtml(row.period || '')}</em>
+          ${renderBankCoverageChip(row.id)}
+        </div>
       </button>
     `).join('');
     results.querySelectorAll('[data-bank-id]').forEach(btn => {
@@ -1621,6 +1697,194 @@
     if (results) results.innerHTML = '';
   }
 
+  function loadRecentBanks() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(BANK_RECENT_STORAGE_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.filter(row => row && row.id).slice(0, MAX_RECENT_BANKS) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveRecentBanks(rows) {
+    try {
+      localStorage.setItem(BANK_RECENT_STORAGE_KEY, JSON.stringify(rows.slice(0, MAX_RECENT_BANKS)));
+    } catch (e) {
+      // Recent banks are a convenience only.
+    }
+  }
+
+  function rememberRecentBank(bank) {
+    if (!bank || !bank.summary || !bank.id) return;
+    const s = bank.summary;
+    const row = {
+      id: String(bank.id),
+      displayName: s.displayName || s.name || 'Bank',
+      city: s.city || '',
+      state: s.state || '',
+      certNumber: s.certNumber || '',
+      primaryRegulator: s.primaryRegulator || '',
+      period: s.period || ''
+    };
+    const next = [row, ...loadRecentBanks().filter(existing => String(existing.id) !== row.id)];
+    saveRecentBanks(next);
+    renderRecentBanks();
+  }
+
+  function clearRecentBanks() {
+    saveRecentBanks([]);
+    renderRecentBanks();
+  }
+
+  function renderRecentBanks() {
+    const panel = document.getElementById('bankRecentPanel');
+    const list = document.getElementById('bankRecentList');
+    if (!panel || !list) return;
+    const rows = loadRecentBanks();
+    panel.hidden = rows.length === 0;
+    if (!rows.length) {
+      list.innerHTML = '';
+      return;
+    }
+    list.innerHTML = rows.map(row => `
+      <button type="button" class="bank-recent-item" data-bank-id="${escapeHtml(row.id)}">
+        <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
+        <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
+        <em>${escapeHtml(row.period || '')}</em>
+        ${renderBankCoverageChip(row.id)}
+      </button>
+    `).join('');
+    list.querySelectorAll('[data-bank-id]').forEach(btn => {
+      btn.addEventListener('click', () => loadBank(btn.dataset.bankId, { collapseResults: true }));
+    });
+  }
+
+  function getSavedBankById(bankId) {
+    return savedBanks.find(row => String(row.bankId) === String(bankId)) || null;
+  }
+
+  async function loadSavedBanks() {
+    try {
+      const res = await fetch('/api/bank-coverage', { cache: 'no-store' });
+      const data = await readBankJson(res);
+      savedBanks = Array.isArray(data.savedBanks) ? data.savedBanks : [];
+    } catch (e) {
+      savedBanks = [];
+      const list = document.getElementById('bankSavedList');
+      if (list) list.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+    }
+    renderSavedBanks();
+  }
+
+  function renderSavedBanks() {
+    const list = document.getElementById('bankSavedList');
+    const count = document.getElementById('bankSavedCount');
+    const filter = document.getElementById('bankSavedFilterInput');
+    if (!list) return;
+    if (count) count.textContent = `${formatNumber(savedBanks.length)} saved`;
+    if (!savedBanks.length) {
+      list.innerHTML = '<div class="bank-search-empty">Save a bank from a tear sheet to start a coverage list.</div>';
+      return;
+    }
+    const q = String(filter ? filter.value : '').trim().toLowerCase();
+    const rows = q
+      ? savedBanks.filter(row => [
+          row.displayName, row.legalName, row.city, row.state, row.certNumber,
+          row.primaryRegulator, row.status, row.priority, row.owner, row.nextActionDate
+        ].filter(Boolean).join(' ').toLowerCase().includes(q))
+      : savedBanks;
+    if (!rows.length) {
+      list.innerHTML = '<div class="bank-search-empty">No saved banks match that filter.</div>';
+      return;
+    }
+    list.innerHTML = rows.map(row => `
+      <button type="button" class="bank-saved-item${String(row.bankId) === String(activeCoverageBankId) ? ' active' : ''}" data-bank-id="${escapeHtml(row.bankId)}">
+        <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
+        <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
+        <div class="bank-saved-meta">
+          <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Watchlist')}</em>
+          <em class="bank-pill ${coverageClass(row.priority)}">${escapeHtml(row.priority || 'Medium')}</em>
+          <small>${escapeHtml(row.nextActionDate ? formatShortDate(row.nextActionDate) : 'No date')}</small>
+        </div>
+      </button>
+    `).join('');
+    list.querySelectorAll('[data-bank-id]').forEach(btn => {
+      btn.addEventListener('click', () => openSavedBankCoverage(btn.dataset.bankId));
+    });
+  }
+
+  function renderCoverageDetailEmpty() {
+    const detail = document.getElementById('bankCoverageDetail');
+    if (!detail) return;
+    detail.innerHTML = `
+      <div class="bank-empty-state">
+        <div class="ff-kicker">Coverage Details</div>
+        <h2>Select a saved bank</h2>
+        <p>Coverage status, next actions, and notes will live here.</p>
+      </div>
+    `;
+  }
+
+  function renderCoverageDetailLoading(row) {
+    const detail = document.getElementById('bankCoverageDetail');
+    if (!detail) return;
+    detail.innerHTML = `
+      <div class="bank-empty-state">
+        <div class="ff-kicker">Coverage Details</div>
+        <h2>${escapeHtml(row && row.displayName ? row.displayName : 'Loading coverage...')}</h2>
+        <p>Loading notes and saved coverage details.</p>
+      </div>
+    `;
+  }
+
+  async function openSavedBankCoverage(bankId) {
+    activeCoverageBankId = String(bankId || '');
+    selectedBankCoverage = getSavedBankById(activeCoverageBankId);
+    selectedBankNotes = [];
+    switchBankWorkspace('coverage');
+    renderCoverageDetailLoading(selectedBankCoverage);
+    await loadBankCoverage(activeCoverageBankId, { renderDetail: true });
+  }
+
+  function coverageClass(value) {
+    return `bank-pill-${String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+  }
+
+  function renderBankCoverageChip(bankId) {
+    const saved = getSavedBankById(bankId);
+    if (!saved || !saved.status) return '';
+    return `<em class="bank-pill ${coverageClass(saved.status)}">${escapeHtml(saved.status)}</em>`;
+  }
+
+  function renderTearSheetCoverageSignal() {
+    const saved = selectedTearSheetCoverage;
+    if (!saved || !saved.bankId) return '';
+    const sub = [
+      saved.priority ? `${saved.priority} priority` : '',
+      saved.owner ? `Owner: ${saved.owner}` : '',
+      saved.nextActionDate ? `Next: ${formatShortDate(saved.nextActionDate)}` : ''
+    ].filter(Boolean).join(' · ');
+    return `
+      <div class="bank-coverage-signal-inner">
+        <em class="bank-pill ${coverageClass(saved.status)}">${escapeHtml(saved.status || 'Saved')}</em>
+        ${sub ? `<span>${escapeHtml(sub)}</span>` : ''}
+      </div>
+    `;
+  }
+
+  function updateTearSheetCoverageSignal() {
+    const el = document.getElementById('bankProfileCoverageSignal');
+    if (el) el.innerHTML = renderTearSheetCoverageSignal();
+  }
+
+  function coverageSelectOptions(values, selected) {
+    return values.map(value => `<option value="${escapeHtml(value)}"${value === selected ? ' selected' : ''}>${escapeHtml(value)}</option>`).join('');
+  }
+
+  function selectedBankId() {
+    return selectedBank && selectedBank.bank ? selectedBank.bank.id : null;
+  }
+
   async function loadBank(id, options = {}) {
     if (options.collapseResults) clearBankSearchResults();
     const profile = document.getElementById('bankProfile');
@@ -1628,7 +1892,11 @@
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(id)}`, { cache: 'no-store' });
       selectedBank = await readBankJson(res);
+      selectedTearSheetCoverage = getSavedBankById(selectedBank.bank.id);
+      selectedBankNotes = [];
       renderBankProfile();
+      rememberRecentBank(selectedBank.bank);
+      loadTearSheetCoverage(selectedBank.bank.id);
     } catch (e) {
       if (profile) profile.innerHTML = `<div class="bank-empty-state"><h2>${escapeHtml(e.message)}</h2></div>`;
     }
@@ -1687,10 +1955,18 @@
           <span class="tool-eyebrow">Call Report Tear Sheet</span>
           <h3>${escapeHtml(values.name || bank.summary.displayName || 'Bank')}</h3>
           <p>${escapeHtml([values.city, values.state, values.certNumber ? `Cert ${values.certNumber}` : '', values.primaryRegulator].filter(Boolean).join(' · '))}</p>
+          <div class="bank-coverage-signal" id="bankProfileCoverageSignal">${renderTearSheetCoverageSignal()}</div>
         </div>
-        <div class="bank-period-badge">
-          <strong>${escapeHtml(latest.endDate || latest.period || '—')}</strong>
-          <span>${escapeHtml(meta.latestPeriod || latest.period || '')}</span>
+        <div class="bank-profile-tools">
+          <div class="bank-profile-actions">
+            <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Bank</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
+          </div>
+          <div class="bank-period-badge">
+            <strong>${escapeHtml(latest.endDate || latest.period || '—')}</strong>
+            <span>${escapeHtml(meta.latestPeriod || latest.period || '')}</span>
+          </div>
         </div>
       </div>
       ${renderBankSection('Details', details, true)}
@@ -1704,6 +1980,335 @@
       ${renderBankFieldSection('Liquidity', fields, values, 'liquidity')}
       ${renderBankTrendTable(fields, recentPeriods)}
     `;
+    updateBankSaveButton();
+    const saveBtn = document.getElementById('bankSaveBtn');
+    const printBtn = document.getElementById('bankPrintBtn');
+    const exportBtn = document.getElementById('bankExportBtn');
+    if (saveBtn) saveBtn.addEventListener('click', saveCurrentBankCoverage);
+    if (printBtn) printBtn.addEventListener('click', printBankProfile);
+    if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
+  }
+
+  function renderBankCoverageSection() {
+    const saved = selectedBankCoverage || {};
+    const status = saved.status || 'Watchlist';
+    const priority = saved.priority || 'Medium';
+    return `
+      <div class="bank-coverage-detail-head">
+        <div>
+          <span class="tool-eyebrow">Coverage Workspace</span>
+          <h3>${escapeHtml(saved.displayName || 'Saved Bank')}</h3>
+          <p>${escapeHtml([saved.city, saved.state, saved.certNumber ? `Cert ${saved.certNumber}` : '', saved.primaryRegulator].filter(Boolean).join(' · '))}</p>
+        </div>
+        <button type="button" class="small-btn" id="bankCoverageOpenTearSheetBtn">Open Tear Sheet</button>
+      </div>
+      <section class="bank-section bank-coverage-section">
+        <div class="bank-section-title">Coverage Details & Notes</div>
+        <div class="bank-coverage-grid">
+          <label>
+            <span>Status</span>
+            <select id="bankCoverageStatus">${coverageSelectOptions(BANK_COVERAGE_STATUSES, status)}</select>
+          </label>
+          <label>
+            <span>Priority</span>
+            <select id="bankCoveragePriority">${coverageSelectOptions(BANK_COVERAGE_PRIORITIES, priority)}</select>
+          </label>
+          <label>
+            <span>Owner</span>
+            <input type="text" id="bankCoverageOwner" value="${escapeHtml(saved.owner || '')}" placeholder="Coverage owner">
+          </label>
+          <label>
+            <span>Next Action</span>
+            <input type="date" id="bankCoverageNextAction" value="${escapeHtml(saved.nextActionDate || '')}">
+          </label>
+        </div>
+        <div class="bank-coverage-actions">
+          <button type="button" class="small-btn" id="bankCoverageSaveBtn">Save Coverage</button>
+          <button type="button" class="text-btn danger" id="bankCoverageRemoveBtn"${saved.bankId ? '' : ' hidden'}>Remove Saved Bank</button>
+          <span class="bank-coverage-status" id="bankCoverageStatusText">${saved.bankId ? `Saved ${escapeHtml(formatFullTimestamp(saved.updatedAt))}` : 'Not saved yet'}</span>
+        </div>
+        <div class="bank-note-composer">
+          <textarea id="bankNoteText" rows="3" placeholder="Add meeting notes, CD appetite, liquidity needs, objections, or follow-up items"></textarea>
+          <button type="button" class="small-btn" id="bankNoteAddBtn">Add Note</button>
+        </div>
+        <div class="bank-notes-list" id="bankNotesList">
+          <div class="bank-search-empty">Loading notes...</div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderCoverageDetail() {
+    const detail = document.getElementById('bankCoverageDetail');
+    if (!detail) return;
+    if (!selectedBankCoverage || !selectedBankCoverage.bankId) {
+      renderCoverageDetailEmpty();
+      return;
+    }
+    detail.innerHTML = renderBankCoverageSection();
+    wireBankCoverageControls();
+    renderBankNotes();
+    updateCoveragePanel();
+  }
+
+  function wireBankCoverageControls() {
+    const saveCoverageBtn = document.getElementById('bankCoverageSaveBtn');
+    const removeCoverageBtn = document.getElementById('bankCoverageRemoveBtn');
+    const addNoteBtn = document.getElementById('bankNoteAddBtn');
+    const openTearSheetBtn = document.getElementById('bankCoverageOpenTearSheetBtn');
+    if (saveCoverageBtn) saveCoverageBtn.addEventListener('click', saveCurrentBankCoverage);
+    if (removeCoverageBtn) removeCoverageBtn.addEventListener('click', removeCurrentBankCoverage);
+    if (addNoteBtn) addNoteBtn.addEventListener('click', addCurrentBankNote);
+    if (openTearSheetBtn) openTearSheetBtn.addEventListener('click', () => {
+      if (!activeCoverageBankId) return;
+      switchBankWorkspace('tear-sheet');
+      loadBank(activeCoverageBankId, { collapseResults: true });
+    });
+  }
+
+  function bankCoverageFormValues() {
+    const isCoverageWorkspace = activeBankWorkspaceView === 'coverage';
+    const tearSheetSaved = selectedTearSheetCoverage || getSavedBankById(selectedBankId()) || {};
+    return {
+      bankId: isCoverageWorkspace ? activeCoverageBankId : selectedBankId(),
+      status: isCoverageWorkspace ? (document.getElementById('bankCoverageStatus')?.value || 'Watchlist') : (tearSheetSaved.status || 'Watchlist'),
+      priority: isCoverageWorkspace ? (document.getElementById('bankCoveragePriority')?.value || 'Medium') : (tearSheetSaved.priority || 'Medium'),
+      owner: isCoverageWorkspace ? (document.getElementById('bankCoverageOwner')?.value || '') : (tearSheetSaved.owner || ''),
+      nextActionDate: isCoverageWorkspace ? (document.getElementById('bankCoverageNextAction')?.value || '') : (tearSheetSaved.nextActionDate || '')
+    };
+  }
+
+  function updateBankSaveButton() {
+    const btn = document.getElementById('bankSaveBtn');
+    if (!btn) return;
+    btn.textContent = selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Bank';
+    updateTearSheetCoverageSignal();
+  }
+
+  function updateCoveragePanel() {
+    const saved = selectedBankCoverage || {};
+    const statusEl = document.getElementById('bankCoverageStatus');
+    const priorityEl = document.getElementById('bankCoveragePriority');
+    const ownerEl = document.getElementById('bankCoverageOwner');
+    const nextActionEl = document.getElementById('bankCoverageNextAction');
+    const removeBtn = document.getElementById('bankCoverageRemoveBtn');
+    const statusText = document.getElementById('bankCoverageStatusText');
+    if (statusEl) statusEl.value = saved.status || 'Watchlist';
+    if (priorityEl) priorityEl.value = saved.priority || 'Medium';
+    if (ownerEl) ownerEl.value = saved.owner || '';
+    if (nextActionEl) nextActionEl.value = saved.nextActionDate || '';
+    if (removeBtn) removeBtn.hidden = !saved.bankId;
+    if (statusText) statusText.textContent = saved.bankId ? `Saved ${formatFullTimestamp(saved.updatedAt)}` : 'Not saved yet';
+    updateBankSaveButton();
+  }
+
+  async function loadTearSheetCoverage(bankId) {
+    try {
+      const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      selectedTearSheetCoverage = data.saved || getSavedBankById(bankId);
+    } catch (e) {
+      selectedTearSheetCoverage = getSavedBankById(bankId);
+    }
+    updateBankSaveButton();
+  }
+
+  async function loadBankCoverage(bankId, options = {}) {
+    try {
+      const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      selectedBankCoverage = data.saved || getSavedBankById(bankId);
+      selectedBankNotes = Array.isArray(data.notes) ? data.notes : [];
+      if (options.renderDetail) renderCoverageDetail();
+      else {
+        updateCoveragePanel();
+        renderBankNotes();
+      }
+    } catch (e) {
+      selectedBankCoverage = getSavedBankById(bankId);
+      selectedBankNotes = [];
+      if (options.renderDetail) renderCoverageDetail();
+      else {
+        updateCoveragePanel();
+        renderBankNotes(e.message);
+      }
+    }
+  }
+
+  async function saveCurrentBankCoverage() {
+    const formValues = bankCoverageFormValues();
+    if (!formValues.bankId) return showToast('No bank selected', true);
+    try {
+      const res = await fetch('/api/bank-coverage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formValues)
+      });
+      const data = await readBankJson(res);
+      if (activeBankWorkspaceView === 'coverage') {
+        selectedBankCoverage = data.saved;
+        activeCoverageBankId = data.saved.bankId;
+        if (selectedBankId() === data.saved.bankId) selectedTearSheetCoverage = data.saved;
+      } else {
+        selectedTearSheetCoverage = data.saved;
+      }
+      await loadSavedBanks();
+      if (activeBankWorkspaceView === 'coverage') renderCoverageDetail();
+      else updateCoveragePanel();
+      showToast('Saved bank coverage');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  async function removeCurrentBankCoverage() {
+    const bankId = activeCoverageBankId || selectedBankId();
+    if (!bankId) return showToast('No bank selected', true);
+    if (!confirm('Remove this bank and its notes from the saved coverage list?')) return;
+    try {
+      const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { method: 'DELETE' });
+      await readBankJson(res);
+      selectedBankCoverage = null;
+      selectedBankNotes = [];
+      if (selectedTearSheetCoverage && selectedTearSheetCoverage.bankId === bankId) selectedTearSheetCoverage = null;
+      if (activeCoverageBankId === bankId) activeCoverageBankId = null;
+      await loadSavedBanks();
+      if (activeBankWorkspaceView === 'coverage') renderCoverageDetailEmpty();
+      else {
+        updateCoveragePanel();
+        renderBankNotes();
+      }
+      showToast('Removed saved bank');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  async function addCurrentBankNote() {
+    const bankId = activeCoverageBankId || selectedBankId();
+    const textarea = document.getElementById('bankNoteText');
+    const text = textarea ? textarea.value.trim() : '';
+    if (!bankId) return showToast('No bank selected', true);
+    if (!text) return showToast('Add note text first', true);
+    try {
+      const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, coverage: bankCoverageFormValues() })
+      });
+      await readBankJson(res);
+      if (textarea) textarea.value = '';
+      await loadSavedBanks();
+      await loadBankCoverage(bankId, { renderDetail: activeBankWorkspaceView === 'coverage' });
+      showToast('Added bank note');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  async function deleteBankNote(noteId) {
+    if (!noteId) return;
+    if (!confirm('Delete this note?')) return;
+    try {
+      const res = await fetch(`/api/bank-coverage/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' });
+      await readBankJson(res);
+      selectedBankNotes = selectedBankNotes.filter(note => note.id !== noteId);
+      renderBankNotes();
+      showToast('Deleted bank note');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  function renderBankNotes(errorMessage) {
+    const list = document.getElementById('bankNotesList');
+    if (!list) return;
+    if (errorMessage) {
+      list.innerHTML = `<div class="bank-search-empty">${escapeHtml(errorMessage)}</div>`;
+      return;
+    }
+    if (!selectedBankNotes.length) {
+      list.innerHTML = '<div class="bank-search-empty">No notes yet.</div>';
+      return;
+    }
+    list.innerHTML = selectedBankNotes.map(note => `
+      <article class="bank-note">
+        <div>
+          <time>${escapeHtml(formatFullTimestamp(note.createdAt))}</time>
+          <p>${escapeHtml(note.text).replace(/\n/g, '<br>')}</p>
+        </div>
+        <button type="button" class="text-btn danger" data-note-id="${escapeHtml(note.id)}">Delete</button>
+      </article>
+    `).join('');
+    list.querySelectorAll('[data-note-id]').forEach(btn => {
+      btn.addEventListener('click', () => deleteBankNote(btn.dataset.noteId));
+    });
+  }
+
+  function printBankProfile() {
+    if (!selectedBank || !selectedBank.bank) return showToast('No bank tear sheet loaded', true);
+    window.print();
+  }
+
+  function exportBankProfileCsv() {
+    if (!selectedBank || !selectedBank.bank) return showToast('No bank tear sheet loaded', true);
+    const bank = selectedBank.bank;
+    const meta = selectedBank.metadata || {};
+    const fields = meta.fields || [];
+    const latest = bank.periods && bank.periods[0] ? bank.periods[0] : { values: {} };
+    const values = latest.values || {};
+    const rows = [
+      ['Section', 'Metric', 'Period', 'Value']
+    ];
+
+    const detailRows = [
+      ['Details', 'Account Name', latest.period || '', values.name || bank.summary.name || ''],
+      ['Details', 'Parent Account', latest.period || '', values.parentName || ''],
+      ['Details', 'Phone', latest.period || '', values.phone || ''],
+      ['Details', 'Website', latest.period || '', values.website || ''],
+      ['Details', 'City', latest.period || '', values.city || ''],
+      ['Details', 'State', latest.period || '', values.state || ''],
+      ['Details', 'Address 1 County', latest.period || '', values.county || ''],
+      ['Details', 'Cert Number', latest.period || '', values.certNumber || ''],
+      ['Details', 'Primary Regulator', latest.period || '', values.primaryRegulator || ''],
+      ['Details', 'SNL Institution Key', latest.period || '', values.id || bank.id || '']
+    ];
+    rows.push(...detailRows);
+
+    fields
+      .filter(field => field.section !== 'details' && Object.prototype.hasOwnProperty.call(values, field.key))
+      .forEach(field => {
+        rows.push([
+          field.section,
+          field.label,
+          latest.period || '',
+          formatBankValue(values[field.key], field.type)
+        ]);
+      });
+
+    rows.push([]);
+    rows.push(['Time Series', 'Metric', 'Period', 'Value']);
+    const fieldByKey = Object.fromEntries(fields.map(field => [field.key, field]));
+    [
+      'totalAssets', 'totalDeposits', 'totalLoans', 'loansToAssets',
+      'securitiesToAssets', 'roa', 'roe', 'netInterestMargin',
+      'efficiencyRatio', 'texasRatio', 'liquidAssetsToAssets'
+    ].forEach(key => {
+      const field = fieldByKey[key];
+      if (!field) return;
+      (bank.periods || []).forEach(period => {
+        rows.push([
+          'Time Series',
+          field.label,
+          period.period || period.endDate || '',
+          formatBankValue(period.values && period.values[key], field.type)
+        ]);
+      });
+    });
+
+    const filename = `fbbs_bank_tear_sheet_${slugifyFilename(bank.summary.displayName || bank.summary.name || bank.id)}_${latest.period || 'latest'}.csv`;
+    downloadCsv(filename, rows);
+    showToast('Exported bank tear sheet CSV');
   }
 
   function renderBankFieldSection(title, fields, values, section, denominatorKey) {

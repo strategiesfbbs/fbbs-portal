@@ -3066,7 +3066,54 @@ body {
   .top-strip-links { display: none; }
 }
 
+.bank-workspace-tabs {
+  background: #eef3ef;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 18px;
+  padding: 4px;
+}
+
+.bank-workspace-tab {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 10px 14px;
+  text-transform: uppercase;
+}
+
+.bank-workspace-tab.active {
+  background: #fff;
+  box-shadow: 0 6px 16px rgba(18, 66, 43, 0.08);
+  color: var(--green);
+}
+
+.bank-workspace-view {
+  display: none;
+}
+
+.bank-workspace-view.active {
+  display: block;
+}
+
+.bank-coverage-layout {
+  align-items: start;
+  display: grid;
+  grid-template-columns: minmax(310px, 0.85fr) minmax(0, 1.35fr);
+  gap: 18px;
+}
+
 .bank-search-panel,
+.bank-recent-panel,
+.bank-saved-panel,
+.bank-coverage-detail,
 .bank-upload-panel,
 .bank-profile {
   background: var(--surface);
@@ -3104,6 +3151,216 @@ body {
 .bank-search-results:empty {
   display: none;
   margin-top: 0;
+}
+
+.bank-recent-panel {
+  padding: 16px 18px;
+}
+
+.bank-saved-panel {
+  padding: 16px 18px;
+}
+
+.bank-coverage-detail {
+  min-height: 360px;
+  padding: 18px;
+}
+
+.bank-recent-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.bank-recent-head h3 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.bank-saved-count {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.bank-saved-filter {
+  margin-bottom: 12px;
+}
+
+.bank-saved-filter input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+  min-width: 0;
+  padding: 11px 12px;
+  width: 100%;
+}
+
+.text-btn {
+  background: transparent;
+  border: 0;
+  color: var(--green);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 0;
+}
+
+.text-btn:hover {
+  color: var(--black);
+}
+
+.text-btn.danger {
+  color: #9b2f2f;
+}
+
+.text-btn.danger:hover {
+  color: #5f1616;
+}
+
+.bank-recent-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.bank-saved-list {
+  display: grid;
+  gap: 10px;
+}
+
+.bank-recent-item {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  display: grid;
+  gap: 4px;
+  min-height: 86px;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.bank-recent-item:hover {
+  border-color: var(--green);
+  box-shadow: 0 8px 24px rgba(18, 66, 43, 0.08);
+}
+
+.bank-recent-item strong {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.bank-recent-item span,
+.bank-recent-item em {
+  color: var(--text3);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.25;
+}
+
+.bank-recent-item .bank-pill {
+  justify-self: start;
+  margin-top: 2px;
+}
+
+.bank-saved-item {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto;
+  gap: 12px;
+  min-height: 66px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.bank-saved-item:hover {
+  border-color: var(--green);
+  box-shadow: 0 8px 24px rgba(18, 66, 43, 0.08);
+}
+
+.bank-saved-item.active {
+  border-color: var(--green);
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.bank-saved-item strong {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.bank-saved-item span {
+  color: var(--text3);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.bank-saved-meta,
+.bank-result-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.bank-result-meta em {
+  color: var(--text3);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.bank-saved-meta small {
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.bank-pill {
+  background: #eef3ef;
+  border: 1px solid #dce7df;
+  border-radius: 999px;
+  color: var(--green);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 4px 7px;
+  text-transform: uppercase;
+}
+
+.bank-pill-high {
+  background: #fff3ea;
+  border-color: #ffd5b8;
+  color: #97490d;
+}
+
+.bank-pill-low,
+.bank-pill-dormant {
+  background: #f2f3f4;
+  border-color: #dee1e4;
+  color: #5d6670;
+}
+
+.bank-pill-client {
+  background: #eef7f1;
+  border-color: #cfe9d9;
+  color: #116b37;
+}
+
+.bank-pill-prospect {
+  background: #eef5ff;
+  border-color: #cfe0f8;
+  color: #1e5797;
 }
 
 .bank-result {
@@ -3192,6 +3449,42 @@ body {
   margin: 4px 0;
 }
 
+.bank-coverage-detail-head {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+}
+
+.bank-coverage-detail-head h3 {
+  font-size: 22px;
+  margin: 4px 0;
+}
+
+.bank-coverage-detail-head p {
+  color: var(--text3);
+  font-size: 12px;
+  margin: 0;
+}
+
+.bank-profile-tools {
+  align-items: flex-end;
+  display: flex;
+  gap: 12px;
+}
+
+.bank-profile-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.bank-action-btn {
+  white-space: nowrap;
+}
+
 .bank-period-badge {
   background: var(--green);
   border-radius: 8px;
@@ -3210,6 +3503,24 @@ body {
   color: rgba(255,255,255,0.78);
 }
 
+.bank-coverage-signal {
+  min-height: 24px;
+  margin-top: 8px;
+}
+
+.bank-coverage-signal-inner {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bank-coverage-signal-inner span {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .bank-section {
   margin-top: 18px;
 }
@@ -3221,6 +3532,107 @@ body {
   font-size: 14px;
   font-weight: 700;
   padding: 9px 12px;
+}
+
+.bank-coverage-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bank-coverage-section .bank-section-title {
+  border-radius: 0;
+}
+
+.bank-coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 12px 0;
+}
+
+.bank-coverage-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.bank-coverage-grid label span {
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.bank-coverage-grid input,
+.bank-coverage-grid select,
+.bank-note-composer textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  min-width: 0;
+  padding: 10px 11px;
+}
+
+.bank-coverage-actions {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 12px;
+}
+
+.bank-coverage-status {
+  color: var(--text3);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.bank-note-composer {
+  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 14px 12px;
+}
+
+.bank-note-composer textarea {
+  min-height: 86px;
+  resize: vertical;
+}
+
+.bank-notes-list {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 14px;
+}
+
+.bank-note {
+  align-items: start;
+  background: #fbfcfb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 11px 12px;
+}
+
+.bank-note time {
+  color: var(--text3);
+  display: block;
+  font-size: 11px;
+  font-weight: 800;
+  margin-bottom: 5px;
+}
+
+.bank-note p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
 }
 
 .bank-fields-grid {
@@ -3320,16 +3732,33 @@ body {
   .commission-control { grid-template-columns: 1fr; }
   .bank-search-row,
   .bank-fields-grid,
-  .bank-result {
+  .bank-result,
+  .bank-recent-list,
+  .bank-saved-item,
+  .bank-coverage-layout,
+  .bank-coverage-grid,
+  .bank-note-composer {
     grid-template-columns: 1fr;
+  }
+  .bank-workspace-tabs {
+    display: grid;
   }
   .bank-result em {
     text-align: left;
   }
+  .bank-saved-meta,
+  .bank-result-meta {
+    justify-content: flex-start;
+  }
   .bank-upload-panel,
-  .bank-profile-head {
+  .bank-profile-head,
+  .bank-profile-tools,
+  .bank-coverage-detail-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .bank-profile-actions {
+    flex-wrap: wrap;
   }
   .bank-period-badge {
     text-align: left;
@@ -3367,5 +3796,53 @@ body {
   .upload-section-head p {
     max-width: none;
     text-align: left;
+  }
+}
+
+@media print {
+  .sidebar,
+  .top-strip,
+  .page-hero,
+  .bank-workspace-tabs,
+  .bank-search-panel,
+  .bank-recent-panel,
+  .bank-saved-panel,
+  .bank-coverage-detail,
+  .bank-coverage-section,
+  .bank-profile-actions,
+  .footer {
+    display: none !important;
+  }
+
+  .main-area {
+    margin-left: 0 !important;
+  }
+
+  .page {
+    display: none !important;
+  }
+
+  #p-banks {
+    display: block !important;
+  }
+
+  .container {
+    max-width: none;
+    padding: 0;
+  }
+
+  .bank-profile {
+    border: 0;
+    box-shadow: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .bank-profile-head {
+    break-after: avoid;
+  }
+
+  .bank-section {
+    break-inside: avoid;
   }
 }
