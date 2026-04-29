@@ -65,6 +65,11 @@ function toIsoDate(mdy) {
   return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
 }
 
+function normalizeSpreadTokens(tokens) {
+  const compact = tokens.join('').toUpperCase();
+  return SPREAD_RE.test(compact) ? compact : null;
+}
+
 // ---------- Rating extraction ----------
 
 /**
@@ -169,36 +174,28 @@ function parseMuniRow(line, section, warnings) {
 
   const isNum = t => /^\d+(\.\d+)?$/.test(t);
 
-  if (rem.length === 0) {
+  let pricingTokens = rem;
+  if (DATE_RE.test(pricingTokens[0])) {
+    callDate = pricingTokens[0];
+    pricingTokens = pricingTokens.slice(1);
+  }
+
+  const normalizedSpread = normalizeSpreadTokens(pricingTokens);
+
+  if (pricingTokens.length === 0) {
     // no pricing
-  } else if (rem.length === 1) {
-    if (SPREAD_RE.test(rem[0])) spread = rem[0];
-    else warnings.push(`Unexpected single pricing token '${rem[0]}': ${line}`);
-  } else if (rem.length === 2) {
-    if (DATE_RE.test(rem[0]) && SPREAD_RE.test(rem[1])) {
-      callDate = rem[0]; spread = rem[1];
+  } else if (normalizedSpread) {
+    spread = normalizedSpread;
+  } else if (pricingTokens.length === 3) {
+    if (isNum(pricingTokens[0]) && isNum(pricingTokens[1]) && isNum(pricingTokens[2])) {
+      ytw = parseFloat(pricingTokens[0]);
+      ytm = parseFloat(pricingTokens[1]);
+      price = parseFloat(pricingTokens[2]);
     } else {
-      warnings.push(`Unexpected 2-token pricing '${rem.join(' ')}': ${line}`);
-    }
-  } else if (rem.length === 3) {
-    if (isNum(rem[0]) && isNum(rem[1]) && isNum(rem[2])) {
-      ytw = parseFloat(rem[0]);
-      ytm = parseFloat(rem[1]);
-      price = parseFloat(rem[2]);
-    } else {
-      warnings.push(`Unexpected 3-token pricing '${rem.join(' ')}': ${line}`);
-    }
-  } else if (rem.length === 4) {
-    if (DATE_RE.test(rem[0]) && isNum(rem[1]) && isNum(rem[2]) && isNum(rem[3])) {
-      callDate = rem[0];
-      ytw = parseFloat(rem[1]);
-      ytm = parseFloat(rem[2]);
-      price = parseFloat(rem[3]);
-    } else {
-      warnings.push(`Unexpected 4-token pricing '${rem.join(' ')}': ${line}`);
+      warnings.push(`Unexpected 3-token pricing '${pricingTokens.join(' ')}': ${line}`);
     }
   } else {
-    warnings.push(`Unexpected pricing block length ${rem.length}: ${line}`);
+    warnings.push(`Unexpected pricing block length ${pricingTokens.length}: ${line}`);
   }
 
   return {
@@ -253,9 +250,37 @@ function recombineRatingLines(rawLines) {
   return out;
 }
 
+function hasQuantityStatePrefix(line) {
+  const tokens = line.split(/\s+/);
+  for (let i = 0; i < tokens.length - 1; i++) {
+    if (/^\d+$/.test(tokens[i]) && STATE_CODES.has(tokens[i + 1])) return true;
+  }
+  return false;
+}
+
+function recombineWrappedRows(lines) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1];
+    if (
+      next &&
+      !findIssueTypePos(line.split(/\s+/)) &&
+      findIssueTypePos(next.split(/\s+/)) &&
+      hasQuantityStatePrefix(line)
+    ) {
+      out.push(`${line} ${next}`);
+      i++;
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
 function parseMuniOffersText(text) {
   const raw = text.split('\n').map(l => l.trim());
-  const lines = recombineRatingLines(raw);
+  const lines = recombineWrappedRows(recombineRatingLines(raw));
 
   const result = { asOfDate: null, offerings: [], warnings: [] };
 

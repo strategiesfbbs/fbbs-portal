@@ -116,6 +116,7 @@ function summarizeWeeklyCdHistory(historyDir, { anchorDate = null } = {}) {
     recapTermUniqueCusips: recapCount,
     duplicateRowsRemoved: allRows.length - uniqueRows.length,
     terms,
+    rateComparisons: buildRateComparisons(snapshots, latestDate),
     availableSnapshots: snapshots.map(s => ({
       snapshotDate: s.snapshotDate || s.asOfDate || s.uploadDate,
       asOfDate: s.asOfDate || null,
@@ -126,6 +127,82 @@ function summarizeWeeklyCdHistory(historyDir, { anchorDate = null } = {}) {
       uniqueCusipCount: uniqueByCusip(s.offerings || []).length
     }))
   };
+}
+
+function buildRateComparisons(snapshots, anchorDate) {
+  const bounds = weekBounds(anchorDate);
+  const periods = [
+    { key: 'today', label: 'Today', targetDate: anchorDate },
+    { key: 'previousWeek', label: 'Previous Week', targetDate: shiftYmd(bounds.start, { days: -1 }) },
+    { key: 'previousMonth', label: 'Previous Month', targetDate: shiftYmd(anchorDate, { months: -1 }) },
+    { key: 'previousYear', label: 'Previous Year', targetDate: shiftYmd(anchorDate, { years: -1 }) }
+  ];
+  const sorted = [...snapshots]
+    .map(s => ({ ...s, effectiveDate: s.snapshotDate || s.asOfDate || s.uploadDate }))
+    .filter(s => s.effectiveDate)
+    .sort((a, b) => String(a.effectiveDate).localeCompare(String(b.effectiveDate)));
+
+  const periodSnapshots = periods.map(period => {
+    const snapshot = findSnapshotOnOrBefore(sorted, period.targetDate);
+    return {
+      ...period,
+      snapshotDate: snapshot ? snapshot.effectiveDate : null,
+      medians: snapshot ? medianRatesByTerm(snapshot.offerings || []) : {}
+    };
+  });
+
+  const comparisonTerms = RECAP_TERMS.map(term => {
+    const row = {
+      term: term.key,
+      label: term.label,
+      months: term.months,
+      rates: {}
+    };
+    for (const period of periodSnapshots) {
+      row.rates[period.key] = period.medians[term.key] ?? null;
+    }
+    row.deltas = {
+      previousWeek: delta(row.rates.today, row.rates.previousWeek),
+      previousMonth: delta(row.rates.today, row.rates.previousMonth),
+      previousYear: delta(row.rates.today, row.rates.previousYear)
+    };
+    return row;
+  });
+
+  return {
+    periods: periodSnapshots.map(({ key, label, targetDate, snapshotDate }) => ({
+      key,
+      label,
+      targetDate,
+      snapshotDate
+    })),
+    terms: comparisonTerms
+  };
+}
+
+function medianRatesByTerm(offerings) {
+  const rows = uniqueByCusip(offerings);
+  const out = {};
+  for (const term of RECAP_TERMS) {
+    const rates = rows
+      .filter(o => normalizeTerm(o.term, o.termMonths) === term.key)
+      .map(o => Number(o.rate))
+      .filter(n => Number.isFinite(n));
+    out[term.key] = median(rates);
+  }
+  return out;
+}
+
+function findSnapshotOnOrBefore(sortedSnapshots, targetDate) {
+  if (!targetDate) return null;
+  for (let i = sortedSnapshots.length - 1; i >= 0; i--) {
+    if (sortedSnapshots[i].effectiveDate <= targetDate) return sortedSnapshots[i];
+  }
+  return null;
+}
+
+function delta(current, prior) {
+  return Number.isFinite(current) && Number.isFinite(prior) ? current - prior : null;
 }
 
 function uniqueByCusip(rows) {
@@ -171,6 +248,15 @@ function weekBounds(ymd) {
   const end = new Date(start);
   end.setDate(start.getDate() + 4);
   return { start: toYmd(start), end: toYmd(end) };
+}
+
+function shiftYmd(ymd, { days = 0, months = 0, years = 0 } = {}) {
+  const date = parseYmd(ymd);
+  if (!date) return null;
+  date.setFullYear(date.getFullYear() + years);
+  date.setMonth(date.getMonth() + months);
+  date.setDate(date.getDate() + days);
+  return toYmd(date);
 }
 
 function parseYmd(ymd) {

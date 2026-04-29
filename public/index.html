@@ -20,63 +20,107 @@
 
   <nav class="sidebar-nav">
     <div class="nav-section">
-      <div class="nav-section-title">Home</div>
       <a class="nav-link" data-page="home" href="#home">
         <span class="nav-icon">&#8962;</span>
         <span class="nav-label">Dashboard</span>
       </a>
     </div>
 
-    <div class="nav-section">
-      <div class="nav-section-title">Publications</div>
-      <a class="nav-link" data-page="dashboard" href="#dashboard">
-        <span class="nav-icon">&#9632;</span>
-        <span class="nav-label">FBBS Sales Dashboard</span>
-      </a>
-      <a class="nav-link" data-page="econ" href="#econ">
-        <span class="nav-icon">&#9632;</span>
-        <span class="nav-label">Economic Update</span>
-      </a>
-      <a class="nav-link" data-page="cd" href="#cd">
-        <span class="nav-icon">&#9632;</span>
-        <span class="nav-label">Brokered CD Sheet</span>
-      </a>
-      <a class="nav-link" data-page="cdoffers" href="#cdoffers">
-        <span class="nav-icon">&#9632;</span>
-        <span class="nav-label">CD Offerings</span>
-      </a>
-      <a class="nav-link" data-page="cd-recap" href="#cd-recap">
-        <span class="nav-icon">&#9632;</span>
-        <span class="nav-label">Weekly CD Recap</span>
-      </a>
-      <a class="nav-link" data-page="munioffers" href="#munioffers">
-        <span class="nav-icon">&#9632;</span>
-        <span class="nav-label">Muni Offerings</span>
-      </a>
+    <div class="nav-section nav-group open" data-nav-group="fbbs">
+      <button class="nav-parent" type="button" aria-expanded="true" data-nav-toggle="fbbs">
+        <span class="nav-icon">FB</span>
+        <span class="nav-label">FBBS</span>
+        <span class="nav-caret">&#8250;</span>
+      </button>
+      <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="dashboard" href="#dashboard">
+          <span class="nav-label">Sales Dashboard</span>
+        </a>
+        <a class="nav-link nav-minor" data-page="econ" href="#econ">
+          <span class="nav-label">Economic Update</span>
+        </a>
+      </div>
     </div>
 
-    <div class="nav-section">
-      <div class="nav-section-title">Explorers</div>
-      <a class="nav-link" data-page="explorer" href="#explorer">
-        <span class="nav-icon">&#9679;</span>
-        <span class="nav-label">CD Explorer</span>
-      </a>
-      <a class="nav-link" data-page="muni-explorer" href="#muni-explorer">
-        <span class="nav-icon">&#9679;</span>
-        <span class="nav-label">Muni Explorer</span>
-      </a>
-      <a class="nav-link" data-page="agencies" href="#agencies">
-        <span class="nav-icon">&#9679;</span>
+    <div class="nav-section nav-group open" data-nav-group="cds">
+      <button class="nav-parent" type="button" aria-expanded="true" data-nav-toggle="cds">
+        <span class="nav-icon">CD</span>
+        <span class="nav-label">CDs</span>
+        <span class="nav-caret">&#8250;</span>
+      </button>
+      <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="explorer" href="#explorer">
+          <span class="nav-label">CD Explorer</span>
+        </a>
+        <a class="nav-link nav-minor" data-page="cdoffers" href="#cdoffers">
+          <span class="nav-label">Daily CD Offers</span>
+        </a>
+        <a class="nav-link nav-minor" data-page="cd-recap" href="#cd-recap">
+          <span class="nav-label">Weekly CD Recap</span>
+        </a>
+        <a class="nav-link nav-minor" data-page="cd" href="#cd">
+          <span class="nav-label">Brokered CD Sheet</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-section nav-group" data-nav-group="munis">
+      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="munis">
+        <span class="nav-icon">MU</span>
+        <span class="nav-label">Munis</span>
+        <span class="nav-caret">&#8250;</span>
+      </button>
+      <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="muni-explorer" href="#muni-explorer">
+          <span class="nav-label">Muni Explorer</span>
+        </a>
+        <a class="nav-link nav-minor" data-page="munioffers" href="#munioffers">
+          <span class="nav-label">Muni Offerings</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-section nav-group" data-nav-group="agencies">
+      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="agencies">
+        <span class="nav-icon">AG</span>
         <span class="nav-label">Agencies</span>
-      </a>
-      <a class="nav-link" data-page="corporates" href="#corporates">
-        <span class="nav-icon">&#9679;</span>
+        <span class="nav-caret">&#8250;</span>
+      </button>
+      <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="agencies" href="#agencies">
+          <span class="nav-label">Agency Explorer</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-section nav-group" data-nav-group="corporates">
+      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="corporates">
+        <span class="nav-icon">CO</span>
         <span class="nav-label">Corporates</span>
-      </a>
+        <span class="nav-caret">&#8250;</span>
+      </button>
+      <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="corporates" href="#corporates">
+          <span class="nav-label">Corporate Explorer</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="nav-section nav-group" data-nav-group="banks">
+      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="banks">
+        <span class="nav-icon">BK</span>
+        <span class="nav-label">Banks</span>
+        <span class="nav-caret">&#8250;</span>
+      </button>
+      <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="banks" href="#banks">
+          <span class="nav-label">Bank Tear Sheets</span>
+        </a>
+      </div>
     </div>
 
     <div class="nav-section">
-      <div class="nav-section-title">Management</div>
+      <div class="nav-section-title">Operations</div>
       <a class="nav-link" data-page="archive" href="#archive">
         <span class="nav-icon">&#9776;</span>
         <span class="nav-label">Archive</span>
@@ -84,10 +128,6 @@
       <a class="nav-link" data-page="upload" href="#upload">
         <span class="nav-icon">&#8593;</span>
         <span class="nav-label">Upload</span>
-      </a>
-      <a class="nav-link" data-page="builder" href="#builder">
-        <span class="nav-icon">&#9733;</span>
-        <span class="nav-label">Dashboard Builder</span>
       </a>
       <a class="nav-link" data-page="admin" href="#admin">
         <span class="nav-icon">&#9881;</span>
@@ -118,8 +158,13 @@
     <span class="tsd-label">Today</span>
     <span class="tsd-value" id="heroDate">&mdash;</span>
   </div>
+  <div class="portal-jump" role="search">
+    <input type="search" id="navSearchInput" placeholder="Jump to a page or tool..." autocomplete="off" aria-label="Jump to a page or tool">
+    <div class="jump-results" id="navSearchResults" aria-label="Navigation results"></div>
+  </div>
   <div class="top-strip-links">
-    <a href="/tools/us-bank-map.html" target="_blank" rel="noopener">US BANK MAP</a>
+    <a href="https://na01.safelinks.protection.outlook.com/?url=https%3A%2F%2Ffbbs.my.salesforce.com%2F%3Fec%3D301%26startURL%3D%252Fvisualforce%252Fsession%253Furl%253Dhttps%25253A%25252F%25252Ffbbs.lightning.force.com%25252Flightning%25252Fpage%25252Fhome&amp;data=05%7C02%7C%7C90bfff827e884e31152a08dea473f43e%7C84df9e7fe9f640afb435aaaaaaaaaaaa%7C1%7C0%7C639129015102639234%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdata=t%2BlTpGfu44X0fyEAaBe4tulDJWJeCFsTFK8%2BZHM%2Fyu4%3D&amp;reserved=0" target="_blank" rel="noopener">Salesforce</a>
+    <a href="#banks" data-page="banks">Bank Tear Sheets</a>
     <a href="https://eportfolio.fbbsinc.com/ePortfolio/Account/Login" target="_blank" rel="noopener">Portfolio Accounting</a>
     <a href="https://www.netxinvestor.com/nxi/login" target="_blank" rel="noopener">NETX Investor</a>
   </div>
@@ -133,10 +178,6 @@
         <h2>Sales <strong>Command Center</strong></h2>
         <p class="hero-sub" id="homeSubtitle">Loading status&hellip;</p>
       </div>
-      <div class="hero-stat">
-        <div class="num" id="homeStat">&mdash; / 8</div>
-        <div class="lbl">Documents Published</div>
-      </div>
     </div>
   </section>
 
@@ -144,13 +185,6 @@
     <div class="section-title-bar">
       <h3>Today's Market Snapshot</h3>
       <div class="kicker" id="homeKicker">&mdash;</div>
-    </div>
-
-    <div class="quality-bar" id="homeQualityBar">
-      <div class="quality-item"><span class="q-label">Files</span><strong id="qualityFiles">—</strong></div>
-      <div class="quality-item"><span class="q-label">Dates</span><strong id="qualityDates">—</strong></div>
-      <div class="quality-item"><span class="q-label">Extracted</span><strong id="qualityCounts">—</strong></div>
-      <div class="quality-item"><span class="q-label">Parser Warnings</span><strong id="qualityWarnings">—</strong></div>
     </div>
 
     <div class="home-market-tiles" id="homeMarketTiles"></div>
@@ -187,6 +221,40 @@
   </div>
 </div>
 
+<!-- ========== BANK TEAR SHEETS PAGE ========== -->
+<div class="page" id="p-banks">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Bank <strong>Tear Sheets</strong></h2>
+        <p class="hero-sub" id="bankTearSheetSub">Search a bank to view the latest call report tear sheet.</p>
+      </div>
+      <div class="hero-stat">
+        <span id="bankDataCount">&mdash;</span>
+        <small>Banks</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <section class="bank-search-panel">
+      <div class="bank-search-row">
+        <input type="search" id="bankSearchInput" placeholder="Start typing a bank name, city, cert number, or parent..." autocomplete="off">
+        <button class="publish-btn" id="bankSearchBtn" type="button">Search</button>
+      </div>
+      <div class="bank-search-results" id="bankSearchResults"></div>
+    </section>
+
+    <section class="bank-profile" id="bankProfile">
+      <div class="bank-empty-state">
+        <div class="ff-kicker">No Bank Selected</div>
+        <h2>Search for a bank above</h2>
+        <p>The profile will populate with the same call-report fields used in the current tear sheet.</p>
+      </div>
+    </section>
+  </div>
+</div>
+
 <!-- ========== DASHBOARD PAGE ========== -->
 <div class="page" id="p-dashboard">
   <section class="page-hero">
@@ -199,15 +267,7 @@
     </div>
   </section>
   <div class="container">
-    <div class="viewer-wrap">
-      <div class="viewer-tabs">
-        <button class="v-tab active">FBBS Sales Dashboard (HTML)</button>
-        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
-        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
-        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
-        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
-        <a class="v-tab" href="/tools/us-bank-map.html" target="_blank" rel="noopener">US BANK MAP</a>
-      </div>
+    <div class="viewer-wrap dashboard-only-view">
       <div class="viewer-frame" id="dashFrame">
         <div class="viewer-empty">
           <div class="ff-kicker">No Document Loaded</div>
@@ -232,15 +292,46 @@
     </div>
   </section>
   <div class="container">
-    <div class="viewer-wrap">
-      <div class="viewer-tabs">
-        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
-        <button class="v-tab active">Economic Update (PDF)</button>
-        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
-        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
-        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
-        <a class="v-tab" href="/tools/us-bank-map.html" target="_blank" rel="noopener">US BANK MAP</a>
+    <section class="economic-tool" id="economicTool">
+      <div class="market-tool-head">
+        <div>
+          <span class="tool-eyebrow">Interactive Market Update</span>
+          <h3>Daily rate and risk snapshot</h3>
+          <p id="econToolSub">Reading the uploaded Economic Update&hellip;</p>
+        </div>
+        <div class="market-date-badge" id="econToolDate">Today</div>
       </div>
+
+      <div class="market-summary-grid" id="econMarketSummary"></div>
+
+      <div class="market-workspace">
+        <div class="market-panel curve-panel">
+          <div class="market-panel-head">
+            <span>U.S. Treasury Curve</span>
+            <strong id="econCurveSlope">2s/10s &mdash;</strong>
+          </div>
+          <div class="curve-chart" id="econCurveChart"></div>
+        </div>
+
+        <div class="market-panel">
+          <div class="market-panel-head">
+            <span>Sales Cues</span>
+            <strong id="econCueCount">&mdash;</strong>
+          </div>
+          <div class="sales-cue-list" id="econSalesCues"></div>
+        </div>
+      </div>
+
+      <div class="market-tabs" role="tablist" aria-label="Economic Update sections">
+        <button type="button" class="active" data-market-section="rates">Market Rates</button>
+        <button type="button" data-market-section="risk">Futures &amp; Volatility</button>
+        <button type="button" data-market-section="headlines">Headlines</button>
+        <button type="button" data-market-section="calendar">Calendar</button>
+      </div>
+      <div class="market-detail-panel" id="econMarketDetail"></div>
+    </section>
+
+    <div class="viewer-wrap document-only-view">
       <div class="viewer-frame" id="econFrame">
         <div class="viewer-empty">
           <div class="ff-kicker">No Document Loaded</div>
@@ -265,15 +356,55 @@
     </div>
   </section>
   <div class="container">
-    <div class="viewer-wrap">
-      <div class="viewer-tabs">
-        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
-        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
-        <button class="v-tab active">CD Rate Sheet (PDF)</button>
-        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
-        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
-        <a class="v-tab" href="/tools/us-bank-map.html" target="_blank" rel="noopener">US BANK MAP</a>
+    <section class="cd-cost-tool" aria-label="Brokered CD cost calculator">
+      <div class="cd-tool-head">
+        <div>
+          <span class="tool-eyebrow">Interactive Tool</span>
+          <h3>Brokered CD Cost Calculator</h3>
+          <p>Estimate funding cost from the brokered CD all-in mid curve.</p>
+        </div>
       </div>
+
+      <div class="cd-calc-layout">
+        <div class="cd-calc-controls">
+          <div class="cd-term-picker">
+            <span>Term</span>
+            <div class="cd-term-buttons" id="cdCalcTermButtons" aria-label="Brokered CD terms"></div>
+          </div>
+          <label>
+            <span>Issue Amount</span>
+            <input type="text" id="cdCalcAmount" inputmode="decimal" value="$1,000,000" aria-label="Issue amount">
+          </label>
+          <label>
+            <span>All-in Rate</span>
+            <input type="number" id="cdCalcRate" min="0" max="25" step="0.001" aria-label="All-in rate percent">
+          </label>
+          <div class="cd-calc-actions" aria-label="Quick amount buttons">
+            <button type="button" data-cd-amount="1000000">$1MM</button>
+            <button type="button" data-cd-amount="5000000">$5MM</button>
+            <button type="button" data-cd-amount="10000000">$10MM</button>
+            <button type="button" data-cd-amount="25000000">$25MM</button>
+          </div>
+        </div>
+
+        <div class="cd-calc-results" id="cdCalcResults">
+          <div class="cd-result-grid">
+            <div class="cd-result-card primary">
+              <span>Annual Cost</span>
+              <strong id="cdCalcAnnualCost">—</strong>
+              <p id="cdCalcResultMeta">Choose a term and amount.</p>
+            </div>
+            <div class="cd-result-card">
+              <span>Monthly Equivalent</span>
+              <strong id="cdCalcMonthlyCost">—</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="cd-calc-note">Simple-interest estimate using the selected all-in mid. Actual cost depends on final rate, settlement, structure, fees, and execution.</p>
+    </section>
+
+    <div class="viewer-wrap document-only-view">
       <div class="viewer-frame" id="cdFrame">
         <div class="viewer-empty">
           <div class="ff-kicker">No Document Loaded</div>
@@ -298,15 +429,7 @@
     </div>
   </section>
   <div class="container">
-    <div class="viewer-wrap">
-      <div class="viewer-tabs">
-        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
-        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
-        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
-        <button class="v-tab active">CD Offerings (PDF)</button>
-        <button class="v-tab" data-goto="munioffers">Muni Offerings (PDF)</button>
-        <a class="v-tab" href="/tools/us-bank-map.html" target="_blank" rel="noopener">US BANK MAP</a>
-      </div>
+    <div class="viewer-wrap document-only-view">
       <div class="viewer-frame" id="cdoffersFrame">
         <div class="viewer-empty">
           <div class="ff-kicker">No Document Loaded</div>
@@ -331,15 +454,7 @@
     </div>
   </section>
   <div class="container">
-    <div class="viewer-wrap">
-      <div class="viewer-tabs">
-        <button class="v-tab" data-goto="dashboard">FBBS Sales Dashboard (HTML)</button>
-        <button class="v-tab" data-goto="econ">Economic Update (PDF)</button>
-        <button class="v-tab" data-goto="cd">CD Rate Sheet (PDF)</button>
-        <button class="v-tab" data-goto="cdoffers">CD Offerings (PDF)</button>
-        <button class="v-tab active">Muni Offerings (PDF)</button>
-        <a class="v-tab" href="/tools/us-bank-map.html" target="_blank" rel="noopener">US BANK MAP</a>
-      </div>
+    <div class="viewer-wrap document-only-view">
       <div class="viewer-frame" id="munioffersFrame">
         <div class="viewer-empty">
           <div class="ff-kicker">No Document Loaded</div>
@@ -416,6 +531,17 @@
       <div class="quality-item"><span class="q-label">Data Rows</span><strong id="uploadQualityCounts">—</strong></div>
       <div class="quality-item"><span class="q-label">Warnings</span><strong id="uploadQualityWarnings">—</strong></div>
     </div>
+
+    <section class="bank-upload-panel">
+      <div>
+        <h3>Bank call report workbook</h3>
+        <p id="bankImportStatus">Checking imported bank data&hellip;</p>
+      </div>
+      <label class="small-btn bank-upload-btn">
+        Upload Workbook
+        <input type="file" id="bankWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
+      </label>
+    </section>
 
     <form id="uploadForm" enctype="multipart/form-data">
       <section class="upload-section">
@@ -641,54 +767,6 @@
   </div>
 </div>
 
-<!-- ========== DASHBOARD BUILDER PAGE ========== -->
-<div class="page" id="p-builder">
-  <section class="page-hero">
-    <div class="page-hero-inner">
-      <div>
-        <h2>Dashboard <strong>Builder</strong></h2>
-        <p class="hero-sub">Generate, preview, and publish the FBBS Sales Dashboard from portal data</p>
-      </div>
-      <div class="hero-stat">
-        <div class="num" id="builderStat">&mdash;</div>
-        <div class="lbl">Preflight</div>
-      </div>
-    </div>
-  </section>
-
-  <div class="container">
-    <div class="section-title-bar">
-      <h3>Sales Dashboard Workflow</h3>
-      <div class="kicker" id="builderKicker">&mdash;</div>
-    </div>
-
-    <div class="builder-panel">
-      <div class="builder-copy">
-        <h3>Morning Process</h3>
-        <p>Upload the daily package first. Then generate a draft FBBS Sales Dashboard from the structured CD, muni, agency, and corporate data already parsed by the portal.</p>
-        <p>This first portal-owned version is source-backed and conservative. Macro, MMD, brokered CD, CD relative value, CMO, and trader commentary sections are marked as pending until those parsers are added.</p>
-      </div>
-      <div class="builder-actions">
-        <button type="button" class="doc-btn" id="generateDashboardBtn">Generate Draft</button>
-        <a class="doc-btn outline disabled-link" id="previewDashboardBtn" href="#" target="_blank" rel="noopener">Preview Draft</a>
-        <button type="button" class="doc-btn outline" id="publishDashboardBtn" disabled>Publish Dashboard</button>
-      </div>
-    </div>
-
-    <div class="builder-status-grid" id="builderStatusGrid"></div>
-
-    <div class="builder-checks">
-      <div class="section-title-bar compact-title">
-        <h3>Preflight Checks</h3>
-        <div class="kicker">Must pass before final publication</div>
-      </div>
-      <div id="builderChecks" class="check-list">
-        <div class="global-empty">Generate a draft to run preflight checks.</div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- ========== WEEKLY CD RECAP PAGE ========== -->
 <div class="page" id="p-cd-recap">
   <section class="page-hero">
@@ -710,17 +788,44 @@
       <div class="kicker" id="cdRecapKicker">&mdash;</div>
     </div>
 
-    <div class="builder-panel cd-recap-panel">
-      <div class="builder-copy">
+    <div class="recap-panel">
+      <div class="recap-copy">
         <h3>Recap Method</h3>
         <p>Daily CD Offers uploads are retained as dated snapshots. The weekly recap combines the week&rsquo;s uploads, removes duplicate CUSIPs, then calculates issue counts and median coupons by term.</p>
       </div>
-      <div class="builder-actions">
+      <div class="recap-actions">
         <button type="button" class="doc-btn" id="refreshCdRecapBtn">Refresh Summary</button>
       </div>
     </div>
 
-    <div class="builder-status-grid" id="cdRecapStatusGrid"></div>
+    <div class="recap-status-grid" id="cdRecapStatusGrid"></div>
+
+    <div class="recap-chart-grid">
+      <section class="recap-chart-card">
+        <div class="recap-chart-head">
+          <h3>Weekly Issue Count by Term</h3>
+          <span>Top terms</span>
+        </div>
+        <div class="term-count-chart" id="cdTermCountChart">
+          <div class="chart-empty">Loading issue counts&hellip;</div>
+        </div>
+      </section>
+
+      <section class="recap-chart-card">
+        <div class="recap-chart-head">
+          <h3>Median Rate Change</h3>
+          <span>Today vs selected period</span>
+        </div>
+        <div class="median-rate-legend" id="cdMedianRateLegend"></div>
+        <div class="median-rate-chart" id="cdMedianRateChart">
+          <div class="chart-empty">Loading rate comparison&hellip;</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="rate-comparison-table-wrap recap-comparison-wide" id="cdRateComparisonTable">
+      <div class="chart-empty">Loading rate comparison table&hellip;</div>
+    </div>
 
     <div class="section-title-bar compact-title">
       <h3>Median Coupon &amp; Issue Count</h3>

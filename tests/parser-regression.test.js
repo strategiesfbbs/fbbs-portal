@@ -2,15 +2,31 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { PDFParse } = require('pdf-parse');
+const XLSX = require('xlsx');
 
 const { parseCdOffersText } = require('../server/cd-offers-parser');
+const { parseBrokeredCdRateSheetText } = require('../server/brokered-cd-parser');
 const { parseMuniOffersText } = require('../server/muni-offers-parser');
+const { parseEconomicUpdateText } = require('../server/economic-update-parser');
 const { parseAgenciesFiles } = require('../server/agencies-parser');
 const { parseCorporatesFiles } = require('../server/corporates-parser');
-const { sniffDateFromFilename, classifyFile } = require('../server/server');
+const {
+  sniffDateFromFilename,
+  classifyFile,
+  readPackageDir,
+  collectAgencyPackageFiles
+} = require('../server/server');
 const { saveCdHistorySnapshot, summarizeWeeklyCdHistory } = require('../server/cd-history');
+const { importWeeklyCdWorksheet } = require('../server/cd-history-importer');
+const {
+  getBankDatabaseStatus,
+  getBankFromDatabase,
+  searchBankDatabase,
+  writeBankDatabase
+} = require('../server/bank-data-importer');
 
 const ROOT = path.join(__dirname, '..');
 const CURRENT_DIR = path.join(ROOT, 'data', 'current');
@@ -88,13 +104,44 @@ async function assertCdParser() {
   assert.deepStrictEqual(commaRestrictions.offerings[0].restrictions, ['FL', 'OH', 'TX']);
 }
 
+async function assertBrokeredCdParser() {
+  const parsed = parseBrokeredCdRateSheetText(await pdfText('FBBS Brokered CD Rate Sheet_04_24_2026_.pdf'));
+  assert.strictEqual(parsed.asOfDate, '2026-04-24');
+  assert.strictEqual(parsed.terms.length, 11);
+  assert.deepStrictEqual(parsed.terms[0], {
+    label: '3 mo',
+    months: 3,
+    low: 3.9,
+    mid: 3.95,
+    high: 4
+  });
+  assert.strictEqual(parsed.terms.find(term => term.months === 120).mid, 4.35);
+}
+
 async function assertMuniParser() {
   const parsed = parseMuniOffersText(await pdfText('20260424_FBBS_Offerings.pdf'));
   assert.strictEqual(parsed.asOfDate, '2026-04-24');
-  assert.strictEqual(parsed.offerings.length, 26);
+  assert.strictEqual(parsed.offerings.length, 27);
+  assert.strictEqual(parsed.warnings.length, 0);
   assert.strictEqual(parsed.offerings[0].section, 'BQ');
   assert.strictEqual(parsed.offerings[0].cusip, '824105BB5');
   assert.strictEqual(parsed.offerings[0].creditEnhancement, 'BAM');
+
+  const wrappedTaxable = parsed.offerings.find(row => row.cusip === '655867W54');
+  assert(wrappedTaxable);
+  assert.strictEqual(wrappedTaxable.issuerName, 'NORFOLK VA ETM - 100% SLUGS');
+  assert.strictEqual(wrappedTaxable.spread, '+24/7YR');
+}
+
+async function assertEconomicUpdateParser() {
+  const parsed = parseEconomicUpdateText(await pdfText('20260427.pdf'));
+  assert.strictEqual(parsed.asOfDate, '2026-04-27');
+  assert.strictEqual(parsed.treasuries.length, 10);
+  assert.strictEqual(parsed.treasuries.find(row => row.tenor === '10YR').yield, 4.319);
+  assert.strictEqual(parsed.releases[0].event, 'Durable Goods Orders');
+  assert.strictEqual(parsed.releases[0].dateTime, '04/29/26 7:30 AM');
+  assert(parsed.releases.some(row => row.event === 'Housing Starts'));
+  assert(!parsed.releases.some(row => /^Apr\b/.test(row.event)));
 }
 
 function assertAgenciesParser() {
@@ -122,13 +169,121 @@ function assertCorporatesParser() {
   assert.strictEqual(parsed.offerings[0].investmentGrade, true);
 }
 
+function assertPackageReaderUsesSlotMetadata() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-package-meta-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'generic spreadsheet.xlsx'), 'not parsed here');
+    fs.writeFileSync(path.join(tmp, '_meta.json'), JSON.stringify({
+      date: '2026-04-28',
+      slotFilenames: {
+        corporates: 'generic spreadsheet.xlsx'
+      },
+      corporatesCount: 12
+    }));
+
+    const pkg = readPackageDir(tmp);
+    assert.strictEqual(pkg.date, '2026-04-28');
+    assert.strictEqual(pkg.corporates, 'generic spreadsheet.xlsx');
+    assert.strictEqual(pkg.agenciesBullets, null);
+    assert.strictEqual(pkg.corporatesCount, 12);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function assertAgencyCollectionPreservesCounterpart() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-agency-merge-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'existing bullets.xlsx'), 'bullets');
+    fs.writeFileSync(path.join(tmp, 'fresh callables.xlsx'), 'callables');
+
+    const selected = collectAgencyPackageFiles(tmp, {
+      slotFilenames: {
+        agenciesCallables: 'fresh callables.xlsx'
+      },
+      priorMeta: {
+        slotFilenames: {
+          agenciesBullets: 'existing bullets.xlsx',
+          agenciesCallables: 'old callables.xlsx'
+        }
+      }
+    });
+
+    assert.deepStrictEqual(selected.missingSlots, []);
+    assert.deepStrictEqual(selected.files.map(f => [f.slot, f.filename]), [
+      ['agenciesBullets', 'existing bullets.xlsx'],
+      ['agenciesCallables', 'fresh callables.xlsx']
+    ]);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function assertBankDatabaseRoundTrip() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-bank-db-'));
+  try {
+    writeBankDatabase({
+      metadata: {
+        importedAt: '2026-04-29T12:00:00.000Z',
+        sourceFile: 'sample.xlsm',
+        latestPeriod: '2025Q4',
+        bankCount: 1,
+        rowCount: 2,
+        fields: []
+      },
+      banks: [{
+        id: 'bank-1',
+        summary: {
+          id: 'bank-1',
+          displayName: 'Sample Bank, Springfield, IL',
+          name: 'Sample Bank',
+          city: 'Springfield',
+          state: 'IL',
+          certNumber: '12345',
+          parentName: 'Sample Bancorp',
+          primaryRegulator: 'FDIC',
+          period: '2025Q4',
+          totalAssets: 1000,
+          totalDeposits: 800
+        },
+        periods: [
+          { period: '2025Q4', endDate: '12/31/2025', values: { id: 'bank-1', name: 'Sample Bank' } }
+        ]
+      }]
+    }, tmp);
+
+    const status = getBankDatabaseStatus(tmp);
+    assert.strictEqual(status.available, true);
+    assert.strictEqual(status.bankCount, 1);
+    assert.strictEqual(status.metadata.latestPeriod, '2025Q4');
+
+    const results = searchBankDatabase(tmp, 'sample springfield', 5);
+    assert.strictEqual(results.results.length, 1);
+    assert.strictEqual(results.results[0].certNumber, '12345');
+
+    const detail = getBankFromDatabase(tmp, 'bank-1');
+    assert.strictEqual(detail.bank.periods.length, 1);
+    assert.strictEqual(detail.bank.summary.displayName, 'Sample Bank, Springfield, IL');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function assertCdHistoryWeeklyDedupe() {
-  const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'fbbs-cd-history-'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-cd-history-'));
   const baseOfferings = [
     { term: '3m', termMonths: 3, name: 'A BANK', rate: 3.75, cusip: '111111111', maturity: '2026-07-01' },
     { term: '3m', termMonths: 3, name: 'B BANK', rate: 3.85, cusip: '222222222', maturity: '2026-07-02' },
     { term: '6m', termMonths: 6, name: 'C BANK', rate: 3.90, cusip: '333333333', maturity: '2026-10-01' }
   ];
+  saveCdHistorySnapshot(tmp, {
+    asOfDate: '2026-04-14',
+    sourceFile: 'prior-week.pdf',
+    offerings: [
+      { term: '3m', termMonths: 3, name: 'OLD A BANK', rate: 3.50, cusip: '999999999', maturity: '2026-07-01' },
+      { term: '6m', termMonths: 6, name: 'OLD C BANK', rate: 3.75, cusip: '888888888', maturity: '2026-10-01' }
+    ]
+  }, { uploadedAt: '2026-04-14T12:00:00.000Z', uploadDate: '2026-04-14' });
   saveCdHistorySnapshot(tmp, {
     asOfDate: '2026-04-20',
     sourceFile: 'day-1.pdf',
@@ -153,17 +308,81 @@ function assertCdHistoryWeeklyDedupe() {
   assert.strictEqual(recap.terms.find(t => t.term === '3m').medianRate, 3.8);
   assert.strictEqual(recap.terms.find(t => t.term === '6m').uniqueCusips, 2);
   assert.strictEqual(recap.terms.find(t => t.term === '6m').medianRate, 3.95);
+  assert.strictEqual(recap.rateComparisons.periods.find(p => p.key === 'today').snapshotDate, '2026-04-21');
+  assert.strictEqual(recap.rateComparisons.periods.find(p => p.key === 'previousWeek').snapshotDate, '2026-04-14');
+  const threeMonth = recap.rateComparisons.terms.find(t => t.term === '3m');
+  assert.strictEqual(threeMonth.rates.today, 3.75);
+  assert.strictEqual(threeMonth.rates.previousWeek, 3.5);
+  assert.strictEqual(threeMonth.deltas.previousWeek, 0.25);
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function assertWeeklyCdWorksheetImport() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-cd-import-'));
+  const workbookPath = path.join(tmp, 'Weekly CD Worksheet.xlsx');
+  const historyDir = path.join(tmp, 'cd-history');
+  const workbook = XLSX.utils.book_new();
+
+  const dataRows = [
+    ['CUSIP', 'NAME', 'DESCRIPTION', 'RATE', 'MATURITY', 'CUSIP2', 'SETTLE', 'FDIC NUMBER', 'DOMICILED', 'IDC', 'MAT YEAR', 'TERM', 'Column1', 'RESTRICTIONS', 'Column2', 'Date Uploaded'],
+    ['111111111', 'A BANK', 'A BANK 3.8 07/01/26', 3.8, new Date(2026, 6, 1), '111111111', new Date(2026, 3, 1), '1', 'MO', '300', 2026, '3m', 'TX, CA', 'TEST', null, new Date(2026, 2, 28)],
+    ['222222222', 'B BANK', 'B BANK 4.1 10/01/26', 4.1, new Date(2026, 9, 1), '222222222', new Date(2026, 3, 2), '2', 'IL', '300', 2026, '6m', '', 'TEST', null, new Date(2026, 2, 28)],
+    [null, null, null, '3m', 4.2, '6m', 4.1, '12m', 4, '18m', 4, '24m', 3.95, '36m', 4, '4y']
+  ];
+  const dataSheet = XLSX.utils.aoa_to_sheet(dataRows);
+  XLSX.utils.book_append_sheet(workbook, dataSheet, 'Data');
+
+  const historicRows = [
+    ['CUSIP', 'NAME', 'DESCRIPTION', 'RATE', 'MATURITY', 'CUSIP2', 'SETTLE', 'FDIC NUMBER', 'DOMICILED', 'IDC', 'MAT YEAR', 'TERM', 'RESTRICTIONS', 'RUNNER', 'CPN FREQ', 'Issuance'],
+    ['333333333', 'C BANK', 'C BANK 5 04/01/24', 5, new Date(2024, 3, 1), '333333333', new Date(2024, 0, 2), '3', 'TX', '300', 2024, '3m', 'NE', 'TEST', 'at maturity', 1]
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(historicRows), '2024 Data');
+  XLSX.writeFile(workbook, workbookPath, { cellDates: true });
+
+  try {
+    const result = importWeeklyCdWorksheet(workbookPath, {
+      historyDir,
+      sheets: ['2024 Data', 'Data']
+    });
+
+    assert.strictEqual(result.stats.writtenSnapshots, 2);
+    assert.strictEqual(result.stats.uniqueRows, 3);
+    assert.strictEqual(result.stats.skippedRows, 1);
+    assert.strictEqual(fs.existsSync(path.join(historyDir, '1900-01-04.json')), false);
+
+    const currentSnapshot = JSON.parse(fs.readFileSync(path.join(historyDir, '2026-03-28.json'), 'utf-8'));
+    assert.strictEqual(currentSnapshot.offerings.length, 2);
+    assert.deepStrictEqual(currentSnapshot.offerings.find(o => o.cusip === '111111111').restrictions, ['TX', 'CA']);
+    assert.strictEqual(currentSnapshot.offerings.find(o => o.cusip === '222222222').termMonths, 6);
+
+    const historicSnapshot = JSON.parse(fs.readFileSync(path.join(historyDir, '2024-01-02.json'), 'utf-8'));
+    assert.strictEqual(historicSnapshot.offerings[0].couponFrequency, 'at maturity');
+
+    const rerun = importWeeklyCdWorksheet(workbookPath, {
+      historyDir,
+      sheets: ['2024 Data', 'Data']
+    });
+    assert.strictEqual(rerun.stats.writtenSnapshots, 0);
+    assert.strictEqual(rerun.stats.skippedExistingSnapshots, 2);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 (async function run() {
   assertDateSniffing();
   assertClassification();
   await assertCdParser();
+  await assertBrokeredCdParser();
   await assertMuniParser();
+  await assertEconomicUpdateParser();
   assertAgenciesParser();
   assertCorporatesParser();
+  assertPackageReaderUsesSlotMetadata();
+  assertAgencyCollectionPreservesCounterpart();
+  assertBankDatabaseRoundTrip();
   assertCdHistoryWeeklyDedupe();
+  assertWeeklyCdWorksheetImport();
   console.log('Parser regression tests passed.');
 })().catch(err => {
   console.error(err);

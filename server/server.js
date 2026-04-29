@@ -23,14 +23,20 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const url = require('url');
 const { PDFParse } = require('pdf-parse');
 
 const { parseCdOffersText } = require('./cd-offers-parser');
+const { parseBrokeredCdRateSheetText } = require('./brokered-cd-parser');
 const { parseMuniOffersText } = require('./muni-offers-parser');
+const { parseEconomicUpdateText } = require('./economic-update-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
 const { parseCorporatesFiles } = require('./corporates-parser');
-const { generateDashboard, TEMPLATE_PATH } = require('./dashboard-generator');
+const {
+  getBankDatabaseStatus,
+  getBankFromDatabase,
+  importBankWorkbook,
+  searchBankDatabase
+} = require('./bank-data-importer');
 const {
   ensureCdHistoryDir,
   saveCdHistorySnapshot,
@@ -49,8 +55,10 @@ const DATA_DIR = process.env.DATA_DIR
 const CURRENT_DIR = path.join(DATA_DIR, 'current');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
 const CD_HISTORY_DIR = path.join(DATA_DIR, 'cd-history');
+const BANK_REPORTS_DIR = path.join(DATA_DIR, 'bank-reports');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
+const BANK_UPLOAD_MAX_BYTES = (parseInt(process.env.BANK_UPLOAD_MAX_MB, 10) || 300) * 1024 * 1024;
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = LOG_LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
@@ -67,7 +75,7 @@ function log(level, ...args) {
 
 // ---------- Setup ----------
 
-[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, CD_HISTORY_DIR].forEach(dir => {
+[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('info', 'Created data directory:', dir);
@@ -96,10 +104,11 @@ const MIME_TYPES = {
 const SLOT_NAMES = ['dashboard', 'econ', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 const OFFERINGS_FILENAME = '_offerings.json';
 const MUNI_OFFERINGS_FILENAME = '_muni_offerings.json';
+const ECONOMIC_UPDATE_FILENAME = '_economic_update.json';
 const AGENCIES_FILENAME = '_agencies.json';
 const CORPORATES_FILENAME = '_corporates.json';
 const META_FILENAME = '_meta.json';
-const DASHBOARD_DRAFT_META_FILENAME = '_dashboard_draft.json';
+const BANK_WORKBOOK_FILENAME = 'current-bank-call-reports.xlsm';
 
 // ---------- Helpers ----------
 
@@ -153,6 +162,14 @@ function safeJoin(base, ...parts) {
   return target;
 }
 
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch (_) {
+    return null;
+  }
+}
+
 function classifyFile(filename, explicitSlot) {
   if (explicitSlot && SLOT_NAMES.includes(explicitSlot)) return explicitSlot;
   if (!filename) return null;
@@ -192,6 +209,42 @@ function classifyFile(filename, explicitSlot) {
     }
     if (/^\d{8}\.pdf$/.test(lower)) return 'econ';
     return 'econ';
+  }
+  return null;
+}
+
+function hasBytes(buffer, bytes, offset = 0) {
+  return bytes.every((byte, i) => buffer[offset + i] === byte);
+}
+
+function looksLikePdf(buffer) {
+  return Buffer.isBuffer(buffer) && hasBytes(buffer, [0x25, 0x50, 0x44, 0x46]);
+}
+
+function looksLikeExcel(buffer) {
+  return Buffer.isBuffer(buffer) && (
+    hasBytes(buffer, [0x50, 0x4b, 0x03, 0x04]) ||
+    hasBytes(buffer, [0x50, 0x4b, 0x05, 0x06]) ||
+    hasBytes(buffer, [0xd0, 0xcf, 0x11, 0xe0])
+  );
+}
+
+function looksLikeHtml(buffer) {
+  if (!Buffer.isBuffer(buffer)) return false;
+  const head = buffer.slice(0, 512).toString('utf-8').trimStart().toLowerCase();
+  return head.startsWith('<!doctype html') || head.startsWith('<html') || head.includes('<html');
+}
+
+function validateUploadSignature(file, slot) {
+  if (!file || !file.data) return 'Upload is missing file data.';
+  if (slot === 'dashboard') {
+    return looksLikeHtml(file.data) ? null : `${file.filename} does not look like an HTML dashboard file.`;
+  }
+  if (['econ', 'cd', 'cdoffers', 'munioffers'].includes(slot)) {
+    return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
+  }
+  if (['agenciesBullets', 'agenciesCallables', 'corporates'].includes(slot)) {
+    return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
   }
   return null;
 }
@@ -375,6 +428,17 @@ async function extractOfferings(pdfBuffer) {
   }
 }
 
+async function extractBrokeredCdRates(pdfBuffer) {
+  try {
+    const parser = new PDFParse({ data: pdfBuffer });
+    const result = await parser.getText();
+    return parseBrokeredCdRateSheetText(result.text || '');
+  } catch (err) {
+    log('error', 'Brokered CD Rate Sheet extraction failed:', err.message);
+    return null;
+  }
+}
+
 async function extractMuniOfferings(pdfBuffer) {
   try {
     const parser = new PDFParse({ data: pdfBuffer });
@@ -387,11 +451,96 @@ async function extractMuniOfferings(pdfBuffer) {
   }
 }
 
+async function extractEconomicUpdate(pdfBuffer, sourceFile) {
+  try {
+    const parser = new PDFParse({ data: pdfBuffer });
+    const result = await parser.getText();
+    return parseEconomicUpdateText(result.text || '', { sourceFile });
+  } catch (err) {
+    log('warn', 'Economic Update extraction failed:', err.message);
+    return null;
+  }
+}
+
 // ---------- Package reading ----------
+
+function readMetaFile(dirPath) {
+  const metaPath = path.join(dirPath, META_FILENAME);
+  if (!fs.existsSync(metaPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(metaPath, 'utf-8')) || {};
+  } catch (e) {
+    log('warn', 'Could not read meta in', dirPath, '-', e.message);
+    return {};
+  }
+}
+
+function fileExistsInDir(dirPath, filename) {
+  if (typeof filename !== 'string' || !filename || filename.startsWith('_')) return false;
+  const filePath = safeJoin(dirPath, filename);
+  if (!filePath || !fs.existsSync(filePath)) return false;
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch (_) {
+    return false;
+  }
+}
+
+function metadataSlotFilename(meta, slot, dirPath, files) {
+  const filename = meta && meta.slotFilenames && meta.slotFilenames[slot];
+  if (typeof filename !== 'string' || !filename || filename.startsWith('_')) return null;
+  if (Array.isArray(files) && !files.includes(filename)) return null;
+  return fileExistsInDir(dirPath, filename) ? filename : null;
+}
+
+function findPackageFileForSlot(dirPath, slot, meta = {}, files = null) {
+  const names = Array.isArray(files)
+    ? files
+    : fs.existsSync(dirPath)
+      ? fs.readdirSync(dirPath).filter(f => !f.startsWith('_'))
+      : [];
+
+  const fromMeta = metadataSlotFilename(meta, slot, dirPath, names);
+  if (fromMeta) return fromMeta;
+
+  return names.find(filename => classifyFile(filename) === slot) || null;
+}
+
+function readSlotFileForPackage(dirPath, slot, { slotFilenames = {}, priorMeta = {} } = {}) {
+  const filename = slotFilenames[slot] || findPackageFileForSlot(dirPath, slot, priorMeta);
+  if (!filename) return null;
+
+  const filePath = safeJoin(dirPath, filename);
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    return { filename, buffer: fs.readFileSync(filePath) };
+  } catch (err) {
+    log('warn', `Could not read ${slot} file ${filename}:`, err.message);
+    return null;
+  }
+}
+
+function collectAgencyPackageFiles(dirPath, { slotFilenames = {}, priorMeta = {} } = {}) {
+  const slots = ['agenciesBullets', 'agenciesCallables'];
+  const files = [];
+  const missingSlots = [];
+
+  for (const slot of slots) {
+    const file = readSlotFileForPackage(dirPath, slot, { slotFilenames, priorMeta });
+    if (file) {
+      files.push({ ...file, slot });
+    } else {
+      missingSlots.push(slot);
+    }
+  }
+
+  return { files, missingSlots };
+}
 
 function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
   if (!fs.existsSync(dirPath)) return null;
   const files = fs.readdirSync(dirPath).filter(f => !f.startsWith('_'));
+  const meta = readMetaFile(dirPath);
   const pkg = {
     date: dateIfMissingMeta,
     dashboard: null,
@@ -411,27 +560,34 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     corporatesCount: null,
     corporatesFileDate: null
   };
+
+  const assignedFromMeta = new Set();
+  for (const slot of SLOT_NAMES) {
+    const filename = metadataSlotFilename(meta, slot, dirPath, files);
+    if (filename) {
+      pkg[slot] = filename;
+      assignedFromMeta.add(filename);
+    }
+  }
+
   for (const f of files) {
+    if (assignedFromMeta.has(f)) continue;
     const type = classifyFile(f);
     if (type && !pkg[type]) pkg[type] = f;
   }
-  const metaPath = path.join(dirPath, META_FILENAME);
-  if (fs.existsSync(metaPath)) {
-    try {
-      const m = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-      if (m.date) pkg.date = m.date;
-      if (m.publishedAt) pkg.publishedAt = m.publishedAt;
-      if (m.publishedBy) pkg.publishedBy = m.publishedBy;
-      if (typeof m.offeringsCount === 'number') pkg.offeringsCount = m.offeringsCount;
-      if (typeof m.muniOfferingsCount === 'number') pkg.muniOfferingsCount = m.muniOfferingsCount;
-      if (typeof m.agencyCount === 'number') pkg.agencyCount = m.agencyCount;
-      if (m.agencyFileDate) pkg.agencyFileDate = m.agencyFileDate;
-      if (typeof m.corporatesCount === 'number') pkg.corporatesCount = m.corporatesCount;
-      if (m.corporatesFileDate) pkg.corporatesFileDate = m.corporatesFileDate;
-    } catch (e) {
-      log('warn', 'Could not read meta in', dirPath, '-', e.message);
-    }
-  }
+
+  if (meta.date) pkg.date = meta.date;
+  if (meta.publishedAt) pkg.publishedAt = meta.publishedAt;
+  if (meta.publishedBy) pkg.publishedBy = meta.publishedBy;
+  if (typeof meta.offeringsCount === 'number') pkg.offeringsCount = meta.offeringsCount;
+  if (typeof meta.muniOfferingsCount === 'number') pkg.muniOfferingsCount = meta.muniOfferingsCount;
+  if (typeof meta.agencyCount === 'number') pkg.agencyCount = meta.agencyCount;
+  if (meta.agencyFileDate) pkg.agencyFileDate = meta.agencyFileDate;
+  if (typeof meta.corporatesCount === 'number') pkg.corporatesCount = meta.corporatesCount;
+  if (meta.corporatesFileDate) pkg.corporatesFileDate = meta.corporatesFileDate;
+  if (Array.isArray(meta.brokeredCdTerms)) pkg.brokeredCdTerms = meta.brokeredCdTerms;
+  if (meta.brokeredCdAsOfDate) pkg.brokeredCdAsOfDate = meta.brokeredCdAsOfDate;
+
   return pkg;
 }
 
@@ -460,6 +616,39 @@ function loadCurrentOfferings() {
     log('warn', 'Could not read offerings file:', e.message);
     return null;
   }
+}
+
+async function loadEconomicUpdateFromDir(dirPath) {
+  const jsonPath = path.join(dirPath, ECONOMIC_UPDATE_FILENAME);
+  if (fs.existsSync(jsonPath)) {
+    try {
+      return JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+    } catch (e) {
+      log('warn', 'Could not read economic update file:', e.message);
+    }
+  }
+
+  const pkg = readPackageDir(dirPath);
+  if (!pkg || !pkg.econ) return null;
+  const pdfPath = path.join(dirPath, pkg.econ);
+  if (!fs.existsSync(pdfPath)) return null;
+  const parsed = await extractEconomicUpdate(fs.readFileSync(pdfPath), pkg.econ);
+  if (!parsed) return null;
+  try {
+    fs.writeFileSync(jsonPath, JSON.stringify(parsed, null, 2));
+  } catch (err) {
+    log('warn', 'Could not cache economic update JSON:', err.message);
+  }
+  return parsed;
+}
+
+function loadCurrentEconomicUpdate() {
+  return loadEconomicUpdateFromDir(CURRENT_DIR);
+}
+
+function loadArchivedEconomicUpdate(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  return loadEconomicUpdateFromDir(path.join(ARCHIVE_DIR, date));
 }
 
 function seedCdHistoryFromCurrentPackage() {
@@ -546,111 +735,65 @@ function loadCurrentCorporates() {
   }
 }
 
-function getSalesDashboardStatus() {
-  const current = getCurrentPackage() || {};
-  const draftPath = path.join(CURRENT_DIR, DASHBOARD_DRAFT_META_FILENAME);
-  let draft = null;
-  if (fs.existsSync(draftPath)) {
-    try { draft = JSON.parse(fs.readFileSync(draftPath, 'utf-8')); } catch (_) {}
+function searchBanks(query, limit = 12) {
+  try {
+    return searchBankDatabase(BANK_REPORTS_DIR, query, limit);
+  } catch (err) {
+    log('warn', 'Bank search failed:', err.message);
+    return null;
   }
-  return {
-    templatePresent: fs.existsSync(TEMPLATE_PATH),
-    currentDashboard: current.dashboard || null,
-    draft,
-    availableData: {
-      cds: !!loadCurrentOfferings(),
-      munis: !!loadCurrentMuniOfferings(),
-      agencies: !!loadCurrentAgencies(),
-      corporates: !!loadCurrentCorporates()
-    },
-    counts: {
-      cds: current.offeringsCount || 0,
-      munis: current.muniOfferingsCount || 0,
-      agencies: current.agencyCount || 0,
-      corporates: current.corporatesCount || 0
+}
+
+function getBankById(id) {
+  try {
+    return getBankFromDatabase(BANK_REPORTS_DIR, id);
+  } catch (err) {
+    log('warn', `Could not read bank detail ${id}:`, err.message);
+    return null;
+  }
+}
+
+function getBankDataStatus() {
+  return getBankDatabaseStatus(BANK_REPORTS_DIR);
+}
+
+async function handleBankDataUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const file = files.find(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename));
+    if (!file) return sendJSON(res, 400, { error: 'Upload a bank workbook (.xlsm, .xlsx, or .xls).' });
+    if (!looksLikeExcel(file.data)) {
+      return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
     }
-  };
-}
 
-function updateMeta(updater) {
-  const metaPath = path.join(CURRENT_DIR, META_FILENAME);
-  let meta = {};
-  if (fs.existsSync(metaPath)) {
-    try { meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); } catch (_) {}
+    const target = path.join(BANK_REPORTS_DIR, BANK_WORKBOOK_FILENAME);
+    const tmpTarget = path.join(BANK_REPORTS_DIR, `${BANK_WORKBOOK_FILENAME}.tmp-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(tmpTarget, file.data);
+    const metadata = await importBankWorkbook(tmpTarget, BANK_REPORTS_DIR, {
+      sourceFile: sanitizeFilename(file.filename)
+    });
+    fs.renameSync(tmpTarget, target);
+    appendAuditLog({
+      event: 'bank-data-import',
+      sourceFile: sanitizeFilename(file.filename),
+      bankCount: metadata.bankCount,
+      rowCount: metadata.rowCount,
+      latestPeriod: metadata.latestPeriod
+    });
+    return sendJSON(res, 200, { success: true, metadata });
+  } catch (err) {
+    try {
+      const staleTemps = fs.readdirSync(BANK_REPORTS_DIR)
+        .filter(name => name.startsWith(`${BANK_WORKBOOK_FILENAME}.tmp-`));
+      staleTemps.forEach(name => fs.rmSync(path.join(BANK_REPORTS_DIR, name), { force: true }));
+    } catch (_) {}
+    log('error', 'Bank workbook upload failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Bank workbook import failed' });
   }
-  meta = updater(meta || {}) || meta;
-  fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-  return meta;
-}
-
-function generateSalesDashboardDraft() {
-  const stamp = (getCurrentPackage() || {}).date || todayStamp();
-  const filename = `FBBS_Sales_Dashboard_DRAFT_${stamp.replace(/-/g, '')}.html`;
-  const outputPath = path.join(CURRENT_DIR, filename);
-  const result = generateDashboard({ currentDir: CURRENT_DIR, outputPath });
-  const draft = {
-    filename,
-    generatedAt: new Date().toISOString(),
-    date: result.date,
-    counts: result.counts,
-    report: result.report
-  };
-  fs.writeFileSync(path.join(CURRENT_DIR, DASHBOARD_DRAFT_META_FILENAME), JSON.stringify(draft, null, 2));
-  appendAuditLog({
-    event: 'dashboard-draft',
-    packageDate: result.date,
-    publishedBy: 'Portal User',
-    files: [{ type: 'dashboardDraft', filename, size: fs.statSync(outputPath).size }],
-    warnings: result.report.passed ? [] : ['Dashboard draft preflight has warnings']
-  });
-  return draft;
-}
-
-function publishSalesDashboardDraft() {
-  const draftPath = path.join(CURRENT_DIR, DASHBOARD_DRAFT_META_FILENAME);
-  if (!fs.existsSync(draftPath)) {
-    const err = new Error('No dashboard draft has been generated yet');
-    err.statusCode = 404;
-    throw err;
-  }
-  const draft = JSON.parse(fs.readFileSync(draftPath, 'utf-8'));
-  const source = safeJoin(CURRENT_DIR, draft.filename);
-  if (!source || !fs.existsSync(source)) {
-    const err = new Error('Dashboard draft file is missing');
-    err.statusCode = 404;
-    throw err;
-  }
-  const stamp = (draft.date || todayStamp()).replace(/-/g, '');
-  const finalName = `FBBS_Sales_Dashboard_${stamp}.html`;
-  const target = safeJoin(CURRENT_DIR, finalName);
-  fs.copyFileSync(source, target);
-
-  const meta = updateMeta(m => {
-    const slotFilenames = { ...(m.slotFilenames || {}), dashboard: finalName };
-    return {
-      ...m,
-      date: m.date || draft.date || todayStamp(),
-      publishedAt: new Date().toISOString(),
-      publishedBy: 'Portal User',
-      slotFilenames
-    };
-  });
-
-  fs.writeFileSync(path.join(CURRENT_DIR, DASHBOARD_DRAFT_META_FILENAME), JSON.stringify({
-    ...draft,
-    publishedAt: new Date().toISOString(),
-    publishedFilename: finalName
-  }, null, 2));
-
-  appendAuditLog({
-    event: 'dashboard-publish',
-    packageDate: meta.date,
-    publishedBy: 'Portal User',
-    files: [{ type: 'dashboard', filename: finalName, size: fs.statSync(target).size }],
-    warnings: []
-  });
-
-  return { filename: finalName, meta };
 }
 
 function loadArchivedCorporates(date) {
@@ -712,11 +855,32 @@ async function handleUpload(req, res) {
   const { files } = parsed;
   if (!files.length) return sendJSON(res, 400, { error: 'No files in upload' });
 
+  let priorMeta = readMetaFile(CURRENT_DIR);
+  const existingBeforeUpload = fs.existsSync(CURRENT_DIR)
+    ? fs.readdirSync(CURRENT_DIR).filter(f => f !== '.gitkeep' && f !== '.DS_Store')
+    : [];
+
   // Determine which slots this upload is touching
   const incomingSlots = new Set();
   for (const f of files) {
     const s = classifyFile(f.filename, f.explicitSlot);
     if (s) incomingSlots.add(s);
+  }
+
+  const touchesAgencies = incomingSlots.has('agenciesBullets') || incomingSlots.has('agenciesCallables');
+  if (touchesAgencies) {
+    const missingAgencyUploads = ['agenciesBullets', 'agenciesCallables']
+      .filter(slot => !incomingSlots.has(slot));
+    const existingPackageDate = priorMeta.date || (existingBeforeUpload.length > 0 ? todayStamp() : null);
+    const currentPackageWillArchive = existingBeforeUpload.length > 0 && existingPackageDate !== todayStamp();
+    const missingCanUseCurrentFiles = !currentPackageWillArchive &&
+      missingAgencyUploads.every(slot => findPackageFileForSlot(CURRENT_DIR, slot, priorMeta));
+
+    if (missingAgencyUploads.length > 0 && !missingCanUseCurrentFiles) {
+      return sendJSON(res, 400, {
+        error: 'Agency uploads require both Bullets and Callables files. Add both agency Excel files and publish again.'
+      });
+    }
   }
 
   // Archive any existing current-package files from a prior day. If same-day,
@@ -729,10 +893,7 @@ async function handleUpload(req, res) {
       let archiveDate = null;
       const metaPath = path.join(CURRENT_DIR, META_FILENAME);
       if (fs.existsSync(metaPath)) {
-        try {
-          const m = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
-          archiveDate = m.date;
-        } catch (_) {}
+        archiveDate = priorMeta.date || null;
       }
       if (!archiveDate) archiveDate = todayStamp();
 
@@ -748,12 +909,14 @@ async function handleUpload(req, res) {
         for (const f of existing) {
           fs.renameSync(path.join(CURRENT_DIR, f), path.join(archiveTarget, f));
         }
+        priorMeta = {};
         log('info', 'Archived prior package to', archiveDate);
       } else {
         // Same day: selectively remove ONLY the files whose slots are being
         // re-uploaded. Per-slot internal json ("_offerings.json", etc.) are
         // also cleared so the re-upload can write fresh ones.
         const perSlotJson = {
+          econ:              [ECONOMIC_UPDATE_FILENAME],
           cdoffers:          [OFFERINGS_FILENAME],
           munioffers:        [MUNI_OFFERINGS_FILENAME],
           agenciesBullets:   [AGENCIES_FILENAME],
@@ -789,6 +952,10 @@ async function handleUpload(req, res) {
       log('warn', 'Could not classify uploaded file:', file.filename);
       continue;
     }
+    const signatureError = validateUploadSignature(file, slot);
+    if (signatureError) {
+      return sendJSON(res, 400, { error: signatureError });
+    }
     const safeName = sanitizeFilename(file.filename);
     const target = safeJoin(CURRENT_DIR, safeName);
     if (!target) {
@@ -810,6 +977,47 @@ async function handleUpload(req, res) {
 
   if (saved.length === 0) {
     return sendJSON(res, 400, { error: 'No uploaded files could be classified' });
+  }
+
+  // Extract the Economic Update PDF into structured market data if present.
+  let economicUpdateWarnings = [];
+  const econFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'econ');
+  if (econFile) {
+    const sourceFile = slotFilenames.econ || sanitizeFilename(econFile.filename);
+    const extracted = await extractEconomicUpdate(econFile.data, sourceFile);
+    if (extracted) {
+      economicUpdateWarnings = extracted.warnings || [];
+      try {
+        fs.writeFileSync(
+          path.join(CURRENT_DIR, ECONOMIC_UPDATE_FILENAME),
+          JSON.stringify(extracted, null, 2)
+        );
+        log('info', `Extracted Economic Update market data from ${sourceFile}`);
+      } catch (err) {
+        log('error', 'Failed to write economic update JSON:', err.message);
+      }
+    } else {
+      economicUpdateWarnings.push('Economic Update PDF was uploaded but market data could not be extracted.');
+    }
+  }
+
+  // Extract the Brokered CD Rate Sheet all-in ranges for the calculator.
+  let brokeredCdTerms = null;
+  let brokeredCdAsOfDate = null;
+  let brokeredCdWarnings = [];
+  const brokeredCdFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'cd');
+  if (brokeredCdFile) {
+    const extracted = await extractBrokeredCdRates(brokeredCdFile.data);
+    if (extracted) {
+      brokeredCdTerms = extracted.terms;
+      brokeredCdAsOfDate = extracted.asOfDate;
+      brokeredCdWarnings = extracted.warnings || [];
+      if (brokeredCdTerms.length > 0) {
+        log('info', `Extracted ${brokeredCdTerms.length} Brokered CD rate terms`);
+      }
+    } else {
+      brokeredCdWarnings.push('Brokered CD Rate Sheet was uploaded but all-in ranges could not be extracted.');
+    }
   }
 
   // Extract offerings from the CD Offers PDF if present.
@@ -887,19 +1095,24 @@ async function handleUpload(req, res) {
   let agencySources = [];
   let agencyFileDate = null;   // date sniffed from the filename (the "file dated" date)
 
-  // Collect from both agency slots.
-  const agencyFiles = [];
-  const bulletsUpload = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'agenciesBullets');
-  const callablesUpload = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'agenciesCallables');
-  if (bulletsUpload) {
-    agencyFiles.push({ filename: sanitizeFilename(bulletsUpload.filename), buffer: bulletsUpload.data });
-  }
-  if (callablesUpload) {
-    agencyFiles.push({ filename: sanitizeFilename(callablesUpload.filename), buffer: callablesUpload.data });
-  }
+  if (touchesAgencies) {
+    const agencySelection = collectAgencyPackageFiles(CURRENT_DIR, { slotFilenames, priorMeta });
+    if (agencySelection.missingSlots.length > 0) {
+      return sendJSON(res, 400, {
+        error: 'Agency uploads require both Bullets and Callables files. Add both agency Excel files and publish again.'
+      });
+    }
 
-  if (agencyFiles.length > 0) {
-    const parsed = parseAgenciesFiles(agencyFiles);
+    const bulletsFile = agencySelection.files.find(f => f.slot === 'agenciesBullets');
+    const callablesFile = agencySelection.files.find(f => f.slot === 'agenciesCallables');
+    if (bulletsFile && !dateSniffs.agenciesBullets) {
+      dateSniffs.agenciesBullets = sniffDateFromFilename(bulletsFile.filename) || priorMeta.agencyFileDate || null;
+    }
+    if (callablesFile && !dateSniffs.agenciesCallables) {
+      dateSniffs.agenciesCallables = sniffDateFromFilename(callablesFile.filename) || priorMeta.agencyFileDate || null;
+    }
+
+    const parsed = parseAgenciesFiles(agencySelection.files);
     agencyCount = parsed.offerings.length;
     agencyWarnings = parsed.warnings;
     agencySources = parsed.sources;
@@ -917,7 +1130,7 @@ async function handleUpload(req, res) {
         path.join(CURRENT_DIR, AGENCIES_FILENAME),
         JSON.stringify(payload, null, 2)
       );
-      log('info', `Extracted ${agencyCount} agency offerings from ${agencyFiles.length} file(s)`);
+      log('info', `Extracted ${agencyCount} agency offerings from ${agencySelection.files.length} file(s)`);
     } catch (err) {
       log('error', 'Failed to write agencies JSON:', err.message);
     }
@@ -971,30 +1184,29 @@ async function handleUpload(req, res) {
   if (offeringsAsOfDate && dateValues.length > 0 && !dateValues.includes(offeringsAsOfDate)) {
     dateWarnings.push(`CD Offers document is dated ${offeringsAsOfDate}, but filenames suggest ${dateValues.join(', ')}.`);
   }
+  if (brokeredCdAsOfDate && dateValues.length > 0 && !dateValues.includes(brokeredCdAsOfDate)) {
+    dateWarnings.push(`Brokered CD Rate Sheet is dated ${brokeredCdAsOfDate}, but filenames suggest ${dateValues.join(', ')}.`);
+  }
   if (muniOfferingsAsOfDate && dateValues.length > 0 && !dateValues.includes(muniOfferingsAsOfDate)) {
     dateWarnings.push(`Muni Offerings document is dated ${muniOfferingsAsOfDate}, but filenames suggest ${dateValues.join(', ')}.`);
   }
   if (offeringsAsOfDate && muniOfferingsAsOfDate && offeringsAsOfDate !== muniOfferingsAsOfDate) {
     dateWarnings.push(`CD Offers (${offeringsAsOfDate}) and Muni Offerings (${muniOfferingsAsOfDate}) are dated differently inside the PDFs.`);
   }
-
-  const packageDate = offeringsAsOfDate || muniOfferingsAsOfDate || uniqueDates[0] || todayStamp();
-
-  // Carry forward meta fields from the prior publish for any slot NOT touched
-  // by this upload (supports independent upload channels on the same day).
-  let priorMeta = {};
-  const priorMetaPath = path.join(CURRENT_DIR, META_FILENAME);
-  if (fs.existsSync(priorMetaPath)) {
-    try { priorMeta = JSON.parse(fs.readFileSync(priorMetaPath, 'utf-8')); } catch (_) {}
+  if (offeringsAsOfDate && brokeredCdAsOfDate && offeringsAsOfDate !== brokeredCdAsOfDate) {
+    dateWarnings.push(`CD Offers (${offeringsAsOfDate}) and Brokered CD Rate Sheet (${brokeredCdAsOfDate}) are dated differently inside the PDFs.`);
   }
+
+  const packageDate = offeringsAsOfDate || brokeredCdAsOfDate || muniOfferingsAsOfDate || uniqueDates[0] || todayStamp();
 
   const mergedOfferingsCount      = incomingSlots.has('cdoffers')    ? offeringsCount      : (priorMeta.offeringsCount ?? null);
   const mergedMuniOfferingsCount  = incomingSlots.has('munioffers')  ? muniOfferingsCount  : (priorMeta.muniOfferingsCount ?? null);
-  const touchedAgencies           = incomingSlots.has('agenciesBullets') || incomingSlots.has('agenciesCallables');
-  const mergedAgencyCount         = touchedAgencies ? agencyCount        : (priorMeta.agencyCount ?? null);
-  const mergedAgencyFileDate      = touchedAgencies ? agencyFileDate     : (priorMeta.agencyFileDate ?? null);
+  const mergedAgencyCount         = touchesAgencies ? agencyCount        : (priorMeta.agencyCount ?? null);
+  const mergedAgencyFileDate      = touchesAgencies ? agencyFileDate     : (priorMeta.agencyFileDate ?? null);
   const mergedCorporatesCount     = incomingSlots.has('corporates')  ? corporatesCount     : (priorMeta.corporatesCount ?? null);
   const mergedCorporatesFileDate  = incomingSlots.has('corporates')  ? corporatesFileDate  : (priorMeta.corporatesFileDate ?? null);
+  const mergedBrokeredCdTerms     = incomingSlots.has('cd')          ? brokeredCdTerms     : (priorMeta.brokeredCdTerms ?? null);
+  const mergedBrokeredCdAsOfDate  = incomingSlots.has('cd')          ? brokeredCdAsOfDate  : (priorMeta.brokeredCdAsOfDate ?? null);
 
   // Merged slot filenames: preserve prior filenames for untouched slots
   const mergedSlotFilenames = { ...(priorMeta.slotFilenames || {}), ...slotFilenames };
@@ -1009,6 +1221,8 @@ async function handleUpload(req, res) {
     agencyFileDate:      mergedAgencyFileDate,
     corporatesCount:     mergedCorporatesCount,
     corporatesFileDate:  mergedCorporatesFileDate,
+    brokeredCdTerms:     mergedBrokeredCdTerms,
+    brokeredCdAsOfDate:  mergedBrokeredCdAsOfDate,
     slotFilenames:       mergedSlotFilenames
   };
   fs.writeFileSync(path.join(CURRENT_DIR, META_FILENAME), JSON.stringify(meta, null, 2));
@@ -1027,6 +1241,8 @@ async function handleUpload(req, res) {
     corporatesFileDate,
     warnings: dateWarnings,
     parserWarnings: {
+      econ: economicUpdateWarnings,
+      cd: brokeredCdWarnings,
       cdoffers: offeringsWarnings,
       munioffers: muniOfferingsWarnings,
       agencies: agencyWarnings,
@@ -1039,6 +1255,7 @@ async function handleUpload(req, res) {
     success: true,
     saved,
     meta,
+    economicUpdateWarnings,
     offeringsCount,
     offeringsWarnings,
     cdHistorySnapshot,
@@ -1058,17 +1275,27 @@ async function handleUpload(req, res) {
 
 const server = http.createServer(async (req, res) => {
   const start = Date.now();
-  const parsed = url.parse(req.url, true);
-  const pathname = decodeURIComponent(parsed.pathname);
+  let requestUrl;
+  try {
+    requestUrl = new URL(req.url || '/', 'http://localhost');
+  } catch (_) {
+    return sendText(res, 400, 'Bad request');
+  }
+  const pathname = safeDecodeURIComponent(requestUrl.pathname || '/');
+  const query = requestUrl.searchParams;
 
   res.on('finish', () => {
     const ms = Date.now() - start;
-    log('debug', req.method, parsed.pathname, '→', res.statusCode, `(${ms}ms)`);
+    log('debug', req.method, requestUrl.pathname, '→', res.statusCode, `(${ms}ms)`);
   });
 
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+
+  if (!pathname) {
+    return sendText(res, 400, 'Bad request');
+  }
 
   try {
     // --- API ---
@@ -1086,7 +1313,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/offerings' && req.method === 'GET') {
-      const date = parsed.query.date;
+      const date = query.get('date');
       const data = date ? loadArchivedOfferings(date) : loadCurrentOfferings();
       if (!data) {
         return sendJSON(res, 404, {
@@ -1098,13 +1325,26 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, data);
     }
 
+    if (pathname === '/api/economic-update' && req.method === 'GET') {
+      const date = query.get('date');
+      const data = date ? await loadArchivedEconomicUpdate(date) : await loadCurrentEconomicUpdate();
+      if (!data) {
+        return sendJSON(res, 404, {
+          error: date
+            ? `No economic update data for ${date}`
+            : 'No economic update data in the current package'
+        });
+      }
+      return sendJSON(res, 200, data);
+    }
+
     if (pathname === '/api/cd-recap/weekly' && req.method === 'GET') {
-      const anchorDate = typeof parsed.query.anchorDate === 'string' ? parsed.query.anchorDate : null;
+      const anchorDate = query.get('anchorDate');
       return sendJSON(res, 200, summarizeWeeklyCdHistory(CD_HISTORY_DIR, { anchorDate }));
     }
 
     if (pathname === '/api/muni-offerings' && req.method === 'GET') {
-      const date = parsed.query.date;
+      const date = query.get('date');
       const data = date ? loadArchivedMuniOfferings(date) : loadCurrentMuniOfferings();
       if (!data) {
         return sendJSON(res, 404, {
@@ -1117,7 +1357,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/agencies' && req.method === 'GET') {
-      const date = parsed.query.date;
+      const date = query.get('date');
       const data = date ? loadArchivedAgencies(date) : loadCurrentAgencies();
       if (!data) {
         return sendJSON(res, 404, {
@@ -1130,7 +1370,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/corporates' && req.method === 'GET') {
-      const date = parsed.query.date;
+      const date = query.get('date');
       const data = date ? loadArchivedCorporates(date) : loadCurrentCorporates();
       if (!data) {
         return sendJSON(res, 404, {
@@ -1142,34 +1382,39 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, data);
     }
 
+    if (pathname === '/api/banks/status' && req.method === 'GET') {
+      return sendJSON(res, 200, getBankDataStatus());
+    }
+
+    if (pathname === '/api/banks/search' && req.method === 'GET') {
+      const limit = Math.min(parseInt(query.get('limit'), 10) || 12, 25);
+      const data = searchBanks(query.get('q') || '', limit);
+      if (!data) return sendJSON(res, 404, { error: 'No bank data has been imported yet' });
+      return sendJSON(res, 200, data);
+    }
+
+    if (pathname.startsWith('/api/banks/') && req.method === 'GET') {
+      const id = pathname.slice('/api/banks/'.length);
+      const data = getBankById(id);
+      if (!data) return sendJSON(res, 404, { error: 'Bank not found' });
+      return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/banks/upload' && req.method === 'POST') {
+      return await handleBankDataUpload(req, res);
+    }
+
     if (pathname === '/api/audit-log' && req.method === 'GET') {
-      const limit = Math.min(parseInt(parsed.query.limit, 10) || 200, 1000);
+      const limit = Math.min(parseInt(query.get('limit'), 10) || 200, 1000);
       return sendJSON(res, 200, readAuditLog({ limit }));
-    }
-
-    if (pathname === '/api/sales-dashboard/status' && req.method === 'GET') {
-      return sendJSON(res, 200, getSalesDashboardStatus());
-    }
-
-    if (pathname === '/api/sales-dashboard/generate' && req.method === 'POST') {
-      if (!fs.existsSync(TEMPLATE_PATH)) {
-        return sendJSON(res, 500, { error: 'FBBS dashboard template is missing from the portal package' });
-      }
-      const draft = generateSalesDashboardDraft();
-      return sendJSON(res, 200, { success: true, draft });
-    }
-
-    if (pathname === '/api/sales-dashboard/publish' && req.method === 'POST') {
-      try {
-        const published = publishSalesDashboardDraft();
-        return sendJSON(res, 200, { success: true, published });
-      } catch (err) {
-        return sendJSON(res, err.statusCode || 500, { error: err.message });
-      }
     }
 
     if (pathname === '/api/upload' && req.method === 'POST') {
       return await handleUpload(req, res);
+    }
+
+    if (pathname.startsWith('/api/')) {
+      return sendJSON(res, 404, { error: 'API endpoint not found' });
     }
 
     // --- File serving: current package ---
@@ -1179,7 +1424,7 @@ const server = http.createServer(async (req, res) => {
       if (filename.startsWith('_')) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(CURRENT_DIR, filename);
       if (!filePath) return sendText(res, 400, 'Invalid path');
-      const download = parsed.query.download === '1';
+      const download = query.get('download') === '1';
       return sendFile(res, filePath, { download });
     }
 
@@ -1195,7 +1440,7 @@ const server = http.createServer(async (req, res) => {
       if (filename.startsWith('_')) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(ARCHIVE_DIR, date, filename);
       if (!filePath) return sendText(res, 400, 'Invalid path');
-      const download = parsed.query.download === '1';
+      const download = query.get('download') === '1';
       return sendFile(res, filePath, { download });
     }
 
@@ -1264,6 +1509,7 @@ function startServer() {
   Data dir:      ${DATA_DIR}
   Audit log:     ${AUDIT_LOG_PATH}
   Max upload:    ${(MAX_UPLOAD_BYTES / (1024 * 1024)).toFixed(0)} MB
+  Bank upload:   ${(BANK_UPLOAD_MAX_BYTES / (1024 * 1024)).toFixed(0)} MB
   Log level:     ${Object.keys(LOG_LEVELS).find(k => LOG_LEVELS[k] === LOG_LEVEL)}
 
   Press Ctrl+C to stop the server.
@@ -1280,5 +1526,8 @@ if (require.main === module) {
 module.exports = {
   classifyFile,
   sniffDateFromFilename,
+  readPackageDir,
+  collectAgencyPackageFiles,
+  findPackageFileForSlot,
   startServer
 };

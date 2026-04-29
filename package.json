@@ -6,7 +6,9 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "test": "node tests/parser-regression.test.js"
+    "test": "node tests/parser-regression.test.js",
+    "import:cd-history": "node scripts/import-weekly-cd-worksheet.js",
+    "import:bank-workbook": "node scripts/import-bank-workbook.js"
   },
   "engines": {
     "node": ">=18"

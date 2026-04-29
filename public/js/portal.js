@@ -19,6 +19,13 @@
     agencies: [],
     corporates: []
   };
+  let economicUpdateData = null;
+  let selectedMarketSection = 'rates';
+  let selectedCdCalcTerm = 3;
+  let selectedCdRecapPeriod = 'previousWeek';
+  let cdRecapData = null;
+  let bankDataStatus = null;
+  let selectedBank = null;
   let selectedFiles = {
     dashboard: null, econ: null, cd: null, cdoffers: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -40,7 +47,64 @@
 
   const VALID_PAGES = ['home', 'dashboard', 'econ', 'cd', 'cdoffers', 'munioffers',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'archive', 'upload', 'builder', 'admin'];
+                       'banks', 'archive', 'upload', 'admin'];
+
+  const NAV_ITEMS = [
+    { page: 'home', group: 'Home', label: 'Dashboard', description: 'Status, market snapshot, search all offerings', aliases: 'home command center summary' },
+    { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
+    { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
+    { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
+    { page: 'cdoffers', group: 'CDs', label: 'Daily CD Offers', description: 'View the daily CD offerings PDF', aliases: 'daily cd offerings offers pdf' },
+    { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
+    { page: 'explorer', group: 'CDs', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates' },
+    { page: 'munioffers', group: 'Munis', label: 'Muni Offerings', description: 'View the muni offerings PDF', aliases: 'municipal pdf munis' },
+    { page: 'muni-explorer', group: 'Munis', label: 'Muni Explorer', description: 'Filter, sort, and export muni offerings', aliases: 'municipal bonds state rating munis' },
+    { page: 'agencies', group: 'Agencies', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet' },
+    { page: 'corporates', group: 'Corporates', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector' },
+    { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert salesforce' },
+    { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
+    { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
+    { page: 'admin', group: 'Operations', label: 'Admin', description: 'Review the publish audit log', aliases: 'audit log admin history' }
+  ];
+
+  const NAV_GROUP_BY_PAGE = {
+    dashboard: 'fbbs',
+    econ: 'fbbs',
+    cd: 'cds',
+    cdoffers: 'cds',
+    'cd-recap': 'cds',
+    explorer: 'cds',
+    munioffers: 'munis',
+    'muni-explorer': 'munis',
+    agencies: 'agencies',
+    corporates: 'corporates',
+    banks: 'banks'
+  };
+
+  const DEFAULT_BROKERED_CD_TERMS = [
+    { label: '3 mo', months: 3, low: 3.900, mid: 3.950, high: 4.000 },
+    { label: '6 mo', months: 6, low: 3.900, mid: 3.925, high: 3.950 },
+    { label: '9 mo', months: 9, low: 3.950, mid: 4.000, high: 4.050 },
+    { label: '12 mo', months: 12, low: 3.900, mid: 3.950, high: 4.000 },
+    { label: '18 mo', months: 18, low: 3.950, mid: 4.025, high: 4.100 },
+    { label: '2 yr', months: 24, low: 3.950, mid: 4.025, high: 4.100 },
+    { label: '3 yr', months: 36, low: 3.950, mid: 4.025, high: 4.100 },
+    { label: '4 yr', months: 48, low: 4.000, mid: 4.075, high: 4.150 },
+    { label: '5 yr', months: 60, low: 4.050, mid: 4.125, high: 4.200 },
+    { label: '7 yr', months: 84, low: 4.150, mid: 4.225, high: 4.300 },
+    { label: '10 yr', months: 120, low: 4.250, mid: 4.325, high: 4.400 }
+  ];
+
+  const COMMISSION_STORAGE_KEY = 'fbbs_commission_settings_v1';
+  const COMMISSION_PRODUCT_LABELS = {
+    agencies: 'Agencies',
+    corporates: 'Corporates'
+  };
+  const DEFAULT_COMMISSION_SETTINGS = {
+    agencies: { enabled: false, method: 'dollars', dollarMarkup: 5, bpMarkup: 50 },
+    corporates: { enabled: false, method: 'dollars', dollarMarkup: 5, bpMarkup: 50 }
+  };
+  let commissionSettings = loadCommissionSettings();
 
   // ============ Utilities ============
 
@@ -54,6 +118,326 @@
     showToast._t = setTimeout(() => t.classList.remove('show'), 3500);
   }
 
+  function loadCommissionSettings() {
+    try {
+      const raw = localStorage.getItem(COMMISSION_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const settings = {};
+      Object.keys(DEFAULT_COMMISSION_SETTINGS).forEach(product => {
+        settings[product] = {
+          ...DEFAULT_COMMISSION_SETTINGS[product],
+          ...(parsed[product] || {})
+        };
+        if (settings[product].dollarMarkup == null && settings[product].manualBp != null) {
+          settings[product].dollarMarkup = Number(settings[product].manualBp) / 10;
+        }
+        if (settings[product].bpMarkup == null && settings[product].manualBp != null) {
+          settings[product].bpMarkup = Number(settings[product].manualBp);
+        }
+        if (settings[product].method !== 'bps') settings[product].method = 'dollars';
+        settings[product].dollarMarkup = normalizeCommissionDollars(settings[product].dollarMarkup);
+        settings[product].bpMarkup = normalizeCommissionBps(settings[product].bpMarkup);
+      });
+      return settings;
+    } catch (e) {
+      return JSON.parse(JSON.stringify(DEFAULT_COMMISSION_SETTINGS));
+    }
+  }
+
+  function saveCommissionSettings() {
+    try {
+      localStorage.setItem(COMMISSION_STORAGE_KEY, JSON.stringify(commissionSettings));
+    } catch (e) {
+      // Storage is a convenience only; the overlay still works for the session.
+    }
+  }
+
+  function normalizeCommissionDollars(value) {
+    const n = Number(value);
+    if (!isFinite(n) || n < 0) return 0;
+    return Math.min(100, n);
+  }
+
+  function normalizeCommissionBps(value) {
+    const n = Number(value);
+    if (!isFinite(n) || n < 0) return 0;
+    return Math.min(1000, n);
+  }
+
+  function commissionMarkForProduct(product) {
+    const settings = commissionSettings[product];
+    if (!settings || !settings.enabled) return null;
+    if (settings.method === 'bps') {
+      const bps = normalizeCommissionBps(settings.bpMarkup);
+      return {
+        label: `${Number(bps).toFixed(Number(bps) % 1 === 0 ? 0 : 2)} bp`,
+        method: 'bps',
+        value: bps
+      };
+    }
+    const dollars = normalizeCommissionDollars(settings.dollarMarkup);
+    return {
+      label: formatCommissionDollars(dollars),
+      method: 'dollars',
+      value: dollars
+    };
+  }
+
+  function formatCommissionDollars(dollars) {
+    if (dollars == null) return '';
+    return `$${Number(dollars).toFixed(Number(dollars) % 1 === 0 ? 0 : 2)}`;
+  }
+
+  function commissionSubline(text) {
+    return text ? `<span class="commission-subline">${escapeHtml(text)}</span>` : '';
+  }
+
+  function markedAgencyValues(record) {
+    const commission = commissionMarkForProduct('agencies');
+    if (!commission || !record || record.askPrice == null) return null;
+    const baseBasis = agencySpreadBasis(record);
+    const clientPrice = markedAgencyPrice(record, commission, baseBasis);
+    if (clientPrice == null) return null;
+    const priceMarkup = clientPrice - record.askPrice;
+    const ytmDelta = yieldDeltaForPriceMark(record, record.maturity, record.ytm, clientPrice);
+    const ytncDelta = yieldDeltaForPriceMark(record, record.nextCallDate, record.ytnc, clientPrice);
+    const markedYtm = ytmDelta == null || record.ytm == null ? null : record.ytm + ytmDelta;
+    const markedYtnc = ytncDelta == null || record.ytnc == null ? null : record.ytnc + ytncDelta;
+    const markedSpreadBasis = agencySpreadBasis(record, clientPrice, { ytm: markedYtm, ytnc: markedYtnc });
+    const markedSpread = markedAgencySpread(record, markedSpreadBasis);
+    return { ...commission, priceMarkup, clientPrice, markedYtm, markedYtnc, markedSpreadBasis, markedSpread };
+  }
+
+  function markedAgencyPrice(record, commission, baseBasis) {
+    if (!commission || !record) return null;
+    if (commission.method === 'bps') {
+      if (!baseBasis || baseBasis.yieldPct == null) return null;
+      const markedYieldPct = baseBasis.yieldPct - (commission.value / 100);
+      const modelBasePrice = solveBondPrice(record.coupon, baseBasis.yieldPct, baseBasis.date, record.settle);
+      const modelMarkedPrice = solveBondPrice(record.coupon, markedYieldPct, baseBasis.date, record.settle);
+      if (modelBasePrice == null || modelMarkedPrice == null) return null;
+      return record.askPrice + (modelMarkedPrice - modelBasePrice);
+    }
+    return record.askPrice + (commission.value / 10);
+  }
+
+  function markedAgencySpread(record, markedBasis) {
+    const baseBasis = agencySpreadBasis(record);
+    if (!markedBasis || markedBasis.yieldPct == null) return null;
+    const treasury = treasuryForAgencyBasis(markedBasis);
+    if (treasury && treasury.yield != null) return (markedBasis.yieldPct - treasury.yield) * 100;
+
+    const baseSpread = effectiveAgencySpread(record);
+    if (baseSpread == null || !baseBasis || baseBasis.key !== markedBasis.key) return null;
+    return baseSpread + ((markedBasis.yieldPct - baseBasis.yieldPct) * 100);
+  }
+
+  function yieldDeltaForPriceMark(record, endDate, sourceYieldPct, markedPrice) {
+    if (!record || record.askPrice == null || record.coupon == null || !endDate || sourceYieldPct == null) return null;
+    const baseModelYield = solveBondYieldPct(record.coupon, record.askPrice, endDate, record.settle);
+    const markedModelYield = solveBondYieldPct(record.coupon, markedPrice, endDate, record.settle);
+    if (baseModelYield == null || markedModelYield == null) return null;
+    return markedModelYield - baseModelYield;
+  }
+
+  function solveBondYieldPct(couponPct, price, endDateStr, settleDateStr) {
+    const priceNum = Number(price);
+    const coupon = Number(couponPct);
+    if (!isFinite(priceNum) || priceNum <= 0 || !isFinite(coupon)) return null;
+
+    const settle = parseIsoDate(settleDateStr) || new Date();
+    const endDate = parseIsoDate(endDateStr);
+    if (!endDate || endDate <= settle) return null;
+
+    const periods = Math.max(1, Math.ceil(monthsBetween(settle, endDate) / 6));
+    const couponPerPeriod = coupon / 2;
+
+    let low = -0.95;
+    let high = 1.5;
+    for (let i = 0; i < 80; i++) {
+      const mid = (low + high) / 2;
+      const pv = bondPriceFromYield(mid, couponPerPeriod, periods);
+      if (pv > priceNum) low = mid;
+      else high = mid;
+    }
+    return ((low + high) / 2) * 100;
+  }
+
+  function solveBondPrice(couponPct, yieldPct, endDateStr, settleDateStr) {
+    const coupon = Number(couponPct);
+    const yieldNum = Number(yieldPct);
+    if (!isFinite(coupon) || !isFinite(yieldNum)) return null;
+    const settle = parseIsoDate(settleDateStr) || new Date();
+    const endDate = parseIsoDate(endDateStr);
+    if (!endDate || endDate <= settle) return null;
+    const periods = Math.max(1, Math.ceil(monthsBetween(settle, endDate) / 6));
+    return bondPriceFromYield(yieldNum / 100, coupon / 2, periods);
+  }
+
+  function bondPriceFromYield(yieldDecimal, couponPerPeriod, periods) {
+    const rate = yieldDecimal / 2;
+    let pv = 0;
+    for (let i = 1; i <= periods; i++) {
+      pv += couponPerPeriod / Math.pow(1 + rate, i);
+    }
+    pv += 100 / Math.pow(1 + rate, periods);
+    return pv;
+  }
+
+  function parseIsoDate(dateStr) {
+    if (!dateStr) return null;
+    const d = new Date(String(dateStr).slice(0, 10) + 'T00:00:00');
+    return isNaN(d) ? null : d;
+  }
+
+  function monthsBetween(start, end) {
+    return (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + ((end.getDate() - start.getDate()) / 30.4375);
+  }
+
+  function commissionPriceHtml(product, record, price, decimals) {
+    if (price == null) return '<span class="no-restrict">&mdash;</span>';
+    const base = Number(price).toFixed(decimals == null ? 3 : decimals);
+    const marked = product === 'corporates' ? markedCorporateValues(record) : markedAgencyValues(record);
+    if (!marked) return base;
+    return `${base}${commissionSubline(`client ${marked.clientPrice.toFixed(decimals == null ? 3 : decimals)} / ${marked.label}`)}`;
+  }
+
+  function commissionSpreadHtml(record) {
+    const spread = effectiveAgencySpread(record);
+    if (!record || spread == null) return '<span class="no-restrict">&mdash;</span>';
+    const base = Number(spread).toFixed(1);
+    const marked = markedAgencyValues(record);
+    if (!marked || marked.markedSpread == null) return base;
+    return `${base}${commissionSubline(`marked ${marked.markedSpread.toFixed(1)}`)}`;
+  }
+
+  function commissionYieldHtml(record, key, decimals) {
+    const baseYield = record && record[key];
+    if (baseYield == null) return '<span class="no-restrict">&mdash;</span>';
+    const base = Number(baseYield).toFixed(decimals == null ? 3 : decimals);
+    const marked = markedAgencyValues(record);
+    const markedYield = key === 'ytnc' ? marked && marked.markedYtnc : marked && marked.markedYtm;
+    if (markedYield == null) return base;
+    return `${base}${commissionSubline(`marked ${markedYield.toFixed(decimals == null ? 3 : decimals)}`)}`;
+  }
+
+  function markedCorporateValues(record) {
+    const commission = commissionMarkForProduct('corporates');
+    if (!commission || !record || record.askPrice == null) return null;
+    const baseBasis = corporateYieldBasis(record);
+    const clientPrice = markedCorporatePrice(record, commission, baseBasis);
+    if (clientPrice == null) return null;
+    const priceMarkup = clientPrice - record.askPrice;
+    const ytmDelta = yieldDeltaForPriceMark(record, record.maturity, record.ytm, clientPrice);
+    const ytncDelta = yieldDeltaForPriceMark(record, record.nextCallDate, record.ytnc, clientPrice);
+    const markedYtm = ytmDelta == null || record.ytm == null ? null : record.ytm + ytmDelta;
+    const markedYtnc = ytncDelta == null || record.ytnc == null ? null : record.ytnc + ytncDelta;
+    const markedSpread = record.askSpread == null || ytmDelta == null ? null : record.askSpread + (ytmDelta * 100);
+    return { ...commission, priceMarkup, clientPrice, markedYtm, markedYtnc, markedSpread };
+  }
+
+  function corporateYieldBasis(record) {
+    if (!record) return null;
+    if (record.maturity && record.ytm != null) return { date: record.maturity, yieldPct: record.ytm, key: 'ytm' };
+    if (record.nextCallDate && record.ytnc != null) return { date: record.nextCallDate, yieldPct: record.ytnc, key: 'ytnc' };
+    return null;
+  }
+
+  function markedCorporatePrice(record, commission, baseBasis) {
+    if (!commission || !record) return null;
+    if (commission.method === 'bps') {
+      if (!baseBasis || baseBasis.yieldPct == null) return null;
+      const markedYieldPct = baseBasis.yieldPct - (commission.value / 100);
+      const modelBasePrice = solveBondPrice(record.coupon, baseBasis.yieldPct, baseBasis.date, null);
+      const modelMarkedPrice = solveBondPrice(record.coupon, markedYieldPct, baseBasis.date, null);
+      if (modelBasePrice == null || modelMarkedPrice == null) return null;
+      return record.askPrice + (modelMarkedPrice - modelBasePrice);
+    }
+    return record.askPrice + (commission.value / 10);
+  }
+
+  function commissionCorporateYieldHtml(record, key, decimals) {
+    const baseYield = record && record[key];
+    if (baseYield == null) return '<span class="no-restrict">&mdash;</span>';
+    const base = Number(baseYield).toFixed(decimals == null ? 3 : decimals);
+    const marked = markedCorporateValues(record);
+    const markedYield = key === 'ytnc' ? marked && marked.markedYtnc : marked && marked.markedYtm;
+    if (markedYield == null) return base;
+    return `${base}${commissionSubline(`marked ${markedYield.toFixed(decimals == null ? 3 : decimals)}`)}`;
+  }
+
+  function renderCommissionControl(product, afterElementId) {
+    const after = document.getElementById(afterElementId);
+    if (!after || !commissionSettings[product]) return;
+    const panelId = `${product}-commission-control`;
+    let panel = document.getElementById(panelId);
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = panelId;
+      panel.className = 'commission-control';
+      after.insertAdjacentElement('afterend', panel);
+    }
+    const settings = commissionSettings[product];
+    const scaleText = settings.method === 'bps'
+      ? '10 bp = 0.10 price | 50 bp = 0.50 | 100 bp = 1.00'
+      : '$1 = 0.10 price | $5 = 0.50 | $10 = 1.00';
+    panel.innerHTML = `
+      <label class="commission-toggle">
+        <input type="checkbox" data-commission-enabled="${product}" ${settings.enabled ? 'checked' : ''}>
+        <span>Add sales commission to ${escapeHtml(COMMISSION_PRODUCT_LABELS[product])}</span>
+      </label>
+      <label class="commission-field">
+        <span>Method</span>
+        <select data-commission-method="${product}">
+          <option value="dollars" ${settings.method === 'dollars' ? 'selected' : ''}>Sales $</option>
+          <option value="bps" ${settings.method === 'bps' ? 'selected' : ''}>Basis points</option>
+        </select>
+      </label>
+      <label class="commission-field">
+        <span>Sales $</span>
+        <input type="number" min="0" max="100" step="0.25" value="${escapeHtml(settings.dollarMarkup)}" data-commission-dollars="${product}">
+      </label>
+      <label class="commission-field">
+        <span>Basis points</span>
+        <input type="number" min="0" max="1000" step="1" value="${escapeHtml(settings.bpMarkup)}" data-commission-bps="${product}">
+      </label>
+      <div class="commission-scale-note">${escapeHtml(scaleText)}</div>
+    `;
+  }
+
+  function setupCommissionControls() {
+    document.addEventListener('change', e => {
+      const enabledProduct = e.target && e.target.dataset ? e.target.dataset.commissionEnabled : null;
+      const methodProduct = e.target && e.target.dataset ? e.target.dataset.commissionMethod : null;
+      if (enabledProduct && commissionSettings[enabledProduct]) {
+        commissionSettings[enabledProduct].enabled = e.target.checked;
+        saveCommissionSettings();
+        refreshCommissionProduct(enabledProduct);
+      }
+      if (methodProduct && commissionSettings[methodProduct]) {
+        commissionSettings[methodProduct].method = e.target.value === 'bps' ? 'bps' : 'dollars';
+        saveCommissionSettings();
+        renderCommissionControl(methodProduct, methodProduct === 'corporates' ? 'corpStatTiles' : 'agencyStatTiles');
+        refreshCommissionProduct(methodProduct);
+      }
+    });
+    document.addEventListener('input', e => {
+      const dollarProduct = e.target && e.target.dataset ? e.target.dataset.commissionDollars : null;
+      const bpProduct = e.target && e.target.dataset ? e.target.dataset.commissionBps : null;
+      const product = dollarProduct || bpProduct;
+      if (!product || !commissionSettings[product]) return;
+      if (dollarProduct) commissionSettings[product].dollarMarkup = normalizeCommissionDollars(e.target.value);
+      if (bpProduct) commissionSettings[product].bpMarkup = normalizeCommissionBps(e.target.value);
+      saveCommissionSettings();
+      refreshCommissionProduct(product);
+    });
+  }
+
+  function refreshCommissionProduct(product) {
+    if (product === 'agencies' && agencyData) renderAgencies();
+    if (product === 'corporates' && corpData) renderCorporates();
+  }
+
   function formatShortDate(dateStr) {
     if (!dateStr) return '—';
     try {
@@ -62,6 +446,20 @@
       return date.toLocaleDateString('en-US', {
         month: 'short', day: 'numeric', year: 'numeric'
       });
+    } catch (e) { return dateStr; }
+  }
+
+  function formatNumericDate(dateStr) {
+    if (!dateStr) return '—';
+    try {
+      const clean = dateStr instanceof Date ? null : String(dateStr).slice(0, 10);
+      const date = dateStr instanceof Date
+        ? dateStr
+        : /^\d{4}-\d{2}-\d{2}$/.test(clean)
+          ? new Date(parseInt(clean.slice(0, 4), 10), parseInt(clean.slice(5, 7), 10) - 1, parseInt(clean.slice(8, 10), 10))
+          : new Date(dateStr);
+      if (isNaN(date)) return dateStr;
+      return `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}/${date.getFullYear()}`;
     } catch (e) { return dateStr; }
   }
 
@@ -84,6 +482,16 @@
   function formatNumber(n) {
     if (n == null || isNaN(n)) return '—';
     return Number(n).toLocaleString();
+  }
+
+  function formatMoney(n, digits = 0) {
+    if (n == null || isNaN(n)) return '—';
+    return Number(n).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: digits,
+      minimumFractionDigits: digits
+    });
   }
 
   function formatPercent(n, digits = 2) {
@@ -228,22 +636,18 @@
       ? `${qualitySummary.warnings} warning${qualitySummary.warnings === 1 ? '' : 's'}`
       : 'No warnings';
 
-    setText('qualityFiles', fileText);
     setText('uploadQualityFiles', fileText);
-    setText('qualityDates', dateText);
     setText('uploadQualityDates', dateText);
-    setText('qualityCounts', qualitySummary.countsText);
     setText('uploadQualityCounts', qualitySummary.countsText);
-    setText('qualityWarnings', warningsText);
     setText('uploadQualityWarnings', warningsText);
 
-    ['qualityDates', 'uploadQualityDates'].forEach(id => {
+    ['uploadQualityDates'].forEach(id => {
       const el = document.getElementById(id);
       if (!el) return;
       el.classList.toggle('warn', qualitySummary.datesMatch === false);
       el.classList.toggle('ok', qualitySummary.datesMatch === true);
     });
-    ['qualityWarnings', 'uploadQualityWarnings'].forEach(id => {
+    ['uploadQualityWarnings'].forEach(id => {
       const el = document.getElementById(id);
       if (!el) return;
       el.classList.toggle('warn', qualitySummary.warnings > 0);
@@ -290,14 +694,20 @@
 
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.nav-link[aria-current="page"]').forEach(n => n.removeAttribute('aria-current'));
 
     const page = document.getElementById('p-' + pageName);
     if (page) page.classList.add('active');
 
     const link = document.querySelector('.nav-link[data-page="' + pageName + '"]');
-    if (link) link.classList.add('active');
+    if (link) {
+      link.classList.add('active');
+      link.setAttribute('aria-current', 'page');
+    }
+    updateMarketNavGroup(pageName);
 
     window.scrollTo({ top: 0, behavior: 'auto' });
+    closeNavSearch();
 
     if (updateHash && window.location.hash !== '#' + pageName) {
       history.replaceState(null, '', '#' + pageName);
@@ -309,7 +719,8 @@
     if (pageName === 'muni-explorer') loadMuniOfferings();
     if (pageName === 'agencies') loadAgencies();
     if (pageName === 'corporates') loadCorporates();
-    if (pageName === 'builder') loadDashboardBuilderStatus();
+    if (pageName === 'banks') loadBankStatus();
+    if (pageName === 'upload') loadBankStatus();
     if (pageName === 'admin') loadAuditLog();
   }
 
@@ -335,6 +746,88 @@
     const h = (window.location.hash || '#home').slice(1);
     goTo(h, { updateHash: false });
   });
+
+  function updateMarketNavGroup(pageName) {
+    document.querySelectorAll('.nav-group.active-group').forEach(group => {
+      group.classList.remove('active-group');
+    });
+    const groupName = NAV_GROUP_BY_PAGE[pageName];
+    if (!groupName) return;
+    const group = document.querySelector(`.nav-group[data-nav-group="${groupName}"]`);
+    if (!group) return;
+    group.classList.add('active-group', 'open');
+    const toggle = group.querySelector('.nav-parent');
+    if (toggle) toggle.setAttribute('aria-expanded', 'true');
+  }
+
+  function setupMarketNav() {
+    document.querySelectorAll('[data-nav-toggle]').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const group = toggle.closest('.nav-group');
+        if (!group) return;
+        const isOpen = group.classList.toggle('open');
+        toggle.setAttribute('aria-expanded', String(isOpen));
+      });
+    });
+  }
+
+  function setupNavSearch() {
+    const input = document.getElementById('navSearchInput');
+    const results = document.getElementById('navSearchResults');
+    if (!input || !results) return;
+
+    const render = () => {
+      const query = input.value.trim().toLowerCase();
+      if (!query) {
+        results.classList.remove('show');
+        results.innerHTML = '';
+        return;
+      }
+      const terms = query.split(/\s+/).filter(Boolean);
+      const matches = NAV_ITEMS.filter(item => {
+        const haystack = `${item.group} ${item.label} ${item.description} ${item.aliases}`.toLowerCase();
+        return terms.every(term => haystack.includes(term));
+      }).slice(0, 7);
+
+      results.classList.add('show');
+      results.innerHTML = matches.length ? matches.map(item => `
+        <button type="button" class="jump-result" data-goto="${item.page}">
+          <span>${escapeHtml(item.group)}</span>
+          <strong>${escapeHtml(item.label)}</strong>
+          <em>${escapeHtml(item.description)}</em>
+        </button>
+      `).join('') : '<div class="jump-empty">No matching pages found</div>';
+    };
+
+    input.addEventListener('input', render);
+    input.addEventListener('focus', render);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        closeNavSearch();
+        input.blur();
+      }
+      if (e.key === 'Enter') {
+        const first = results.querySelector('[data-goto]');
+        if (first) {
+          e.preventDefault();
+          goTo(first.dataset.goto);
+        }
+      }
+    });
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.portal-jump')) closeNavSearch();
+    });
+  }
+
+  function closeNavSearch() {
+    const input = document.getElementById('navSearchInput');
+    const results = document.getElementById('navSearchResults');
+    if (input) input.value = '';
+    if (results) {
+      results.classList.remove('show');
+      results.innerHTML = '';
+    }
+  }
 
   // ============ Initial load ============
 
@@ -370,6 +863,8 @@
     renderViewer('cd');
     renderViewer('cdoffers');
     renderViewer('munioffers');
+    await loadEconomicUpdate();
+    renderCdCostCalculator();
   }
 
   async function loadArchive() {
@@ -425,10 +920,6 @@
       }
 
       card.innerHTML = `
-        <div class="doc-card-ribbon">
-          <span>Document ${i + 1} of ${TOTAL_SLOTS}</span>
-          <span class="type-pill">${meta.ext}</span>
-        </div>
         <div class="doc-card-body">
           <div>
             <div class="doc-icon"><span class="doc-ext">${meta.ext}</span></div>
@@ -448,8 +939,6 @@
       `;
       grid.appendChild(card);
     });
-
-    document.getElementById('homeStat').textContent = `${filled} / ${TOTAL_SLOTS}`;
 
     const subtitle = document.getElementById('homeSubtitle');
     const kicker = document.getElementById('homeKicker');
@@ -582,6 +1071,331 @@
     }
   }
 
+  // ============ Economic Update Tool ============
+
+  async function loadEconomicUpdate() {
+    const tool = document.getElementById('economicTool');
+    if (!tool) return;
+    if (!currentPackage || !currentPackage.econ) {
+      economicUpdateData = null;
+      renderEconomicUpdate();
+      return;
+    }
+    try {
+      const res = await fetch('/api/economic-update', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      economicUpdateData = await res.json();
+    } catch (e) {
+      console.error('Failed to load economic update:', e);
+      economicUpdateData = null;
+    }
+    renderEconomicUpdate();
+  }
+
+  function formatMarketValue(row) {
+    if (!row) return '—';
+    const value = row.value != null ? row.value : row.priorClose;
+    if (value == null || isNaN(value)) return row.status || '—';
+    return row.isPercent ? formatPercentTile(value, 2) : formatNumber(value);
+  }
+
+  function formatMarketChange(value, digits = 3) {
+    if (value == null || isNaN(value)) return '—';
+    const sign = Number(value) > 0 ? '+' : '';
+    return `${sign}${Number(value).toFixed(digits)}`;
+  }
+
+  function changeClass(value) {
+    if (value == null || isNaN(value)) return '';
+    return Number(value) > 0 ? 'positive' : Number(value) < 0 ? 'negative' : 'flat';
+  }
+
+  function economicRowHtml(row) {
+    return `
+      <div class="market-data-row">
+        <span>${escapeHtml(row.label || row.event || row.tenor || 'Item')}</span>
+        <strong>${escapeHtml(row.event ? (row.dateTime || 'Watch') : formatMarketValue(row))}</strong>
+        <em class="${changeClass(row.change)}">${escapeHtml(row.change != null ? formatMarketChange(row.change, row.isPercent ? 3 : 2) : row.status || '')}</em>
+      </div>
+    `;
+  }
+
+  function calendarDateParts(dateTime) {
+    const text = String(dateTime || '').trim();
+    const match = text.match(/^(\d{2}\/\d{2}\/\d{2})\s+(.+)$/);
+    if (!match) return { date: 'Watch', time: text || 'Time pending' };
+    return { date: match[1], time: match[2] };
+  }
+
+  function economicCalendarHtml(items) {
+    if (!items.length) {
+      return '<div class="market-empty small">No economic calendar items extracted.</div>';
+    }
+    return `
+      <div class="calendar-event-list">
+        ${items.map(item => {
+          const parts = calendarDateParts(item.dateTime);
+          return `
+            <article class="calendar-event-card">
+              <div class="calendar-event-time">
+                <span>${escapeHtml(parts.date)}</span>
+                <strong>${escapeHtml(parts.time)}</strong>
+              </div>
+              <div class="calendar-event-copy">
+                <h4>${escapeHtml(item.event || 'Economic release')}</h4>
+                <p>From the uploaded daily Economic Update calendar.</p>
+              </div>
+            </article>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function renderEconomicUpdate() {
+    const summary = document.getElementById('econMarketSummary');
+    const sub = document.getElementById('econToolSub');
+    const dateBadge = document.getElementById('econToolDate');
+    const curve = document.getElementById('econCurveChart');
+    const slopeEl = document.getElementById('econCurveSlope');
+    const cues = document.getElementById('econSalesCues');
+    const cueCount = document.getElementById('econCueCount');
+    if (!summary || !sub || !dateBadge || !curve || !slopeEl || !cues || !cueCount) return;
+
+    const data = economicUpdateData;
+    if (!data) {
+      sub.textContent = currentPackage && currentPackage.econ
+        ? 'Market data could not be extracted yet. The PDF remains available below.'
+        : 'Upload the daily Economic Update PDF to activate this tool.';
+      dateBadge.textContent = 'No data';
+      summary.innerHTML = `
+        <div class="market-empty">
+          <strong>No interactive market data loaded</strong>
+          <p>This section uses the uploaded daily Economic Update PDF.</p>
+        </div>`;
+      curve.innerHTML = '';
+      slopeEl.textContent = '2s/10s —';
+      cues.innerHTML = '';
+      cueCount.textContent = '—';
+      renderEconomicDetail();
+      return;
+    }
+
+    const treasuries = data.treasuries || [];
+    const marketRates = data.marketRates || [];
+    const marketRows = data.marketData || [];
+    const two = treasuries.find(row => row.tenor === '2YR');
+    const ten = treasuries.find(row => row.tenor === '10YR');
+    const sofr = marketRates.find(row => row.label === 'SOFR');
+    const prime = marketRates.find(row => row.label === 'Prime Rate');
+    const vix = marketRows.find(row => row.label === 'VIX');
+    const crude = marketRows.find(row => row.label === 'CRUDE FUTURE');
+    const spx = marketRows.find(row => row.label === 'SPX') || marketRows.find(row => row.label === 'S&P 500');
+
+    sub.textContent = `${data.sourceFile || currentPackage.econ || 'Economic Update'} · Extracted ${formatFullTimestamp(data.extractedAt)}`;
+    dateBadge.textContent = data.asOfDate ? formatShortDate(data.asOfDate) : 'Current';
+    slopeEl.textContent = two && ten ? `2s/10s ${(ten.yield - two.yield).toFixed(3)}%` : '2s/10s —';
+
+    summary.innerHTML = [
+      { label: '2Y Treasury', value: two ? formatPercentTile(two.yield, 3) : '—', change: two ? formatMarketChange(two.dailyChange, 3) : '—' },
+      { label: '10Y Treasury', value: ten ? formatPercentTile(ten.yield, 3) : '—', change: ten ? formatMarketChange(ten.dailyChange, 3) : '—' },
+      { label: 'SOFR', value: formatMarketValue(sofr), change: sofr ? formatMarketChange(sofr.change, 3) : '—' },
+      { label: 'Prime Rate', value: formatMarketValue(prime), change: prime ? formatMarketChange(prime.change, 3) : '—' },
+      { label: 'SPX', value: formatMarketValue(spx), change: spx ? formatMarketChange(spx.change, 2) : '—' },
+      { label: 'VIX', value: formatMarketValue(vix), change: vix ? formatMarketChange(vix.change, 2) : '—' },
+      { label: 'Crude Future', value: formatMarketValue(crude), change: crude ? formatMarketChange(crude.change, 2) : '—' }
+    ].map(item => `
+      <div class="market-summary-card">
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${escapeHtml(item.value)}</strong>
+        <em>${escapeHtml(item.change)}</em>
+      </div>
+    `).join('');
+
+    renderCurveChart(treasuries);
+    const cueRows = data.salesCues || [];
+    cueCount.textContent = `${cueRows.length} cues`;
+    cues.innerHTML = cueRows.length ? cueRows.map(cue => `
+      <div class="sales-cue">
+        <strong>${escapeHtml(cue.title)}</strong>
+        <p>${escapeHtml(cue.body)}</p>
+      </div>
+    `).join('') : '<div class="market-empty small">No sales cues extracted.</div>';
+    renderEconomicDetail();
+  }
+
+  function renderCurveChart(treasuries) {
+    const curve = document.getElementById('econCurveChart');
+    if (!curve) return;
+    if (!treasuries || !treasuries.length) {
+      curve.innerHTML = '<div class="market-empty small">Treasury curve unavailable.</div>';
+      return;
+    }
+    const yields = treasuries.map(row => row.yield).filter(n => n != null && !isNaN(n));
+    const min = Math.min.apply(null, yields);
+    const max = Math.max.apply(null, yields);
+    const range = Math.max(max - min, 0.01);
+    curve.innerHTML = treasuries.map(row => {
+      const height = 18 + ((row.yield - min) / range) * 72;
+      return `
+        <div class="curve-bar" title="${escapeHtml(row.label)} ${escapeHtml(formatPercentTile(row.yield, 3))}">
+          <span style="height:${height.toFixed(1)}%"></span>
+          <strong>${escapeHtml(formatPercentTile(row.yield, 2))}</strong>
+          <em>${escapeHtml(row.label)}</em>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderEconomicDetail() {
+    const detail = document.getElementById('econMarketDetail');
+    if (!detail) return;
+    const data = economicUpdateData;
+    if (!data) {
+      detail.innerHTML = '<div class="market-empty small">Choose a section after the Economic Update has been uploaded.</div>';
+      return;
+    }
+
+    if (selectedMarketSection === 'risk') {
+      detail.innerHTML = `<div class="market-data-list">${(data.marketData || []).map(economicRowHtml).join('')}</div>`;
+      return;
+    }
+    if (selectedMarketSection === 'headlines') {
+      const items = data.headlines || [];
+      detail.innerHTML = items.length
+        ? `<div class="headline-list">${items.map(item => `<p>${escapeHtml(item)}</p>`).join('')}</div>`
+        : '<div class="market-empty small">No headlines extracted from the PDF.</div>';
+      return;
+    }
+    if (selectedMarketSection === 'calendar') {
+      const items = data.releases || [];
+      detail.innerHTML = economicCalendarHtml(items);
+      return;
+    }
+
+    const rows = [
+      ...(data.marketRates || []),
+      ...(data.bondIndices || [])
+    ];
+    detail.innerHTML = rows.length
+      ? `<div class="market-data-list">${rows.map(economicRowHtml).join('')}</div>`
+      : '<div class="market-empty small">No market rates extracted.</div>';
+  }
+
+  function setupEconomicMarketTool() {
+    document.querySelectorAll('[data-market-section]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedMarketSection = btn.dataset.marketSection || 'rates';
+        document.querySelectorAll('[data-market-section]').forEach(item => {
+          item.classList.toggle('active', item === btn);
+        });
+        renderEconomicDetail();
+      });
+    });
+  }
+
+  // ============ Brokered CD Cost Calculator ============
+
+  function parseMoneyInput(value) {
+    const clean = String(value || '').replace(/[^0-9.]/g, '');
+    const parsed = Number(clean);
+    return isNaN(parsed) ? 0 : parsed;
+  }
+
+  function formatTermMonths(months) {
+    const n = Number(months);
+    if (!n || isNaN(n)) return 'Manual';
+    if (n % 12 === 0) return `${n / 12} yr`;
+    if (n < 12) return `${n} mo`;
+    return `${(n / 12).toFixed(1).replace(/\.0$/, '')} yr`;
+  }
+
+  function renderCdCostCalculator() {
+    const termButtons = document.getElementById('cdCalcTermButtons');
+    const rateInput = document.getElementById('cdCalcRate');
+    if (!termButtons || !rateInput) return;
+
+    const terms = getBrokeredCdTerms();
+    termButtons.innerHTML = terms.map(term => `
+      <button type="button" class="${term.months === selectedCdCalcTerm ? 'active' : ''}" data-cd-term="${term.months}">
+        <span>${escapeHtml(term.label)}</span>
+        <strong>${escapeHtml(formatPercentTile(term.mid, 3))}</strong>
+      </button>
+    `).join('');
+
+    const selected = terms.find(term => term.months === selectedCdCalcTerm) || terms[0];
+    selectedCdCalcTerm = selected.months;
+    rateInput.value = selected.mid.toFixed(3);
+    calculateCdCost();
+  }
+
+  function getBrokeredCdTerms() {
+    const uploadedTerms = currentPackage && Array.isArray(currentPackage.brokeredCdTerms)
+      ? currentPackage.brokeredCdTerms
+      : [];
+    return uploadedTerms.length ? uploadedTerms : DEFAULT_BROKERED_CD_TERMS;
+  }
+
+  function calculateCdCost() {
+    const amountInput = document.getElementById('cdCalcAmount');
+    const rateInput = document.getElementById('cdCalcRate');
+    const annualEl = document.getElementById('cdCalcAnnualCost');
+    const monthlyEl = document.getElementById('cdCalcMonthlyCost');
+    const metaEl = document.getElementById('cdCalcResultMeta');
+    if (!amountInput || !rateInput || !annualEl || !monthlyEl || !metaEl) return;
+
+    const terms = getBrokeredCdTerms();
+    const selected = terms.find(term => term.months === selectedCdCalcTerm) || terms[0];
+    const months = selected.months;
+    const amount = parseMoneyInput(amountInput.value);
+    const rate = Number(rateInput.value);
+
+    if (!amount || isNaN(rate)) {
+      annualEl.textContent = '—';
+      monthlyEl.textContent = '—';
+      metaEl.textContent = 'Enter an amount and rate to calculate cost.';
+      return;
+    }
+
+    const annualCost = amount * (rate / 100);
+    annualEl.textContent = formatMoney(annualCost);
+    monthlyEl.textContent = formatMoney(annualCost / 12);
+    metaEl.textContent = `${formatMoney(amount)} issued at ${formatPercentTile(rate, 3)} all-in mid for ${formatTermMonths(months)}`;
+  }
+
+  function setupCdCostCalculator() {
+    const termButtons = document.getElementById('cdCalcTermButtons');
+    const amountInput = document.getElementById('cdCalcAmount');
+    const rateInput = document.getElementById('cdCalcRate');
+    if (!termButtons || !amountInput || !rateInput) return;
+
+    termButtons.addEventListener('click', e => {
+      const btn = e.target.closest('[data-cd-term]');
+      if (!btn) return;
+      selectedCdCalcTerm = Number(btn.dataset.cdTerm);
+      const selected = getBrokeredCdTerms().find(term => term.months === selectedCdCalcTerm);
+      if (selected) rateInput.value = selected.mid.toFixed(3);
+      termButtons.querySelectorAll('[data-cd-term]').forEach(button => {
+        button.classList.toggle('active', button === btn);
+      });
+      calculateCdCost();
+    });
+    amountInput.addEventListener('input', calculateCdCost);
+    amountInput.addEventListener('blur', () => {
+      const amount = parseMoneyInput(amountInput.value);
+      amountInput.value = amount ? formatMoney(amount) : '';
+      calculateCdCost();
+    });
+    rateInput.addEventListener('input', calculateCdCost);
+
+    document.querySelectorAll('[data-cd-amount]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        amountInput.value = formatMoney(Number(btn.dataset.cdAmount || 0));
+        calculateCdCost();
+      });
+    });
+  }
+
   // ============ Archive ============
 
   function renderArchive() {
@@ -694,6 +1508,287 @@
     input.addEventListener('input', renderGlobalSearch);
   }
 
+  // ============ Bank Tear Sheets ============
+
+  async function loadBankStatus() {
+    const sub = document.getElementById('bankTearSheetSub');
+    const count = document.getElementById('bankDataCount');
+    const status = document.getElementById('bankImportStatus');
+    try {
+      const res = await fetch('/api/banks/status', { cache: 'no-store' });
+      bankDataStatus = await readBankJson(res);
+    } catch (e) {
+      bankDataStatus = { available: false, error: e.message };
+    }
+
+    if (bankDataStatus && bankDataStatus.available) {
+      const meta = bankDataStatus.metadata || {};
+      if (sub) sub.textContent = `Imported ${formatNumber(bankDataStatus.bankCount || meta.bankCount)} banks · latest period ${meta.latestPeriod || '—'}`;
+      if (count) count.textContent = formatNumber(bankDataStatus.bankCount || meta.bankCount);
+      if (status) status.textContent = `${meta.sourceFile || 'Workbook'} imported ${formatImportedDate(meta.importedAt)} · ${formatNumber(meta.rowCount)} rows · latest ${meta.latestPeriod || '—'}`;
+    } else {
+      if (sub) sub.textContent = bankDataStatus.error || 'Upload the SNL call report workbook to enable bank tear sheet search.';
+      if (count) count.textContent = '0';
+      if (status) status.textContent = bankDataStatus.error || 'No bank workbook has been imported yet.';
+    }
+  }
+
+  function formatImportedDate(iso) {
+    if (!iso) return 'recently';
+    try {
+      return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    } catch (e) {
+      return 'recently';
+    }
+  }
+
+  function setupBankSearch() {
+    const input = document.getElementById('bankSearchInput');
+    const btn = document.getElementById('bankSearchBtn');
+    const upload = document.getElementById('bankWorkbookInput');
+    if (input) {
+      let t = null;
+      input.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(() => searchBanks(input.value), 180);
+      });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          searchBanks(input.value, { openFirst: true });
+        } else if (e.key === 'Escape') {
+          clearBankSearchResults();
+        }
+      });
+    }
+    if (btn) btn.addEventListener('click', () => searchBanks(input ? input.value : '', { openFirst: true }));
+    if (upload) upload.addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      if (file) uploadBankWorkbook(file);
+    });
+  }
+
+  async function readBankJson(res) {
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('The portal server is serving the old page instead of bank data. Restart the portal, then refresh this screen.');
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Bank data request failed');
+    return data;
+  }
+
+  async function searchBanks(query, options = {}) {
+    const results = document.getElementById('bankSearchResults');
+    const q = String(query || '').trim();
+    if (!results) return;
+    if (q.length < 2) {
+      results.innerHTML = '<div class="bank-search-empty">Type at least two characters to search banks.</div>';
+      return;
+    }
+    results.innerHTML = '<div class="bank-search-empty">Searching banks&hellip;</div>';
+    try {
+      const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=10`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      renderBankResults(data.results || []);
+      if (options.openFirst && data.results && data.results[0]) loadBank(data.results[0].id, { collapseResults: true });
+    } catch (e) {
+      results.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function renderBankResults(rows) {
+    const results = document.getElementById('bankSearchResults');
+    if (!results) return;
+    if (!rows.length) {
+      results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
+      return;
+    }
+    results.innerHTML = rows.map(row => `
+      <button type="button" class="bank-result" data-bank-id="${escapeHtml(row.id)}">
+        <strong>${escapeHtml(row.displayName || row.name || 'Bank')}</strong>
+        <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
+        <em>${escapeHtml(row.period || '')}</em>
+      </button>
+    `).join('');
+    results.querySelectorAll('[data-bank-id]').forEach(btn => {
+      btn.addEventListener('click', () => loadBank(btn.dataset.bankId, { collapseResults: true }));
+    });
+  }
+
+  function clearBankSearchResults() {
+    const results = document.getElementById('bankSearchResults');
+    if (results) results.innerHTML = '';
+  }
+
+  async function loadBank(id, options = {}) {
+    if (options.collapseResults) clearBankSearchResults();
+    const profile = document.getElementById('bankProfile');
+    if (profile) profile.innerHTML = '<div class="bank-empty-state"><h2>Loading bank tear sheet&hellip;</h2></div>';
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(id)}`, { cache: 'no-store' });
+      selectedBank = await readBankJson(res);
+      renderBankProfile();
+    } catch (e) {
+      if (profile) profile.innerHTML = `<div class="bank-empty-state"><h2>${escapeHtml(e.message)}</h2></div>`;
+    }
+  }
+
+  function uploadBankWorkbook(file) {
+    const status = document.getElementById('bankImportStatus');
+    const input = document.getElementById('bankWorkbookInput');
+    const formData = new FormData();
+    formData.append('bankWorkbook', file, file.name);
+    if (status) status.textContent = `Importing ${file.name}... this can take a minute.`;
+    fetch('/api/banks/upload', { method: 'POST', body: formData })
+      .then(async res => {
+        const data = await readBankJson(res);
+        showToast(`Imported ${formatNumber(data.metadata.bankCount)} banks · latest ${data.metadata.latestPeriod || '—'}`);
+        return loadBankStatus();
+      })
+      .catch(err => {
+        showToast(err.message, true);
+        if (status) status.textContent = err.message;
+      })
+      .finally(() => {
+        if (input) input.value = '';
+      });
+  }
+
+  function renderBankProfile() {
+    const profile = document.getElementById('bankProfile');
+    if (!profile || !selectedBank || !selectedBank.bank) return;
+    const bank = selectedBank.bank;
+    const meta = selectedBank.metadata || {};
+    const latest = bank.periods && bank.periods[0] ? bank.periods[0] : { values: {} };
+    const values = latest.values || {};
+    const fields = meta.fields || [];
+    const recentPeriods = (bank.periods || []).slice(0, 8);
+    const details = [
+      ['Account Name', values.name || bank.summary.name],
+      ['Parent Account', values.parentName],
+      ['Phone', values.phone],
+      ['Website', values.website],
+      ['City', values.city],
+      ['State', values.state],
+      ['Address 1 County', values.county],
+      ['Fiduciary Assets ($000)', formatBankValue(values.fiduciaryAssets, 'money')],
+      ['Cert Number', values.certNumber],
+      ['Primary Regulator', values.primaryRegulator],
+      ['FTEs', formatBankValue(values.fullTimeEmployees, 'number')],
+      ['Subchapter S Election?', values.subchapterS],
+      ['Number of Offices', formatBankValue(values.numberOfOffices, 'number')],
+      ['SNL Institution Key', values.id]
+    ];
+
+    profile.innerHTML = `
+      <div class="bank-profile-head">
+        <div>
+          <span class="tool-eyebrow">Call Report Tear Sheet</span>
+          <h3>${escapeHtml(values.name || bank.summary.displayName || 'Bank')}</h3>
+          <p>${escapeHtml([values.city, values.state, values.certNumber ? `Cert ${values.certNumber}` : '', values.primaryRegulator].filter(Boolean).join(' · '))}</p>
+        </div>
+        <div class="bank-period-badge">
+          <strong>${escapeHtml(latest.endDate || latest.period || '—')}</strong>
+          <span>${escapeHtml(meta.latestPeriod || latest.period || '')}</span>
+        </div>
+      </div>
+      ${renderBankSection('Details', details, true)}
+      ${renderBankFieldSection('Balance Sheet', fields, values, 'balanceSheet')}
+      ${renderBankFieldSection('Securities (AFS-FV)', fields, values, 'securitiesAfs', 'afsTotal')}
+      ${renderBankFieldSection('Securities (HTM-FV)', fields, values, 'securitiesHtm', 'htmTotal')}
+      ${renderBankFieldSection('Loans', fields, values, 'loans')}
+      ${renderBankFieldSection('Capital', fields, values, 'capital')}
+      ${renderBankFieldSection('Profitability', fields, values, 'profitability')}
+      ${renderBankFieldSection('Asset Quality', fields, values, 'assetQuality')}
+      ${renderBankFieldSection('Liquidity', fields, values, 'liquidity')}
+      ${renderBankTrendTable(fields, recentPeriods)}
+    `;
+  }
+
+  function renderBankFieldSection(title, fields, values, section, denominatorKey) {
+    const rows = fields
+      .filter(field => field.section === section)
+      .map(field => {
+        const value = formatBankValue(values[field.key], field.type);
+        const derivedPct = field.denominatorKey ? bankShare(values[field.key], values[field.denominatorKey]) : null;
+        const pct = denominatorKey && field.key !== denominatorKey ? bankShare(values[field.key], values[denominatorKey]) : derivedPct;
+        return [field.label, pct == null ? value : `${value} / ${pct}`];
+      });
+    return renderBankSection(title, rows);
+  }
+
+  function renderBankSection(title, rows, details) {
+    const filtered = rows.filter(([, value]) => value !== null && value !== undefined && value !== '—' && value !== '');
+    const midpoint = Math.ceil(filtered.length / 2);
+    const columns = [filtered.slice(0, midpoint), filtered.slice(midpoint)];
+    return `
+      <section class="bank-section ${details ? 'details' : ''}">
+        <div class="bank-section-title">${escapeHtml(title)}</div>
+        <div class="bank-fields-grid">
+          ${columns.map(col => `<div>${col.map(([label, value]) => `
+            <div class="bank-field-row">
+              <span>${escapeHtml(label)}</span>
+              <strong>${escapeHtml(value)}</strong>
+            </div>
+          `).join('')}</div>`).join('')}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderBankTrendTable(fields, periods) {
+    const rows = [
+      'totalAssets', 'totalDeposits', 'totalLoans', 'loansToAssets',
+      'securitiesToAssets', 'roa', 'roe', 'netInterestMargin',
+      'efficiencyRatio', 'texasRatio', 'liquidAssetsToAssets'
+    ];
+    const fieldByKey = Object.fromEntries(fields.map(field => [field.key, field]));
+    if (!periods.length) return '';
+    return `
+      <section class="bank-section">
+        <div class="bank-section-title">Time Series - Quarterly</div>
+        <div class="bank-trend-wrap">
+          <table class="bank-trend-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                ${periods.map(period => `<th>${escapeHtml(period.endDate || period.period)}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(key => {
+                const field = fieldByKey[key];
+                if (!field) return '';
+                return `<tr>
+                  <td>${escapeHtml(field.label)}</td>
+                  ${periods.map(period => `<td>${escapeHtml(formatBankValue(period.values && period.values[key], field.type))}</td>`).join('')}
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }
+
+  function formatBankValue(value, type) {
+    if (value == null || value === '') return '—';
+    if (type === 'money') return formatMoney(value, 0);
+    if (type === 'percent') return formatPercentTile(value, 2);
+    if (type === 'percentOf') return formatMoney(value, 0);
+    if (type === 'number') return formatNumber(value);
+    if (type === 'period') return String(value);
+    return String(value);
+  }
+
+  function bankShare(value, total) {
+    const n = Number(value);
+    const d = Number(total);
+    if (!isFinite(n) || !isFinite(d) || d === 0) return null;
+    return formatPercentTile((n / d) * 100, 2);
+  }
+
   function slotAcceptExtensions(slot) {
     if (slot === 'dashboard') return ['.html', '.htm'];
     if (slot === 'agenciesBullets' || slot === 'agenciesCallables' || slot === 'corporates') return ['.xlsx', '.xls'];
@@ -804,117 +1899,6 @@
     }
   }
 
-  // ============ Dashboard Builder ============
-
-  async function loadDashboardBuilderStatus() {
-    let status = null;
-    try {
-      const res = await fetch('/api/sales-dashboard/status', { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      status = await res.json();
-    } catch (e) {
-      showToast('Could not load dashboard builder status: ' + e.message, true);
-      return;
-    }
-    renderDashboardBuilderStatus(status);
-  }
-
-  function renderDashboardBuilderStatus(status) {
-    const stat = document.getElementById('builderStat');
-    const kicker = document.getElementById('builderKicker');
-    const grid = document.getElementById('builderStatusGrid');
-    const checks = document.getElementById('builderChecks');
-    const preview = document.getElementById('previewDashboardBtn');
-    const publish = document.getElementById('publishDashboardBtn');
-    if (!grid) return;
-
-    const draft = status.draft || null;
-    const passed = draft && draft.report && draft.report.passed;
-    if (stat) stat.textContent = draft ? (passed ? 'Pass' : 'Review') : 'Draft';
-    if (kicker) kicker.textContent = draft
-      ? `Draft generated ${formatTime(draft.generatedAt)}`
-      : 'No draft generated yet';
-
-    const data = status.availableData || {};
-    const counts = status.counts || {};
-    const tiles = [
-      { label: 'Template', value: status.templatePresent ? 'Ready' : 'Missing' },
-      { label: 'CDs', value: data.cds ? `${formatNumber(counts.cds)} rows` : 'Missing' },
-      { label: 'Munis', value: data.munis ? `${formatNumber(counts.munis)} rows` : 'Missing' },
-      { label: 'Agencies', value: data.agencies ? `${formatNumber(counts.agencies)} rows` : 'Missing' },
-      { label: 'Corporates', value: data.corporates ? `${formatNumber(counts.corporates)} rows` : 'Missing' },
-      { label: 'Published HTML', value: status.currentDashboard || 'Not published' }
-    ];
-    grid.innerHTML = tiles.map(t => `
-      <div class="stat-tile">
-        <span>${escapeHtml(t.label)}</span>
-        <strong>${escapeHtml(String(t.value))}</strong>
-      </div>
-    `).join('');
-
-    if (draft && draft.filename) {
-      preview.href = '/current/' + encodeURIComponent(draft.filename);
-      preview.classList.remove('disabled-link');
-      publish.disabled = !(draft.report && draft.report.passed);
-    } else {
-      preview.href = '#';
-      preview.classList.add('disabled-link');
-      publish.disabled = true;
-    }
-
-    if (!draft || !draft.report) {
-      checks.innerHTML = '<div class="global-empty">Generate a draft to run preflight checks.</div>';
-      return;
-    }
-    checks.innerHTML = draft.report.checks.map(c => `
-      <div class="check-row ${c.ok ? 'ok' : 'warn'}">
-        <span>${c.ok ? 'Pass' : 'Review'}</span>
-        <strong>${escapeHtml(c.label)}</strong>
-      </div>
-    `).join('');
-  }
-
-  function setupDashboardBuilder() {
-    const generate = document.getElementById('generateDashboardBtn');
-    const publish = document.getElementById('publishDashboardBtn');
-    if (generate) {
-      generate.addEventListener('click', async () => {
-        generate.disabled = true;
-        generate.textContent = 'Generating...';
-        try {
-          const res = await fetch('/api/sales-dashboard/generate', { method: 'POST' });
-          const data = await res.json();
-          if (!res.ok || !data.success) throw new Error(data.error || 'Generation failed');
-          showToast('Dashboard draft generated');
-          await loadDashboardBuilderStatus();
-        } catch (e) {
-          showToast(e.message, true);
-        } finally {
-          generate.disabled = false;
-          generate.textContent = 'Generate Draft';
-        }
-      });
-    }
-    if (publish) {
-      publish.addEventListener('click', async () => {
-        publish.disabled = true;
-        publish.textContent = 'Publishing...';
-        try {
-          const res = await fetch('/api/sales-dashboard/publish', { method: 'POST' });
-          const data = await res.json();
-          if (!res.ok || !data.success) throw new Error(data.error || 'Publish failed');
-          showToast('FBBS Sales Dashboard published');
-          await loadCurrent();
-          await loadDashboardBuilderStatus();
-        } catch (e) {
-          showToast(e.message, true);
-        } finally {
-          publish.textContent = 'Publish Dashboard';
-        }
-      });
-    }
-  }
-
   // ============ Weekly CD Recap ============
 
   async function loadCdRecap() {
@@ -930,6 +1914,7 @@
       const res = await fetch('/api/cd-recap/weekly', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const recap = await res.json();
+      cdRecapData = recap;
 
       if (stat) stat.textContent = formatNumber(recap.uniqueCusips || 0);
       if (sub) {
@@ -946,8 +1931,8 @@
           { label: 'Week Range', value: `${formatShortDate(recap.weekStart)} - ${formatShortDate(recap.weekEnd)}` },
           { label: 'Daily Snapshots', value: formatNumber(recap.snapshotCount || 0) },
           { label: 'Raw Rows', value: formatNumber(recap.rawRows || 0) },
-          { label: 'Unique CUSIPs', value: formatNumber(recap.uniqueCusips || 0) },
-          { label: 'Recap Terms', value: formatNumber(recap.recapTermUniqueCusips || 0) },
+          { label: 'Unique CUSIP Count', value: formatNumber(recap.uniqueCusips || 0) },
+          { label: 'Charted Term CUSIP Count', value: formatNumber(recap.recapTermUniqueCusips || 0) },
           { label: 'Snapshot Dates', value: snapshotDates }
         ];
         grid.innerHTML = tiles.map(t => `
@@ -958,13 +1943,16 @@
         `).join('');
       }
       renderCdRecapTable(recap);
+      renderCdRecapCharts(recap);
     } catch (err) {
       console.error('Failed to load weekly CD recap:', err);
+      cdRecapData = null;
       if (body) {
         body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--danger)">
           Failed to load weekly CD recap: ${escapeHtml(err.message)}
         </td></tr>`;
       }
+      renderCdRecapCharts(null);
       showToast('Could not load weekly CD recap: ' + err.message, true);
     }
   }
@@ -995,6 +1983,256 @@
         </tr>
       `;
     }).join('');
+  }
+
+  function renderCdRecapCharts(recap) {
+    renderCdTermCountChart(recap);
+    renderCdMedianRateChart(recap);
+    renderCdRateComparisonTable(recap);
+  }
+
+  function renderCdTermCountChart(recap) {
+    const chart = document.getElementById('cdTermCountChart');
+    if (!chart) return;
+    const terms = Array.isArray(recap && recap.terms)
+      ? recap.terms
+          .filter(t => Number(t.uniqueCusips) > 0)
+          .sort((a, b) => Number(b.uniqueCusips || 0) - Number(a.uniqueCusips || 0))
+          .slice(0, 8)
+      : [];
+    if (!terms.length) {
+      chart.innerHTML = '<div class="chart-empty">Upload Daily CD Offers PDFs to build weekly term counts.</div>';
+      return;
+    }
+
+    const maxCount = Math.max(...terms.map(t => Number(t.uniqueCusips || 0)), 1);
+    chart.innerHTML = terms.map(t => {
+      const count = Number(t.uniqueCusips || 0);
+      const pct = Math.max(4, (count / maxCount) * 100);
+      return `
+        <div class="term-bar-row">
+          <div class="term-bar-label">${escapeHtml(t.label || t.term)}</div>
+          <div class="term-bar-track">
+            <div class="term-bar-fill" style="width:${pct.toFixed(2)}%"></div>
+          </div>
+          <strong>${formatNumber(count)}</strong>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderCdMedianRateChart(recap) {
+    const chart = document.getElementById('cdMedianRateChart');
+    const legend = document.getElementById('cdMedianRateLegend');
+    if (!chart) return;
+    const comparison = recap && recap.rateComparisons;
+    const periods = Array.isArray(comparison && comparison.periods) ? comparison.periods : [];
+    const terms = Array.isArray(comparison && comparison.terms)
+      ? comparison.terms.filter(row => Object.values(row.rates || {}).some(v => v != null && !isNaN(v)))
+      : [];
+    if (!periods.length || !terms.length) {
+      if (legend) legend.innerHTML = '';
+      chart.innerHTML = '<div class="chart-empty">Rate comparison will fill in as prior CD snapshots accumulate.</div>';
+      return;
+    }
+
+    const comparisonPeriods = periods.filter(period => period.key !== 'today');
+    const validPeriods = comparisonPeriods.filter(period =>
+      terms.some(row => Number.isFinite(Number(row.rates && row.rates.today)) && Number.isFinite(Number(row.rates && row.rates[period.key])))
+    );
+    if (!validPeriods.length) {
+      if (legend) legend.innerHTML = '';
+      chart.innerHTML = '<div class="chart-empty">Rate comparison will fill in as prior CD snapshots accumulate.</div>';
+      return;
+    }
+    if (!validPeriods.some(period => period.key === selectedCdRecapPeriod)) {
+      selectedCdRecapPeriod = validPeriods[0].key;
+    }
+
+    const selectedPeriod = validPeriods.find(period => period.key === selectedCdRecapPeriod) || validPeriods[0];
+    if (legend) {
+      legend.innerHTML = `
+        <div class="cd-period-toggle" role="group" aria-label="CD recap comparison period">
+          <span>Compare today with</span>
+          ${validPeriods.map(period => `
+            <button type="button" class="${period.key === selectedPeriod.key ? 'active' : ''}" data-cd-recap-period="${escapeHtml(period.key)}">
+              ${escapeHtml(period.label.replace('Previous ', ''))}
+            </button>
+          `).join('')}
+        </div>
+        <div class="cd-period-date">
+          ${escapeHtml(selectedPeriod.label)}
+          <em>${selectedPeriod.snapshotDate ? formatShortDate(selectedPeriod.snapshotDate) : 'No snapshot'}</em>
+        </div>
+      `;
+      legend.querySelectorAll('[data-cd-recap-period]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedCdRecapPeriod = btn.dataset.cdRecapPeriod;
+          renderCdMedianRateChart(cdRecapData);
+        });
+      });
+    }
+
+    const rows = terms.map(row => {
+      const today = Number(row.rates && row.rates.today);
+      const prior = Number(row.rates && row.rates[selectedPeriod.key]);
+      const delta = Number.isFinite(today) && Number.isFinite(prior) ? today - prior : null;
+      return {
+        term: row.term,
+        label: row.label || row.term,
+        today: Number.isFinite(today) ? today : null,
+        prior: Number.isFinite(prior) ? prior : null,
+        delta
+      };
+    });
+    const pairRates = rows.flatMap(row => [row.today, row.prior]).filter(Number.isFinite);
+    const { min, max } = makeDumbbellRateDomain(Math.min(...pairRates), Math.max(...pairRates));
+    const ticks = makeDumbbellRateTicks(min, max);
+
+    chart.innerHTML = `
+      <div class="cd-dumbbell-chart">
+        <div class="cd-dumbbell-axis">
+          ${ticks.map(tick => `
+            <span style="left:${ratePosition(tick, min, max).toFixed(2)}%">${escapeHtml(formatPercentTile(tick, 2))}</span>
+          `).join('')}
+        </div>
+        ${rows.map(row => renderDumbbellRow(row, min, max, selectedPeriod)).join('')}
+      </div>
+    `;
+  }
+
+  function renderDumbbellRow(row, min, max, selectedPeriod) {
+    if (!Number.isFinite(row.today) || !Number.isFinite(row.prior)) {
+      return `
+        <div class="cd-dumbbell-row muted">
+          <div class="cd-dumbbell-term">${escapeHtml(row.label)}</div>
+          <div class="cd-dumbbell-track unavailable">No ${escapeHtml(selectedPeriod.label.toLowerCase())} rate</div>
+          <div class="cd-dumbbell-delta">—</div>
+        </div>
+      `;
+    }
+
+    const priorPct = ratePosition(row.prior, min, max);
+    const todayPct = ratePosition(row.today, min, max);
+    const connectorLeft = Math.min(priorPct, todayPct);
+    const connectorWidth = Math.abs(todayPct - priorPct);
+    const direction = deltaClass(row.delta);
+    const deltaText = formatBasisPointDelta(row.delta);
+    return `
+      <div class="cd-dumbbell-row" title="${escapeHtml(`${row.label}: ${formatPercentTile(row.prior, 2)} to ${formatPercentTile(row.today, 2)} (${deltaText})`)}">
+        <div class="cd-dumbbell-term">${escapeHtml(row.label)}</div>
+        <div class="cd-dumbbell-track">
+          <span class="cd-dumbbell-connector ${direction}" style="left:${connectorLeft.toFixed(2)}%;width:${Math.max(1, connectorWidth).toFixed(2)}%"></span>
+          <span class="cd-dumbbell-dot prior" style="left:${priorPct.toFixed(2)}%"></span>
+          <span class="cd-dumbbell-dot today" style="left:${todayPct.toFixed(2)}%"></span>
+        </div>
+        <div class="cd-dumbbell-delta ${direction}">${escapeHtml(deltaText)}</div>
+      </div>
+    `;
+  }
+
+  function renderCdRateComparisonTable(recap) {
+    const tableWrap = document.getElementById('cdRateComparisonTable');
+    if (!tableWrap) return;
+    const comparison = recap && recap.rateComparisons;
+    const comparisonTerms = Array.isArray(comparison && comparison.terms) ? comparison.terms : [];
+    const recapTerms = Array.isArray(recap && recap.terms) ? recap.terms : [];
+    const issueByTerm = new Map(recapTerms.map(row => [row.term, row]));
+    const rows = comparisonTerms
+      .filter(row => Object.values(row.rates || {}).some(v => v != null && !isNaN(v)))
+      .map(row => {
+        const issue = issueByTerm.get(row.term) || {};
+        return {
+          term: row.term,
+          label: row.label || row.term,
+          count: Number(issue.uniqueCusips || 0),
+          share: issue.issueShare,
+          rates: row.rates || {},
+          deltas: row.deltas || {}
+        };
+      });
+
+    if (!rows.length) {
+      tableWrap.innerHTML = '<div class="chart-empty">Rate comparison table will fill in as prior CD snapshots accumulate.</div>';
+      return;
+    }
+
+    tableWrap.innerHTML = `
+      <table class="rate-comparison-table">
+        <thead>
+          <tr>
+            <th>Term</th>
+            <th>Count</th>
+            <th>Share</th>
+            <th>Today</th>
+            <th>Prev Week</th>
+            <th>Wk Chg</th>
+            <th>Prev Month</th>
+            <th>Mo Chg</th>
+            <th>Prev Year</th>
+            <th>Yr Chg</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td><strong>${escapeHtml(row.label)}</strong></td>
+              <td>${escapeHtml(formatNumber(row.count))}</td>
+              <td>${escapeHtml(formatIssueShare(row.share))}</td>
+              <td>${escapeHtml(formatPercentTile(row.rates.today, 2))}</td>
+              <td>${escapeHtml(formatPercentTile(row.rates.previousWeek, 2))}</td>
+              <td><span class="rate-change-pill ${deltaClass(row.deltas.previousWeek)}">${escapeHtml(formatBasisPointDelta(row.deltas.previousWeek))}</span></td>
+              <td>${escapeHtml(formatPercentTile(row.rates.previousMonth, 2))}</td>
+              <td><span class="rate-change-pill ${deltaClass(row.deltas.previousMonth)}">${escapeHtml(formatBasisPointDelta(row.deltas.previousMonth))}</span></td>
+              <td>${escapeHtml(formatPercentTile(row.rates.previousYear, 2))}</td>
+              <td><span class="rate-change-pill ${deltaClass(row.deltas.previousYear)}">${escapeHtml(formatBasisPointDelta(row.deltas.previousYear))}</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function makeDumbbellRateDomain(minRate, maxRate) {
+    if (!Number.isFinite(minRate) || !Number.isFinite(maxRate)) {
+      return { min: 3, max: 5 };
+    }
+    const range = maxRate - minRate;
+    const padding = Math.max(0.12, range * 0.25);
+    let min = Math.max(0, Math.floor((minRate - padding) * 4) / 4);
+    let max = Math.ceil((maxRate + padding) * 4) / 4;
+    if (max - min < 0.75) {
+      const mid = (minRate + maxRate) / 2;
+      min = Math.max(0, Math.floor((mid - 0.375) * 4) / 4);
+      max = Math.ceil((mid + 0.375) * 4) / 4;
+    }
+    return { min, max };
+  }
+
+  function makeDumbbellRateTicks(min, max) {
+    const steps = 4;
+    const range = Math.max(0.01, max - min);
+    return Array.from({ length: steps + 1 }, (_, index) => Number((min + (range / steps) * index).toFixed(2)));
+  }
+
+  function ratePosition(rate, min, max) {
+    if (!Number.isFinite(rate) || max <= min) return 50;
+    return Math.max(0, Math.min(100, ((rate - min) / (max - min)) * 100));
+  }
+
+  function formatBasisPointDelta(delta) {
+    if (!Number.isFinite(delta)) return '—';
+    const bps = Math.round(delta * 100);
+    return `${bps > 0 ? '+' : ''}${bps} bp`;
+  }
+
+  function formatIssueShare(share) {
+    return Number.isFinite(Number(share)) ? `${(Number(share) * 100).toFixed(0)}%` : '—';
+  }
+
+  function deltaClass(delta) {
+    if (!Number.isFinite(delta) || Math.abs(delta) < 0.005) return 'flat';
+    return delta > 0 ? 'up' : 'down';
   }
 
   function setupCdRecap() {
@@ -1072,12 +2310,12 @@
     stateSelect.value = keepState;
 
     const asOf = offeringsData.asOfDate
-      ? ` &middot; As of ${formatShortDate(offeringsData.asOfDate)}`
+      ? ` &middot; As of ${formatNumericDate(offeringsData.asOfDate)}`
       : '';
     document.getElementById('explorerSub').innerHTML =
       `${off.length} CDs available${asOf}`;
     document.getElementById('explorerKicker').textContent =
-      offeringsData.asOfDate ? formatShortDate(offeringsData.asOfDate) : 'Current package';
+      offeringsData.asOfDate ? formatNumericDate(offeringsData.asOfDate) : 'Current package';
   }
 
   function renderOfferings() {
@@ -1107,9 +2345,9 @@
         <td><span class="term-pill">${escapeHtml(o.term)}</span></td>
         <td class="issuer-cell">${escapeHtml(o.name)}</td>
         <td style="text-align:right" class="rate-cell">${o.rate.toFixed(2)}</td>
-        <td>${formatShortDate(o.maturity)}</td>
+        <td>${formatNumericDate(o.maturity)}</td>
         <td class="cusip-cell">${escapeHtml(o.cusip)}</td>
-        <td>${formatShortDate(o.settle)}</td>
+        <td>${formatNumericDate(o.settle)}</td>
         <td>${escapeHtml(o.issuerState)}</td>
         <td>${o.restrictions.length
           ? `<span class="restrict-chip" title="Not available in: ${o.restrictions.join(', ')}">${o.restrictions.join(', ')}</span>`
@@ -1304,12 +2542,12 @@
     stateSelect.value = keepState;
 
     const asOf = muniData.asOfDate
-      ? ` &middot; As of ${formatShortDate(muniData.asOfDate)}`
+      ? ` &middot; As of ${formatNumericDate(muniData.asOfDate)}`
       : '';
     document.getElementById('muniExplorerSub').innerHTML =
       `${off.length} muni bonds available${asOf}`;
     document.getElementById('muniExplorerKicker').textContent =
-      muniData.asOfDate ? formatShortDate(muniData.asOfDate) : 'Current package';
+      muniData.asOfDate ? formatNumericDate(muniData.asOfDate) : 'Current package';
   }
 
   function renderMuniOfferings() {
@@ -1328,7 +2566,7 @@
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:40px;color:var(--text3)">
         No offerings match the current filters.
       </td></tr>`;
       return;
@@ -1355,7 +2593,7 @@
         : '<span class="no-restrict">&mdash;</span>';
 
       const callCell = o.callDate
-        ? formatShortDate(o.callDate)
+        ? formatNumericDate(o.callDate)
         : '<span class="no-restrict">&mdash;</span>';
 
       const creditCell = o.creditEnhancement
@@ -1371,7 +2609,7 @@
           <td class="issuer-cell">${escapeHtml(o.issuerName)}</td>
           <td>${escapeHtml(o.issueType)}</td>
           <td style="text-align:right">${o.coupon.toFixed(3)}</td>
-          <td>${formatShortDate(o.maturity)}</td>
+          <td>${formatNumericDate(o.maturity)}</td>
           <td>${callCell}</td>
           <td style="text-align:right">${yieldCell}</td>
           <td style="text-align:right">${priceCell}</td>
@@ -1531,6 +2769,7 @@
   // ============ Agencies Explorer ============
 
   let agencyData = null;
+  let agencyTreasuryData = null;
   let agencyFilters = {
     search: '',
     tickers: new Set(),        // multi-select
@@ -1554,7 +2793,11 @@
     const body = document.getElementById('agenciesBody');
     const sub = document.getElementById('agenciesSub');
     try {
-      const res = await fetch('/api/agencies', { cache: 'no-store' });
+      const [res, treasury] = await Promise.all([
+        fetch('/api/agencies', { cache: 'no-store' }),
+        loadAgencyTreasuryData()
+      ]);
+      agencyTreasuryData = treasury;
       if (res.status === 404) {
         agencyData = null;
         body.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:40px;color:var(--text3)">
@@ -1625,12 +2868,126 @@
       }
     };
 
-    const fdate = agencyData.fileDate ? ` &middot; File dated ${formatShortDate(agencyData.fileDate)}` : '';
-    const udate = agencyData.uploadedAt ? ` &middot; Uploaded ${formatShortDate(agencyData.uploadedAt.slice(0,10))}` : '';
+    const fdate = agencyData.fileDate ? ` &middot; File dated ${formatNumericDate(agencyData.fileDate)}` : '';
+    const udate = agencyData.uploadedAt ? ` &middot; Uploaded ${formatNumericDate(agencyData.uploadedAt.slice(0,10))}` : '';
     document.getElementById('agenciesSub').innerHTML = `${off.length} agency offerings${udate}${fdate}`;
     document.getElementById('agenciesKicker').textContent = agencyData.fileDate
-      ? `File ${formatShortDate(agencyData.fileDate)}`
+      ? `File ${formatNumericDate(agencyData.fileDate)}`
       : 'Current';
+    renderCommissionControl('agencies', 'agencyStatTiles');
+  }
+
+  async function loadAgencyTreasuryData() {
+    try {
+      const res = await fetch('/api/economic-update', { cache: 'no-store' });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return Array.isArray(data && data.treasuries) && data.treasuries.length ? data : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function agencySpreadBasis(record, priceOverride, yields) {
+    if (!record) return null;
+    const price = priceOverride == null ? record.askPrice : priceOverride;
+    const ytm = yields ? yields.ytm : record.ytm;
+    const ytnc = yields ? yields.ytnc : record.ytnc;
+    const isPremium = Number(price) >= 100;
+
+    if (record.structure === 'Callable' && isPremium && record.nextCallDate && ytnc != null) {
+      return { date: record.nextCallDate, yieldPct: ytnc, label: 'call', key: 'ytnc' };
+    }
+    if (record.maturity && ytm != null) {
+      return { date: record.maturity, yieldPct: ytm, label: 'maturity', key: 'ytm' };
+    }
+    if (record.nextCallDate && ytnc != null) {
+      return { date: record.nextCallDate, yieldPct: ytnc, label: 'call', key: 'ytnc' };
+    }
+    return null;
+  }
+
+  function effectiveAgencyBenchmark(record) {
+    if (record && record.structure !== 'Callable' && record.benchmark) return record.benchmark;
+    const treasury = treasuryForAgencyRecord(record);
+    if (treasury) return treasury.label;
+    return record && record.benchmark ? record.benchmark : null;
+  }
+
+  function effectiveAgencySpread(record) {
+    if (!record) return null;
+    if (record.structure !== 'Callable' && record.askSpread != null) return record.askSpread;
+    const basis = agencySpreadBasis(record);
+    const treasury = treasuryForAgencyRecord(record);
+    if (!basis || !treasury || treasury.yield == null) return null;
+    return (basis.yieldPct - treasury.yield) * 100;
+  }
+
+  function treasuryForAgencyRecord(record) {
+    const basis = agencySpreadBasis(record);
+    return treasuryForAgencyBasis(basis);
+  }
+
+  function treasuryForAgencyBasis(basis) {
+    const curve = agencyTreasuryCurve();
+    if (!basis || !curve.length) return null;
+    const months = monthsBetween(new Date(), parseIsoDate(basis.date));
+    if (!isFinite(months) || months <= 0) return null;
+    return interpolateTreasuryYield(curve, months);
+  }
+
+  function agencyTreasuryCurve() {
+    const rows = Array.isArray(agencyTreasuryData && agencyTreasuryData.treasuries)
+      ? agencyTreasuryData.treasuries
+      : [];
+    return rows
+      .map(row => ({
+        months: tenorToMonths(row.tenor),
+        label: row.label || row.tenor,
+        yield: row.yield
+      }))
+      .filter(row => row.months != null && row.yield != null)
+      .sort((a, b) => a.months - b.months);
+  }
+
+  function tenorToMonths(tenor) {
+    const match = String(tenor || '').match(/^(\d+)(MO|M|YR|Y)$/i);
+    if (!match) return null;
+    const n = Number(match[1]);
+    if (!isFinite(n)) return null;
+    return /^M/i.test(match[2]) ? n : n * 12;
+  }
+
+  function interpolateTreasuryYield(curve, targetMonths) {
+    if (!curve.length) return null;
+    if (targetMonths <= curve[0].months) {
+      return { ...curve[0], label: curve[0].label };
+    }
+    const last = curve[curve.length - 1];
+    if (targetMonths >= last.months) {
+      return { ...last, label: last.label };
+    }
+    for (let i = 1; i < curve.length; i++) {
+      const left = curve[i - 1];
+      const right = curve[i];
+      if (targetMonths <= right.months) {
+        const weight = (targetMonths - left.months) / (right.months - left.months);
+        const interpolated = left.yield + ((right.yield - left.yield) * weight);
+        return {
+          months: targetMonths,
+          yield: interpolated,
+          label: nearestTreasuryLabel(left, right, targetMonths)
+        };
+      }
+    }
+    return null;
+  }
+
+  function nearestTreasuryLabel(left, right, targetMonths) {
+    const nearest = Math.abs(targetMonths - left.months) <= Math.abs(right.months - targetMonths)
+      ? left
+      : right;
+    return nearest.label;
   }
 
   function applyAgencyFilters(offerings) {
@@ -1663,6 +3020,14 @@
     const mult = dir === 'asc' ? 1 : -1;
     arr.sort((a, b) => {
       let av = a[col], bv = b[col];
+      if (col === 'askSpread') {
+        av = effectiveAgencySpread(a);
+        bv = effectiveAgencySpread(b);
+      }
+      if (col === 'benchmark') {
+        av = effectiveAgencyBenchmark(a);
+        bv = effectiveAgencyBenchmark(b);
+      }
       if (av == null) return 1;
       if (bv == null) return -1;
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult;
@@ -1691,10 +3056,11 @@
     }
 
     const fmt = (v, d = 3) => v == null ? '<span class="no-restrict">&mdash;</span>' : v.toFixed(d);
-    const fmtDate = v => v ? formatShortDate(v) : '<span class="no-restrict">&mdash;</span>';
+    const fmtDate = v => v ? formatNumericDate(v) : '<span class="no-restrict">&mdash;</span>';
 
     body.innerHTML = filtered.map(o => {
       const structureClass = o.structure === 'Bullet' ? 'structure-bullet' : 'structure-callable';
+      const benchmark = effectiveAgencyBenchmark(o);
       return `
         <tr>
           <td><span class="structure-pill ${structureClass}">${escapeHtml(o.structure)}</span></td>
@@ -1704,12 +3070,12 @@
           <td>${fmtDate(o.maturity)}</td>
           <td>${fmtDate(o.nextCallDate)}</td>
           <td>${o.callType ? `<span class="calltype-chip">${escapeHtml(o.callType)}</span>` : '<span class="no-restrict">&mdash;</span>'}</td>
-          <td style="text-align:right" class="rate-cell">${fmt(o.ytm, 3)}</td>
-          <td style="text-align:right" class="rate-cell">${fmt(o.ytnc, 3)}</td>
-          <td style="text-align:right">${fmt(o.askPrice, 3)}</td>
+          <td style="text-align:right" class="rate-cell">${commissionYieldHtml(o, 'ytm', 3)}</td>
+          <td style="text-align:right" class="rate-cell">${commissionYieldHtml(o, 'ytnc', 3)}</td>
+          <td style="text-align:right">${commissionPriceHtml('agencies', o, o.askPrice, 3)}</td>
           <td style="text-align:right" class="qnty-cell">${fmt(o.availableSize, 3)}</td>
-          <td style="text-align:right">${o.askSpread == null ? '<span class="no-restrict">&mdash;</span>' : o.askSpread.toFixed(1)}</td>
-          <td>${o.benchmark ? escapeHtml(o.benchmark) : '<span class="no-restrict">&mdash;</span>'}</td>
+          <td style="text-align:right">${commissionSpreadHtml(o)}</td>
+          <td>${benchmark ? escapeHtml(benchmark) : '<span class="no-restrict">&mdash;</span>'}</td>
         </tr>`;
     }).join('');
   }
@@ -1802,25 +3168,42 @@
     if (filtered.length === 0) return showToast('No offerings match filters', true);
 
     const header = ['Structure','Ticker','CUSIP','Coupon','Maturity','NextCallDate','CallType',
-                    'YTM','YTNC','AskPrice','AvailableSize','AskSpread','Benchmark',
-                    'Settle','CostBasis','Notes','CommissionBp'];
-    const rows = filtered.map(o => [
+                    'SpreadBasis','SpreadYield','MarkedSpreadBasis','MarkedSpreadYield','YTM','MarkedYTM','YTNC','MarkedYTNC','AskPrice','SalesCommissionMethod','SalesCommissionValue','PriceMarkup','ClientPrice','AvailableSize','AskSpread','MarkedSpread','Benchmark',
+                    'Settle','CostBasis','Notes','SourceCommissionBp'];
+    const rows = filtered.map(o => {
+      const marked = markedAgencyValues(o);
+      const spreadBasis = agencySpreadBasis(o);
+      const spread = effectiveAgencySpread(o);
+      const benchmark = effectiveAgencyBenchmark(o);
+      return [
       o.structure, o.ticker, o.cusip,
       o.coupon != null ? o.coupon.toFixed(3) : '',
       o.maturity || '',
       o.nextCallDate || '',
       o.callType || '',
+      spreadBasis ? spreadBasis.label : '',
+      spreadBasis && spreadBasis.yieldPct != null ? spreadBasis.yieldPct.toFixed(3) : '',
+      marked && marked.markedSpreadBasis ? marked.markedSpreadBasis.label : '',
+      marked && marked.markedSpreadBasis && marked.markedSpreadBasis.yieldPct != null ? marked.markedSpreadBasis.yieldPct.toFixed(3) : '',
       o.ytm != null ? o.ytm.toFixed(3) : '',
+      marked && marked.markedYtm != null ? marked.markedYtm.toFixed(3) : '',
       o.ytnc != null ? o.ytnc.toFixed(3) : '',
+      marked && marked.markedYtnc != null ? marked.markedYtnc.toFixed(3) : '',
       o.askPrice != null ? o.askPrice.toFixed(3) : '',
+      marked ? marked.method : '',
+      marked ? marked.value.toString() : '',
+      marked ? marked.priceMarkup.toFixed(3) : '',
+      marked ? marked.clientPrice.toFixed(3) : '',
       o.availableSize != null ? o.availableSize.toFixed(3) : '',
-      o.askSpread != null ? o.askSpread.toFixed(1) : '',
-      o.benchmark || '',
+      spread != null ? spread.toFixed(1) : '',
+      marked && marked.markedSpread != null ? marked.markedSpread.toFixed(1) : '',
+      benchmark || '',
       o.settle || '',
       o.costBasis != null ? o.costBasis.toFixed(3) : '',
       o.notes || '',
       o.commissionBp != null ? o.commissionBp.toString() : ''
-    ]);
+      ];
+    });
     const csv = [header, ...rows]
       .map(r => r.map(cell => {
         const s = String(cell ?? '');
@@ -1930,12 +3313,13 @@
         if (corpData) renderCorporates();
       }
     };
-    const fdate = corpData.fileDate ? ` &middot; File dated ${formatShortDate(corpData.fileDate)}` : '';
-    const udate = corpData.uploadedAt ? ` &middot; Uploaded ${formatShortDate(corpData.uploadedAt.slice(0,10))}` : '';
+    const fdate = corpData.fileDate ? ` &middot; File dated ${formatNumericDate(corpData.fileDate)}` : '';
+    const udate = corpData.uploadedAt ? ` &middot; Uploaded ${formatNumericDate(corpData.uploadedAt.slice(0,10))}` : '';
     document.getElementById('corporatesSub').innerHTML = `${off.length} corporate bonds${udate}${fdate}`;
     document.getElementById('corporatesKicker').textContent = corpData.fileDate
-      ? `File ${formatShortDate(corpData.fileDate)}`
+      ? `File ${formatNumericDate(corpData.fileDate)}`
       : 'Current';
+    renderCommissionControl('corporates', 'corpStatTiles');
   }
 
   function applyCorpFilters(offerings) {
@@ -2002,7 +3386,7 @@
     }
 
     const fmt = (v, d = 3) => v == null ? '<span class="no-restrict">&mdash;</span>' : v.toFixed(d);
-    const fmtDate = v => v ? formatShortDate(v) : '<span class="no-restrict">&mdash;</span>';
+    const fmtDate = v => v ? formatNumericDate(v) : '<span class="no-restrict">&mdash;</span>';
     const tierClass = t => ({
       'AAA/AA': 'tier-aaa',
       'A': 'tier-a',
@@ -2028,9 +3412,9 @@
           <td style="text-align:right">${fmt(o.coupon, 3)}</td>
           <td>${fmtDate(o.maturity)}</td>
           <td>${fmtDate(o.nextCallDate)}</td>
-          <td style="text-align:right" class="rate-cell">${fmt(o.ytm, 3)}</td>
-          <td style="text-align:right" class="rate-cell">${fmt(o.ytnc, 3)}</td>
-          <td style="text-align:right">${fmt(o.askPrice, 3)}</td>
+          <td style="text-align:right" class="rate-cell">${commissionCorporateYieldHtml(o, 'ytm', 3)}</td>
+          <td style="text-align:right" class="rate-cell">${commissionCorporateYieldHtml(o, 'ytnc', 3)}</td>
+          <td style="text-align:right">${commissionPriceHtml('corporates', o, o.askPrice, 3)}</td>
           <td style="text-align:right" class="qnty-cell">${fmt(o.availableSize, 0)}</td>
           <td class="cusip-cell">${escapeHtml(o.cusip || '')}</td>
         </tr>`;
@@ -2126,25 +3510,36 @@
     if (filtered.length === 0) return showToast('No offerings match filters', true);
 
     const header = ['CreditTier','Moodys','SP','Issuer','Ticker','Sector','PaymentRank',
-                    'Coupon','Maturity','NextCallDate','YTM','YTNC','AskPrice','AvailableSize',
-                    'AmtOut','Series','CUSIP','AskSpread','Benchmark','FloaterSpread'];
-    const rows = filtered.map(o => [
+                    'Coupon','Maturity','NextCallDate','YTM','MarkedYTM','YTNC','MarkedYTNC',
+                    'AskPrice','SalesCommissionMethod','SalesCommissionValue','PriceMarkup','ClientPrice',
+                    'AvailableSize','AmtOut','Series','CUSIP','AskSpread','MarkedSpread','Benchmark','FloaterSpread'];
+    const rows = filtered.map(o => {
+      const marked = markedCorporateValues(o);
+      return [
       o.creditTier, o.moodysRating || '', o.spRating || '',
       o.issuerName, o.ticker || '', o.sector || '', o.paymentRank || '',
       o.coupon != null ? o.coupon.toFixed(3) : '',
       o.maturity || '',
       o.nextCallDate || '',
       o.ytm != null ? o.ytm.toFixed(3) : '',
+      marked && marked.markedYtm != null ? marked.markedYtm.toFixed(3) : '',
       o.ytnc != null ? o.ytnc.toFixed(3) : '',
+      marked && marked.markedYtnc != null ? marked.markedYtnc.toFixed(3) : '',
       o.askPrice != null ? o.askPrice.toFixed(3) : '',
+      marked ? marked.method : '',
+      marked ? marked.value.toString() : '',
+      marked ? marked.priceMarkup.toFixed(3) : '',
+      marked ? marked.clientPrice.toFixed(3) : '',
       o.availableSize != null ? o.availableSize.toFixed(0) : '',
       o.amtOutRaw || '',
       o.series || '',
       o.cusip,
       o.askSpread != null ? o.askSpread.toString() : '',
+      marked && marked.markedSpread != null ? marked.markedSpread.toFixed(1) : '',
       o.benchmark || '',
       o.floaterSpread != null ? o.floaterSpread.toString() : ''
-    ]);
+      ];
+    });
     const csv = [header, ...rows]
       .map(r => r.map(cell => {
         const s = String(cell ?? '');
@@ -2231,12 +3626,17 @@
     loadArchive();
     setupUpload();
     setupGlobalSearch();
-    setupDashboardBuilder();
+    setupCdCostCalculator();
+    setupEconomicMarketTool();
+    setupNavSearch();
+    setupMarketNav();
     setupCdRecap();
     setupOfferingsFilters();
     setupMuniFilters();
     setupAgencyFilters();
     setupCorpFilters();
+    setupBankSearch();
+    setupCommissionControls();
     setupSidebar();
 
     // Respect a hash on initial load (e.g. bookmarked /#archive)

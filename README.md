@@ -28,7 +28,7 @@ From the project folder, run once:
 npm install
 ```
 
-This installs `pdf-parse` (used to extract CD offerings from the daily PDF). Everything else is Node built-ins.
+This installs `pdf-parse` for PDF text extraction and `xlsx` for trader spreadsheets.
 
 ### 3. Launch
 
@@ -133,12 +133,13 @@ No database. Everything lives in plain folders:
 ```
 <DATA_DIR>/
 ├── current/              ← today's package (uploaded files + generated JSON + _meta.json)
-│   ├── FBBS_Dashboard_....html
+│   ├── FBBS_Sales_Dashboard_....html
 │   ├── 20260423.pdf
 │   ├── FBBS_Brokered_CD_Rate_Sheet_....pdf
 │   ├── 20260423_CD_Offers.pdf
 │   ├── _offerings.json
 │   ├── _muni_offerings.json
+│   ├── _economic_update.json
 │   ├── _agencies.json
 │   ├── _corporates.json
 │   └── _meta.json
@@ -176,6 +177,7 @@ Handy if the team ever wants to script publishing or pull data elsewhere.
 | `GET` | `/api/health` | Liveness probe — returns `{status, now}` |
 | `GET` | `/api/current` | JSON describing the current published package |
 | `GET` | `/api/archive` | JSON array of all archived days |
+| `GET` | `/api/economic-update` | Structured Economic Update market data from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/offerings` | Structured CD offerings from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/muni-offerings` | Structured Muni offerings from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/agencies` | Structured Agency offerings (bullets + callables unified) from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
@@ -217,6 +219,16 @@ Each offering record has this shape (matches the plan's `Offering` model; easy t
 ```
 
 Archived offerings are available at `/api/offerings?date=YYYY-MM-DD` — a building block for future historical-comparison views.
+
+### Backfill CD history
+
+The Weekly CD Recap reads one JSON snapshot per day from `data/cd-history/`. To rebuild that history from the legacy `Weekly CD Worksheet.xlsx`, run:
+
+```bash
+npm run import:cd-history -- "/path/to/Weekly CD Worksheet.xlsx"
+```
+
+The importer reads the `2024 Data`, `2025 Data`, and `Data` tabs, skips chart/footer rows, preserves existing snapshots unless `--overwrite` is supplied, and can preview the import with `--dry-run`.
 
 ---
 
@@ -318,10 +330,10 @@ Archived agencies are available at `/api/agencies?date=YYYY-MM-DD`.
 The **Admin** page shows a reverse-chronological list of every publish:
 
 - Timestamp, package date, publisher name
-- Which files were included (dashboard, econ, cd, cdoffers)
-- Offering count extracted
+- Which files were included across dashboard, econ, CDs, munis, agencies, and corporates
+- Parsed counts extracted for each supported data set
 - Any validation warnings from that publish (e.g. "files appear to be from different dates")
-- Parser warnings are also preserved in the generated JSON files (`_offerings.json`, `_muni_offerings.json`, `_agencies.json`, `_corporates.json`) so future reviews can see whether extraction skipped or questioned any rows
+- Parser warnings are also preserved in the generated JSON files (`_economic_update.json`, `_offerings.json`, `_muni_offerings.json`, `_agencies.json`, `_corporates.json`) so future reviews can see whether extraction skipped or questioned any rows
 
 The log is stored as an append-only JSON-lines file at `data/audit.log` — one line per publish, each line a complete JSON record. It can be tailed, grepped, shipped to a SIEM, or rotated however IT prefers. Delete the file to clear the log; no restart required.
 
@@ -329,7 +341,7 @@ The log is stored as an append-only JSON-lines file at `data/audit.log` — one 
 
 ## Date-mismatch validation
 
-On every upload, the server sniffs the date from each filename and cross-checks against the internal "as of" date parsed from the CD Offers PDF. If anything doesn't line up, the publish still succeeds (a same-day correction is a valid workflow) but the response includes a `dateWarnings` array, which is:
+On every upload, the server sniffs the date from each filename and cross-checks against internal dates parsed from supported PDFs, including CD Offers and Muni Offerings. If anything doesn't line up, the publish still succeeds (a same-day correction is a valid workflow) but the response includes a `dateWarnings` array, which is:
 
 1. Shown as an amber toast immediately after publish
 2. Recorded in the audit log, visible on the Admin page
