@@ -6,6 +6,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 
 const ACCOUNT_STATUS_DATABASE_FILENAME = 'bank-account-statuses.sqlite';
+const ACCOUNT_STATUS_WORKBOOK_FILENAMES = ['current-bank-account-statuses.xlsb'];
 const ACCOUNT_STATUSES = new Set(['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant']);
 const DEFAULT_ACCOUNT_STATUS = 'Open';
 
@@ -61,6 +62,10 @@ function ensureAccountStatusDatabase(outputDir) {
     );
     CREATE INDEX IF NOT EXISTS idx_bank_account_status_cert ON bank_account_statuses(cert_number);
     CREATE INDEX IF NOT EXISTS idx_bank_account_status_status ON bank_account_statuses(status);
+    CREATE TABLE IF NOT EXISTS metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
   return dbPath;
 }
@@ -167,6 +172,48 @@ function getBankAccountStatuses(outputDir, bankIds = []) {
     ${statusSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)};
   `);
   return new Map(rows.map(row => [String(row.bankId), mapStatusRow(row, true)]));
+}
+
+function writeAccountStatusMetadata(outputDir, metadata) {
+  const dbPath = ensureAccountStatusDatabase(outputDir);
+  runSqlite(dbPath, `
+    INSERT INTO metadata (key, value)
+    VALUES ('lastImport', ${sqlString(JSON.stringify(metadata || {}))})
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+  `);
+}
+
+function getBankAccountStatusImportStatus(outputDir) {
+  const dbPath = ensureAccountStatusDatabase(outputDir);
+  const countRows = querySqliteJson(dbPath, 'SELECT COUNT(*) AS statusCount FROM bank_account_statuses;');
+  const statusCount = countRows.length ? Number(countRows[0].statusCount || 0) : 0;
+  const metadataRows = querySqliteJson(dbPath, `SELECT value FROM metadata WHERE key = 'lastImport' LIMIT 1;`);
+  let metadata = {};
+  if (metadataRows.length && metadataRows[0].value) {
+    try {
+      metadata = JSON.parse(metadataRows[0].value);
+    } catch (_) {
+      metadata = {};
+    }
+  }
+  if (!metadata.importedAt) {
+    for (const filename of ACCOUNT_STATUS_WORKBOOK_FILENAMES) {
+      const workbookPath = path.join(outputDir, filename);
+      if (!fs.existsSync(workbookPath)) continue;
+      const stat = fs.statSync(workbookPath);
+      metadata = {
+        ...metadata,
+        sourceFile: metadata.sourceFile || filename,
+        importedAt: stat.mtime.toISOString()
+      };
+      break;
+    }
+  }
+  return {
+    available: statusCount > 0,
+    statusCount,
+    metadata
+  };
 }
 
 function upsertBankAccountStatus(outputDir, bankSummary, input = {}) {
@@ -378,18 +425,21 @@ function importBankAccountStatusWorkbook(outputDir, workbookInput, bankSummaries
     stats.importedCount += 1;
   }
   upsertBankAccountStatusRows(outputDir, matchedRows);
+  writeAccountStatusMetadata(outputDir, stats);
 
   return stats;
 }
 
 module.exports = {
   ACCOUNT_STATUS_DATABASE_FILENAME,
+  ACCOUNT_STATUS_WORKBOOK_FILENAMES,
   ACCOUNT_STATUSES,
   DEFAULT_ACCOUNT_STATUS,
   accountStatusDatabasePathForDir,
   defaultAccountStatus,
   ensureAccountStatusDatabase,
   getBankAccountStatus,
+  getBankAccountStatusImportStatus,
   getBankAccountStatuses,
   importBankAccountStatusWorkbook,
   normalizeCert,

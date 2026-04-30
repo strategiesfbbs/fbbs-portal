@@ -41,6 +41,7 @@ const {
 const {
   addBankNote,
   getBankCoverage,
+  getSavedBankCoverageMap,
   listSavedBanks,
   removeBankNote,
   removeSavedBank,
@@ -48,6 +49,7 @@ const {
 } = require('./bank-coverage-store');
 const {
   defaultAccountStatus,
+  getBankAccountStatusImportStatus,
   getBankAccountStatuses,
   importBankAccountStatusWorkbook,
   upsertBankAccountStatus
@@ -787,10 +789,12 @@ function searchBanks(query, limit = 12) {
   try {
     const data = searchBankDatabase(BANK_REPORTS_DIR, query, limit);
     if (!data || !Array.isArray(data.results)) return data;
-    const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, data.results.map(row => row.id));
+    const bankIds = data.results.map(row => row.id);
+    const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, bankIds);
+    const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, bankIds);
     return {
       ...data,
-      results: data.results.map(summary => enrichBankSummary(summary, statuses))
+      results: data.results.map(summary => enrichBankSummary(summary, statuses, coverageMap))
     };
   } catch (err) {
     log('warn', 'Bank search failed:', err.message);
@@ -803,11 +807,12 @@ function getBankById(id) {
     const data = getBankFromDatabase(BANK_REPORTS_DIR, id);
     if (!data || !data.bank || !data.bank.summary) return data;
     const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, [data.bank.id]);
+    const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, [data.bank.id]);
     return {
       ...data,
       bank: {
         ...data.bank,
-        summary: enrichBankSummary(data.bank.summary, statuses)
+        summary: enrichBankSummary(data.bank.summary, statuses, coverageMap)
       }
     };
   } catch (err) {
@@ -816,11 +821,12 @@ function getBankById(id) {
   }
 }
 
-function effectiveAccountStatus(summary, statuses) {
+function effectiveAccountStatus(summary, statuses, coverageMap) {
   if (!summary || !summary.id) return defaultAccountStatus(summary);
   const stored = statuses && statuses.get(String(summary.id));
   let status = stored || defaultAccountStatus(summary);
-  const coverage = getBankCoverage(BANK_REPORTS_DIR, summary.id).saved;
+  const resolvedCoverageMap = coverageMap || getSavedBankCoverageMap(BANK_REPORTS_DIR, [summary.id]);
+  const coverage = resolvedCoverageMap.get(String(summary.id));
   if (coverage && coverage.status) {
     status = {
       ...status,
@@ -835,20 +841,24 @@ function effectiveAccountStatus(summary, statuses) {
   return status;
 }
 
-function enrichBankSummary(summary, statuses) {
+function enrichBankSummary(summary, statuses, coverageMap) {
   if (!summary) return summary;
   return {
     ...summary,
-    accountStatus: effectiveAccountStatus(summary, statuses)
+    accountStatus: effectiveAccountStatus(summary, statuses, coverageMap)
   };
 }
 
 function getBankDataStatus() {
-  return getBankDatabaseStatus(BANK_REPORTS_DIR);
+  const bankStatus = getBankDatabaseStatus(BANK_REPORTS_DIR);
+  return {
+    ...bankStatus,
+    accountStatuses: getBankAccountStatusImportStatus(BANK_REPORTS_DIR)
+  };
 }
 
 function getBankSummaryForCoverage(bankId) {
-  const data = getBankById(bankId);
+  const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId);
   if (!data || !data.bank || !data.bank.summary) return null;
   return data.bank.summary;
 }
@@ -1635,9 +1645,10 @@ const server = http.createServer(async (req, res) => {
       const coverage = getBankCoverage(BANK_REPORTS_DIR, bankId);
       const summary = getBankSummaryForCoverage(bankId);
       const statuses = summary ? getBankAccountStatuses(BANK_REPORTS_DIR, [bankId]) : new Map();
+      const coverageMap = coverage.saved ? new Map([[String(bankId), coverage.saved]]) : new Map();
       return sendJSON(res, 200, {
         ...coverage,
-        accountStatus: summary ? effectiveAccountStatus(summary, statuses) : null
+        accountStatus: summary ? effectiveAccountStatus(summary, statuses, coverageMap) : null
       });
     }
 

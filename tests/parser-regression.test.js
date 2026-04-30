@@ -30,6 +30,7 @@ const {
 const {
   addBankNote,
   getBankCoverage,
+  getSavedBankCoverageMap,
   listSavedBanks,
   removeBankNote,
   removeSavedBank,
@@ -38,6 +39,7 @@ const {
 const {
   defaultAccountStatus,
   getBankAccountStatus,
+  getBankAccountStatusImportStatus,
   importBankAccountStatusWorkbook,
   upsertBankAccountStatus
 } = require('../server/bank-account-status-store');
@@ -312,6 +314,9 @@ function assertBankCoverageStore() {
     const rows = listSavedBanks(tmp);
     assert.strictEqual(rows.length, 1);
     assert.strictEqual(rows[0].displayName, 'Sample Bank, Springfield, IL');
+    const savedMap = getSavedBankCoverageMap(tmp, ['bank-1', 'missing-bank']);
+    assert.strictEqual(savedMap.size, 1);
+    assert.strictEqual(savedMap.get('bank-1').status, 'Prospect');
 
     const note = addBankNote(tmp, 'bank-1', 'Discussed CD ladder and muni needs.');
     assert(note.id);
@@ -379,6 +384,10 @@ function assertBankAccountStatusStore() {
     assert.strictEqual(getBankAccountStatus(tmp, 'new-bank').status, 'Client');
     assert.strictEqual(getBankAccountStatus(tmp, 'old-bank'), null);
     assert.strictEqual(getBankAccountStatus(tmp, 'prospect-bank').status, 'Prospect');
+    const importStatus = getBankAccountStatusImportStatus(tmp);
+    assert.strictEqual(importStatus.available, true);
+    assert.strictEqual(importStatus.statusCount, 2);
+    assert.strictEqual(importStatus.metadata.sourceFile, 'Account + FDIC Cert.xlsx');
 
     const manual = upsertBankAccountStatus(tmp, summaries[2], { status: 'Not Real' });
     assert.strictEqual(manual.status, 'Prospect');

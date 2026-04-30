@@ -1675,6 +1675,7 @@
     const sub = document.getElementById('bankTearSheetSub');
     const count = document.getElementById('bankDataCount');
     const status = document.getElementById('bankImportStatus');
+    const accountStatus = document.getElementById('bankStatusImportStatus');
     try {
       const res = await fetch('/api/banks/status', { cache: 'no-store' });
       bankDataStatus = await readBankJson(res);
@@ -1691,6 +1692,17 @@
       if (sub) sub.textContent = bankDataStatus.error || 'Upload the SNL call report workbook to enable bank tear sheet search.';
       if (count) count.textContent = '0';
       if (status) status.textContent = bankDataStatus.error || 'No bank workbook has been imported yet.';
+    }
+
+    const statusMeta = bankDataStatus && bankDataStatus.accountStatuses ? bankDataStatus.accountStatuses : {};
+    const importMeta = statusMeta.metadata || {};
+    if (accountStatus && statusMeta.available) {
+      const source = importMeta.sourceFile || 'Account status workbook';
+      const countText = `${formatNumber(statusMeta.statusCount || importMeta.importedCount || 0)} statuses`;
+      const unmatchedText = importMeta.unmatchedCount !== undefined ? ` · ${formatNumber(importMeta.unmatchedCount)} unmatched` : '';
+      accountStatus.textContent = `${source} imported ${formatImportedDate(importMeta.importedAt)} · ${countText}${unmatchedText}`;
+    } else if (accountStatus) {
+      accountStatus.textContent = 'Account statuses default to Open until imported or edited.';
     }
   }
 
@@ -2096,6 +2108,7 @@
           status.textContent = `Imported ${formatNumber(meta.importedCount || 0)} statuses · ${formatNumber(meta.unmatchedCount || 0)} unmatched · ${meta.sheetName || 'workbook'}`;
         }
         return Promise.all([
+          loadBankStatus(),
           loadSavedBanks(),
           selectedBankId() ? loadBank(selectedBankId(), { collapseResults: false }) : Promise.resolve()
         ]);
@@ -2264,7 +2277,7 @@
     const tearSheetStatus = document.getElementById('bankTearSheetStatus')?.value || currentBankAccountStatus().status || 'Open';
     return {
       bankId: isCoverageWorkspace ? activeCoverageBankId : selectedBankId(),
-      status: isCoverageWorkspace ? (document.getElementById('bankCoverageStatus')?.value || 'Open') : (tearSheetSaved.status || tearSheetStatus),
+      status: isCoverageWorkspace ? (document.getElementById('bankCoverageStatus')?.value || 'Open') : tearSheetStatus,
       priority: isCoverageWorkspace ? (document.getElementById('bankCoveragePriority')?.value || 'Medium') : (tearSheetSaved.priority || 'Medium'),
       owner: isCoverageWorkspace ? (document.getElementById('bankCoverageOwner')?.value || '') : (tearSheetSaved.owner || ''),
       nextActionDate: isCoverageWorkspace ? (document.getElementById('bankCoverageNextAction')?.value || '') : (tearSheetSaved.nextActionDate || '')
@@ -2342,6 +2355,9 @@
       });
       const data = await readBankJson(res);
       if (data.accountStatus) selectedBankAccountStatus = data.accountStatus;
+      if (selectedBank && selectedBank.bank && selectedBank.bank.summary) {
+        selectedBank.bank.summary.accountStatus = selectedBankAccountStatus;
+      }
       if (activeBankWorkspaceView === 'coverage') {
         selectedBankCoverage = data.saved;
         activeCoverageBankId = data.saved.bankId;

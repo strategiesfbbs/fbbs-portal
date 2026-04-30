@@ -231,6 +231,16 @@ function getBankCoverage(outputDir, bankId) {
   };
 }
 
+function getSavedBankCoverageMap(outputDir, bankIds = []) {
+  const ids = [...new Set(bankIds.map(id => String(id || '').trim()).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    ${coverageSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)};
+  `);
+  return new Map(rows.map(row => [String(row.bankId), mapCoverageRow(row)]));
+}
+
 function upsertSavedBank(outputDir, bankSummary, input = {}) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const summary = normalizeBankSummary(bankSummary);
@@ -322,6 +332,7 @@ module.exports = {
   coverageDatabasePathForDir,
   ensureCoverageDatabase,
   getBankCoverage,
+  getSavedBankCoverageMap,
   listSavedBanks,
   removeBankNote,
   removeSavedBank,
