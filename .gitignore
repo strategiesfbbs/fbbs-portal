@@ -18,3 +18,10 @@ npm-debug.log*
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Per-agent IDE / harness state (Claude Code worktrees, settings.local.json,
+# launch.json, etc., and any duplicate package-lock files macOS creates when
+# two processes write to the same path). Both agents leave artifacts here
+# that aren't meant to ship.
+.claude/
+package-lock[ ]*.json

@@ -1111,7 +1111,63 @@
   }
 
   function normalizeSearchText(parts) {
-    return parts.filter(v => v != null && v !== '').join(' ').toLowerCase();
+    const values = [];
+    const add = value => {
+      if (value == null || value === '') return;
+      if (Array.isArray(value)) {
+        value.forEach(add);
+        return;
+      }
+      if (typeof value === 'object') {
+        Object.values(value).forEach(add);
+        return;
+      }
+      const raw = String(value).trim().toLowerCase();
+      if (!raw) return;
+      const spaced = raw.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+      values.push(raw);
+      if (spaced && spaced !== raw) values.push(spaced);
+      if (spaced && spaced.includes(' ')) values.push(spaced.replace(/\s+/g, ''));
+    };
+    parts.forEach(add);
+    return values.join(' ');
+  }
+
+  const STATE_SEARCH_ALIASES = {
+    AL: 'alabama', AK: 'alaska', AZ: 'arizona', AR: 'arkansas', CA: 'california',
+    CO: 'colorado', CT: 'connecticut', DE: 'delaware', DC: 'district of columbia washington dc',
+    FL: 'florida', GA: 'georgia', HI: 'hawaii', ID: 'idaho', IL: 'illinois',
+    IN: 'indiana', IA: 'iowa', KS: 'kansas', KY: 'kentucky', LA: 'louisiana',
+    ME: 'maine', MD: 'maryland', MA: 'massachusetts', MI: 'michigan', MN: 'minnesota',
+    MS: 'mississippi', MO: 'missouri', MT: 'montana', NE: 'nebraska', NV: 'nevada',
+    NH: 'new hampshire', NJ: 'new jersey', NM: 'new mexico', NY: 'new york',
+    NC: 'north carolina', ND: 'north dakota', OH: 'ohio', OK: 'oklahoma',
+    OR: 'oregon', PA: 'pennsylvania', RI: 'rhode island', SC: 'south carolina',
+    SD: 'south dakota', TN: 'tennessee', TX: 'texas', UT: 'utah', VT: 'vermont',
+    VA: 'virginia', WA: 'washington', WV: 'west virginia', WI: 'wisconsin',
+    WY: 'wyoming', PR: 'puerto rico', GU: 'guam', VI: 'virgin islands'
+  };
+
+  function stateSearchAliases(value) {
+    const code = String(value || '').trim().toUpperCase();
+    if (!code) return [];
+    const name = STATE_SEARCH_ALIASES[code];
+    return name ? [code, name] : [code];
+  }
+
+  function creditSearchAliases(value) {
+    const tier = String(value || '').trim();
+    if (!tier) return [];
+    return [tier, `${tier} rated`, `${tier}-rated`, `${tier} rating`];
+  }
+
+  function searchTermsFromQuery(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
   }
 
   function buildSearchRows() {
@@ -1122,7 +1178,11 @@
       subtitle: `${formatPercentTile(o.rate, 2)} · ${o.term} · ${formatShortDate(o.maturity)}`,
       meta: o.cusip,
       page: 'explorer',
-      searchText: normalizeSearchText([o.name, o.cusip, o.issuerState, o.term, o.couponFrequency])
+      searchText: normalizeSearchText([
+        o,
+        stateSearchAliases(o.issuerState),
+        'cd certificate deposit brokered cd security'
+      ])
     }));
     (marketData.munis || []).forEach(o => rows.push({
       type: 'Muni',
@@ -1130,7 +1190,11 @@
       subtitle: `${o.section || 'Muni'} · ${o.issuerState || ''} · ${formatPercentTile(o.ytw, 3)}`,
       meta: o.cusip,
       page: 'muni-explorer',
-      searchText: normalizeSearchText([o.issuerName, o.cusip, o.issuerState, o.section, o.issueType, o.moodysRating, o.spRating])
+      searchText: normalizeSearchText([
+        o,
+        stateSearchAliases(o.issuerState),
+        'muni municipal bond security tax exempt taxable bq'
+      ])
     }));
     (marketData.agencies || []).forEach(o => rows.push({
       type: 'Agency',
@@ -1138,7 +1202,10 @@
       subtitle: `${o.structure || ''} · ${formatPercentTile(o.ytm, 3)} · ${formatShortDate(o.maturity)}`,
       meta: o.callType || o.benchmark || '',
       page: 'agencies',
-      searchText: normalizeSearchText([o.ticker, o.cusip, o.structure, o.callType, o.benchmark])
+      searchText: normalizeSearchText([
+        o,
+        'agency agencies government sponsored gse bond security bullet callable'
+      ])
     }));
     (marketData.corporates || []).forEach(o => rows.push({
       type: 'Corporate',
@@ -1146,9 +1213,37 @@
       subtitle: `${o.ticker || ''} · ${o.creditTier || ''} · ${formatPercentTile(o.ytm, 3)}`,
       meta: o.cusip,
       page: 'corporates',
-      searchText: normalizeSearchText([o.issuerName, o.ticker, o.cusip, o.sector, o.paymentRank, o.creditTier, o.moodysRating, o.spRating])
+      searchText: normalizeSearchText([
+        o,
+        creditSearchAliases(o.creditTier),
+        o.investmentGrade ? 'investment grade ig' : 'high yield hy',
+        'corporate corp bond security'
+      ])
     }));
     return rows;
+  }
+
+  function interleaveSearchMatches(matches, limit = 24) {
+    const typeOrder = ['CD', 'Muni', 'Agency', 'Corporate'];
+    const groups = new Map(typeOrder.map(type => [type, []]));
+    matches.forEach(row => {
+      if (!groups.has(row.type)) groups.set(row.type, []);
+      groups.get(row.type).push(row);
+    });
+
+    const ordered = [];
+    while (ordered.length < limit) {
+      let added = false;
+      for (const type of typeOrder) {
+        const next = groups.get(type).shift();
+        if (!next) continue;
+        ordered.push(next);
+        added = true;
+        if (ordered.length >= limit) break;
+      }
+      if (!added) break;
+    }
+    return ordered;
   }
 
   function renderGlobalSearch() {
@@ -1156,16 +1251,15 @@
     const results = document.getElementById('globalSearchResults');
     if (!input || !results) return;
 
-    const q = input.value.trim().toLowerCase();
-    if (!q) {
+    const terms = searchTermsFromQuery(input.value);
+    if (!terms.length) {
       results.innerHTML = '<div class="global-empty">Start typing to search CDs, munis, agencies, and corporates.</div>';
       return;
     }
 
-    const terms = q.split(/\s+/).filter(Boolean);
-    const matches = buildSearchRows()
-      .filter(row => terms.every(term => row.searchText.includes(term)))
-      .slice(0, 12);
+    const matches = interleaveSearchMatches(
+      buildSearchRows().filter(row => terms.every(term => row.searchText.includes(term)))
+    );
 
     if (!matches.length) {
       results.innerHTML = '<div class="global-empty">No matching offerings found.</div>';
