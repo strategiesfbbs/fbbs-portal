@@ -580,6 +580,13 @@ function getBankFromDatabase(outputDir, id) {
   return { metadata, bank: JSON.parse(rows[0].detail_json) };
 }
 
+function listBankSummaries(outputDir) {
+  const dbPath = databasePathForDir(outputDir);
+  if (!fs.existsSync(dbPath)) return [];
+  return querySqliteJson(dbPath, 'SELECT summary_json FROM banks;')
+    .map(row => JSON.parse(row.summary_json));
+}
+
 module.exports = {
   BANK_DATABASE_FILENAME,
   BANK_FIELDS,
@@ -587,6 +594,7 @@ module.exports = {
   getBankDatabaseStatus,
   getBankFromDatabase,
   importBankWorkbook,
+  listBankSummaries,
   parseBankWorkbook,
   searchBankDatabase,
   writeBankDatabase

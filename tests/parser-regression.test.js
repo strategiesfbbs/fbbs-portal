@@ -35,6 +35,12 @@ const {
   removeSavedBank,
   upsertSavedBank
 } = require('../server/bank-coverage-store');
+const {
+  defaultAccountStatus,
+  getBankAccountStatus,
+  importBankAccountStatusWorkbook,
+  upsertBankAccountStatus
+} = require('../server/bank-account-status-store');
 
 const ROOT = path.join(__dirname, '..');
 const CURRENT_DIR = path.join(ROOT, 'data', 'current');
@@ -322,6 +328,68 @@ function assertBankCoverageStore() {
   }
 }
 
+function assertBankAccountStatusStore() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-bank-status-'));
+  try {
+    const summaries = [
+      {
+        id: 'old-bank',
+        displayName: 'Sample Bank, Springfield, IL',
+        name: 'Sample Bank',
+        city: 'Springfield',
+        state: 'IL',
+        certNumber: '12345',
+        period: '2017Y'
+      },
+      {
+        id: 'new-bank',
+        displayName: 'Sample Bank, Springfield, IL',
+        name: 'Sample Bank',
+        city: 'Springfield',
+        state: 'IL',
+        certNumber: '12345',
+        period: '2025Q4'
+      },
+      {
+        id: 'prospect-bank',
+        displayName: 'Prospect Bank, Nashville, IL',
+        name: 'Prospect Bank',
+        city: 'Nashville',
+        state: 'IL',
+        certNumber: '98765',
+        period: '2025Q4'
+      }
+    ];
+    assert.strictEqual(defaultAccountStatus(summaries[0]).status, 'Open');
+
+    const workbookPath = path.join(tmp, 'Account + FDIC Cert.xlsx');
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['Status', 'Cert Number'],
+      ['Client', '12345'],
+      ['Prospect', '98765'],
+      ['Open', '00000']
+    ]), 'Sheet1');
+    XLSX.writeFile(workbook, workbookPath);
+
+    const result = importBankAccountStatusWorkbook(tmp, workbookPath, summaries, {
+      sourceFile: 'Account + FDIC Cert.xlsx'
+    });
+    assert.strictEqual(result.importedCount, 2);
+    assert.strictEqual(result.unmatchedCount, 1);
+    assert.strictEqual(getBankAccountStatus(tmp, 'new-bank').status, 'Client');
+    assert.strictEqual(getBankAccountStatus(tmp, 'old-bank'), null);
+    assert.strictEqual(getBankAccountStatus(tmp, 'prospect-bank').status, 'Prospect');
+
+    const manual = upsertBankAccountStatus(tmp, summaries[2], { status: 'Not Real' });
+    assert.strictEqual(manual.status, 'Prospect');
+    const open = upsertBankAccountStatus(tmp, summaries[2], { status: 'Open' });
+    assert.strictEqual(open.status, 'Open');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function assertCdHistoryWeeklyDedupe() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-cd-history-'));
   const baseOfferings = [
@@ -435,6 +503,7 @@ function assertWeeklyCdWorksheetImport() {
   assertAgencyCollectionPreservesCounterpart();
   assertBankDatabaseRoundTrip();
   assertBankCoverageStore();
+  assertBankAccountStatusStore();
   assertCdHistoryWeeklyDedupe();
   assertWeeklyCdWorksheetImport();
   console.log('Parser regression tests passed.');

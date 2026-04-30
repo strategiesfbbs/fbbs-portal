@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const COVERAGE_DATABASE_FILENAME = 'bank-coverage.sqlite';
-const COVERAGE_STATUSES = new Set(['Prospect', 'Client', 'Watchlist', 'Dormant']);
+const COVERAGE_STATUSES = new Set(['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant']);
 const COVERAGE_PRIORITIES = new Set(['High', 'Medium', 'Low']);
 
 function coverageDatabasePathForDir(outputDir) {
@@ -61,7 +61,7 @@ function ensureCoverageDatabase(outputDir) {
       period TEXT,
       total_assets REAL,
       total_deposits REAL,
-      status TEXT NOT NULL DEFAULT 'Watchlist',
+      status TEXT NOT NULL DEFAULT 'Open',
       priority TEXT NOT NULL DEFAULT 'Medium',
       owner TEXT,
       next_action_date TEXT,
@@ -99,7 +99,7 @@ function cleanDate(value) {
   return cleaned && /^\d{4}-\d{2}-\d{2}$/.test(cleaned) ? cleaned : null;
 }
 
-function normalizeStatus(value, fallback = 'Watchlist') {
+function normalizeStatus(value, fallback = 'Open') {
   const cleaned = cleanText(value, 40);
   return COVERAGE_STATUSES.has(cleaned) ? cleaned : fallback;
 }
@@ -140,7 +140,7 @@ function mapCoverageRow(row) {
     period: row.period || '',
     totalAssets: row.totalAssets == null ? null : Number(row.totalAssets),
     totalDeposits: row.totalDeposits == null ? null : Number(row.totalDeposits),
-    status: row.status || 'Watchlist',
+    status: row.status || 'Open',
     priority: row.priority || 'Medium',
     owner: row.owner || '',
     nextActionDate: row.nextActionDate || '',
@@ -236,10 +236,12 @@ function upsertSavedBank(outputDir, bankSummary, input = {}) {
   const summary = normalizeBankSummary(bankSummary);
   const existing = getExistingCoverage(outputDir, summary.bankId);
   const now = new Date().toISOString();
-  const status = normalizeStatus(input.status, existing ? existing.status : 'Watchlist');
-  const priority = normalizePriority(input.priority, existing ? existing.priority : 'Medium');
-  const owner = cleanText(input.owner, 120);
-  const nextActionDate = cleanDate(input.nextActionDate);
+  const status = normalizeStatus(input.status, existing ? existing.status : 'Open');
+  const priority = input.priority !== undefined
+    ? normalizePriority(input.priority, existing ? existing.priority : 'Medium')
+    : (existing ? existing.priority : 'Medium');
+  const owner = input.owner !== undefined ? cleanText(input.owner, 120) : (existing ? existing.owner : null);
+  const nextActionDate = input.nextActionDate !== undefined ? cleanDate(input.nextActionDate) : (existing ? existing.nextActionDate : null);
   const createdAt = existing ? existing.createdAt : now;
 
   runSqlite(dbPath, `

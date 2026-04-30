@@ -35,6 +35,7 @@ const {
   getBankDatabaseStatus,
   getBankFromDatabase,
   importBankWorkbook,
+  listBankSummaries,
   searchBankDatabase
 } = require('./bank-data-importer');
 const {
@@ -45,6 +46,12 @@ const {
   removeSavedBank,
   upsertSavedBank
 } = require('./bank-coverage-store');
+const {
+  defaultAccountStatus,
+  getBankAccountStatuses,
+  importBankAccountStatusWorkbook,
+  upsertBankAccountStatus
+} = require('./bank-account-status-store');
 const {
   ensureCdHistoryDir,
   saveCdHistorySnapshot,
@@ -117,6 +124,7 @@ const AGENCIES_FILENAME = '_agencies.json';
 const CORPORATES_FILENAME = '_corporates.json';
 const META_FILENAME = '_meta.json';
 const BANK_WORKBOOK_FILENAME = 'current-bank-call-reports.xlsm';
+const BANK_STATUS_WORKBOOK_FILENAME = 'current-bank-account-statuses.xlsb';
 
 // ---------- Helpers ----------
 
@@ -781,7 +789,13 @@ function loadCurrentCorporates() {
 
 function searchBanks(query, limit = 12) {
   try {
-    return searchBankDatabase(BANK_REPORTS_DIR, query, limit);
+    const data = searchBankDatabase(BANK_REPORTS_DIR, query, limit);
+    if (!data || !Array.isArray(data.results)) return data;
+    const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, data.results.map(row => row.id));
+    return {
+      ...data,
+      results: data.results.map(summary => enrichBankSummary(summary, statuses))
+    };
   } catch (err) {
     log('warn', 'Bank search failed:', err.message);
     return null;
@@ -790,11 +804,47 @@ function searchBanks(query, limit = 12) {
 
 function getBankById(id) {
   try {
-    return getBankFromDatabase(BANK_REPORTS_DIR, id);
+    const data = getBankFromDatabase(BANK_REPORTS_DIR, id);
+    if (!data || !data.bank || !data.bank.summary) return data;
+    const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, [data.bank.id]);
+    return {
+      ...data,
+      bank: {
+        ...data.bank,
+        summary: enrichBankSummary(data.bank.summary, statuses)
+      }
+    };
   } catch (err) {
     log('warn', `Could not read bank detail ${id}:`, err.message);
     return null;
   }
+}
+
+function effectiveAccountStatus(summary, statuses) {
+  if (!summary || !summary.id) return defaultAccountStatus(summary);
+  const stored = statuses && statuses.get(String(summary.id));
+  let status = stored || defaultAccountStatus(summary);
+  const coverage = getBankCoverage(BANK_REPORTS_DIR, summary.id).saved;
+  if (coverage && coverage.status) {
+    status = {
+      ...status,
+      status: coverage.status,
+      priority: coverage.priority || '',
+      owner: coverage.owner || status.owner || '',
+      nextActionDate: coverage.nextActionDate || '',
+      source: 'coverage',
+      isCoverageSaved: true
+    };
+  }
+  return status;
+}
+
+function enrichBankSummary(summary, statuses) {
+  if (!summary) return summary;
+  return {
+    ...summary,
+    accountStatus: effectiveAccountStatus(summary, statuses)
+  };
 }
 
 function getBankDataStatus() {
@@ -817,16 +867,51 @@ async function handleSaveBankCoverage(req, res) {
     if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
 
     const saved = upsertSavedBank(BANK_REPORTS_DIR, summary, body);
+    const accountStatus = upsertBankAccountStatus(BANK_REPORTS_DIR, summary, {
+      status: saved.status,
+      source: 'coverage',
+      owner: saved.owner
+    });
     appendAuditLog({
       event: 'bank-coverage-save',
       bankId,
       status: saved.status,
       priority: saved.priority
     });
-    return sendJSON(res, 200, { saved });
+    return sendJSON(res, 200, { saved, accountStatus });
   } catch (err) {
     log('error', 'Bank coverage save failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not save bank coverage' });
+  }
+}
+
+async function handleSaveBankAccountStatus(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const bankId = String(body.bankId || '').trim();
+    if (!bankId) return sendJSON(res, 400, { error: 'Bank ID is required' });
+
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+
+    const accountStatus = upsertBankAccountStatus(BANK_REPORTS_DIR, summary, {
+      status: body.status,
+      source: 'manual'
+    });
+    const existingCoverage = getBankCoverage(BANK_REPORTS_DIR, bankId).saved;
+    let saved = existingCoverage;
+    if (existingCoverage) {
+      saved = upsertSavedBank(BANK_REPORTS_DIR, summary, { status: accountStatus.status });
+    }
+    appendAuditLog({
+      event: 'bank-account-status-save',
+      bankId,
+      status: accountStatus.status
+    });
+    return sendJSON(res, 200, { accountStatus, saved });
+  } catch (err) {
+    log('error', 'Bank account status save failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not save bank status' });
   }
 }
 
@@ -886,6 +971,42 @@ async function handleBankDataUpload(req, res) {
     } catch (_) {}
     log('error', 'Bank workbook upload failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Bank workbook import failed' });
+  }
+}
+
+async function handleBankStatusUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const file = files.find(f => /\.(xlsb|xlsm|xlsx|xls)$/i.test(f.filename));
+    if (!file) return sendJSON(res, 400, { error: 'Upload an account status workbook (.xlsb, .xlsm, .xlsx, or .xls).' });
+    if (!looksLikeExcel(file.data)) {
+      return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
+    }
+
+    const bankSummaries = listBankSummaries(BANK_REPORTS_DIR);
+    if (!bankSummaries.length) {
+      return sendJSON(res, 400, { error: 'Import bank call report data before importing account statuses.' });
+    }
+
+    const metadata = importBankAccountStatusWorkbook(BANK_REPORTS_DIR, file.data, bankSummaries, {
+      sourceFile: sanitizeFilename(file.filename)
+    });
+    const target = path.join(BANK_REPORTS_DIR, BANK_STATUS_WORKBOOK_FILENAME);
+    fs.writeFileSync(target, file.data);
+    appendAuditLog({
+      event: 'bank-account-status-import',
+      sourceFile: sanitizeFilename(file.filename),
+      importedCount: metadata.importedCount,
+      unmatchedCount: metadata.unmatchedCount
+    });
+    return sendJSON(res, 200, { success: true, metadata });
+  } catch (err) {
+    log('error', 'Bank account status upload failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Bank account status import failed' });
   }
 }
 
@@ -1385,6 +1506,27 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  // Defense-in-depth: restrict where the SPA shell can load resources from.
+  // We deliberately do NOT apply this strict CSP to user-uploaded files served
+  // from /current/ or /archive/ — those (esp. dashboard HTML) legitimately
+  // load CDN libraries like Chart.js. The dashboard iframe is sandboxed
+  // client-side instead, which puts it in an opaque origin so it cannot
+  // make same-origin fetches against this app's APIs.
+  const isUserContent =
+    pathname.startsWith('/current/') || pathname.startsWith('/archive/');
+  if (!isUserContent) {
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; " +
+      "img-src 'self' data:; " +
+      "style-src 'self' 'unsafe-inline'; " +
+      "script-src 'self'; " +
+      "frame-src 'self'; " +
+      "object-src 'none'; " +
+      "base-uri 'self'; " +
+      "form-action 'self'"
+    );
+  }
 
   if (!pathname) {
     return sendText(res, 400, 'Bad request');
@@ -1494,7 +1636,13 @@ const server = http.createServer(async (req, res) => {
     if (bankCoverageMatch && req.method === 'GET') {
       const bankId = safeDecodeURIComponent(bankCoverageMatch[1]);
       if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
-      return sendJSON(res, 200, getBankCoverage(BANK_REPORTS_DIR, bankId));
+      const coverage = getBankCoverage(BANK_REPORTS_DIR, bankId);
+      const summary = getBankSummaryForCoverage(bankId);
+      const statuses = summary ? getBankAccountStatuses(BANK_REPORTS_DIR, [bankId]) : new Map();
+      return sendJSON(res, 200, {
+        ...coverage,
+        accountStatus: summary ? effectiveAccountStatus(summary, statuses) : null
+      });
     }
 
     if (bankCoverageMatch && req.method === 'DELETE') {
@@ -1512,6 +1660,10 @@ const server = http.createServer(async (req, res) => {
       removeBankNote(BANK_REPORTS_DIR, noteId);
       appendAuditLog({ event: 'bank-note-remove', noteId });
       return sendJSON(res, 200, { success: true });
+    }
+
+    if (pathname === '/api/bank-account-status' && req.method === 'POST') {
+      return await handleSaveBankAccountStatus(req, res);
     }
 
     if (pathname === '/api/banks/status' && req.method === 'GET') {
@@ -1534,6 +1686,10 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/banks/upload' && req.method === 'POST') {
       return await handleBankDataUpload(req, res);
+    }
+
+    if (pathname === '/api/bank-account-statuses/upload' && req.method === 'POST') {
+      return await handleBankStatusUpload(req, res);
     }
 
     if (pathname === '/api/audit-log' && req.method === 'GET') {

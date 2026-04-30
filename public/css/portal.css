@@ -3627,12 +3627,23 @@ body {
 }
 
 .bank-profile-actions {
+  align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .bank-action-btn {
   white-space: nowrap;
+}
+
+.bank-action-select {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  min-height: 36px;
+  padding: 7px 10px;
 }
 
 .bank-period-badge {

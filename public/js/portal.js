@@ -27,6 +27,7 @@
   let bankDataStatus = null;
   let selectedBank = null;
   let savedBanks = [];
+  let selectedBankAccountStatus = null;
   let selectedTearSheetCoverage = null;
   let selectedBankCoverage = null;
   let selectedBankNotes = [];
@@ -102,7 +103,7 @@
   const COMMISSION_STORAGE_KEY = 'fbbs_commission_settings_v1';
   const BANK_RECENT_STORAGE_KEY = 'fbbs_recent_banks_v1';
   const MAX_RECENT_BANKS = 6;
-  const BANK_COVERAGE_STATUSES = ['Prospect', 'Client', 'Watchlist', 'Dormant'];
+  const BANK_COVERAGE_STATUSES = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
   const BANK_COVERAGE_PRIORITIES = ['High', 'Medium', 'Low'];
   const COMMISSION_PRODUCT_LABELS = {
     agencies: 'Agencies',
@@ -1200,7 +1201,12 @@
 
     if (file) {
       const src = '/current/' + encodeURIComponent(file);
-      frame.innerHTML = `<iframe src="${src}" title="${meta.label}"></iframe>`;
+      // The Sales Dashboard is user-uploaded HTML. Sandbox it with
+      // allow-scripts only (no allow-same-origin) so its JavaScript can still
+      // run (Chart.js, inline handlers) but the iframe gets an opaque origin
+      // and cannot read parent state or call our same-origin APIs.
+      const sandboxAttr = slot === 'dashboard' ? ' sandbox="allow-scripts"' : '';
+      frame.innerHTML = `<iframe src="${src}" title="${meta.label}"${sandboxAttr}></iframe>`;
       sub.textContent = `${file} · Published ${formatTime(currentPackage.publishedAt)}`;
       if (slot === 'dashboard') {
         btn.onclick = () => window.open(src, '_blank', 'noopener');
@@ -1701,6 +1707,7 @@
     const input = document.getElementById('bankSearchInput');
     const btn = document.getElementById('bankSearchBtn');
     const upload = document.getElementById('bankWorkbookInput');
+    const statusUpload = document.getElementById('bankStatusWorkbookInput');
     const clearRecent = document.getElementById('clearRecentBanksBtn');
     const savedFilter = document.getElementById('bankSavedFilterInput');
     setupBankWorkspaceTabs();
@@ -1723,6 +1730,10 @@
     if (upload) upload.addEventListener('change', e => {
       const file = e.target.files && e.target.files[0];
       if (file) uploadBankWorkbook(file);
+    });
+    if (statusUpload) statusUpload.addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      if (file) uploadBankStatusWorkbook(file);
     });
     if (clearRecent) clearRecent.addEventListener('click', clearRecentBanks);
     if (savedFilter) savedFilter.addEventListener('input', renderSavedBanks);
@@ -1802,7 +1813,7 @@
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
         <div class="bank-result-meta">
           <em>${escapeHtml(row.period || '')}</em>
-          ${renderBankCoverageChip(row.id)}
+          ${renderBankStatusChip(row)}
         </div>
       </button>
     `).join('');
@@ -1843,7 +1854,8 @@
       state: s.state || '',
       certNumber: s.certNumber || '',
       primaryRegulator: s.primaryRegulator || '',
-      period: s.period || ''
+      period: s.period || '',
+      accountStatus: s.accountStatus || currentBankAccountStatus()
     };
     const next = [row, ...loadRecentBanks().filter(existing => String(existing.id) !== row.id)];
     saveRecentBanks(next);
@@ -1870,7 +1882,7 @@
         <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
         <em>${escapeHtml(row.period || '')}</em>
-        ${renderBankCoverageChip(row.id)}
+        ${renderBankStatusChip(row)}
       </button>
     `).join('');
     list.querySelectorAll('[data-bank-id]').forEach(btn => {
@@ -1921,7 +1933,7 @@
         <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
         <div class="bank-saved-meta">
-          <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Watchlist')}</em>
+          <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
           <em class="bank-pill ${coverageClass(row.priority)}">${escapeHtml(row.priority || 'Medium')}</em>
           <small>${escapeHtml(row.nextActionDate ? formatShortDate(row.nextActionDate) : 'No date')}</small>
         </div>
@@ -1969,23 +1981,49 @@
     return `bank-pill-${String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
   }
 
-  function renderBankCoverageChip(bankId) {
-    const saved = getSavedBankById(bankId);
-    if (!saved || !saved.status) return '';
-    return `<em class="bank-pill ${coverageClass(saved.status)}">${escapeHtml(saved.status)}</em>`;
+  function defaultBankAccountStatus() {
+    return { status: 'Open', source: 'default', isStored: false };
+  }
+
+  function currentBankAccountStatus() {
+    const saved = selectedTearSheetCoverage && selectedTearSheetCoverage.status ? selectedTearSheetCoverage : null;
+    const status = saved || selectedBankAccountStatus || (selectedBank && selectedBank.bank && selectedBank.bank.summary && selectedBank.bank.summary.accountStatus) || defaultBankAccountStatus();
+    return {
+      ...defaultBankAccountStatus(),
+      ...status,
+      status: status.status || 'Open'
+    };
+  }
+
+  function statusForBankRow(row) {
+    if (!row) return defaultBankAccountStatus();
+    const saved = getSavedBankById(row.id || row.bankId);
+    const status = saved || row.accountStatus || defaultBankAccountStatus();
+    return {
+      ...defaultBankAccountStatus(),
+      ...status,
+      status: status.status || 'Open'
+    };
+  }
+
+  function renderBankStatusChip(row) {
+    const status = statusForBankRow(row);
+    return `<em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>`;
   }
 
   function renderTearSheetCoverageSignal() {
     const saved = selectedTearSheetCoverage;
-    if (!saved || !saved.bankId) return '';
+    const selectedStatus = document.getElementById('bankTearSheetStatus')?.value;
+    const status = { ...currentBankAccountStatus(), status: selectedStatus || currentBankAccountStatus().status || 'Open' };
     const sub = [
-      saved.priority ? `${saved.priority} priority` : '',
-      saved.owner ? `Owner: ${saved.owner}` : '',
-      saved.nextActionDate ? `Next: ${formatShortDate(saved.nextActionDate)}` : ''
+      saved && saved.priority ? `${saved.priority} priority` : '',
+      status.owner ? `Owner: ${status.owner}` : '',
+      saved && saved.nextActionDate ? `Next: ${formatShortDate(saved.nextActionDate)}` : '',
+      status.services ? `Services: ${status.services}` : ''
     ].filter(Boolean).join(' · ');
     return `
       <div class="bank-coverage-signal-inner">
-        <em class="bank-pill ${coverageClass(saved.status)}">${escapeHtml(saved.status || 'Saved')}</em>
+        <em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>
         ${sub ? `<span>${escapeHtml(sub)}</span>` : ''}
       </div>
     `;
@@ -2011,6 +2049,7 @@
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(id)}`, { cache: 'no-store' });
       selectedBank = await readBankJson(res);
+      selectedBankAccountStatus = (selectedBank.bank && selectedBank.bank.summary && selectedBank.bank.summary.accountStatus) || defaultBankAccountStatus();
       selectedTearSheetCoverage = getSavedBankById(selectedBank.bank.id);
       selectedBankNotes = [];
       renderBankProfile();
@@ -2032,6 +2071,34 @@
         const data = await readBankJson(res);
         showToast(`Imported ${formatNumber(data.metadata.bankCount)} banks · latest ${data.metadata.latestPeriod || '—'}`);
         return loadBankStatus();
+      })
+      .catch(err => {
+        showToast(err.message, true);
+        if (status) status.textContent = err.message;
+      })
+      .finally(() => {
+        if (input) input.value = '';
+      });
+  }
+
+  function uploadBankStatusWorkbook(file) {
+    const status = document.getElementById('bankStatusImportStatus');
+    const input = document.getElementById('bankStatusWorkbookInput');
+    const formData = new FormData();
+    formData.append('bankStatusWorkbook', file, file.name);
+    if (status) status.textContent = `Importing statuses from ${file.name}...`;
+    fetch('/api/bank-account-statuses/upload', { method: 'POST', body: formData })
+      .then(async res => {
+        const data = await readBankJson(res);
+        const meta = data.metadata || {};
+        showToast(`Imported ${formatNumber(meta.importedCount || 0)} bank statuses`);
+        if (status) {
+          status.textContent = `Imported ${formatNumber(meta.importedCount || 0)} statuses · ${formatNumber(meta.unmatchedCount || 0)} unmatched · ${meta.sheetName || 'workbook'}`;
+        }
+        return Promise.all([
+          loadSavedBanks(),
+          selectedBankId() ? loadBank(selectedBankId(), { collapseResults: false }) : Promise.resolve()
+        ]);
       })
       .catch(err => {
         showToast(err.message, true);
@@ -2078,6 +2145,8 @@
         </div>
         <div class="bank-profile-tools">
           <div class="bank-profile-actions">
+            <select id="bankTearSheetStatus" class="bank-action-select" aria-label="Bank account status">${coverageSelectOptions(BANK_COVERAGE_STATUSES, currentBankAccountStatus().status || 'Open')}</select>
+            <button type="button" class="small-btn bank-action-btn" id="bankStatusSaveBtn">Save Status</button>
             <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Bank</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
             <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
@@ -2101,16 +2170,20 @@
     `;
     updateBankSaveButton();
     const saveBtn = document.getElementById('bankSaveBtn');
+    const statusSaveBtn = document.getElementById('bankStatusSaveBtn');
+    const statusSelect = document.getElementById('bankTearSheetStatus');
     const printBtn = document.getElementById('bankPrintBtn');
     const exportBtn = document.getElementById('bankExportBtn');
     if (saveBtn) saveBtn.addEventListener('click', saveCurrentBankCoverage);
+    if (statusSaveBtn) statusSaveBtn.addEventListener('click', saveCurrentBankAccountStatus);
+    if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
   }
 
   function renderBankCoverageSection() {
     const saved = selectedBankCoverage || {};
-    const status = saved.status || 'Watchlist';
+    const status = saved.status || selectedBankAccountStatus?.status || 'Open';
     const priority = saved.priority || 'Medium';
     return `
       <div class="bank-coverage-detail-head">
@@ -2188,9 +2261,10 @@
   function bankCoverageFormValues() {
     const isCoverageWorkspace = activeBankWorkspaceView === 'coverage';
     const tearSheetSaved = selectedTearSheetCoverage || getSavedBankById(selectedBankId()) || {};
+    const tearSheetStatus = document.getElementById('bankTearSheetStatus')?.value || currentBankAccountStatus().status || 'Open';
     return {
       bankId: isCoverageWorkspace ? activeCoverageBankId : selectedBankId(),
-      status: isCoverageWorkspace ? (document.getElementById('bankCoverageStatus')?.value || 'Watchlist') : (tearSheetSaved.status || 'Watchlist'),
+      status: isCoverageWorkspace ? (document.getElementById('bankCoverageStatus')?.value || 'Open') : (tearSheetSaved.status || tearSheetStatus),
       priority: isCoverageWorkspace ? (document.getElementById('bankCoveragePriority')?.value || 'Medium') : (tearSheetSaved.priority || 'Medium'),
       owner: isCoverageWorkspace ? (document.getElementById('bankCoverageOwner')?.value || '') : (tearSheetSaved.owner || ''),
       nextActionDate: isCoverageWorkspace ? (document.getElementById('bankCoverageNextAction')?.value || '') : (tearSheetSaved.nextActionDate || '')
@@ -2199,8 +2273,9 @@
 
   function updateBankSaveButton() {
     const btn = document.getElementById('bankSaveBtn');
-    if (!btn) return;
-    btn.textContent = selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Bank';
+    const statusSelect = document.getElementById('bankTearSheetStatus');
+    if (btn) btn.textContent = selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Bank';
+    if (statusSelect) statusSelect.value = currentBankAccountStatus().status || 'Open';
     updateTearSheetCoverageSignal();
   }
 
@@ -2212,7 +2287,7 @@
     const nextActionEl = document.getElementById('bankCoverageNextAction');
     const removeBtn = document.getElementById('bankCoverageRemoveBtn');
     const statusText = document.getElementById('bankCoverageStatusText');
-    if (statusEl) statusEl.value = saved.status || 'Watchlist';
+    if (statusEl) statusEl.value = saved.status || selectedBankAccountStatus?.status || 'Open';
     if (priorityEl) priorityEl.value = saved.priority || 'Medium';
     if (ownerEl) ownerEl.value = saved.owner || '';
     if (nextActionEl) nextActionEl.value = saved.nextActionDate || '';
@@ -2225,6 +2300,7 @@
     try {
       const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { cache: 'no-store' });
       const data = await readBankJson(res);
+      selectedBankAccountStatus = data.accountStatus || selectedBankAccountStatus || defaultBankAccountStatus();
       selectedTearSheetCoverage = data.saved || getSavedBankById(bankId);
     } catch (e) {
       selectedTearSheetCoverage = getSavedBankById(bankId);
@@ -2236,6 +2312,7 @@
     try {
       const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { cache: 'no-store' });
       const data = await readBankJson(res);
+      if (data.accountStatus) selectedBankAccountStatus = data.accountStatus;
       selectedBankCoverage = data.saved || getSavedBankById(bankId);
       selectedBankNotes = Array.isArray(data.notes) ? data.notes : [];
       if (options.renderDetail) renderCoverageDetail();
@@ -2264,6 +2341,7 @@
         body: JSON.stringify(formValues)
       });
       const data = await readBankJson(res);
+      if (data.accountStatus) selectedBankAccountStatus = data.accountStatus;
       if (activeBankWorkspaceView === 'coverage') {
         selectedBankCoverage = data.saved;
         activeCoverageBankId = data.saved.bankId;
@@ -2275,6 +2353,30 @@
       if (activeBankWorkspaceView === 'coverage') renderCoverageDetail();
       else updateCoveragePanel();
       showToast('Saved bank coverage');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  async function saveCurrentBankAccountStatus() {
+    const bankId = selectedBankId();
+    const status = document.getElementById('bankTearSheetStatus')?.value || currentBankAccountStatus().status || 'Open';
+    if (!bankId) return showToast('No bank selected', true);
+    try {
+      const res = await fetch('/api/bank-account-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bankId, status })
+      });
+      const data = await readBankJson(res);
+      selectedBankAccountStatus = data.accountStatus || { status };
+      if (data.saved) selectedTearSheetCoverage = data.saved;
+      if (selectedBank && selectedBank.bank && selectedBank.bank.summary) {
+        selectedBank.bank.summary.accountStatus = selectedBankAccountStatus;
+      }
+      await loadSavedBanks();
+      updateBankSaveButton();
+      showToast('Saved bank status');
     } catch (e) {
       showToast(e.message, true);
     }
