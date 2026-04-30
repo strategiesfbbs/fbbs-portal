@@ -4,7 +4,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { PDFParse } = require('pdf-parse');
+const { extractPdfText } = require('../server/pdf-text');
 const XLSX = require('xlsx');
 
 const { parseCdOffersText } = require('../server/cd-offers-parser');
@@ -68,8 +68,7 @@ function currentFile(name) {
 }
 
 async function pdfText(filename) {
-  const parser = new PDFParse({ data: fs.readFileSync(currentFile(filename)) });
-  const result = await parser.getText();
+  const result = await extractPdfText(fs.readFileSync(currentFile(filename)));
   return result.text || '';
 }
 

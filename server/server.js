@@ -23,7 +23,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { PDFParse } = require('pdf-parse');
+const { extractPdfText } = require('./pdf-text');
 
 const { parseCdOffersText } = require('./cd-offers-parser');
 const { parseBrokeredCdRateSheetText } = require('./brokered-cd-parser');
@@ -470,8 +470,7 @@ function sanitizeFilename(original) {
 
 async function extractOfferings(pdfBuffer) {
   try {
-    const parser = new PDFParse({ data: pdfBuffer });
-    const result = await parser.getText();
+    const result = await extractPdfText(pdfBuffer);
     const parsed = parseCdOffersText(result.text || '');
     return parsed;
   } catch (err) {
@@ -482,8 +481,7 @@ async function extractOfferings(pdfBuffer) {
 
 async function extractBrokeredCdRates(pdfBuffer) {
   try {
-    const parser = new PDFParse({ data: pdfBuffer });
-    const result = await parser.getText();
+    const result = await extractPdfText(pdfBuffer);
     return parseBrokeredCdRateSheetText(result.text || '');
   } catch (err) {
     log('error', 'Brokered CD Rate Sheet extraction failed:', err.message);
@@ -493,8 +491,7 @@ async function extractBrokeredCdRates(pdfBuffer) {
 
 async function extractMuniOfferings(pdfBuffer) {
   try {
-    const parser = new PDFParse({ data: pdfBuffer });
-    const result = await parser.getText();
+    const result = await extractPdfText(pdfBuffer);
     const parsed = parseMuniOffersText(result.text || '');
     return parsed;
   } catch (err) {
@@ -505,8 +502,7 @@ async function extractMuniOfferings(pdfBuffer) {
 
 async function extractEconomicUpdate(pdfBuffer, sourceFile) {
   try {
-    const parser = new PDFParse({ data: pdfBuffer });
-    const result = await parser.getText();
+    const result = await extractPdfText(pdfBuffer);
     return parseEconomicUpdateText(result.text || '', { sourceFile });
   } catch (err) {
     log('warn', 'Economic Update extraction failed:', err.message);
