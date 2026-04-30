@@ -111,14 +111,46 @@ function parseHeadlines(text) {
     .slice(0, 4);
 }
 
+const DATE_TIME_RE = /(\d{2}\/\d{2}\/\d{2}\s+\d{1,2}:\d{2}\s+[AP]M)/i;
+const NUMERIC_TOKEN_RE = /^(?:--+|-?\$?\d[\d,]*(?:\.\d+)?[%bk]?|-?\d+(?:\.\d+)?[%bk]?)$/i;
+const PERIOD_PREFIX_RE =
+  /^(?:Last Week|\d{1,2}\/\d{1,2}\/\d{2,4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)(?:\s+F)?)\b/i;
+
 function isDateTimeLine(line) {
   return /^(?:\d{2}\/\d{2}\/\d{2}\s+\d{1,2}:\d{2}\s+[AP]M|Last Week)$/i.test(line);
 }
 
+function stripPeriodPrefix(text) {
+  const m = String(text || '').match(PERIOD_PREFIX_RE);
+  return m ? text.slice(m[0].length).trim() : text.trim();
+}
+
+function stripTrailingNumerics(text) {
+  const tokens = String(text || '').trim().split(/\s+/);
+  while (tokens.length && NUMERIC_TOKEN_RE.test(tokens[tokens.length - 1])) tokens.pop();
+  return tokens.join(' ').trim();
+}
+
+function stripLeadingNumerics(text) {
+  const tokens = String(text || '').trim().split(/\s+/);
+  while (tokens.length && NUMERIC_TOKEN_RE.test(tokens[0])) tokens.shift();
+  return tokens.join(' ').trim();
+}
+
+// Extract the human-readable event name from a release row that may have
+// the date/time stamp at the start, middle, or end of the line, with a
+// "PERIOD" cell (Apr / Mar / Last Week / M/D/YYYY) and three trailing
+// SURVEY/ACTUAL/PRIOR values surrounding it.
 function splitInlineDateTime(line) {
-  const match = String(line || '').match(/^(.*?)\s+(\d{2}\/\d{2}\/\d{2}\s+\d{1,2}:\d{2}\s+[AP]M)$/i);
-  if (!match) return null;
-  return { event: match[1].trim(), dateTime: match[2].trim() };
+  const m = String(line || '').match(DATE_TIME_RE);
+  if (!m) return null;
+  const dateTime = m[1].trim();
+  const before = line.slice(0, m.index).trim();
+  const after = line.slice(m.index + m[1].length).trim();
+  const beforeClean = stripTrailingNumerics(stripPeriodPrefix(before));
+  const afterClean = stripLeadingNumerics(stripTrailingNumerics(after));
+  const event = [beforeClean, afterClean].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  return { event, dateTime };
 }
 
 function isEconomicEventName(line) {

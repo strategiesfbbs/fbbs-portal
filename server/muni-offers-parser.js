@@ -227,8 +227,9 @@ function parseMuniRow(line, section, warnings) {
  *
  * A line is a rating fragment if:
  *   - it ends with "/" (a split rating continues next), OR
- *   - it's a short line (≤ 2 tokens) where the first token is a valid Moody's
- *     rating code.
+ *   - it's a short line (≤ 3 tokens) whose first token is a valid Moody's
+ *     or S&P rating code (the watchlist parenthetical e.g. "(STA)" can
+ *     wrap onto the next line, so we accept up to 3 tokens here).
  */
 function recombineRatingLines(rawLines) {
   const out = [];
@@ -236,9 +237,11 @@ function recombineRatingLines(rawLines) {
   for (const line of rawLines) {
     if (!line) continue;
     const tokens = line.split(/\s+/);
+    const firstCore = tokens[0] ? tokens[0].replace(/\/$/, '') : '';
+    const isRatingPrefix = MOODY_RE.test(firstCore) || SP_CORE_RE.test(firstCore);
     const isFragment =
       /\/$/.test(line) ||
-      (tokens.length <= 2 && MOODY_RE.test(tokens[0]));
+      (tokens.length <= 3 && isRatingPrefix);
     if (isFragment) {
       pending = pending ? (pending + ' ' + line) : line;
       continue;
@@ -258,22 +261,58 @@ function hasQuantityStatePrefix(line) {
   return false;
 }
 
+// Lines that should never be folded into a wrapped data row — these are
+// section headers, column headers, page boilerplate, or standalone date stamps.
+const NON_WRAPPABLE_RES = [
+  /^MUNICIPALS\b/i,
+  /^TAXABLE MUNIS\b/i,
+  /^MOODY'S\s+S&P/i,
+  /^TYPE\b/i,
+  /^COUPON\b/i,
+  /^\*\*\*/,
+  /^The information/i,
+  /^Neither the/i,
+  /^Investment products/i,
+  /^First Bankers/i,
+  /^FBBSinc/i,
+  /^Colorado \|/i,
+  /^Overland Park|^Lincoln, NE|^Oklahoma City/i,
+  /^-- \d+ of/,
+  /^\d{1,2}\/\d{1,2}\/\d{4}$/
+];
+
+function isNonWrappableLine(line) {
+  if (!line || line === 'x' || line === 'ENHANCEMENT') return true;
+  return NON_WRAPPABLE_RES.some(re => re.test(line));
+}
+
+const MAX_WRAP_LOOKAHEAD = 4;
+
 function recombineWrappedRows(lines) {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const next = lines[i + 1];
-    if (
-      next &&
-      !findIssueTypePos(line.split(/\s+/)) &&
-      findIssueTypePos(next.split(/\s+/)) &&
-      hasQuantityStatePrefix(line)
-    ) {
-      out.push(`${line} ${next}`);
-      i++;
+    if (findIssueTypePos(line.split(/\s+/)) || !hasQuantityStatePrefix(line)) {
+      out.push(line);
       continue;
     }
-    out.push(line);
+    // Walk forward collecting non-data-row fragments until we hit a row that
+    // contains an issue type. Bail on section headers / boilerplate so we
+    // never absorb them into a data row.
+    const accum = [line];
+    let merged = false;
+    for (let j = i + 1; j < lines.length && j - i <= MAX_WRAP_LOOKAHEAD; j++) {
+      const next = lines[j];
+      if (!next) continue;
+      if (isNonWrappableLine(next)) break;
+      accum.push(next);
+      if (findIssueTypePos(next.split(/\s+/))) {
+        merged = true;
+        i = j;
+        break;
+      }
+    }
+    out.push(merged ? accum.join(' ') : line);
   }
   return out;
 }
@@ -303,7 +342,7 @@ function parseMuniOffersText(text) {
   const NOISE_RES = [
     /^MOODY'S\s+S&P/i,
     /^TYPE\s+COUPON/i,
-    /^\*\*\*/,
+    /\*\*\*/,
     /^The information set forth/i,
     /^Neither the information/i,
     /^Investment products are not/i,
@@ -326,7 +365,14 @@ function parseMuniOffersText(text) {
     // Noise filters
     if (NOISE_RES.some(re => re.test(line))) continue;
     if (line === 'x' || line === 'ENHANCEMENT') continue;
+    // Standalone column header fragments (the PDF stacks "ISSUE / TYPE" and
+    // "CREDIT / ENHANCEMENT" across two lines, and the long header row can
+    // also break apart when the renderer can't keep it together).
+    if (/^(ISSUE|TYPE|CREDIT|COUPON\s+MATURITY|MOODY'S\s+S&P|QNTY|ST|ISSUER)$/i.test(line)) continue;
+    if (/^COUPON\s+MATURITY\s+CALL\s+DATE/i.test(line)) continue;
     if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(line)) continue;
+    // Bare page numbers ("1", "2", etc.) sometimes land on their own line.
+    if (/^\d{1,3}$/.test(line)) continue;
 
     if (!section) {
       result.warnings.push(`Row before any section header: ${line}`);
