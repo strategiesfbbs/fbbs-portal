@@ -460,9 +460,10 @@ function assertStrategyStore() {
     assert.strictEqual(open.requests.length, 1);
     assert.strictEqual(open.counts.Open, 1);
 
-    const updated = updateStrategyRequest(tmp, request.id, { status: 'Needs Billed', assignedTo: 'Dan' });
+    const updated = updateStrategyRequest(tmp, request.id, { status: 'Needs Billed', assignedTo: 'Dan', priority: '5' });
     assert.strictEqual(updated.status, 'Needs Billed');
     assert.strictEqual(updated.assignedTo, 'Dan');
+    assert.strictEqual(updated.priority, '5');
     assert(updated.billedAt);
 
     const byBank = listStrategyRequests(tmp, { bankId: 'bank-1' });

@@ -112,7 +112,7 @@
   const BANK_COVERAGE_PRIORITIES = ['High', 'Medium', 'Low'];
   const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'CECL Analysis', 'Miscellaneous'];
   const STRATEGY_STATUSES = ['Open', 'In Progress', 'Completed', 'Needs Billed'];
-  const STRATEGY_PRIORITIES = ['1', '2', '3', '4'];
+  const STRATEGY_PRIORITIES = ['1', '2', '3', '4', '5'];
   const COMMISSION_PRODUCT_LABELS = {
     agencies: 'Agencies',
     corporates: 'Corporates'
@@ -2045,11 +2045,11 @@
         <p>${escapeHtml(row.summary || 'Strategy request')}</p>
         ${row.comments ? `<div class="strategy-card-comments">${escapeHtml(row.comments).replace(/\n/g, '<br>')}</div>` : ''}
         <div class="strategy-card-meta">
-          <span>Priority ${escapeHtml(row.priority || '3')}</span>
+          <span>Priority ${escapeHtml(row.priority || '3')}/5</span>
           ${row.requestedBy ? `<span>By ${escapeHtml(row.requestedBy)}</span>` : ''}
           ${row.assignedTo ? `<span>Owner ${escapeHtml(row.assignedTo)}</span>` : ''}
           ${row.invoiceContact ? `<span>Invoice ${escapeHtml(row.invoiceContact)}</span>` : ''}
-          <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
+          <span>${escapeHtml([row.city, row.state].filter(Boolean).join(', '))}</span>
           <span>Updated ${escapeHtml(formatFullTimestamp(row.updatedAt))}</span>
           ${row.billedAt ? `<span>Billed ${escapeHtml(formatFullTimestamp(row.billedAt))}</span>` : ''}
           ${row.archivedAt ? `<span>Archived ${escapeHtml(formatFullTimestamp(row.archivedAt))}</span>` : ''}
@@ -2723,7 +2723,7 @@
           </div>
           <p>${escapeHtml(row.summary || 'Strategy request')}</p>
           <div class="strategy-card-meta">
-            <span>Priority ${escapeHtml(row.priority || '3')}</span>
+            <span>Priority ${escapeHtml(row.priority || '3')}/5</span>
             ${row.requestedBy ? `<span>By ${escapeHtml(row.requestedBy)}</span>` : ''}
             ${row.assignedTo ? `<span>Owner ${escapeHtml(row.assignedTo)}</span>` : ''}
             ${row.invoiceContact ? `<span>Invoice ${escapeHtml(row.invoiceContact)}</span>` : ''}

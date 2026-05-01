@@ -8,7 +8,7 @@ const path = require('path');
 const STRATEGY_DATABASE_FILENAME = 'bank-strategies.sqlite';
 const STRATEGY_TYPES = new Set(['Bond Swap', 'Muni BCIS', 'CECL Analysis', 'Miscellaneous']);
 const STRATEGY_STATUSES = new Set(['Open', 'In Progress', 'Completed', 'Needs Billed']);
-const STRATEGY_PRIORITIES = new Set(['1', '2', '3', '4']);
+const STRATEGY_PRIORITIES = new Set(['1', '2', '3', '4', '5']);
 
 function strategyDatabasePathForDir(outputDir) {
   return path.join(outputDir, STRATEGY_DATABASE_FILENAME);
