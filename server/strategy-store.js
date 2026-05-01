@@ -65,12 +65,22 @@ function ensureStrategyDatabase(outputDir) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       completed_at TEXT,
-      billed_at TEXT
+      billed_at TEXT,
+      archived_at TEXT,
+      archived_by TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_strategy_status_updated ON strategy_requests(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_strategy_bank ON strategy_requests(bank_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_strategy_type ON strategy_requests(request_type, status);
   `);
+  const columns = querySqliteJson(dbPath, 'PRAGMA table_info(strategy_requests);').map(row => row.name);
+  if (!columns.includes('archived_at')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN archived_at TEXT;');
+  }
+  if (!columns.includes('archived_by')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN archived_by TEXT;');
+  }
+  runSqlite(dbPath, 'CREATE INDEX IF NOT EXISTS idx_strategy_archive ON strategy_requests(archived_at, updated_at DESC);');
   return dbPath;
 }
 
@@ -136,7 +146,9 @@ function strategySelectSql(where = '1 = 1') {
       created_at AS createdAt,
       updated_at AS updatedAt,
       completed_at AS completedAt,
-      billed_at AS billedAt
+      billed_at AS billedAt,
+      archived_at AS archivedAt,
+      archived_by AS archivedBy
     FROM strategy_requests
     WHERE ${where}
   `;
@@ -163,13 +175,22 @@ function mapStrategyRow(row) {
     createdAt: row.createdAt || '',
     updatedAt: row.updatedAt || '',
     completedAt: row.completedAt || '',
-    billedAt: row.billedAt || ''
+    billedAt: row.billedAt || '',
+    archivedAt: row.archivedAt || '',
+    archivedBy: row.archivedBy || '',
+    isArchived: Boolean(row.archivedAt)
   };
 }
 
 function listStrategyRequests(outputDir, filters = {}) {
   const dbPath = ensureStrategyDatabase(outputDir);
   const where = [];
+  const archivedFilter = String(filters.archived || '').toLowerCase();
+  if (archivedFilter === 'only') {
+    where.push('archived_at IS NOT NULL');
+  } else if (archivedFilter !== 'all') {
+    where.push('archived_at IS NULL');
+  }
   if (filters.status && STRATEGY_STATUSES.has(filters.status)) {
     where.push(`status = ${sqlString(filters.status)}`);
   }
@@ -186,16 +207,21 @@ function listStrategyRequests(outputDir, filters = {}) {
         WHEN 'Needs Billed' THEN 4
         ELSE 5
       END,
+      archived_at IS NOT NULL ASC,
       CAST(priority AS INTEGER) ASC,
       updated_at DESC
     LIMIT 500;
   `);
   const requests = rows.map(mapStrategyRow);
   const counts = Object.fromEntries([...STRATEGY_STATUSES].map(status => [status, 0]));
-  const countRows = querySqliteJson(dbPath, 'SELECT status, COUNT(*) AS count FROM strategy_requests GROUP BY status;');
+  const countWhere = archivedFilter === 'only'
+    ? 'archived_at IS NOT NULL'
+    : (archivedFilter === 'all' ? '1 = 1' : 'archived_at IS NULL');
+  const countRows = querySqliteJson(dbPath, `SELECT status, COUNT(*) AS count FROM strategy_requests WHERE ${countWhere} GROUP BY status;`);
   countRows.forEach(row => {
     if (STRATEGY_STATUSES.has(row.status)) counts[row.status] = Number(row.count || 0);
   });
+  counts.Archived = Number((querySqliteJson(dbPath, 'SELECT COUNT(*) AS count FROM strategy_requests WHERE archived_at IS NOT NULL;')[0] || {}).count || 0);
   return { requests, counts };
 }
 
@@ -257,7 +283,20 @@ function updateStrategyRequest(outputDir, id, input = {}) {
     : existing.completedAt || null;
   const billedAt = status === 'Needs Billed'
     ? (existing.billedAt || now)
+    : input.markBilled
+      ? (existing.billedAt || now)
     : existing.billedAt || null;
+  const archiveIntent = input.archived;
+  const archivedAt = archiveIntent === true
+    ? (existing.archivedAt || now)
+    : archiveIntent === false
+      ? null
+      : existing.archivedAt || null;
+  const archivedBy = archiveIntent === true
+    ? (cleanText(input.archivedBy, 120) || existing.archivedBy || null)
+    : archiveIntent === false
+      ? null
+      : existing.archivedBy || null;
 
   runSqlite(dbPath, `
     UPDATE strategy_requests SET
@@ -271,7 +310,9 @@ function updateStrategyRequest(outputDir, id, input = {}) {
       comments = ${sqlString(input.comments !== undefined ? cleanMultilineText(input.comments) : existing.comments)},
       updated_at = ${sqlString(now)},
       completed_at = ${sqlString(completedAt)},
-      billed_at = ${sqlString(billedAt)}
+      billed_at = ${sqlString(billedAt)},
+      archived_at = ${sqlString(archivedAt)},
+      archived_by = ${sqlString(archivedBy)}
     WHERE id = ${sqlString(String(id || ''))};
   `);
   return getStrategyRequest(outputDir, id);

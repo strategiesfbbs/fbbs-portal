@@ -468,6 +468,21 @@ function assertStrategyStore() {
     const byBank = listStrategyRequests(tmp, { bankId: 'bank-1' });
     assert.strictEqual(byBank.requests.length, 1);
     assert.strictEqual(byBank.counts['Needs Billed'], 1);
+
+    const archived = updateStrategyRequest(tmp, request.id, { archived: true, markBilled: true });
+    assert(archived.archivedAt);
+    assert(archived.billedAt);
+
+    const active = listStrategyRequests(tmp);
+    assert.strictEqual(active.requests.length, 0);
+    assert.strictEqual(active.counts.Archived, 1);
+
+    const archivedOnly = listStrategyRequests(tmp, { archived: 'only', bankId: 'bank-1' });
+    assert.strictEqual(archivedOnly.requests.length, 1);
+    assert.strictEqual(archivedOnly.requests[0].isArchived, true);
+
+    const restored = updateStrategyRequest(tmp, request.id, { archived: false });
+    assert.strictEqual(restored.isArchived, false);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -1722,6 +1722,7 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/strategies' && req.method === 'GET') {
       return sendJSON(res, 200, listStrategyRequests(BANK_REPORTS_DIR, {
+        archived: query.get('archived'),
         status: query.get('status'),
         bankId: query.get('bankId')
       }));
