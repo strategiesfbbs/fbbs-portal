@@ -2015,6 +2015,38 @@
     board.querySelectorAll('[data-strategy-upload]').forEach(btn => {
       btn.addEventListener('click', () => uploadStrategyFile(btn.dataset.strategyUpload));
     });
+    board.querySelectorAll('[data-strategy-drop]').forEach(drop => {
+      const input = drop.querySelector('[data-strategy-file]');
+      const fileName = drop.querySelector('[data-strategy-file-name]');
+      if (input) {
+        input.addEventListener('change', () => updateStrategyDropFileName(drop, input.files && input.files[0]));
+      }
+      drop.addEventListener('click', event => {
+        if (event.target && event.target.closest('button, input')) return;
+        if (input) input.click();
+      });
+      ['dragenter', 'dragover'].forEach(type => {
+        drop.addEventListener(type, event => {
+          event.preventDefault();
+          drop.classList.add('dragging');
+        });
+      });
+      ['dragleave', 'drop'].forEach(type => {
+        drop.addEventListener(type, event => {
+          event.preventDefault();
+          drop.classList.remove('dragging');
+        });
+      });
+      drop.addEventListener('drop', event => {
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (!file || !input) return;
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        input.files = transfer.files;
+        updateStrategyDropFileName(drop, file);
+        if (fileName) fileName.focus?.();
+      });
+    });
     board.querySelectorAll('[data-strategy-cancel]').forEach(btn => {
       btn.addEventListener('click', () => hideStrategyEditor(btn.dataset.strategyCancel));
     });
@@ -2119,10 +2151,14 @@
             <span>Comments</span>
             <textarea rows="4" data-strategy-field="comments">${escapeHtml(row.comments || '')}</textarea>
           </label>
-          <label class="wide strategy-file-upload">
-            <span>Final Deliverable</span>
+          <div class="wide strategy-file-upload" data-strategy-drop>
+            <div>
+              <span>Final Deliverable</span>
+              <strong data-strategy-file-name>No file selected</strong>
+              <small>Drop the final swap, BCIS, THO, CECL, PDF, workbook, Word doc, or CSV here.</small>
+            </div>
             <input type="file" data-strategy-file accept=".pdf,.xlsx,.xlsm,.xlsb,.xls,.docx,.csv">
-          </label>
+          </div>
         </div>
         <div class="strategy-edit-actions">
           <button type="button" class="small-btn" data-strategy-save="${escapeHtml(row.id)}">Save Details</button>
@@ -2146,6 +2182,12 @@
         `).join('')}
       </div>
     `;
+  }
+
+  function updateStrategyDropFileName(drop, file) {
+    const label = drop ? drop.querySelector('[data-strategy-file-name]') : null;
+    if (label) label.textContent = file && file.name ? file.name : 'No file selected';
+    if (drop) drop.classList.toggle('has-file', Boolean(file));
   }
 
   function showStrategyEditor(id) {

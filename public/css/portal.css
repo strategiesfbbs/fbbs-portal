@@ -4019,8 +4019,58 @@ body {
   white-space: nowrap;
 }
 
+.strategy-file-upload {
+  align-items: center;
+  background: #fbfcfb;
+  border: 1px dashed #9fb7a6;
+  border-radius: 8px;
+  cursor: pointer;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 12px;
+}
+
+.strategy-file-upload.dragging,
+.strategy-file-upload.has-file {
+  background: #eef8f0;
+  border-color: var(--green);
+}
+
+.strategy-file-upload span {
+  color: var(--text3);
+  display: block;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+.strategy-file-upload strong {
+  color: var(--text);
+  display: block;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-file-upload small {
+  color: var(--text3);
+  display: block;
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 4px;
+}
+
 .strategy-file-upload input[type="file"] {
   background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  max-width: 100%;
+  padding: 8px;
 }
 
 .strategy-card-meta {
