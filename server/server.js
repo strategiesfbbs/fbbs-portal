@@ -55,7 +55,9 @@ const {
   upsertBankAccountStatus
 } = require('./bank-account-status-store');
 const {
+  addStrategyRequestFile,
   createStrategyRequest,
+  getStrategyRequestFile,
   listStrategyRequests,
   updateStrategyRequest
 } = require('./strategy-store');
@@ -114,7 +116,11 @@ const MIME_TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.pdf':  'application/pdf',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  '.xlsb': 'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
   '.xls':  'application/vnd.ms-excel',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.csv':  'text/csv; charset=utf-8',
   '.png':  'image/png',
   '.jpg':  'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -154,7 +160,7 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
-function sendFile(res, filePath, { download = false, sandboxHtml = false } = {}) {
+function sendFile(res, filePath, { download = false, sandboxHtml = false, filename = '' } = {}) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
       return sendText(res, 404, 'Not found');
@@ -165,8 +171,9 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false } = {})
       'Cache-Control': 'no-cache'
     };
     if (download) {
+      const downloadName = path.basename(filename || filePath).replace(/"/g, '');
       headers['Content-Disposition'] =
-        `attachment; filename="${path.basename(filePath).replace(/"/g, '')}"`;
+        `attachment; filename="${downloadName}"`;
     }
     if (sandboxHtml && /\.html?$/i.test(filePath)) {
       headers['Content-Security-Policy'] = 'sandbox allow-scripts';
@@ -297,10 +304,42 @@ function looksLikeExcel(buffer) {
   );
 }
 
+function looksLikeZip(buffer) {
+  return Buffer.isBuffer(buffer) && (
+    hasBytes(buffer, [0x50, 0x4b, 0x03, 0x04]) ||
+    hasBytes(buffer, [0x50, 0x4b, 0x05, 0x06])
+  );
+}
+
+function looksLikePlainText(buffer) {
+  return Buffer.isBuffer(buffer) && buffer.slice(0, 2048).indexOf(0) === -1;
+}
+
 function looksLikeHtml(buffer) {
   if (!Buffer.isBuffer(buffer)) return false;
   const head = buffer.slice(0, 512).toString('utf-8').trimStart().toLowerCase();
   return head.startsWith('<!doctype html') || head.startsWith('<html') || head.includes('<html');
+}
+
+function validateStrategyFileSignature(file) {
+  if (!file || !file.data) return 'Upload is missing file data.';
+  const ext = path.extname(file.filename || '').toLowerCase();
+  if (!['.pdf', '.xlsx', '.xlsm', '.xlsb', '.xls', '.docx', '.csv'].includes(ext)) {
+    return 'Strategy deliverables must be PDF, Excel, Word, or CSV files.';
+  }
+  if (ext === '.pdf') {
+    return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
+  }
+  if (['.xlsx', '.xlsm', '.xlsb', '.xls'].includes(ext)) {
+    return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
+  }
+  if (ext === '.docx') {
+    return looksLikeZip(file.data) ? null : `${file.filename} does not look like a Word document.`;
+  }
+  if (ext === '.csv') {
+    return looksLikePlainText(file.data) ? null : `${file.filename} does not look like a CSV file.`;
+  }
+  return null;
 }
 
 function validateUploadSignature(file, slot) {
@@ -1034,6 +1073,38 @@ async function handleUpdateStrategyRequest(req, res, id) {
   }
 }
 
+async function handleUploadStrategyRequestFile(req, res, id) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  try {
+    const { files, fields } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const file = files.find(row => row.fieldName === 'strategyFile') || files[0];
+    if (!file) return sendJSON(res, 400, { error: 'Choose a strategy deliverable to upload' });
+
+    const signatureError = validateStrategyFileSignature(file);
+    if (signatureError) return sendJSON(res, 400, { error: signatureError });
+
+    const request = addStrategyRequestFile(BANK_REPORTS_DIR, id, {
+      filename: sanitizeFilename(file.filename),
+      data: file.data
+    }, { label: fields.label });
+    if (!request) return sendJSON(res, 404, { error: 'Strategy request not found' });
+
+    appendAuditLog({
+      event: 'strategy-request-file-upload',
+      strategyId: request.id,
+      bankId: request.bankId,
+      filename: sanitizeFilename(file.filename)
+    });
+    return sendJSON(res, 200, { request });
+  } catch (err) {
+    log('error', 'Strategy file upload failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not upload strategy file' });
+  }
+}
+
 async function handleBankDataUpload(req, res) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
@@ -1730,6 +1801,23 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/strategies' && req.method === 'POST') {
       return await handleCreateStrategyRequest(req, res);
+    }
+
+    const strategyFileMatch = pathname.match(/^\/api\/strategies\/([^/]+)\/files\/([^/]+)$/);
+    if (strategyFileMatch && req.method === 'GET') {
+      const id = safeDecodeURIComponent(strategyFileMatch[1]);
+      const fileId = safeDecodeURIComponent(strategyFileMatch[2]);
+      if (!id || !fileId) return sendText(res, 400, 'Invalid strategy file ID');
+      const file = getStrategyRequestFile(BANK_REPORTS_DIR, id, fileId);
+      if (!file || !fs.existsSync(file.path)) return sendText(res, 404, 'Not found');
+      return sendFile(res, file.path, { download: true, filename: file.filename });
+    }
+
+    const strategyFileUploadMatch = pathname.match(/^\/api\/strategies\/([^/]+)\/files$/);
+    if (strategyFileUploadMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(strategyFileUploadMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid strategy request ID' });
+      return await handleUploadStrategyRequestFile(req, res, id);
     }
 
     const strategyMatch = pathname.match(/^\/api\/strategies\/([^/]+)$/);

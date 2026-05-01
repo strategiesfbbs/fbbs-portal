@@ -6,12 +6,17 @@ const fs = require('fs');
 const path = require('path');
 
 const STRATEGY_DATABASE_FILENAME = 'bank-strategies.sqlite';
-const STRATEGY_TYPES = new Set(['Bond Swap', 'Muni BCIS', 'CECL Analysis', 'Miscellaneous']);
+const STRATEGY_FILE_DIRNAME = 'strategy-files';
+const STRATEGY_TYPES = new Set(['Bond Swap', 'Muni BCIS', 'THO Report', 'CECL Analysis', 'Miscellaneous']);
 const STRATEGY_STATUSES = new Set(['Open', 'In Progress', 'Completed', 'Needs Billed']);
 const STRATEGY_PRIORITIES = new Set(['1', '2', '3', '4', '5']);
 
 function strategyDatabasePathForDir(outputDir) {
   return path.join(outputDir, STRATEGY_DATABASE_FILENAME);
+}
+
+function strategyFilesRootForDir(outputDir) {
+  return path.join(outputDir, STRATEGY_FILE_DIRNAME);
 }
 
 function sqlString(value) {
@@ -72,6 +77,17 @@ function ensureStrategyDatabase(outputDir) {
     CREATE INDEX IF NOT EXISTS idx_strategy_status_updated ON strategy_requests(status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_strategy_bank ON strategy_requests(bank_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_strategy_type ON strategy_requests(request_type, status);
+    CREATE TABLE IF NOT EXISTS strategy_request_files (
+      id TEXT PRIMARY KEY,
+      strategy_id TEXT NOT NULL,
+      original_filename TEXT NOT NULL,
+      stored_filename TEXT NOT NULL,
+      label TEXT,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      uploaded_at TEXT NOT NULL,
+      FOREIGN KEY(strategy_id) REFERENCES strategy_requests(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_strategy_files_request ON strategy_request_files(strategy_id, uploaded_at DESC);
   `);
   const columns = querySqliteJson(dbPath, 'PRAGMA table_info(strategy_requests);').map(row => row.name);
   if (!columns.includes('archived_at')) {
@@ -109,6 +125,19 @@ function normalizeStatus(value, fallback = 'Open') {
 function normalizePriority(value, fallback = '3') {
   const cleaned = cleanText(value, 10);
   return STRATEGY_PRIORITIES.has(cleaned) ? cleaned : fallback;
+}
+
+function sanitizeFileName(original) {
+  let name = path.basename(original || '').trim();
+  name = name.replace(/[^A-Za-z0-9._\- ]/g, '_');
+  name = name.replace(/_{2,}/g, '_');
+  name = name.replace(/^\.+/, '');
+  if (!name) name = 'file';
+  if (name.length > 160) {
+    const ext = path.extname(name);
+    name = name.slice(0, 160 - ext.length) + ext;
+  }
+  return name;
 }
 
 function normalizeBankSummary(summary) {
@@ -182,6 +211,53 @@ function mapStrategyRow(row) {
   };
 }
 
+function mapStrategyFileRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id || '',
+    strategyId: row.strategyId || '',
+    filename: row.originalFilename || '',
+    label: row.label || '',
+    sizeBytes: Number(row.sizeBytes || 0),
+    uploadedAt: row.uploadedAt || ''
+  };
+}
+
+function listFilesForStrategyIds(outputDir, strategyIds) {
+  const ids = [...new Set((strategyIds || []).filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+  const dbPath = ensureStrategyDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    SELECT
+      id AS id,
+      strategy_id AS strategyId,
+      original_filename AS originalFilename,
+      label AS label,
+      size_bytes AS sizeBytes,
+      uploaded_at AS uploadedAt
+    FROM strategy_request_files
+    WHERE strategy_id IN (${ids.map(sqlString).join(', ')})
+    ORDER BY uploaded_at DESC;
+  `);
+  const filesByRequest = new Map(ids.map(id => [id, []]));
+  rows.forEach(row => {
+    const file = mapStrategyFileRow(row);
+    if (!file) return;
+    if (!filesByRequest.has(file.strategyId)) filesByRequest.set(file.strategyId, []);
+    filesByRequest.get(file.strategyId).push(file);
+  });
+  return filesByRequest;
+}
+
+function attachFiles(outputDir, requests) {
+  const rows = Array.isArray(requests) ? requests : [requests].filter(Boolean);
+  const filesByRequest = listFilesForStrategyIds(outputDir, rows.map(row => row.id));
+  rows.forEach(row => {
+    row.files = filesByRequest.get(row.id) || [];
+  });
+  return Array.isArray(requests) ? rows : rows[0] || null;
+}
+
 function listStrategyRequests(outputDir, filters = {}) {
   const dbPath = ensureStrategyDatabase(outputDir);
   const where = [];
@@ -212,7 +288,7 @@ function listStrategyRequests(outputDir, filters = {}) {
       updated_at DESC
     LIMIT 500;
   `);
-  const requests = rows.map(mapStrategyRow);
+  const requests = attachFiles(outputDir, rows.map(mapStrategyRow));
   const counts = Object.fromEntries([...STRATEGY_STATUSES].map(status => [status, 0]));
   const countWhere = archivedFilter === 'only'
     ? 'archived_at IS NOT NULL'
@@ -228,7 +304,7 @@ function listStrategyRequests(outputDir, filters = {}) {
 function getStrategyRequest(outputDir, id) {
   const dbPath = ensureStrategyDatabase(outputDir);
   const rows = querySqliteJson(dbPath, `${strategySelectSql(`id = ${sqlString(String(id || ''))}`)} LIMIT 1;`);
-  return rows.length ? mapStrategyRow(rows[0]) : null;
+  return rows.length ? attachFiles(outputDir, mapStrategyRow(rows[0])) : null;
 }
 
 function createStrategyRequest(outputDir, bankSummary, input = {}) {
@@ -318,13 +394,85 @@ function updateStrategyRequest(outputDir, id, input = {}) {
   return getStrategyRequest(outputDir, id);
 }
 
+function strategyFilePathForRow(outputDir, strategyId, storedFilename) {
+  const dir = path.resolve(strategyFilesRootForDir(outputDir), String(strategyId || ''));
+  const target = path.resolve(dir, String(storedFilename || ''));
+  const rel = path.relative(dir, target);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error('Invalid strategy file path');
+  return target;
+}
+
+function addStrategyRequestFile(outputDir, strategyId, file, input = {}) {
+  const existing = getStrategyRequest(outputDir, strategyId);
+  if (!existing) return null;
+  if (!file || !Buffer.isBuffer(file.data) || !file.data.length) {
+    const err = new Error('Strategy file is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const dbPath = ensureStrategyDatabase(outputDir);
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+  const originalFilename = sanitizeFileName(file.filename || 'strategy-file');
+  const storedFilename = `${id}-${originalFilename}`;
+  const filePath = strategyFilePathForRow(outputDir, existing.id, storedFilename);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, file.data);
+  runSqlite(dbPath, `
+    INSERT INTO strategy_request_files (
+      id, strategy_id, original_filename, stored_filename, label, size_bytes, uploaded_at
+    ) VALUES (
+      ${sqlString(id)},
+      ${sqlString(existing.id)},
+      ${sqlString(originalFilename)},
+      ${sqlString(storedFilename)},
+      ${sqlString(cleanText(input.label, 120))},
+      ${Number(file.data.length) || 0},
+      ${sqlString(now)}
+    );
+    UPDATE strategy_requests
+    SET updated_at = ${sqlString(now)}
+    WHERE id = ${sqlString(existing.id)};
+  `);
+  return getStrategyRequest(outputDir, existing.id);
+}
+
+function getStrategyRequestFile(outputDir, strategyId, fileId) {
+  const dbPath = ensureStrategyDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    SELECT
+      id AS id,
+      strategy_id AS strategyId,
+      original_filename AS originalFilename,
+      stored_filename AS storedFilename,
+      label AS label,
+      size_bytes AS sizeBytes,
+      uploaded_at AS uploadedAt
+    FROM strategy_request_files
+    WHERE strategy_id = ${sqlString(String(strategyId || ''))}
+      AND id = ${sqlString(String(fileId || ''))}
+    LIMIT 1;
+  `);
+  if (!rows.length) return null;
+  const row = rows[0];
+  return {
+    ...mapStrategyFileRow(row),
+    storedFilename: row.storedFilename || '',
+    path: strategyFilePathForRow(outputDir, row.strategyId, row.storedFilename)
+  };
+}
+
 module.exports = {
   STRATEGY_DATABASE_FILENAME,
+  STRATEGY_FILE_DIRNAME,
   STRATEGY_STATUSES,
   STRATEGY_TYPES,
+  addStrategyRequestFile,
   createStrategyRequest,
+  getStrategyRequestFile,
   getStrategyRequest,
   listStrategyRequests,
   strategyDatabasePathForDir,
+  strategyFilesRootForDir,
   updateStrategyRequest
 };

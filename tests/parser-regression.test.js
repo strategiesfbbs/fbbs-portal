@@ -46,7 +46,9 @@ const {
   upsertBankAccountStatus
 } = require('../server/bank-account-status-store');
 const {
+  addStrategyRequestFile,
   createStrategyRequest,
+  getStrategyRequestFile,
   listStrategyRequests,
   updateStrategyRequest
 } = require('../server/strategy-store');
@@ -466,9 +468,23 @@ function assertStrategyStore() {
     assert.strictEqual(updated.priority, '5');
     assert(updated.billedAt);
 
+    const tho = updateStrategyRequest(tmp, request.id, { requestType: 'THO Report' });
+    assert.strictEqual(tho.requestType, 'THO Report');
+
+    const withFile = addStrategyRequestFile(tmp, request.id, {
+      filename: 'Final THO Report.pdf',
+      data: Buffer.from('%PDF-1.4\n')
+    });
+    assert.strictEqual(withFile.files.length, 1);
+    assert.strictEqual(withFile.files[0].filename, 'Final THO Report.pdf');
+    const savedFile = getStrategyRequestFile(tmp, request.id, withFile.files[0].id);
+    assert(savedFile.path.endsWith('.pdf'));
+    assert.strictEqual(fs.existsSync(savedFile.path), true);
+
     const byBank = listStrategyRequests(tmp, { bankId: 'bank-1' });
     assert.strictEqual(byBank.requests.length, 1);
     assert.strictEqual(byBank.counts['Needs Billed'], 1);
+    assert.strictEqual(byBank.requests[0].files.length, 1);
 
     const archived = updateStrategyRequest(tmp, request.id, { archived: true, markBilled: true });
     assert(archived.archivedAt);

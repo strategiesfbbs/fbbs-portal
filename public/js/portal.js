@@ -73,7 +73,7 @@
     { page: 'agencies', group: 'Offerings', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
     { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert salesforce' },
-    { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, CECL, and miscellaneous requests', aliases: 'bond swap bcis cecl monday tasks requests billing strategies' },
+    { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
     { page: 'admin', group: 'Operations', label: 'Admin', description: 'Review the publish audit log', aliases: 'audit log admin history' }
@@ -110,7 +110,7 @@
   const MAX_RECENT_BANKS = 6;
   const BANK_COVERAGE_STATUSES = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
   const BANK_COVERAGE_PRIORITIES = ['High', 'Medium', 'Low'];
-  const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'CECL Analysis', 'Miscellaneous'];
+  const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'THO Report', 'CECL Analysis', 'Miscellaneous'];
   const STRATEGY_STATUSES = ['Open', 'In Progress', 'Completed', 'Needs Billed'];
   const STRATEGY_PRIORITIES = ['1', '2', '3', '4', '5'];
   const COMMISSION_PRODUCT_LABELS = {
@@ -731,7 +731,7 @@
     const corporates = marketData.corporates || [];
     const strategyCounts = strategyNotifications.counts || {};
     const cards = [
-      { page: 'strategies', label: 'Strategies', title: 'Strategies Queue', detail: 'Track Bond Swap, Muni BCIS, CECL, miscellaneous, and billing requests.', metric: `${formatNumber(strategyCounts.Open || 0)} open` },
+      { page: 'strategies', label: 'Strategies', title: 'Strategies Queue', detail: 'Track Bond Swap, Muni BCIS, THO, CECL, miscellaneous, and billing requests.', metric: `${formatNumber(strategyCounts.Open || 0)} open` },
       { page: 'banks', label: 'Banks', title: 'Bank Tear Sheets', detail: 'Call report tear sheets, saved banks, notes, and coverage status.', metric: 'Coverage workspace' },
       { page: 'explorer', label: 'CDs', title: 'CD Explorer', detail: 'Search daily CD offerings by issuer, CUSIP, term, rate, and restrictions.', metric: `${formatNumber(cds.length)} CDs` },
       { page: 'muni-explorer', label: 'Munis', title: 'Muni Explorer', detail: 'Browse municipal offerings by issuer, state, rating, yield, and call status.', metric: `${formatNumber(munis.length)} munis` },
@@ -1939,6 +1939,7 @@
         row.id, row.displayName, row.legalName, row.city, row.state, row.certNumber,
         row.requestType, row.status, row.priority, row.requestedBy,
         row.assignedTo, row.invoiceContact, row.summary, row.comments,
+        ...(Array.isArray(row.files) ? row.files.map(file => file.filename || file.label || '') : []),
         row.createdAt, row.updatedAt, row.completedAt, row.billedAt, row.archivedAt
       ].filter(Boolean).join(' ').toLowerCase().includes(q);
     });
@@ -2009,6 +2010,9 @@
     board.querySelectorAll('[data-strategy-save]').forEach(btn => {
       btn.addEventListener('click', () => saveStrategyEditor(btn.dataset.strategySave));
     });
+    board.querySelectorAll('[data-strategy-upload]').forEach(btn => {
+      btn.addEventListener('click', () => uploadStrategyFile(btn.dataset.strategyUpload));
+    });
     board.querySelectorAll('[data-strategy-cancel]').forEach(btn => {
       btn.addEventListener('click', () => hideStrategyEditor(btn.dataset.strategyCancel));
     });
@@ -2044,6 +2048,7 @@
         </button>
         <p>${escapeHtml(row.summary || 'Strategy request')}</p>
         ${row.comments ? `<div class="strategy-card-comments">${escapeHtml(row.comments).replace(/\n/g, '<br>')}</div>` : ''}
+        ${renderStrategyFiles(row)}
         <div class="strategy-card-meta">
           <span>Priority ${escapeHtml(row.priority || '3')}/5</span>
           ${row.requestedBy ? `<span>By ${escapeHtml(row.requestedBy)}</span>` : ''}
@@ -2112,11 +2117,31 @@
             <span>Comments</span>
             <textarea rows="4" data-strategy-field="comments">${escapeHtml(row.comments || '')}</textarea>
           </label>
+          <label class="wide strategy-file-upload">
+            <span>Final Deliverable</span>
+            <input type="file" data-strategy-file accept=".pdf,.xlsx,.xlsm,.xlsb,.xls,.docx,.csv">
+          </label>
         </div>
         <div class="strategy-edit-actions">
           <button type="button" class="small-btn" data-strategy-save="${escapeHtml(row.id)}">Save Details</button>
+          <button type="button" class="text-btn" data-strategy-upload="${escapeHtml(row.id)}">Upload File</button>
           <button type="button" class="text-btn" data-strategy-cancel="${escapeHtml(row.id)}">Cancel</button>
         </div>
+      </div>
+    `;
+  }
+
+  function renderStrategyFiles(row) {
+    const files = Array.isArray(row.files) ? row.files : [];
+    if (!files.length) return '';
+    return `
+      <div class="strategy-files">
+        <span>Files</span>
+        ${files.map(file => `
+          <a href="/api/strategies/${encodeURIComponent(row.id)}/files/${encodeURIComponent(file.id)}" target="_blank" rel="noopener">
+            ${escapeHtml(file.filename || 'Strategy file')}
+          </a>
+        `).join('')}
       </div>
     `;
   }
@@ -2154,8 +2179,34 @@
       refreshStrategyCountsFromRows();
       renderStrategyBoard();
       await loadStrategyNotifications();
-      if (selectedBankId() && data.request.bankId === selectedBankId()) loadBankStrategyHistory(selectedBankId());
+      refreshVisibleStrategyHistoryForRequest(data.request);
       showToast('Saved strategy request details');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  async function uploadStrategyFile(id) {
+    if (!id) return;
+    const panel = document.getElementById(`strategyEdit-${id}`);
+    const input = panel ? panel.querySelector('[data-strategy-file]') : null;
+    const file = input && input.files ? input.files[0] : null;
+    if (!file) return showToast('Choose a file to upload', true);
+    const body = new FormData();
+    body.append('strategyFile', file);
+    try {
+      const res = await fetch(`/api/strategies/${encodeURIComponent(id)}/files`, {
+        method: 'POST',
+        body
+      });
+      const data = await readBankJson(res);
+      if (data.request) {
+        strategyRequests = strategyRequests.map(row => row.id === data.request.id ? data.request : row);
+        renderStrategyBoard();
+        await loadStrategyNotifications();
+        refreshVisibleStrategyHistoryForRequest(data.request);
+      }
+      showToast('Uploaded strategy file');
     } catch (e) {
       showToast(e.message, true);
     }
@@ -2180,7 +2231,7 @@
       refreshStrategyCountsFromRows();
       renderStrategyBoard();
       await loadStrategyNotifications();
-      if (selectedBankId() && data.request.bankId === selectedBankId()) loadBankStrategyHistory(selectedBankId());
+      refreshVisibleStrategyHistoryForRequest(data.request);
       showToast(`Moved request to ${status}`);
     } catch (e) {
       showToast(e.message, true);
@@ -2198,7 +2249,7 @@
       await readBankJson(res);
       await loadStrategies();
       await loadStrategyNotifications();
-      if (selectedBankId()) loadBankStrategyHistory(selectedBankId());
+      if (currentVisibleStrategyHistoryBankId()) loadBankStrategyHistory(currentVisibleStrategyHistoryBankId());
       showToast(markBilled ? 'Marked billed and archived request' : 'Archived strategy request');
     } catch (e) {
       showToast(e.message, true);
@@ -2216,7 +2267,7 @@
       await readBankJson(res);
       await loadStrategies();
       await loadStrategyNotifications();
-      if (selectedBankId()) loadBankStrategyHistory(selectedBankId());
+      if (currentVisibleStrategyHistoryBankId()) loadBankStrategyHistory(currentVisibleStrategyHistoryBankId());
       showToast('Restored strategy request');
     } catch (e) {
       showToast(e.message, true);
@@ -2676,8 +2727,9 @@
   }
 
   async function loadBankStrategyHistory(bankId) {
-    const list = document.getElementById('bankStrategyHistoryList');
-    if (list) list.innerHTML = '<div class="bank-search-empty">Loading strategy history...</div>';
+    strategyHistoryLists().forEach(list => {
+      list.innerHTML = '<div class="bank-search-empty">Loading strategy history...</div>';
+    });
     try {
       const res = await fetch(`/api/strategies?bankId=${encodeURIComponent(bankId)}&archived=all`, { cache: 'no-store' });
       const data = await readBankJson(res);
@@ -2689,11 +2741,28 @@
     }
   }
 
-  function renderBankStrategyHistoryPanel() {
+  function currentVisibleStrategyHistoryBankId() {
+    return activeBankWorkspaceView === 'coverage' ? activeCoverageBankId : selectedBankId();
+  }
+
+  function refreshVisibleStrategyHistoryForRequest(request) {
+    const bankId = currentVisibleStrategyHistoryBankId();
+    if (bankId && request && String(request.bankId) === String(bankId)) {
+      loadBankStrategyHistory(bankId);
+    }
+  }
+
+  function strategyHistoryLists() {
+    const lists = [...document.querySelectorAll('[data-strategy-history-list]')];
+    const visible = lists.filter(list => !list.closest('[hidden]'));
+    return visible.length ? visible : lists;
+  }
+
+  function renderBankStrategyHistoryPanel(listId = 'bankStrategyHistoryList') {
     return `
       <section class="bank-section bank-strategy-history">
         <div class="bank-section-title">Strategy Request History</div>
-        <div class="bank-strategy-history-list" id="bankStrategyHistoryList">
+        <div class="bank-strategy-history-list" id="${escapeHtml(listId)}" data-strategy-history-list>
           <div class="bank-search-empty">Loading strategy history...</div>
         </div>
       </section>
@@ -2701,17 +2770,21 @@
   }
 
   function renderBankStrategyHistory(errorMessage) {
-    const list = document.getElementById('bankStrategyHistoryList');
-    if (!list) return;
+    const lists = strategyHistoryLists();
+    if (!lists.length) return;
     if (errorMessage) {
-      list.innerHTML = `<div class="bank-search-empty">${escapeHtml(errorMessage)}</div>`;
+      lists.forEach(list => {
+        list.innerHTML = `<div class="bank-search-empty">${escapeHtml(errorMessage)}</div>`;
+      });
       return;
     }
     if (!selectedBankStrategyHistory.length) {
-      list.innerHTML = '<div class="bank-search-empty">No strategy requests for this bank yet.</div>';
+      lists.forEach(list => {
+        list.innerHTML = '<div class="bank-search-empty">No strategy requests for this bank yet.</div>';
+      });
       return;
     }
-    list.innerHTML = selectedBankStrategyHistory.map(row => `
+    const html = selectedBankStrategyHistory.map(row => `
       <article class="bank-strategy-history-item">
         <div>
           <div class="strategy-card-head">
@@ -2722,6 +2795,8 @@
             </span>
           </div>
           <p>${escapeHtml(row.summary || 'Strategy request')}</p>
+          ${row.comments ? `<div class="strategy-card-comments">${escapeHtml(row.comments).replace(/\n/g, '<br>')}</div>` : ''}
+          ${renderStrategyFiles(row)}
           <div class="strategy-card-meta">
             <span>Priority ${escapeHtml(row.priority || '3')}/5</span>
             ${row.requestedBy ? `<span>By ${escapeHtml(row.requestedBy)}</span>` : ''}
@@ -2733,14 +2808,17 @@
         <button type="button" class="text-btn" data-bank-strategy-open="${escapeHtml(row.id)}">Open in Queue</button>
       </article>
     `).join('');
-    list.querySelectorAll('[data-bank-strategy-open]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        goTo('strategies');
-        const search = document.getElementById('strategySearchInput');
-        const archive = document.getElementById('strategyArchiveFilter');
-        if (archive) archive.value = 'all';
-        if (search) search.value = btn.dataset.bankStrategyOpen || '';
-        loadStrategies();
+    lists.forEach(list => {
+      list.innerHTML = html;
+      list.querySelectorAll('[data-bank-strategy-open]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          goTo('strategies');
+          const search = document.getElementById('strategySearchInput');
+          const archive = document.getElementById('strategyArchiveFilter');
+          if (archive) archive.value = 'all';
+          if (search) search.value = btn.dataset.bankStrategyOpen || '';
+          loadStrategies();
+        });
       });
     });
   }
@@ -2913,6 +2991,7 @@
           <div class="bank-search-empty">Loading notes...</div>
         </div>
       </section>
+      ${renderBankStrategyHistoryPanel('bankCoverageStrategyHistoryList')}
     `;
   }
 
@@ -2927,6 +3006,7 @@
     wireBankCoverageControls();
     renderBankNotes();
     updateCoveragePanel();
+    loadBankStrategyHistory(selectedBankCoverage.bankId);
   }
 
   function wireBankCoverageControls() {
