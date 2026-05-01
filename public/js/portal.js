@@ -71,7 +71,7 @@
     { page: 'agencies', group: 'Offerings', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
     { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert salesforce' },
-    { page: 'strategies', group: 'Banks', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, CECL, and miscellaneous requests', aliases: 'bond swap bcis cecl monday tasks requests billing strategies' },
+    { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, CECL, and miscellaneous requests', aliases: 'bond swap bcis cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
     { page: 'admin', group: 'Operations', label: 'Admin', description: 'Review the publish audit log', aliases: 'audit log admin history' }
@@ -86,8 +86,7 @@
     'muni-explorer': 'offerings',
     agencies: 'offerings',
     corporates: 'offerings',
-    banks: 'banks',
-    strategies: 'banks'
+    banks: 'banks'
   };
 
   const DEFAULT_BROKERED_CD_TERMS = [
