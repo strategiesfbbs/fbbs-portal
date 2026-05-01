@@ -16,6 +16,8 @@ const { parseCorporatesFiles } = require('../server/corporates-parser');
 const {
   sniffDateFromFilename,
   classifyFile,
+  hasPrivatePathSegment,
+  isSameOriginWrite,
   readPackageDir,
   collectAgencyPackageFiles
 } = require('../server/server');
@@ -91,6 +93,32 @@ function assertClassification() {
   assert.strictEqual(classifyFile('bullets 04.24.26.xlsx'), 'agenciesBullets');
   assert.strictEqual(classifyFile('callables 04.24.26.xlsx'), 'agenciesCallables');
   assert.strictEqual(classifyFile('corporates 04.24.26.xlsx'), 'corporates');
+}
+
+function assertSecurityHelpers() {
+  assert.strictEqual(hasPrivatePathSegment('_meta.json'), true);
+  assert.strictEqual(hasPrivatePathSegment('nested/_secret.json'), true);
+  assert.strictEqual(hasPrivatePathSegment('folder/report.pdf'), false);
+
+  assert.strictEqual(isSameOriginWrite({
+    headers: {
+      host: 'portal.local:3000',
+      origin: 'http://portal.local:3000'
+    }
+  }), true);
+  assert.strictEqual(isSameOriginWrite({
+    headers: {
+      host: 'portal.local:3000',
+      origin: 'http://evil.example'
+    }
+  }), false);
+  assert.strictEqual(isSameOriginWrite({
+    headers: {
+      host: 'portal.local:3000',
+      'sec-fetch-site': 'cross-site'
+    }
+  }), false);
+  assert.strictEqual(isSameOriginWrite({ headers: { host: 'portal.local:3000' } }), true);
 }
 
 async function assertCdParser() {
@@ -501,6 +529,7 @@ function assertWeeklyCdWorksheetImport() {
 (async function run() {
   assertDateSniffing();
   assertClassification();
+  assertSecurityHelpers();
   await assertCdParser();
   await assertBrokeredCdParser();
   await assertMuniParser();

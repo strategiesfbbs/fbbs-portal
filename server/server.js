@@ -149,7 +149,7 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
-function sendFile(res, filePath, { download = false } = {}) {
+function sendFile(res, filePath, { download = false, sandboxHtml = false } = {}) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
       return sendText(res, 404, 'Not found');
@@ -162,6 +162,9 @@ function sendFile(res, filePath, { download = false } = {}) {
     if (download) {
       headers['Content-Disposition'] =
         `attachment; filename="${path.basename(filePath).replace(/"/g, '')}"`;
+    }
+    if (sandboxHtml && /\.html?$/i.test(filePath)) {
+      headers['Content-Security-Policy'] = 'sandbox allow-scripts';
     }
     res.writeHead(200, headers);
     const stream = fs.createReadStream(filePath);
@@ -186,6 +189,48 @@ function safeDecodeURIComponent(value) {
   } catch (_) {
     return null;
   }
+}
+
+function hasPrivatePathSegment(value) {
+  return String(value || '')
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .some(segment => segment.startsWith('_'));
+}
+
+function firstHeaderValue(value) {
+  return String(Array.isArray(value) ? value[0] : value || '').split(',')[0].trim();
+}
+
+function requestHost(req) {
+  return firstHeaderValue(req.headers['x-forwarded-host'] || req.headers.host).toLowerCase();
+}
+
+function headerUrlHost(value) {
+  try {
+    return new URL(firstHeaderValue(value)).host.toLowerCase();
+  } catch (_) {
+    return null;
+  }
+}
+
+function isSameOriginWrite(req) {
+  const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (fetchSite === 'cross-site') return false;
+
+  const host = requestHost(req);
+  const origin = req.headers.origin;
+  if (origin) return Boolean(host && headerUrlHost(origin) === host);
+
+  const referer = req.headers.referer;
+  if (referer) return Boolean(host && headerUrlHost(referer) === host);
+
+  return true;
+}
+
+function isMutatingApiRequest(req, pathname) {
+  const method = String(req.method || 'GET').toUpperCase();
+  return pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(method);
 }
 
 function classifyFile(filename, explicitSlot) {
@@ -1538,6 +1583,10 @@ const server = http.createServer(async (req, res) => {
     return sendText(res, 400, 'Bad request');
   }
 
+  if (isMutatingApiRequest(req, pathname) && !isSameOriginWrite(req)) {
+    return sendJSON(res, 403, { error: 'Cross-site write request blocked' });
+  }
+
   try {
     // --- API ---
 
@@ -1716,11 +1765,11 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname.startsWith('/current/')) {
       const filename = pathname.slice('/current/'.length);
-      if (filename.startsWith('_')) return sendText(res, 404, 'Not found');
+      if (hasPrivatePathSegment(filename)) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(CURRENT_DIR, filename);
       if (!filePath) return sendText(res, 400, 'Invalid path');
       const download = query.get('download') === '1';
-      return sendFile(res, filePath, { download });
+      return sendFile(res, filePath, { download, sandboxHtml: true });
     }
 
     // --- File serving: archive ---
@@ -1732,11 +1781,11 @@ const server = http.createServer(async (req, res) => {
       const date = rest.slice(0, slash);
       const filename = rest.slice(slash + 1);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendText(res, 400, 'Invalid date');
-      if (filename.startsWith('_')) return sendText(res, 404, 'Not found');
+      if (hasPrivatePathSegment(filename)) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(ARCHIVE_DIR, date, filename);
       if (!filePath) return sendText(res, 400, 'Invalid path');
       const download = query.get('download') === '1';
-      return sendFile(res, filePath, { download });
+      return sendFile(res, filePath, { download, sandboxHtml: true });
     }
 
     // --- Static assets ---
@@ -1820,6 +1869,8 @@ if (require.main === module) {
 
 module.exports = {
   classifyFile,
+  hasPrivatePathSegment,
+  isSameOriginWrite,
   sniffDateFromFilename,
   readPackageDir,
   collectAgencyPackageFiles,
