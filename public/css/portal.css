@@ -384,7 +384,7 @@ body {
   align-items: center;
   margin-left: auto;
   display: flex;
-  gap: 18px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 .top-strip-links a,
@@ -398,11 +398,23 @@ body {
   font-weight: 600;
   font-family: inherit;
   letter-spacing: 0.3px;
-  padding: 0;
+  padding: 8px 9px;
 }
 .top-strip-links a:hover,
 .top-link-trigger:hover { color: var(--tea-green); }
-.top-strip-links a::after {
+.top-primary-link,
+.top-link-trigger {
+  border-radius: 999px;
+}
+.top-primary-link:hover,
+.top-link-trigger:hover {
+  background: rgba(21, 80, 55, 0.06);
+}
+.top-strip-links [data-page].active {
+  background: #eef3ef;
+  color: var(--racing-green);
+}
+.top-strip-links a[target="_blank"]::after {
   content: ' ↗';
   font-size: 10px;
   opacity: 0.5;
@@ -427,7 +439,7 @@ body {
   border-radius: 8px;
   box-shadow: 0 16px 36px rgba(18, 66, 43, 0.14);
   display: none;
-  min-width: 170px;
+  min-width: 190px;
   padding: 7px;
   position: absolute;
   right: 0;
@@ -444,6 +456,7 @@ body {
   border-radius: 6px;
   display: block;
   padding: 9px 10px;
+  white-space: nowrap;
 }
 
 .top-link-menu-panel a:hover {
@@ -452,6 +465,10 @@ body {
 
 .top-link-menu-panel a::after {
   content: '';
+}
+
+.external-tools-panel {
+  min-width: 220px;
 }
 
 .sidebar-backdrop {

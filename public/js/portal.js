@@ -871,6 +871,7 @@
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
     document.querySelectorAll('.nav-link[aria-current="page"]').forEach(n => n.removeAttribute('aria-current'));
+    document.querySelectorAll('.top-strip-links [data-page]').forEach(n => n.classList.remove('active'));
 
     const page = document.getElementById('p-' + pageName);
     if (page) page.classList.add('active');
@@ -880,6 +881,7 @@
       link.classList.add('active');
       link.setAttribute('aria-current', 'page');
     }
+    document.querySelectorAll('.top-strip-links [data-page="' + pageName + '"]').forEach(n => n.classList.add('active'));
     updateMarketNavGroup(pageName);
 
     window.scrollTo({ top: 0, behavior: 'auto' });
