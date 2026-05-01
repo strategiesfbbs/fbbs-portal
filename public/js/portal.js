@@ -2015,38 +2015,7 @@
     board.querySelectorAll('[data-strategy-upload]').forEach(btn => {
       btn.addEventListener('click', () => uploadStrategyFile(btn.dataset.strategyUpload));
     });
-    board.querySelectorAll('[data-strategy-drop]').forEach(drop => {
-      const input = drop.querySelector('[data-strategy-file]');
-      const fileName = drop.querySelector('[data-strategy-file-name]');
-      if (input) {
-        input.addEventListener('change', () => updateStrategyDropFileName(drop, input.files && input.files[0]));
-      }
-      drop.addEventListener('click', event => {
-        if (event.target && event.target.closest('button, input')) return;
-        if (input) input.click();
-      });
-      ['dragenter', 'dragover'].forEach(type => {
-        drop.addEventListener(type, event => {
-          event.preventDefault();
-          drop.classList.add('dragging');
-        });
-      });
-      ['dragleave', 'drop'].forEach(type => {
-        drop.addEventListener(type, event => {
-          event.preventDefault();
-          drop.classList.remove('dragging');
-        });
-      });
-      drop.addEventListener('drop', event => {
-        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
-        if (!file || !input) return;
-        const transfer = new DataTransfer();
-        transfer.items.add(file);
-        input.files = transfer.files;
-        updateStrategyDropFileName(drop, file);
-        if (fileName) fileName.focus?.();
-      });
-    });
+    wireStrategyDropZones(board);
     board.querySelectorAll('[data-strategy-cancel]').forEach(btn => {
       btn.addEventListener('click', () => hideStrategyEditor(btn.dataset.strategyCancel));
     });
@@ -2190,6 +2159,42 @@
     if (drop) drop.classList.toggle('has-file', Boolean(file));
   }
 
+  function wireStrategyDropZones(root) {
+    const scope = root || document;
+    scope.querySelectorAll('[data-strategy-drop]').forEach(drop => {
+      const input = drop.querySelector('[data-strategy-file]');
+      const fileName = drop.querySelector('[data-strategy-file-name]');
+      if (input) {
+        input.addEventListener('change', () => updateStrategyDropFileName(drop, input.files && input.files[0]));
+      }
+      drop.addEventListener('click', event => {
+        if (event.target && event.target.closest('button, input')) return;
+        if (input) input.click();
+      });
+      ['dragenter', 'dragover'].forEach(type => {
+        drop.addEventListener(type, event => {
+          event.preventDefault();
+          drop.classList.add('dragging');
+        });
+      });
+      ['dragleave', 'drop'].forEach(type => {
+        drop.addEventListener(type, event => {
+          event.preventDefault();
+          drop.classList.remove('dragging');
+        });
+      });
+      drop.addEventListener('drop', event => {
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (!file || !input) return;
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        input.files = transfer.files;
+        updateStrategyDropFileName(drop, file);
+        if (fileName) fileName.focus?.();
+      });
+    });
+  }
+
   function showStrategyEditor(id) {
     const panel = document.getElementById(`strategyEdit-${id}`);
     if (panel) panel.hidden = false;
@@ -2234,6 +2239,11 @@
     if (!id) return;
     const panel = document.getElementById(`strategyEdit-${id}`);
     const input = panel ? panel.querySelector('[data-strategy-file]') : null;
+    return uploadStrategyFileFromInput(id, input);
+  }
+
+  async function uploadStrategyFileFromInput(id, input, options = {}) {
+    if (!id) return null;
     const file = input && input.files ? input.files[0] : null;
     if (!file) return showToast('Choose a file to upload', true);
     const body = new FormData();
@@ -2245,14 +2255,24 @@
       });
       const data = await readBankJson(res);
       if (data.request) {
-        strategyRequests = strategyRequests.map(row => row.id === data.request.id ? data.request : row);
+        const existing = strategyRequests.some(row => row.id === data.request.id);
+        strategyRequests = existing
+          ? strategyRequests.map(row => row.id === data.request.id ? data.request : row)
+          : [data.request, ...strategyRequests];
         renderStrategyBoard();
         await loadStrategyNotifications();
         refreshVisibleStrategyHistoryForRequest(data.request);
       }
-      showToast('Uploaded strategy file');
+      if (input) {
+        input.value = '';
+        const drop = input.closest('[data-strategy-drop]');
+        updateStrategyDropFileName(drop, null);
+      }
+      if (!options.silent) showToast('Uploaded strategy file');
+      return data.request || null;
     } catch (e) {
       showToast(e.message, true);
+      return null;
     }
   }
 
@@ -2768,6 +2788,7 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
+    wireStrategyDropZones(profile);
   }
 
   async function loadBankStrategyHistory(bankId) {
@@ -2829,7 +2850,7 @@
       return;
     }
     const html = selectedBankStrategyHistory.map(row => `
-      <article class="bank-strategy-history-item">
+      <article class="bank-strategy-history-item" data-bank-strategy-history-item="${escapeHtml(row.id)}">
         <div>
           <div class="strategy-card-head">
             <strong>${escapeHtml(row.requestType || 'Miscellaneous')}</strong>
@@ -2848,12 +2869,31 @@
             ${row.invoiceContact ? `<span>Invoice ${escapeHtml(row.invoiceContact)}</span>` : ''}
             <span>Updated ${escapeHtml(formatFullTimestamp(row.updatedAt))}</span>
           </div>
+          <div class="strategy-history-upload">
+            <div class="strategy-file-upload compact" data-strategy-drop>
+              <div>
+                <span>Attach File</span>
+                <strong data-strategy-file-name>No file selected</strong>
+                <small>Drop or choose the final report for this request.</small>
+              </div>
+              <input type="file" data-strategy-file accept=".pdf,.xlsx,.xlsm,.xlsb,.xls,.docx,.csv">
+            </div>
+            <button type="button" class="text-btn" data-bank-strategy-upload="${escapeHtml(row.id)}">Upload File</button>
+          </div>
         </div>
         <button type="button" class="text-btn" data-bank-strategy-open="${escapeHtml(row.id)}">Open in Queue</button>
       </article>
     `).join('');
     lists.forEach(list => {
       list.innerHTML = html;
+      wireStrategyDropZones(list);
+      list.querySelectorAll('[data-bank-strategy-upload]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const item = btn.closest('[data-bank-strategy-history-item]');
+          const input = item ? item.querySelector('[data-strategy-file]') : null;
+          uploadStrategyFileFromInput(btn.dataset.bankStrategyUpload, input);
+        });
+      });
       list.querySelectorAll('[data-bank-strategy-open]').forEach(btn => {
         btn.addEventListener('click', () => {
           goTo('strategies');
@@ -2905,6 +2945,14 @@
             <span>Comments</span>
             <textarea id="bankStrategyComments" rows="4" placeholder="Portfolio notes, timing, deliverables, billing notes, or context from the banker"></textarea>
           </label>
+          <div class="wide strategy-file-upload" data-strategy-drop>
+            <div>
+              <span>Optional File</span>
+              <strong data-strategy-file-name>No file selected</strong>
+              <small>Attach a final swap, BCIS, THO, CECL, PDF, workbook, Word doc, or CSV with this request.</small>
+            </div>
+            <input type="file" id="bankStrategyFile" data-strategy-file accept=".pdf,.xlsx,.xlsm,.xlsb,.xls,.docx,.csv">
+          </div>
         </div>
         <div class="bank-coverage-actions">
           <button type="button" class="small-btn" id="bankStrategySubmitBtn">Submit Request</button>
@@ -2936,6 +2984,7 @@
     const requestType = document.getElementById('bankStrategyType')?.value || 'Miscellaneous';
     const summaryEl = document.getElementById('bankStrategySummary');
     const summary = summaryEl ? summaryEl.value.trim() : '';
+    const fileInput = document.getElementById('bankStrategyFile');
     const payload = {
       bankId,
       requestType,
@@ -2958,6 +3007,9 @@
         STRATEGY_STATUSES.forEach(status => {
           strategyCounts[status] = strategyRequests.filter(row => row.status === status).length;
         });
+        if (fileInput && fileInput.files && fileInput.files[0]) {
+          await uploadStrategyFileFromInput(data.request.id, fileInput, { silent: true });
+        }
       }
       resetBankStrategyRequestForm();
       hideBankStrategyRequestPanel();
@@ -2987,6 +3039,11 @@
     if (assigned) assigned.value = 'Strategies';
     if (type) type.value = 'Muni BCIS';
     if (priority) priority.value = '3';
+    const file = document.getElementById('bankStrategyFile');
+    if (file) {
+      file.value = '';
+      updateStrategyDropFileName(file.closest('[data-strategy-drop]'), null);
+    }
   }
 
   function renderBankCoverageSection() {
