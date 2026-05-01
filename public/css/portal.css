@@ -409,6 +409,9 @@ body {
 }
 
 .top-link-menu {
+  align-items: center;
+  align-self: stretch;
+  display: flex;
   position: relative;
 }
 
@@ -428,7 +431,7 @@ body {
   padding: 7px;
   position: absolute;
   right: 0;
-  top: calc(100% + 10px);
+  top: 100%;
   z-index: 80;
 }
 
