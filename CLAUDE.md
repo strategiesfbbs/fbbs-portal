@@ -4,6 +4,10 @@ Internal Node.js web app for First Bankers' Banc Securities, Inc. — publishes 
 
 For Institutional Use Only.
 
+## Company / product context
+
+Read `docs/company-portal-context.md` when brainstorming portal direction, Salesforce replacement, bank coverage workflows, strategy/task queues, billing queues, maps, or product-fit ideas. Keep that context strategic and non-sensitive; do not copy settlement instructions, account numbers, or private approval-packet details into the repo.
+
 ## Constraints to weigh against any change
 
 - **Two npm deps only** (`pdf-parse`, `xlsx`). This is a deliberate choice — every new dependency makes deployment harder for a non-developer to babysit. Justify additions; prefer Node built-ins or shelling out to tools that exist on every box (e.g. `sqlite3`, `unzip`).
@@ -58,8 +62,9 @@ data/
 - `_`-prefixed files refused at both routes.
 - Filenames sanitized via `sanitizeFilename()` before any disk write.
 - Magic-byte signature check on every uploaded file (`looksLikePdf` / `looksLikeExcel` / `looksLikeHtml`).
-- Security headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: SAMEORIGIN`, and `Content-Security-Policy` (scoped — applied to the SPA shell + APIs but **not** to `/current/*` or `/archive/*`, since uploaded dashboard HTML legitimately loads Chart.js from cdnjs).
+- Security headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: SAMEORIGIN`, and `Content-Security-Policy` (scoped — strict CSP is applied to the SPA shell + APIs; uploaded dashboard HTML served from `/current/*` or `/archive/*` gets a sandbox CSP so direct opens stay isolated while still allowing scripts).
 - Dashboard iframe carries `sandbox="allow-scripts"` (no `allow-same-origin`) — its JS still runs but it gets an opaque origin and can't call our APIs.
+- Mutating `/api/*` requests are blocked when browser same-origin signals indicate a cross-site write.
 - Streaming file responses (`fs.createReadStream` + pipe).
 - Graceful shutdown on SIGINT/SIGTERM.
 
