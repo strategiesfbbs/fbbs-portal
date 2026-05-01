@@ -35,6 +35,8 @@
   let activeBankWorkspaceView = 'tear-sheet';
   let strategyRequests = [];
   let strategyCounts = {};
+  let strategyNotifications = { requests: [], counts: {} };
+  let selectedBankStrategyHistory = [];
   let selectedFiles = {
     dashboard: null, econ: null, cd: null, cdoffers: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -651,6 +653,10 @@
     const pkg = currentPackage || {};
     const missing = homeMissingDocs();
     const items = [];
+    const strategyCounts = strategyNotifications.counts || {};
+    const needsBilled = Number(strategyCounts['Needs Billed'] || 0);
+    const inProgress = Number(strategyCounts['In Progress'] || 0);
+    const openStrategies = Number(strategyCounts.Open || 0);
 
     if (filled < TOTAL_SLOTS) {
       items.push({
@@ -680,6 +686,25 @@
       });
     }
 
+    if (needsBilled > 0) {
+      items.push({
+        page: 'strategies',
+        tone: 'attention',
+        kicker: 'Billing',
+        title: `${formatNumber(needsBilled)} strateg${needsBilled === 1 ? 'y' : 'ies'} need${needsBilled === 1 ? 's' : ''} billed`,
+        detail: 'Review invoice contact and archive after billing'
+      });
+    }
+
+    if (openStrategies > 0 || inProgress > 0) {
+      items.push({
+        page: 'strategies',
+        kicker: 'Strategies',
+        title: `${formatNumber(openStrategies)} open · ${formatNumber(inProgress)} in progress`,
+        detail: 'Bond swaps, BCIS, CECL, and miscellaneous requests'
+      });
+    }
+
     items.push({
       page: 'banks',
       kicker: 'Coverage',
@@ -704,7 +729,9 @@
     const munis = marketData.munis || [];
     const agencies = marketData.agencies || [];
     const corporates = marketData.corporates || [];
+    const strategyCounts = strategyNotifications.counts || {};
     const cards = [
+      { page: 'strategies', label: 'Strategies', title: 'Strategies Queue', detail: 'Track Bond Swap, Muni BCIS, CECL, miscellaneous, and billing requests.', metric: `${formatNumber(strategyCounts.Open || 0)} open` },
       { page: 'banks', label: 'Banks', title: 'Bank Tear Sheets', detail: 'Call report tear sheets, saved banks, notes, and coverage status.', metric: 'Coverage workspace' },
       { page: 'explorer', label: 'CDs', title: 'CD Explorer', detail: 'Search daily CD offerings by issuer, CUSIP, term, rate, and restrictions.', metric: `${formatNumber(cds.length)} CDs` },
       { page: 'muni-explorer', label: 'Munis', title: 'Muni Explorer', detail: 'Browse municipal offerings by issuer, state, rating, yield, and call status.', metric: `${formatNumber(munis.length)} munis` },
@@ -1884,6 +1911,22 @@
     }
   }
 
+  async function loadStrategyNotifications() {
+    try {
+      const res = await fetch('/api/strategies', { cache: 'no-store' });
+      const data = await readBankJson(res);
+      strategyNotifications = {
+        requests: Array.isArray(data.requests) ? data.requests : [],
+        counts: data.counts || {}
+      };
+    } catch (e) {
+      strategyNotifications = { requests: [], counts: {} };
+    }
+    const filled = SLOTS.filter(slot => currentPackage && currentPackage[slot]).length;
+    renderHomeWorkList(filled);
+    renderHomeLaunchGrid();
+  }
+
   function filteredStrategies() {
     const search = document.getElementById('strategySearchInput');
     const type = document.getElementById('strategyTypeFilter');
@@ -1893,7 +1936,7 @@
       if (typeFilter && row.requestType !== typeFilter) return false;
       if (!q) return true;
       return [
-        row.displayName, row.legalName, row.city, row.state, row.certNumber,
+        row.id, row.displayName, row.legalName, row.city, row.state, row.certNumber,
         row.requestType, row.status, row.priority, row.requestedBy,
         row.assignedTo, row.invoiceContact, row.summary, row.comments,
         row.createdAt, row.updatedAt, row.completedAt, row.billedAt, row.archivedAt
@@ -1960,6 +2003,15 @@
     board.querySelectorAll('[data-strategy-update]').forEach(btn => {
       btn.addEventListener('click', () => updateStrategyStatus(btn.dataset.strategyUpdate, btn.dataset.strategyStatus));
     });
+    board.querySelectorAll('[data-strategy-edit]').forEach(btn => {
+      btn.addEventListener('click', () => showStrategyEditor(btn.dataset.strategyEdit));
+    });
+    board.querySelectorAll('[data-strategy-save]').forEach(btn => {
+      btn.addEventListener('click', () => saveStrategyEditor(btn.dataset.strategySave));
+    });
+    board.querySelectorAll('[data-strategy-cancel]').forEach(btn => {
+      btn.addEventListener('click', () => hideStrategyEditor(btn.dataset.strategyCancel));
+    });
     board.querySelectorAll('[data-strategy-archive]').forEach(btn => {
       btn.addEventListener('click', () => archiveStrategyRequest(btn.dataset.strategyArchive, btn.dataset.strategyBilling === 'true'));
     });
@@ -2006,6 +2058,7 @@
           ${row.isArchived ? `
             <button type="button" class="text-btn" data-strategy-restore="${escapeHtml(row.id)}">Restore</button>
           ` : ''}
+          <button type="button" class="text-btn" data-strategy-edit="${escapeHtml(row.id)}">Details</button>
           ${availableMoves.map(status => `
             <button type="button" class="text-btn" data-strategy-update="${escapeHtml(row.id)}" data-strategy-status="${escapeHtml(status)}">
               Move to ${escapeHtml(status)}
@@ -2018,8 +2071,94 @@
             <button type="button" class="text-btn" data-strategy-archive="${escapeHtml(row.id)}" data-strategy-billing="true">Mark Billed + Archive</button>
           ` : ''}
         </div>
+        ${renderStrategyEditor(row)}
       </article>
     `;
+  }
+
+  function renderStrategyEditor(row) {
+    return `
+      <div class="strategy-edit-panel" id="strategyEdit-${escapeHtml(row.id)}" hidden>
+        <div class="strategy-edit-grid">
+          <label>
+            <span>Request Type</span>
+            <select data-strategy-field="requestType">${coverageSelectOptions(STRATEGY_TYPES, row.requestType || 'Miscellaneous')}</select>
+          </label>
+          <label>
+            <span>Status</span>
+            <select data-strategy-field="status">${coverageSelectOptions(STRATEGY_STATUSES, row.status || 'Open')}</select>
+          </label>
+          <label>
+            <span>Priority</span>
+            <select data-strategy-field="priority">${coverageSelectOptions(STRATEGY_PRIORITIES, row.priority || '3')}</select>
+          </label>
+          <label>
+            <span>Requested By</span>
+            <input type="text" data-strategy-field="requestedBy" value="${escapeHtml(row.requestedBy || '')}">
+          </label>
+          <label>
+            <span>Assigned To</span>
+            <input type="text" data-strategy-field="assignedTo" value="${escapeHtml(row.assignedTo || '')}">
+          </label>
+          <label>
+            <span>Invoice Contact</span>
+            <input type="text" data-strategy-field="invoiceContact" value="${escapeHtml(row.invoiceContact || '')}">
+          </label>
+          <label class="wide">
+            <span>Summary</span>
+            <input type="text" data-strategy-field="summary" value="${escapeHtml(row.summary || '')}">
+          </label>
+          <label class="wide">
+            <span>Comments</span>
+            <textarea rows="4" data-strategy-field="comments">${escapeHtml(row.comments || '')}</textarea>
+          </label>
+        </div>
+        <div class="strategy-edit-actions">
+          <button type="button" class="small-btn" data-strategy-save="${escapeHtml(row.id)}">Save Details</button>
+          <button type="button" class="text-btn" data-strategy-cancel="${escapeHtml(row.id)}">Cancel</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function showStrategyEditor(id) {
+    const panel = document.getElementById(`strategyEdit-${id}`);
+    if (panel) panel.hidden = false;
+  }
+
+  function hideStrategyEditor(id) {
+    const panel = document.getElementById(`strategyEdit-${id}`);
+    if (panel) panel.hidden = true;
+  }
+
+  function strategyEditorValues(id) {
+    const panel = document.getElementById(`strategyEdit-${id}`);
+    const payload = {};
+    if (!panel) return payload;
+    panel.querySelectorAll('[data-strategy-field]').forEach(field => {
+      payload[field.dataset.strategyField] = field.value;
+    });
+    return payload;
+  }
+
+  async function saveStrategyEditor(id) {
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/strategies/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(strategyEditorValues(id))
+      });
+      const data = await readBankJson(res);
+      strategyRequests = strategyRequests.map(row => row.id === data.request.id ? data.request : row);
+      refreshStrategyCountsFromRows();
+      renderStrategyBoard();
+      await loadStrategyNotifications();
+      if (selectedBankId() && data.request.bankId === selectedBankId()) loadBankStrategyHistory(selectedBankId());
+      showToast('Saved strategy request details');
+    } catch (e) {
+      showToast(e.message, true);
+    }
   }
 
   function refreshStrategyCountsFromRows() {
@@ -2040,6 +2179,8 @@
       strategyRequests = strategyRequests.map(row => row.id === data.request.id ? data.request : row);
       refreshStrategyCountsFromRows();
       renderStrategyBoard();
+      await loadStrategyNotifications();
+      if (selectedBankId() && data.request.bankId === selectedBankId()) loadBankStrategyHistory(selectedBankId());
       showToast(`Moved request to ${status}`);
     } catch (e) {
       showToast(e.message, true);
@@ -2056,6 +2197,8 @@
       });
       await readBankJson(res);
       await loadStrategies();
+      await loadStrategyNotifications();
+      if (selectedBankId()) loadBankStrategyHistory(selectedBankId());
       showToast(markBilled ? 'Marked billed and archived request' : 'Archived strategy request');
     } catch (e) {
       showToast(e.message, true);
@@ -2072,6 +2215,8 @@
       });
       await readBankJson(res);
       await loadStrategies();
+      await loadStrategyNotifications();
+      if (selectedBankId()) loadBankStrategyHistory(selectedBankId());
       showToast('Restored strategy request');
     } catch (e) {
       showToast(e.message, true);
@@ -2389,9 +2534,11 @@
       selectedBankAccountStatus = (selectedBank.bank && selectedBank.bank.summary && selectedBank.bank.summary.accountStatus) || defaultBankAccountStatus();
       selectedTearSheetCoverage = getSavedBankById(selectedBank.bank.id);
       selectedBankNotes = [];
+      selectedBankStrategyHistory = [];
       renderBankProfile();
       rememberRecentBank(selectedBank.bank);
       loadTearSheetCoverage(selectedBank.bank.id);
+      loadBankStrategyHistory(selectedBank.bank.id);
     } catch (e) {
       if (profile) profile.innerHTML = `<div class="bank-empty-state"><h2>${escapeHtml(e.message)}</h2></div>`;
     }
@@ -2497,6 +2644,7 @@
         </div>
       </div>
       ${renderBankStrategyRequestPanel()}
+      ${renderBankStrategyHistoryPanel()}
       ${renderBankSection('Details', details, true)}
       ${renderBankFieldSection('Balance Sheet', fields, values, 'balanceSheet')}
       ${renderBankFieldSection('Securities (AFS-FV)', fields, values, 'securitiesAfs', 'afsTotal')}
@@ -2525,6 +2673,76 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
+  }
+
+  async function loadBankStrategyHistory(bankId) {
+    const list = document.getElementById('bankStrategyHistoryList');
+    if (list) list.innerHTML = '<div class="bank-search-empty">Loading strategy history...</div>';
+    try {
+      const res = await fetch(`/api/strategies?bankId=${encodeURIComponent(bankId)}&archived=all`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      selectedBankStrategyHistory = Array.isArray(data.requests) ? data.requests : [];
+      renderBankStrategyHistory();
+    } catch (e) {
+      selectedBankStrategyHistory = [];
+      renderBankStrategyHistory(e.message);
+    }
+  }
+
+  function renderBankStrategyHistoryPanel() {
+    return `
+      <section class="bank-section bank-strategy-history">
+        <div class="bank-section-title">Strategy Request History</div>
+        <div class="bank-strategy-history-list" id="bankStrategyHistoryList">
+          <div class="bank-search-empty">Loading strategy history...</div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderBankStrategyHistory(errorMessage) {
+    const list = document.getElementById('bankStrategyHistoryList');
+    if (!list) return;
+    if (errorMessage) {
+      list.innerHTML = `<div class="bank-search-empty">${escapeHtml(errorMessage)}</div>`;
+      return;
+    }
+    if (!selectedBankStrategyHistory.length) {
+      list.innerHTML = '<div class="bank-search-empty">No strategy requests for this bank yet.</div>';
+      return;
+    }
+    list.innerHTML = selectedBankStrategyHistory.map(row => `
+      <article class="bank-strategy-history-item">
+        <div>
+          <div class="strategy-card-head">
+            <strong>${escapeHtml(row.requestType || 'Miscellaneous')}</strong>
+            <span>
+              ${row.isArchived ? '<em class="strategy-archive-badge">Archived</em>' : ''}
+              <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
+            </span>
+          </div>
+          <p>${escapeHtml(row.summary || 'Strategy request')}</p>
+          <div class="strategy-card-meta">
+            <span>Priority ${escapeHtml(row.priority || '3')}</span>
+            ${row.requestedBy ? `<span>By ${escapeHtml(row.requestedBy)}</span>` : ''}
+            ${row.assignedTo ? `<span>Owner ${escapeHtml(row.assignedTo)}</span>` : ''}
+            ${row.invoiceContact ? `<span>Invoice ${escapeHtml(row.invoiceContact)}</span>` : ''}
+            <span>Updated ${escapeHtml(formatFullTimestamp(row.updatedAt))}</span>
+          </div>
+        </div>
+        <button type="button" class="text-btn" data-bank-strategy-open="${escapeHtml(row.id)}">Open in Queue</button>
+      </article>
+    `).join('');
+    list.querySelectorAll('[data-bank-strategy-open]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        goTo('strategies');
+        const search = document.getElementById('strategySearchInput');
+        const archive = document.getElementById('strategyArchiveFilter');
+        if (archive) archive.value = 'all';
+        if (search) search.value = btn.dataset.bankStrategyOpen || '';
+        loadStrategies();
+      });
+    });
   }
 
   function renderBankStrategyRequestPanel() {
@@ -2622,6 +2840,8 @@
       resetBankStrategyRequestForm();
       hideBankStrategyRequestPanel();
       renderStrategyBoard();
+      await loadStrategyNotifications();
+      await loadBankStrategyHistory(bankId);
       showToast('Submitted strategy request');
     } catch (e) {
       showToast(e.message, true);
@@ -4919,6 +5139,7 @@
   function init() {
     setHeaderDate();
     loadCurrent();
+    loadStrategyNotifications();
     loadArchive();
     setupUpload();
     setupGlobalSearch();
