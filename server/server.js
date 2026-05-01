@@ -32,6 +32,11 @@ const { parseEconomicUpdateText } = require('./economic-update-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
 const { parseCorporatesFiles } = require('./corporates-parser');
 const {
+  getMbsCmoSourceFile,
+  loadMbsCmoInventory,
+  saveMbsCmoUpload
+} = require('./mbs-cmo-store');
+const {
   getBankDatabaseStatus,
   getBankFromDatabase,
   importBankWorkbook,
@@ -80,6 +85,7 @@ const CURRENT_DIR = path.join(DATA_DIR, 'current');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
 const CD_HISTORY_DIR = path.join(DATA_DIR, 'cd-history');
 const BANK_REPORTS_DIR = path.join(DATA_DIR, 'bank-reports');
+const MBS_CMO_DIR = path.join(DATA_DIR, 'mbs-cmo');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
 const BANK_UPLOAD_MAX_BYTES = (parseInt(process.env.BANK_UPLOAD_MAX_MB, 10) || 300) * 1024 * 1024;
@@ -99,7 +105,7 @@ function log(level, ...args) {
 
 // ---------- Setup ----------
 
-[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR].forEach(dir => {
+[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('info', 'Created data directory:', dir);
@@ -121,6 +127,7 @@ const MIME_TYPES = {
   '.xls':  'application/vnd.ms-excel',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.csv':  'text/csv; charset=utf-8',
+  '.eml':  'message/rfc822',
   '.png':  'image/png',
   '.jpg':  'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -319,6 +326,38 @@ function looksLikeHtml(buffer) {
   if (!Buffer.isBuffer(buffer)) return false;
   const head = buffer.slice(0, 512).toString('utf-8').trimStart().toLowerCase();
   return head.startsWith('<!doctype html') || head.startsWith('<html') || head.includes('<html');
+}
+
+function looksLikePng(buffer) {
+  return Buffer.isBuffer(buffer) && hasBytes(buffer, [0x89, 0x50, 0x4e, 0x47]);
+}
+
+function looksLikeJpeg(buffer) {
+  return Buffer.isBuffer(buffer) && hasBytes(buffer, [0xff, 0xd8, 0xff]);
+}
+
+function validateMbsCmoFileSignature(file) {
+  if (!file || !file.data) return 'Upload is missing file data.';
+  const ext = path.extname(file.filename || '').toLowerCase();
+  if (!['.pdf', '.xlsx', '.xlsm', '.xlsb', '.xls', '.eml', '.png', '.jpg', '.jpeg'].includes(ext)) {
+    return 'MBS/CMO uploads must be Excel, PDF, email, PNG, or JPG files.';
+  }
+  if (ext === '.pdf') {
+    return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
+  }
+  if (['.xlsx', '.xlsm', '.xlsb', '.xls'].includes(ext)) {
+    return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
+  }
+  if (ext === '.eml') {
+    return looksLikePlainText(file.data) ? null : `${file.filename} does not look like an email message.`;
+  }
+  if (ext === '.png') {
+    return looksLikePng(file.data) ? null : `${file.filename} does not look like a PNG image.`;
+  }
+  if (['.jpg', '.jpeg'].includes(ext)) {
+    return looksLikeJpeg(file.data) ? null : `${file.filename} does not look like a JPG image.`;
+  }
+  return null;
 }
 
 function validateStrategyFileSignature(file) {
@@ -1105,6 +1144,48 @@ async function handleUploadStrategyRequestFile(req, res, id) {
   }
 }
 
+async function handleMbsCmoUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    if (!files.length) return sendJSON(res, 400, { error: 'Choose at least one MBS/CMO source file' });
+
+    for (const file of files) {
+      const signatureError = validateMbsCmoFileSignature(file);
+      if (signatureError) return sendJSON(res, 400, { error: signatureError });
+    }
+
+    for (const file of files) {
+      if (path.extname(file.filename || '').toLowerCase() !== '.pdf') continue;
+      try {
+        const result = await extractPdfText(file.data);
+        file.pdfText = result.text || '';
+      } catch (err) {
+        log('warn', 'MBS/CMO PDF extraction failed for', file.filename, err.message);
+        file.pdfText = '';
+      }
+    }
+
+    const inventory = saveMbsCmoUpload(MBS_CMO_DIR, files);
+    appendAuditLog({
+      event: 'mbs-cmo-upload',
+      files: files.map(file => ({
+        filename: sanitizeFilename(file.filename),
+        size: file.data.length
+      })),
+      parsedOffers: inventory.uploadedOffers.length,
+      warnings: inventory.uploadWarnings
+    });
+    return sendJSON(res, 200, inventory);
+  } catch (err) {
+    log('error', 'MBS/CMO upload failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not upload MBS/CMO files' });
+  }
+}
+
 async function handleBankDataUpload(req, res) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
@@ -1789,6 +1870,23 @@ const server = http.createServer(async (req, res) => {
         });
       }
       return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/mbs-cmo' && req.method === 'GET') {
+      return sendJSON(res, 200, loadMbsCmoInventory(MBS_CMO_DIR));
+    }
+
+    if (pathname === '/api/mbs-cmo/upload' && req.method === 'POST') {
+      return await handleMbsCmoUpload(req, res);
+    }
+
+    const mbsCmoFileMatch = pathname.match(/^\/api\/mbs-cmo\/files\/([^/]+)$/);
+    if (mbsCmoFileMatch && req.method === 'GET') {
+      const fileId = safeDecodeURIComponent(mbsCmoFileMatch[1]);
+      if (!fileId) return sendText(res, 400, 'Invalid MBS/CMO file ID');
+      const file = getMbsCmoSourceFile(MBS_CMO_DIR, fileId);
+      if (!file || !fs.existsSync(file.path)) return sendText(res, 404, 'Not found');
+      return sendFile(res, file.path, { download: true, filename: file.filename });
     }
 
     if (pathname === '/api/strategies' && req.method === 'GET') {

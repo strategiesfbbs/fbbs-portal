@@ -3,11 +3,13 @@ data/current/*
 data/archive/*
 data/cd-history/*
 data/bank-reports/*
+data/mbs-cmo/*
 data/audit.log
 !data/current/.gitkeep
 !data/archive/.gitkeep
 !data/cd-history/.gitkeep
 !data/bank-reports/.gitkeep
+!data/mbs-cmo/.gitkeep
 
 # Node / IIS logs
 node_modules/

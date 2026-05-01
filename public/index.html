@@ -61,6 +61,9 @@
         <a class="nav-link nav-minor" data-page="corporates" href="#corporates">
           <span class="nav-label">Corporate Explorer</span>
         </a>
+        <a class="nav-link nav-minor" data-page="mbs-cmo" href="#mbs-cmo">
+          <span class="nav-label">MBS/CMO Explorer</span>
+        </a>
       </div>
     </div>
 
@@ -150,6 +153,7 @@
         <a href="#muni-explorer" data-page="muni-explorer">Muni Explorer</a>
         <a href="#agencies" data-page="agencies">Agency Explorer</a>
         <a href="#corporates" data-page="corporates">Corporate Explorer</a>
+        <a href="#mbs-cmo" data-page="mbs-cmo">MBS/CMO Explorer</a>
         <a href="#cd-recap" data-page="cd-recap">Weekly CD Recap</a>
       </div>
     </div>
@@ -1444,6 +1448,113 @@
     <div class="legend-box">
       <strong>Tip:</strong>
       Credit tier classification follows S&amp;P's letter grades (AAA/AA / A / BBB / HY / NR). "IG" = investment grade (BBB &amp; up). Amount outstanding in millions is sortable as Qty. Click column headers to sort.
+    </div>
+  </div>
+</div>
+
+<!-- ========== MBS / CMO EXPLORER PAGE ========== -->
+<div class="page" id="p-mbs-cmo">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>MBS/CMO <strong>Explorer</strong></h2>
+        <p class="hero-sub" id="mbsCmoSub">Upload Bloomberg workbooks, deal PDFs, screen snips, and offer emails.</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="mbsCmoStat">&mdash;</div>
+        <div class="lbl">Offers Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="mbs-upload-panel">
+      <div>
+        <h3>Source Drop</h3>
+        <p>Excel with Bloomberg values, CMO/MBS PDFs, .eml offer emails, and PNG/JPG screen snips are saved together here.</p>
+      </div>
+      <label class="mbs-file-picker" for="mbsCmoUploadInput">
+        <span>Select source files</span>
+        <small id="mbsCmoUploadName">No files selected</small>
+      </label>
+      <input type="file" id="mbsCmoUploadInput" multiple accept=".xlsm,.xlsx,.xlsb,.xls,.pdf,.eml,.png,.jpg,.jpeg" hidden>
+      <button type="button" class="publish-btn" id="mbsCmoUploadBtn">Upload Sources</button>
+      <div class="mbs-upload-status" id="mbsCmoUploadStatus"></div>
+    </div>
+
+    <div class="section-title-bar">
+      <h3>Filter &amp; Sort MBS/CMO</h3>
+      <div class="kicker" id="mbsCmoKicker">&mdash;</div>
+    </div>
+
+    <div class="explorer-stats" id="mbsCmoStatTiles"></div>
+
+    <div class="agency-filters">
+      <div class="af-row corp-search-row">
+        <label class="ef-field af-search-field">
+          <span>Search CUSIP, description, source, or note</span>
+          <input type="text" id="mf-search" placeholder="Type 3133, PAC, FMED, FR RB..." autocomplete="off">
+        </label>
+        <label class="ef-field">
+          <span>Product</span>
+          <select id="mf-product">
+            <option value="">All</option>
+            <option value="MBS">MBS</option>
+            <option value="CMO">CMO</option>
+            <option value="Email Offer">Email notes</option>
+          </select>
+        </label>
+        <label class="ef-field">
+          <span>Source</span>
+          <select id="mf-source">
+            <option value="">All sources</option>
+            <option value="Bloomberg Workbook">Bloomberg Workbook</option>
+            <option value="PDF Offering">PDF Offering</option>
+            <option value="Email Offer">Email Offer</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="af-row af-row-narrow">
+        <label class="ef-field"><span>Min yield %</span><input type="number" id="mf-minYield" step="0.01" min="0" max="20" placeholder="4.5"></label>
+        <label class="ef-field"><span>Max WAL</span><input type="number" id="mf-maxWal" step="0.1" min="0" max="40" placeholder="6"></label>
+        <label class="ef-field"><span>Min spread</span><input type="number" id="mf-minSpread" step="1" placeholder="50"></label>
+        <label class="ef-field"><span>Settle from</span><input type="date" id="mf-settleFrom"></label>
+        <label class="ef-field"><span>Maturity to</span><input type="date" id="mf-maturityTo"></label>
+        <div class="ef-actions af-actions">
+          <button type="button" class="small-btn" id="mf-reset">Clear filters</button>
+          <button type="button" class="small-btn" id="mf-export">Export CSV</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table mbs-cmo-table">
+        <thead>
+          <tr>
+            <th data-sort="productType" style="width:80px">Product</th>
+            <th data-sort="description">Description</th>
+            <th data-sort="cusip" style="width:100px">CUSIP</th>
+            <th data-sort="coupon" style="width:75px;text-align:right">Cpn %</th>
+            <th data-sort="price" style="width:75px;text-align:right">Price</th>
+            <th data-sort="yield" style="width:75px;text-align:right">Yield %</th>
+            <th data-sort="wal" style="width:70px;text-align:right">WAL</th>
+            <th data-sort="spread" style="width:75px;text-align:right">Spread</th>
+            <th data-sort="principalWindow" style="width:115px">Prin Window</th>
+            <th data-sort="settleDate" style="width:95px">Settle</th>
+            <th data-sort="sourceType" style="width:120px">Source</th>
+            <th style="width:125px">Files</th>
+          </tr>
+        </thead>
+        <tbody id="mbsCmoBody">
+          <tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">Loading MBS/CMO inventory&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="legend-box">
+      <strong>Note:</strong>
+      Bloomberg workbooks use cached cell values, so refresh and save from Bloomberg before uploading. Screen snips are retained as sources; Excel, PDF, and email files are parsed into rows.
     </div>
   </div>
 </div>

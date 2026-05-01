@@ -37,6 +37,7 @@
   let strategyCounts = {};
   let strategyNotifications = { requests: [], counts: {} };
   let selectedBankStrategyHistory = [];
+  let mbsCmoData = null;
   let selectedFiles = {
     dashboard: null, econ: null, cd: null, cdoffers: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -58,7 +59,7 @@
 
   const VALID_PAGES = ['home', 'dashboard', 'econ', 'cd', 'cdoffers', 'munioffers',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'banks', 'strategies', 'archive', 'upload', 'admin'];
+                       'mbs-cmo', 'banks', 'strategies', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Dashboard', description: 'Status, market snapshot, search all offerings', aliases: 'home command center summary' },
@@ -72,6 +73,7 @@
     { page: 'muni-explorer', group: 'Offerings', label: 'Muni Explorer', description: 'Filter, sort, and export muni offerings', aliases: 'municipal bonds state rating munis offerings' },
     { page: 'agencies', group: 'Offerings', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
     { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
+    { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert salesforce' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
@@ -88,6 +90,7 @@
     'muni-explorer': 'offerings',
     agencies: 'offerings',
     corporates: 'offerings',
+    'mbs-cmo': 'offerings',
     banks: 'banks'
   };
 
@@ -897,6 +900,7 @@
     if (pageName === 'muni-explorer') loadMuniOfferings();
     if (pageName === 'agencies') loadAgencies();
     if (pageName === 'corporates') loadCorporates();
+    if (pageName === 'mbs-cmo') loadMbsCmo();
     if (pageName === 'banks') {
       loadBankStatus();
       loadSavedBanks();
@@ -5254,6 +5258,260 @@
     showToast(`Exported ${filtered.length} corporate offerings`);
   }
 
+  // ============ MBS / CMO Explorer ============
+
+  let mbsCmoFilters = {
+    search: '',
+    product: '',
+    source: '',
+    minYield: null,
+    maxWal: null,
+    minSpread: null,
+    settleFrom: null,
+    maturityTo: null
+  };
+  let mbsCmoSort = { col: 'createdAt', dir: 'desc' };
+
+  async function loadMbsCmo() {
+    const body = document.getElementById('mbsCmoBody');
+    if (!body) return;
+    try {
+      const res = await fetch('/api/mbs-cmo', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      mbsCmoData = await res.json();
+    } catch (e) {
+      console.error('Failed to load MBS/CMO:', e);
+      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--danger)">
+        Failed to load MBS/CMO inventory: ${escapeHtml(e.message)}
+      </td></tr>`;
+      return;
+    }
+    renderMbsCmo();
+  }
+
+  function applyMbsCmoFilters(offers) {
+    const f = mbsCmoFilters;
+    return offers.filter(o => {
+      if (f.search) {
+        const q = f.search.toLowerCase();
+        const haystack = [
+          o.description, o.cusip, o.productType, o.sourceType, o.note,
+          o.emailSubject, o.emailFrom, ...(o.sourceFiles || []).map(file => file.filename)
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      if (f.product === 'Email Offer' && o.sourceType !== 'Email Offer') return false;
+      if (f.product && f.product !== 'Email Offer' && o.productType !== f.product) return false;
+      if (f.source && o.sourceType !== f.source) return false;
+      if (f.minYield != null && (o.yield == null || o.yield < f.minYield)) return false;
+      if (f.maxWal != null && (o.wal == null || o.wal > f.maxWal)) return false;
+      if (f.minSpread != null && (o.spread == null || o.spread < f.minSpread)) return false;
+      if (f.settleFrom && (!o.settleDate || o.settleDate < f.settleFrom)) return false;
+      if (f.maturityTo && (!o.maturityDate || o.maturityDate > f.maturityTo)) return false;
+      return true;
+    });
+  }
+
+  function sortMbsCmoInPlace(rows) {
+    const { col, dir } = mbsCmoSort;
+    const mult = dir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      const av = a[col], bv = b[col];
+      if (av == null || av === '') return 1;
+      if (bv == null || bv === '') return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult;
+      return String(av).localeCompare(String(bv)) * mult;
+    });
+  }
+
+  function renderMbsCmo() {
+    const body = document.getElementById('mbsCmoBody');
+    if (!body || !mbsCmoData) return;
+    const offers = Array.isArray(mbsCmoData.offers) ? mbsCmoData.offers : [];
+    const filtered = applyMbsCmoFilters(offers);
+    sortMbsCmoInPlace(filtered);
+
+    setText('mbsCmoStat', formatNumber(filtered.length));
+    const sourceCount = Array.isArray(mbsCmoData.sources) ? mbsCmoData.sources.length : 0;
+    const uploaded = mbsCmoData.uploadedAt ? `Updated ${formatFullTimestamp(mbsCmoData.uploadedAt)}` : 'No uploads yet';
+    setText('mbsCmoKicker', `${uploaded} · ${formatNumber(sourceCount)} source files`);
+    setText('mbsCmoSub', `${formatNumber(offers.length)} modeled rows from ${formatNumber(sourceCount)} uploaded sources`);
+    renderStatTiles('mbsCmoStatTiles', [
+      { label: 'Shown', value: formatNumber(filtered.length) },
+      { label: 'CMOs', value: formatNumber(filtered.filter(o => o.productType === 'CMO').length) },
+      { label: 'MBS', value: formatNumber(filtered.filter(o => o.productType === 'MBS').length) },
+      { label: 'Avg Yield', value: formatPercentTile(average(filtered.map(o => o.yield)), 2) },
+      { label: 'Avg WAL', value: average(filtered.map(o => o.wal)) == null ? '—' : average(filtered.map(o => o.wal)).toFixed(2) }
+    ]);
+
+    if (!offers.length) {
+      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">
+        No MBS/CMO sources uploaded yet. Use the source drop above to add Bloomberg workbooks, PDFs, offer emails, or screenshots.
+      </td></tr>`;
+      return;
+    }
+    if (!filtered.length) {
+      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">
+        No MBS/CMO rows match the current filters.
+      </td></tr>`;
+      return;
+    }
+
+    const fmt = (v, d = 2) => v == null || isNaN(v) ? '<span class="no-restrict">&mdash;</span>' : Number(v).toFixed(d);
+    const fmtDate = v => v ? formatNumericDate(v) : '<span class="no-restrict">&mdash;</span>';
+    const pillClass = p => p === 'CMO' ? 'tier-a' : p === 'MBS' ? 'tier-bbb' : 'tier-nr';
+
+    body.innerHTML = filtered.map(o => {
+      const files = (o.sourceFiles || []).map(file => `
+        <a class="source-chip" href="/api/mbs-cmo/files/${encodeURIComponent(file.id)}" target="_blank" rel="noopener">
+          ${escapeHtml(file.extension || 'file')}
+        </a>
+      `).join('');
+      const note = o.note ? `<div class="mbs-note">${escapeHtml(o.note).slice(0, 360)}</div>` : '';
+      return `
+        <tr>
+          <td><span class="tier-pill ${pillClass(o.productType)}">${escapeHtml(o.productType || 'MBS/CMO')}</span></td>
+          <td class="issuer-cell"><strong>${escapeHtml(o.description || o.emailSubject || 'Offer note')}</strong>${note}</td>
+          <td class="cusip-cell">${escapeHtml(o.cusip || '')}</td>
+          <td style="text-align:right">${fmt(o.coupon, 3)}</td>
+          <td style="text-align:right">${fmt(o.price, 3)}</td>
+          <td style="text-align:right" class="rate-cell">${fmt(o.yield, 3)}</td>
+          <td style="text-align:right">${fmt(o.wal, 2)}</td>
+          <td style="text-align:right">${fmt(o.spread, 0)}</td>
+          <td>${escapeHtml(o.principalWindow || '')}</td>
+          <td>${fmtDate(o.settleDate)}</td>
+          <td><span class="rank-chip">${escapeHtml(o.sourceType || '')}</span></td>
+          <td>${files || '<span class="no-restrict">&mdash;</span>'}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  function setupMbsCmo() {
+    const byId = id => document.getElementById(id);
+    const search = byId('mf-search');
+    if (!search) return;
+
+    search.addEventListener('input', () => {
+      mbsCmoFilters.search = search.value.trim();
+      if (mbsCmoData) renderMbsCmo();
+    });
+    byId('mf-product').addEventListener('change', e => {
+      mbsCmoFilters.product = e.target.value;
+      if (mbsCmoData) renderMbsCmo();
+    });
+    byId('mf-source').addEventListener('change', e => {
+      mbsCmoFilters.source = e.target.value;
+      if (mbsCmoData) renderMbsCmo();
+    });
+
+    [
+      ['mf-minYield', 'minYield', 'num'],
+      ['mf-maxWal', 'maxWal', 'num'],
+      ['mf-minSpread', 'minSpread', 'num'],
+      ['mf-settleFrom', 'settleFrom', 'str'],
+      ['mf-maturityTo', 'maturityTo', 'str']
+    ].forEach(([id, key, kind]) => {
+      const el = byId(id);
+      el.addEventListener('input', () => {
+        if (kind === 'num') {
+          const v = parseFloat(el.value);
+          mbsCmoFilters[key] = isNaN(v) ? null : v;
+        } else {
+          mbsCmoFilters[key] = el.value || null;
+        }
+        if (mbsCmoData) renderMbsCmo();
+      });
+    });
+
+    byId('mf-reset').addEventListener('click', () => {
+      mbsCmoFilters = { search: '', product: '', source: '', minYield: null, maxWal: null, minSpread: null, settleFrom: null, maturityTo: null };
+      ['mf-search', 'mf-product', 'mf-source', 'mf-minYield', 'mf-maxWal', 'mf-minSpread', 'mf-settleFrom', 'mf-maturityTo'].forEach(id => {
+        const el = byId(id);
+        if (el) el.value = '';
+      });
+      if (mbsCmoData) renderMbsCmo();
+    });
+    byId('mf-export').addEventListener('click', exportMbsCmoCsv);
+
+    byId('mbsCmoUploadInput').addEventListener('change', e => {
+      const names = [...(e.target.files || [])].map(file => file.name);
+      setText('mbsCmoUploadName', names.length ? `${names.length} selected: ${names.slice(0, 2).join(', ')}${names.length > 2 ? '...' : ''}` : 'No files selected');
+    });
+    byId('mbsCmoUploadBtn').addEventListener('click', uploadMbsCmoFiles);
+
+    document.querySelectorAll('#p-mbs-cmo th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.sort;
+        if (mbsCmoSort.col === col) mbsCmoSort.dir = mbsCmoSort.dir === 'asc' ? 'desc' : 'asc';
+        else {
+          mbsCmoSort.col = col;
+          mbsCmoSort.dir = ['coupon', 'price', 'yield', 'wal', 'spread'].includes(col) ? 'desc' : 'asc';
+        }
+        document.querySelectorAll('#p-mbs-cmo th').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
+        th.classList.add(mbsCmoSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+        if (mbsCmoData) renderMbsCmo();
+      });
+    });
+  }
+
+  async function uploadMbsCmoFiles() {
+    const input = document.getElementById('mbsCmoUploadInput');
+    const status = document.getElementById('mbsCmoUploadStatus');
+    const button = document.getElementById('mbsCmoUploadBtn');
+    const files = [...(input.files || [])];
+    if (!files.length) return showToast('Choose one or more MBS/CMO source files', true);
+
+    const form = new FormData();
+    files.forEach(file => form.append('sources', file));
+    button.disabled = true;
+    status.textContent = 'Uploading and parsing sources...';
+    try {
+      const res = await fetch('/api/mbs-cmo/upload', { method: 'POST', body: form });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      mbsCmoData = data;
+      input.value = '';
+      setText('mbsCmoUploadName', 'No files selected');
+      status.textContent = `Added ${formatNumber(data.uploadedOffers ? data.uploadedOffers.length : 0)} modeled rows from ${formatNumber(data.uploadedSources ? data.uploadedSources.length : files.length)} sources.`;
+      if (Array.isArray(data.uploadWarnings) && data.uploadWarnings.length) {
+        status.textContent += ` ${data.uploadWarnings.length} warning(s).`;
+      }
+      renderMbsCmo();
+      showToast('MBS/CMO sources uploaded');
+    } catch (e) {
+      status.textContent = e.message;
+      showToast(e.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function exportMbsCmoCsv() {
+    if (!mbsCmoData) return showToast('No MBS/CMO data loaded', true);
+    const filtered = applyMbsCmoFilters(mbsCmoData.offers || []);
+    sortMbsCmoInPlace(filtered);
+    if (!filtered.length) return showToast('No rows match filters', true);
+    const rows = [[
+      'Product','Description','CUSIP','Coupon','Price','Bid','Ask','Yield','WAL','Duration','Spread',
+      'WAC','Factor','CurrentFace','OriginalFace','SettleDate','IssueDate','MaturityDate',
+      'PrincipalWindow','Collateral','TopGeo','Loans','Available','SourceType','SourceFiles','Note'
+    ]];
+    filtered.forEach(o => {
+      rows.push([
+        o.productType || '', o.description || o.emailSubject || '', o.cusip || '',
+        o.coupon ?? '', o.price ?? '', o.bid ?? '', o.ask ?? '', o.yield ?? '', o.wal ?? '',
+        o.duration ?? '', o.spread ?? '', o.wac ?? '', o.factor ?? '', o.currentFace ?? '',
+        o.originalFace ?? '', o.settleDate || '', o.issueDate || '', o.maturityDate || '',
+        o.principalWindow || '', o.collateral || '', o.topGeo || '', o.loans ?? '',
+        o.available || '', o.sourceType || '', (o.sourceFiles || []).map(f => f.filename).join('; '),
+        o.note || ''
+      ]);
+    });
+    const stamp = (mbsCmoData.uploadedAt || 'mbs-cmo').slice(0, 10).replace(/[^a-z0-9_-]/gi, '_');
+    downloadCsv(`fbbs_mbs_cmo_${stamp}.csv`, rows);
+    showToast(`Exported ${filtered.length} MBS/CMO rows`);
+  }
+
   // ============ Admin / Audit Log ============
 
   async function loadAuditLog() {
@@ -5333,6 +5591,7 @@
     setupMuniFilters();
     setupAgencyFilters();
     setupCorpFilters();
+    setupMbsCmo();
     setupBankSearch();
     setupStrategies();
     setupCommissionControls();
