@@ -55,6 +55,11 @@ const {
   upsertBankAccountStatus
 } = require('./bank-account-status-store');
 const {
+  createStrategyRequest,
+  listStrategyRequests,
+  updateStrategyRequest
+} = require('./strategy-store');
+const {
   ensureCdHistoryDir,
   saveCdHistorySnapshot,
   summarizeWeeklyCdHistory
@@ -986,6 +991,49 @@ async function handleAddBankNote(req, res, bankId) {
   }
 }
 
+async function handleCreateStrategyRequest(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const bankId = String(body.bankId || '').trim();
+    if (!bankId) return sendJSON(res, 400, { error: 'Bank ID is required' });
+
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+
+    const request = createStrategyRequest(BANK_REPORTS_DIR, summary, body);
+    appendAuditLog({
+      event: 'strategy-request-create',
+      strategyId: request && request.id,
+      bankId,
+      requestType: request && request.requestType,
+      status: request && request.status
+    });
+    return sendJSON(res, 200, { request });
+  } catch (err) {
+    log('error', 'Strategy request create failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not create strategy request' });
+  }
+}
+
+async function handleUpdateStrategyRequest(req, res, id) {
+  try {
+    const body = await readJsonBody(req);
+    const request = updateStrategyRequest(BANK_REPORTS_DIR, id, body);
+    if (!request) return sendJSON(res, 404, { error: 'Strategy request not found' });
+    appendAuditLog({
+      event: 'strategy-request-update',
+      strategyId: request.id,
+      bankId: request.bankId,
+      requestType: request.requestType,
+      status: request.status
+    });
+    return sendJSON(res, 200, { request });
+  } catch (err) {
+    log('error', 'Strategy request update failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not update strategy request' });
+  }
+}
+
 async function handleBankDataUpload(req, res) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
@@ -1670,6 +1718,24 @@ const server = http.createServer(async (req, res) => {
         });
       }
       return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/strategies' && req.method === 'GET') {
+      return sendJSON(res, 200, listStrategyRequests(BANK_REPORTS_DIR, {
+        status: query.get('status'),
+        bankId: query.get('bankId')
+      }));
+    }
+
+    if (pathname === '/api/strategies' && req.method === 'POST') {
+      return await handleCreateStrategyRequest(req, res);
+    }
+
+    const strategyMatch = pathname.match(/^\/api\/strategies\/([^/]+)$/);
+    if (strategyMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(strategyMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid strategy request ID' });
+      return await handleUpdateStrategyRequest(req, res, id);
     }
 
     if (pathname === '/api/bank-coverage' && req.method === 'GET') {

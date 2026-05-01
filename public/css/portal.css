@@ -3211,7 +3211,8 @@ body {
   .quality-bar, .explorer-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .explorer-filters { grid-template-columns: 1fr 1fr 1fr; }
   .muni-filters { grid-template-columns: 1fr 1fr 1fr; }
-.commission-control { grid-template-columns: 1fr 1fr; }
+  .commission-control { grid-template-columns: 1fr 1fr; }
+  .strategy-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ef-actions { grid-column: 1 / -1; justify-content: flex-end; }
   .top-strip-links { display: none; }
 }
@@ -3764,6 +3765,210 @@ body {
   margin-left: auto;
 }
 
+.strategy-toolbar {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.strategy-filter-row {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(190px, auto) auto;
+  gap: 10px;
+}
+
+.strategy-filter-row input,
+.strategy-filter-row select,
+.strategy-request-grid input,
+.strategy-request-grid select,
+.strategy-request-grid textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  min-width: 0;
+  padding: 10px 11px;
+}
+
+.strategy-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.strategy-count-pill {
+  align-items: center;
+  background: #eef3ef;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text2);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 7px;
+  padding: 7px 10px;
+}
+
+.strategy-count-pill strong {
+  color: var(--green);
+}
+
+.strategy-board {
+  align-items: start;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(230px, 1fr));
+  gap: 14px;
+}
+
+.strategy-column {
+  background: #f7faf8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.strategy-column-head {
+  align-items: center;
+  background: #eef3ef;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  padding: 11px 12px;
+}
+
+.strategy-column-head h3 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.strategy-column-head span {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.strategy-column-list {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.strategy-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+}
+
+.strategy-card-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.strategy-card-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.strategy-bank-link {
+  background: transparent;
+  border: 0;
+  color: var(--green);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 900;
+  padding: 0;
+  text-align: left;
+}
+
+.strategy-bank-link:hover {
+  text-decoration: underline;
+}
+
+.strategy-card p,
+.strategy-card-comments {
+  color: var(--text2);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.strategy-card-comments {
+  background: #fbfcfb;
+  border-left: 3px solid var(--tea-green);
+  padding: 8px 10px;
+}
+
+.strategy-card-meta {
+  color: var(--text3);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  font-weight: 800;
+  gap: 7px 10px;
+}
+
+.strategy-card-actions {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding-top: 8px;
+}
+
+.strategy-empty-column {
+  color: var(--text3);
+  font-size: 12px;
+  padding: 14px 8px;
+  text-align: center;
+}
+
+.bank-strategy-request {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bank-strategy-request .bank-section-title {
+  border-radius: 0;
+}
+
+.strategy-request-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 12px 0;
+}
+
+.strategy-request-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.strategy-request-grid label span {
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.strategy-request-grid textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.strategy-request-grid .wide {
+  grid-column: 1 / -1;
+}
+
 .bank-note-composer {
   align-items: stretch;
   display: grid;
@@ -3909,6 +4114,9 @@ body {
   .muni-filters { grid-template-columns: 1fr 1fr; }
   .commission-control { grid-template-columns: 1fr; }
   .bank-search-row,
+  .strategy-filter-row,
+  .strategy-board,
+  .strategy-request-grid,
   .bank-fields-grid,
   .bank-result,
   .bank-recent-list,

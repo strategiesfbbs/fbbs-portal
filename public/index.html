@@ -90,6 +90,9 @@
         <a class="nav-link nav-minor" data-page="banks" href="#banks">
           <span class="nav-label">Bank Tear Sheets</span>
         </a>
+        <a class="nav-link nav-minor" data-page="strategies" href="#strategies">
+          <span class="nav-label">Strategies</span>
+        </a>
       </div>
     </div>
 
@@ -295,6 +298,43 @@
         </section>
       </div>
     </section>
+  </div>
+</div>
+
+<!-- ========== STRATEGIES PAGE ========== -->
+<div class="page" id="p-strategies">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Strategies <strong>Queue</strong></h2>
+        <p class="hero-sub" id="strategiesSub">Bond swaps, Muni BCIS, CECL analysis, and miscellaneous strategy requests.</p>
+      </div>
+      <div class="hero-stat">
+        <span id="strategiesOpenCount">&mdash;</span>
+        <small>Open</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="strategy-toolbar">
+      <div class="strategy-filter-row">
+        <input type="search" id="strategySearchInput" placeholder="Search requests, banks, comments, invoice contacts..." autocomplete="off">
+        <select id="strategyTypeFilter" aria-label="Filter strategy type">
+          <option value="">All request types</option>
+          <option value="Bond Swap">Bond Swaps</option>
+          <option value="Muni BCIS">Muni BCIS</option>
+          <option value="CECL Analysis">CECL Analysis</option>
+          <option value="Miscellaneous">Miscellaneous</option>
+        </select>
+        <button type="button" class="small-btn" id="strategyRefreshBtn">Refresh</button>
+      </div>
+      <div class="strategy-counts" id="strategyCounts"></div>
+    </div>
+
+    <div class="strategy-board" id="strategyBoard">
+      <div class="bank-search-empty">Loading strategy requests&hellip;</div>
+    </div>
   </div>
 </div>
 

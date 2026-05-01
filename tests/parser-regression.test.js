@@ -45,6 +45,11 @@ const {
   importBankAccountStatusWorkbook,
   upsertBankAccountStatus
 } = require('../server/bank-account-status-store');
+const {
+  createStrategyRequest,
+  listStrategyRequests,
+  updateStrategyRequest
+} = require('../server/strategy-store');
 
 const ROOT = path.join(__dirname, '..');
 const CURRENT_DIR = path.join(ROOT, 'data', 'current');
@@ -426,6 +431,48 @@ function assertBankAccountStatusStore() {
   }
 }
 
+function assertStrategyStore() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-strategies-'));
+  try {
+    const summary = {
+      id: 'bank-1',
+      displayName: 'Sample Bank, Springfield, IL',
+      name: 'Sample Bank',
+      city: 'Springfield',
+      state: 'IL',
+      certNumber: '12345'
+    };
+    const request = createStrategyRequest(tmp, summary, {
+      requestType: 'Bond Swap',
+      priority: '2',
+      requestedBy: 'Joe',
+      assignedTo: 'Strategies',
+      invoiceContact: 'Controller',
+      summary: 'Evaluate swap for tax-loss harvesting',
+      comments: 'Client asked for a breakeven review.'
+    });
+    assert(request.id);
+    assert.strictEqual(request.status, 'Open');
+    assert.strictEqual(request.requestType, 'Bond Swap');
+    assert.strictEqual(request.priority, '2');
+
+    const open = listStrategyRequests(tmp, { status: 'Open' });
+    assert.strictEqual(open.requests.length, 1);
+    assert.strictEqual(open.counts.Open, 1);
+
+    const updated = updateStrategyRequest(tmp, request.id, { status: 'Needs Billed', assignedTo: 'Dan' });
+    assert.strictEqual(updated.status, 'Needs Billed');
+    assert.strictEqual(updated.assignedTo, 'Dan');
+    assert(updated.billedAt);
+
+    const byBank = listStrategyRequests(tmp, { bankId: 'bank-1' });
+    assert.strictEqual(byBank.requests.length, 1);
+    assert.strictEqual(byBank.counts['Needs Billed'], 1);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function assertCdHistoryWeeklyDedupe() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-cd-history-'));
   const baseOfferings = [
@@ -541,6 +588,7 @@ function assertWeeklyCdWorksheetImport() {
   assertBankDatabaseRoundTrip();
   assertBankCoverageStore();
   assertBankAccountStatusStore();
+  assertStrategyStore();
   assertCdHistoryWeeklyDedupe();
   assertWeeklyCdWorksheetImport();
   console.log('Parser regression tests passed.');
