@@ -1808,7 +1808,7 @@ const server = http.createServer(async (req, res) => {
       "default-src 'self'; " +
       "img-src 'self' data:; " +
       "style-src 'self' 'unsafe-inline'; " +
-      "script-src 'self'; " +
+      "script-src 'self' https://cdn.plot.ly; " +
       "frame-src 'self'; " +
       "object-src 'none'; " +
       "base-uri 'self'; " +

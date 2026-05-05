@@ -5336,6 +5336,20 @@ body {
   padding: 14px;
 }
 
+.bank-plotly-map {
+  height: min(68vh, 620px);
+  min-height: 420px;
+  padding: 8px;
+}
+
+.bank-map-loading {
+  align-items: center;
+  color: var(--text3);
+  display: flex;
+  height: 100%;
+  justify-content: center;
+}
+
 .bank-state-row {
   display: grid;
   gap: 6px;
@@ -5427,7 +5441,7 @@ body {
   background: rgba(21, 96, 69, 0.07);
 }
 
-.bank-map-table td:nth-child(n+3):nth-child(-n+8) {
+.bank-map-table td:nth-child(n+5):nth-child(-n+7) {
   text-align: right;
   white-space: nowrap;
 }
@@ -5461,7 +5475,7 @@ body {
 .bank-map-detail-tabs {
   display: grid;
   gap: 6px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 12px 0;
 }
 
@@ -5508,6 +5522,79 @@ body {
 
 .bank-map-detail-actions {
   margin-top: 14px;
+}
+
+.bank-map-detail-qoq {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+
+.bank-map-detail-qoq th,
+.bank-map-detail-qoq td {
+  border-bottom: 1px solid var(--border);
+  padding: 7px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.bank-map-detail-qoq th {
+  background: var(--surface2);
+  color: var(--text3);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.bank-map-detail-qoq th:not(:first-child),
+.bank-map-detail-qoq td:not(:first-child) {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bank-map-detail-qoq .chg-pos {
+  color: #0b6b3a;
+}
+
+.bank-map-detail-qoq .chg-neg {
+  color: #9b1c1c;
+}
+
+.bank-map-tooltip {
+  background: rgba(20, 20, 20, 0.95);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  color: #fff;
+  display: none;
+  font-size: 12px;
+  left: 0;
+  line-height: 1.25;
+  max-width: 360px;
+  padding: 10px 12px;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  z-index: 9999;
+}
+
+.bank-map-tooltip-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.bank-map-tooltip-grid {
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: auto 1fr;
+}
+
+.bank-map-tooltip-grid span {
+  opacity: 0.9;
+}
+
+.bank-map-tooltip-grid strong {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .bank-map-filter-panel {

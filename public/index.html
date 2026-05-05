@@ -403,11 +403,12 @@
         <div class="bank-map-head">
           <div>
             <span class="tool-eyebrow">State Selection</span>
-            <h3>Coverage map</h3>
+            <h3>Interactive heat map</h3>
           </div>
           <span id="bankMapMetricLabel">Bank count</span>
         </div>
-        <div class="bank-state-map" id="bankStateMap"></div>
+        <div class="bank-plotly-map" id="bankPlotlyMap"></div>
+        <div class="bank-state-map" id="bankStateMap" hidden></div>
       </div>
 
       <div class="bank-map-list-panel">
@@ -422,19 +423,18 @@
           <table class="bank-map-table">
             <thead>
               <tr>
-                <th>Bank</th>
+                <th>Bank Name (A-Z)</th>
+                <th>FDIC Cert #</th>
+                <th>City</th>
                 <th>State</th>
                 <th>Assets</th>
-                <th>AFS</th>
-                <th>HTM</th>
                 <th>L/D</th>
                 <th>ROA</th>
-                <th>NIM</th>
                 <th>Status</th>
               </tr>
             </thead>
             <tbody id="bankMapRows">
-              <tr><td colspan="9">Loading map data...</td></tr>
+              <tr><td colspan="8">Loading map data...</td></tr>
             </tbody>
           </table>
         </div>
