@@ -93,6 +93,9 @@
         <a class="nav-link nav-minor" data-page="banks" href="#banks">
           <span class="nav-label">Bank Tear Sheets</span>
         </a>
+        <a class="nav-link nav-minor" data-page="maps" href="#maps">
+          <span class="nav-label">US Bank Map</span>
+        </a>
       </div>
     </div>
 
@@ -174,7 +177,8 @@
         <span aria-hidden="true">&#8964;</span>
       </button>
       <div class="top-link-menu-panel external-tools-panel">
-        <a href="https://fbbs.lightning.force.com/lightning/n/Maps" target="_blank" rel="noopener">Maps</a>
+        <a href="#maps" data-page="maps">US Bank Map</a>
+        <a href="https://fbbs.lightning.force.com/lightning/n/Maps" target="_blank" rel="noopener">Salesforce Maps</a>
         <a href="https://eportfolio.fbbsinc.com/ePortfolio/Account/Login" target="_blank" rel="noopener">Portfolio Accounting</a>
         <a href="https://www.netxinvestor.com/nxi/login" target="_blank" rel="noopener">NETX Investor</a>
         <a href="https://fbbsinc.com" target="_blank" rel="noopener">fbbsinc.com</a>
@@ -1607,6 +1611,82 @@
   </div>
 </div>
 
+<!-- ========== MAPS PAGE ========== -->
+<div class="page" id="p-maps">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>US Bank Map</h2>
+        <p class="hero-sub" id="mapsSubtitle">Loading bank tear sheet data&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="mapsBankCount">&mdash;</div>
+        <div class="lbl">Banks</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="maps-split">
+      <section class="maps-panel">
+        <h3>Interactive Heat Map</h3>
+        <div id="mapsPlot" class="maps-plot"></div>
+        <div class="maps-tip">Tip: click states to toggle selection. Use Clear to reset.</div>
+      </section>
+
+      <section class="maps-panel">
+        <h3>Bank List</h3>
+        <div class="maps-controls">
+          <div class="maps-control-row">
+            <span class="maps-control-label">Selected states:</span>
+            <div id="mapsStateChips" class="maps-chips"></div>
+            <button id="mapsClearStates" type="button" class="small-btn">Clear</button>
+          </div>
+          <div class="maps-control-row">
+            <input type="search" id="mapsSearchBox" placeholder="Search bank, FDIC, city&hellip;" autocomplete="off">
+            <button id="mapsAdvancedBtn" type="button" class="small-btn">Advanced filter&hellip;</button>
+            <span id="mapsActiveFilters" class="maps-active-filters"></span>
+            <span id="mapsRowCount" class="maps-row-count">&mdash;</span>
+          </div>
+        </div>
+        <div class="maps-tablewrap">
+          <table id="mapsBankTable" class="maps-table">
+            <thead>
+              <tr>
+                <th>Bank Name</th>
+                <th>FDIC</th>
+                <th>City</th>
+                <th>State</th>
+                <th class="num">Assets ($MM)</th>
+                <th class="num">ROA (%)</th>
+                <th class="num">NIM (%)</th>
+              </tr>
+            </thead>
+            <tbody id="mapsBankBody">
+              <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">Loading&hellip;</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="maps-modal-backdrop" id="mapsModalBackdrop" hidden>
+    <div class="maps-modal" role="dialog" aria-modal="true">
+      <header>
+        <span class="title">Advanced filter (AND)</span>
+        <button type="button" class="small-btn" id="mapsModalClose">Close</button>
+      </header>
+      <div class="maps-modal-body" id="mapsConditionsBody"></div>
+      <footer>
+        <button type="button" class="small-btn" id="mapsAddCondition">Add condition</button>
+        <button type="button" class="small-btn" id="mapsResetConditions">Reset</button>
+        <button type="button" class="small-btn primary" id="mapsApplyConditions">Apply</button>
+      </footer>
+    </div>
+  </div>
+</div>
+
 <!-- ========== ADMIN PAGE ========== -->
 <div class="page" id="p-admin">
   <section class="page-hero">
@@ -1681,6 +1761,7 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite">Action completed</div>
 
+<script src="/vendor/plotly-2.27.0.min.js"></script>
 <script src="/js/portal.js"></script>
 </body>
 </html>

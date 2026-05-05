@@ -988,6 +988,64 @@ function getBankDataStatus() {
   };
 }
 
+let mapBankCache = null;
+
+function buildMapBankList() {
+  const summaries = listBankSummaries(BANK_REPORTS_DIR) || [];
+  const toMm = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v) / 1000;
+  const toNum = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v);
+  const isCurrent = p => /^2025Q\d/.test(String(p || ''));
+  const banks = summaries.filter(s => isCurrent(s.period)).map(s => ({
+    bankkey: s.id || '',
+    bankname: s.displayName || s.name || '',
+    fdic: s.certNumber || '',
+    city: s.city || '',
+    state: s.state || '',
+    period: s.period || '',
+    assetsmm: toMm(s.totalAssets),
+    equitymm: toMm(s.totalEquityCapital),
+    tier1mm: toMm(s.tier1Capital),
+    depositsmm: toMm(s.totalDeposits),
+    afsmm: toMm(s.afsTotal),
+    htmmm: toMm(s.htmTotal),
+    ltd: toNum(s.loansToDeposits),
+    roa: toNum(s.roa),
+    roe: toNum(s.roe),
+    nim: toNum(s.netInterestMargin),
+    yos: toNum(s.yieldOnSecurities),
+    yieldloans: toNum(s.yieldOnLoans),
+    yea: toNum(s.yieldOnEarningAssets),
+    cof: toNum(s.costOfFunds),
+    eff: toNum(s.efficiencyRatio),
+    leverage: toNum(s.leverageRatio),
+    nibpct: toNum(s.nonInterestBearingDeposits),
+    wholesale: toNum(s.wholesaleFundingReliance)
+  }));
+  const stateCounts = {};
+  let latestPeriod = '';
+  for (const b of banks) {
+    if (b.state) stateCounts[b.state] = (stateCounts[b.state] || 0) + 1;
+    if (b.period && b.period > latestPeriod) latestPeriod = b.period;
+  }
+  return { banks, stateCounts, latestPeriod, bankCount: banks.length };
+}
+
+function getMapBankData() {
+  if (!mapBankCache) {
+    try {
+      mapBankCache = buildMapBankList();
+    } catch (err) {
+      log('warn', 'Map bank list build failed:', err.message);
+      return null;
+    }
+  }
+  return mapBankCache;
+}
+
+function invalidateMapBankCache() {
+  mapBankCache = null;
+}
+
 function getBankSummaryForCoverage(bankId) {
   const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId);
   if (!data || !data.bank || !data.bank.summary) return null;
@@ -1209,6 +1267,7 @@ async function handleBankDataUpload(req, res) {
       sourceFile: sanitizeFilename(file.filename)
     });
     fs.renameSync(tmpTarget, target);
+    invalidateMapBankCache();
     appendAuditLog({
       event: 'bank-data-import',
       sourceFile: sanitizeFilename(file.filename),
@@ -2013,6 +2072,12 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/banks/search' && req.method === 'GET') {
       const limit = Math.min(parseInt(query.get('limit'), 10) || 12, 25);
       const data = searchBanks(query.get('q') || '', limit);
+      if (!data) return sendJSON(res, 404, { error: 'No bank data has been imported yet' });
+      return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/banks/map' && req.method === 'GET') {
+      const data = getMapBankData();
       if (!data) return sendJSON(res, 404, { error: 'No bank data has been imported yet' });
       return sendJSON(res, 200, data);
     }

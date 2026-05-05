@@ -61,7 +61,7 @@
 
   const VALID_PAGES = ['home', 'dashboard', 'econ', 'cd', 'cdoffers', 'munioffers',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'banks', 'strategies', 'archive', 'upload', 'admin'];
+                       'mbs-cmo', 'banks', 'maps', 'strategies', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -77,6 +77,7 @@
     { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
     { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
+    { page: 'maps', group: 'Banks', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
@@ -93,7 +94,8 @@
     agencies: 'offerings',
     corporates: 'offerings',
     'mbs-cmo': 'offerings',
-    banks: 'banks'
+    banks: 'banks',
+    maps: 'banks'
   };
 
   const DEFAULT_BROKERED_CD_TERMS = [
@@ -926,6 +928,7 @@
       loadSavedBanks();
       loadAccountCoverageAccounts();
     }
+    if (pageName === 'maps') loadMaps();
     if (pageName === 'strategies') loadStrategies();
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'admin') loadAuditLog();
@@ -6175,6 +6178,404 @@
         }
       });
     });
+  }
+
+  // ============ US Bank Map ============
+
+  const MAPS_FILTER_FIELDS = [
+    { key: 'bankname', label: 'Bank Name', type: 'text' },
+    { key: 'fdic', label: 'FDIC Cert #', type: 'text' },
+    { key: 'city', label: 'City', type: 'text' },
+    { key: 'state', label: 'State', type: 'text' },
+    { key: 'assetsmm', label: 'Total Assets ($MM)', type: 'number' },
+    { key: 'equitymm', label: 'Total Equity Capital ($MM)', type: 'number' },
+    { key: 'tier1mm', label: 'Tier 1 Capital ($MM)', type: 'number' },
+    { key: 'depositsmm', label: 'Total Deposits ($MM)', type: 'number' },
+    { key: 'afsmm', label: 'Securities AFS ($MM)', type: 'number' },
+    { key: 'htmmm', label: 'Securities HTM ($MM)', type: 'number' },
+    { key: 'ltd', label: 'Loan/Deposit (%)', type: 'number' },
+    { key: 'roa', label: 'ROA (%)', type: 'number' },
+    { key: 'roe', label: 'ROE (%)', type: 'number' },
+    { key: 'nim', label: 'Net Interest Margin (%)', type: 'number' },
+    { key: 'yos', label: 'Yield on Securities (%)', type: 'number' },
+    { key: 'yieldloans', label: 'Yield on Loans (%)', type: 'number' },
+    { key: 'yea', label: 'Yield on Earning Assets (%)', type: 'number' },
+    { key: 'cof', label: 'Cost of Funds (%)', type: 'number' },
+    { key: 'eff', label: 'Efficiency Ratio (%)', type: 'number' },
+    { key: 'leverage', label: 'Leverage Ratio (%)', type: 'number' },
+    { key: 'nibpct', label: 'Non-Int Bearing Dep / Total Dep (%)', type: 'number' },
+    { key: 'wholesale', label: 'Reliance on Wholesale Funding (%)', type: 'number' }
+  ];
+  const MAPS_NUMERIC_OPS = ['>', '>=', '=', '<=', '<', '!='];
+  const MAPS_TEXT_OPS = ['contains', 'equals'];
+
+  let mapsState = {
+    loaded: false,
+    loading: false,
+    banks: [],
+    stateCounts: {},
+    latestPeriod: '',
+    selectedStates: new Set(),
+    search: '',
+    advanced: [],
+    plotInitialized: false
+  };
+
+  function fmtMm(v) {
+    if (v == null || !Number.isFinite(v)) return '';
+    if (v >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return v.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  }
+
+  function fmtPct(v) {
+    if (v == null || !Number.isFinite(v)) return '';
+    return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+
+  async function loadMaps() {
+    const subtitle = document.getElementById('mapsSubtitle');
+    if (mapsState.loading) return;
+    if (mapsState.loaded) {
+      renderMapsView();
+      return;
+    }
+    mapsState.loading = true;
+    if (subtitle) subtitle.textContent = 'Loading bank tear sheet data…';
+    try {
+      const res = await fetch('/api/banks/map', { cache: 'no-store' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Bank tear sheet data not available yet.');
+      }
+      const data = await res.json();
+      mapsState.banks = Array.isArray(data.banks) ? data.banks : [];
+      mapsState.stateCounts = data.stateCounts || {};
+      mapsState.latestPeriod = data.latestPeriod || '';
+      mapsState.loaded = true;
+      mapsBindHandlers();
+      renderMapsView();
+    } catch (err) {
+      if (subtitle) subtitle.textContent = err.message || 'Failed to load bank data';
+      const body = document.getElementById('mapsBankBody');
+      if (body) body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">${escapeHtml(err.message || 'Failed to load')}</td></tr>`;
+    } finally {
+      mapsState.loading = false;
+    }
+  }
+
+  function renderMapsView() {
+    const subtitle = document.getElementById('mapsSubtitle');
+    const countEl = document.getElementById('mapsBankCount');
+    if (countEl) countEl.textContent = mapsState.banks.length.toLocaleString();
+    if (subtitle) {
+      subtitle.textContent = mapsState.latestPeriod
+        ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · click states or rows for detail`
+        : `${mapsState.banks.length.toLocaleString()} banks · click states or rows for detail`;
+    }
+    renderMapsChoropleth();
+    renderMapsStateChips();
+    applyMapsFilters();
+  }
+
+  function renderMapsChoropleth() {
+    if (typeof Plotly === 'undefined') return;
+    const el = document.getElementById('mapsPlot');
+    if (!el) return;
+    if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
+    const entries = Object.entries(mapsState.stateCounts).sort();
+    const locations = entries.map(([s]) => s);
+    const z = entries.map(([, n]) => n);
+    const portalScale = [
+      [0.00, '#f3f8f5'],
+      [0.25, '#B8CEBE'],
+      [0.50, '#9EB8A8'],
+      [0.75, '#345F4A'],
+      [1.00, '#003F2A']
+    ];
+    const figData = [{
+      type: 'choropleth',
+      locationmode: 'USA-states',
+      locations,
+      z,
+      colorscale: portalScale,
+      hovertemplate: '<b>%{location}</b><br>Banks: %{z:,.0f}<extra></extra>',
+      marker: { line: { color: '#ffffff', width: 0.6 } },
+      colorbar: {
+        title: { text: 'Banks', font: { color: '#1f2925', size: 12 } },
+        tickfont: { color: '#1f2925', size: 11 },
+        outlinecolor: '#dbe6df',
+        outlinewidth: 1,
+        thickness: 12,
+        len: 0.85
+      }
+    }];
+    const layout = {
+      geo: {
+        scope: 'usa',
+        showlakes: true,
+        lakecolor: '#f7faf8',
+        bgcolor: 'rgba(0,0,0,0)',
+        landcolor: '#fbfdfc',
+        subunitcolor: '#dbe6df'
+      },
+      font: { family: 'inherit', color: '#1f2925' },
+      margin: { t: 10, r: 10, b: 10, l: 10 },
+      coloraxis: undefined,
+      paper_bgcolor: 'rgba(0,0,0,0)',
+      plot_bgcolor: 'rgba(0,0,0,0)'
+    };
+    Plotly.react(el, figData, layout, { responsive: true, displaylogo: false }).then(() => {
+      if (mapsState.plotInitialized) return;
+      mapsState.plotInitialized = true;
+      el.on('plotly_click', (data) => {
+        if (!data || !data.points || !data.points.length) return;
+        const st = data.points[0].location;
+        if (!st) return;
+        if (mapsState.selectedStates.has(st)) mapsState.selectedStates.delete(st);
+        else mapsState.selectedStates.add(st);
+        renderMapsStateChips();
+        applyMapsFilters();
+      });
+    });
+  }
+
+  function renderMapsStateChips() {
+    const chipsEl = document.getElementById('mapsStateChips');
+    if (!chipsEl) return;
+    if (mapsState.selectedStates.size === 0) {
+      chipsEl.innerHTML = '<span class="maps-chip">All</span>';
+      return;
+    }
+    const html = Array.from(mapsState.selectedStates).sort().map(st =>
+      `<span class="maps-chip"><span>${escapeHtml(st)}</span><span class="x" data-maps-remove-state="${escapeHtml(st)}" title="Remove">×</span></span>`
+    ).join('');
+    chipsEl.innerHTML = html;
+  }
+
+  function rowMatchesAdvanced(bank) {
+    if (!mapsState.advanced.length) return true;
+    for (const cond of mapsState.advanced) {
+      const def = MAPS_FILTER_FIELDS.find(f => f.key === cond.field);
+      if (!def) continue;
+      const val = bank[cond.field];
+      if (def.type === 'number') {
+        const lhs = (val == null || !Number.isFinite(Number(val))) ? null : Number(val);
+        const rhs = Number(String(cond.value).replace(/,/g, '').replace(/%/g, ''));
+        if (lhs == null || !Number.isFinite(rhs)) return false;
+        switch (cond.op) {
+          case '>': if (!(lhs > rhs)) return false; break;
+          case '>=': if (!(lhs >= rhs)) return false; break;
+          case '<': if (!(lhs < rhs)) return false; break;
+          case '<=': if (!(lhs <= rhs)) return false; break;
+          case '=': if (!(lhs === rhs)) return false; break;
+          case '!=': if (!(lhs !== rhs)) return false; break;
+          default: return false;
+        }
+      } else {
+        const lhs = String(val || '').toLowerCase();
+        const rhs = String(cond.value || '').toLowerCase();
+        if (cond.op === 'equals') { if (lhs !== rhs) return false; }
+        else if (cond.op === 'contains') { if (!lhs.includes(rhs)) return false; }
+        else return false;
+      }
+    }
+    return true;
+  }
+
+  function applyMapsFilters() {
+    const body = document.getElementById('mapsBankBody');
+    const rowCountEl = document.getElementById('mapsRowCount');
+    if (!body) return;
+    const q = (mapsState.search || '').toLowerCase().trim();
+    const sel = mapsState.selectedStates;
+    const rows = [];
+    for (const b of mapsState.banks) {
+      if (sel.size > 0 && !sel.has(b.state)) continue;
+      if (q) {
+        const hay = (b.bankname + ' ' + b.fdic + ' ' + b.city + ' ' + b.state).toLowerCase();
+        if (!hay.includes(q)) continue;
+      }
+      if (!rowMatchesAdvanced(b)) continue;
+      rows.push(b);
+    }
+    rows.sort((a, b) => (b.assetsmm || 0) - (a.assetsmm || 0));
+    const limit = 1000;
+    const shown = rows.slice(0, limit);
+    body.innerHTML = shown.map(b => `
+      <tr data-maps-bankid="${escapeHtml(b.bankkey)}">
+        <td>${escapeHtml(b.bankname || '')}</td>
+        <td>${escapeHtml(b.fdic || '')}</td>
+        <td>${escapeHtml(b.city || '')}</td>
+        <td>${escapeHtml(b.state || '')}</td>
+        <td class="num">${escapeHtml(fmtMm(b.assetsmm))}</td>
+        <td class="num">${escapeHtml(fmtPct(b.roa))}</td>
+        <td class="num">${escapeHtml(fmtPct(b.nim))}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
+    if (rowCountEl) {
+      const total = rows.length.toLocaleString();
+      rowCountEl.textContent = rows.length > limit
+        ? `${shown.length.toLocaleString()} of ${total} bank(s) shown (top by assets)`
+        : `${total} bank(s) shown`;
+    }
+    renderMapsActiveFilters();
+  }
+
+  function renderMapsActiveFilters() {
+    const el = document.getElementById('mapsActiveFilters');
+    if (!el) return;
+    if (!mapsState.advanced.length) { el.textContent = ''; return; }
+    const parts = mapsState.advanced.map(f => {
+      const def = MAPS_FILTER_FIELDS.find(d => d.key === f.field);
+      return (def ? def.label : f.field) + ' ' + f.op + ' ' + f.value;
+    });
+    el.textContent = 'Active filter: ' + parts.join(' AND ');
+  }
+
+  function openMapsConditionsModal() {
+    const backdrop = document.getElementById('mapsModalBackdrop');
+    const body = document.getElementById('mapsConditionsBody');
+    if (!backdrop || !body) return;
+    if (mapsState.advanced.length === 0) mapsState.advanced.push({ field: 'assetsmm', op: '>', value: '' });
+    renderMapsConditionRows();
+    backdrop.hidden = false;
+  }
+
+  function closeMapsConditionsModal() {
+    const backdrop = document.getElementById('mapsModalBackdrop');
+    if (backdrop) backdrop.hidden = true;
+  }
+
+  function renderMapsConditionRows() {
+    const body = document.getElementById('mapsConditionsBody');
+    if (!body) return;
+    body.innerHTML = mapsState.advanced.map((cond, idx) => {
+      const def = MAPS_FILTER_FIELDS.find(f => f.key === cond.field) || MAPS_FILTER_FIELDS[0];
+      const ops = def.type === 'number' ? MAPS_NUMERIC_OPS : MAPS_TEXT_OPS;
+      const fieldOpts = MAPS_FILTER_FIELDS.map(f => `<option value="${escapeHtml(f.key)}"${f.key === cond.field ? ' selected' : ''}>${escapeHtml(f.label)}</option>`).join('');
+      const opOpts = ops.map(o => `<option value="${escapeHtml(o)}"${o === cond.op ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
+      return `
+        <div class="maps-cond" data-maps-cond-idx="${idx}">
+          <select data-maps-cond-field>${fieldOpts}</select>
+          <select data-maps-cond-op>${opOpts}</select>
+          <input type="text" data-maps-cond-value value="${escapeHtml(String(cond.value || ''))}" placeholder="value">
+          <button type="button" class="small-btn" data-maps-cond-remove>Remove</button>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function mapsBindHandlers() {
+    const search = document.getElementById('mapsSearchBox');
+    if (search && !search.dataset.bound) {
+      search.addEventListener('input', () => { mapsState.search = search.value; applyMapsFilters(); });
+      search.dataset.bound = '1';
+    }
+    const clearBtn = document.getElementById('mapsClearStates');
+    if (clearBtn && !clearBtn.dataset.bound) {
+      clearBtn.addEventListener('click', () => {
+        mapsState.selectedStates.clear();
+        renderMapsStateChips();
+        applyMapsFilters();
+      });
+      clearBtn.dataset.bound = '1';
+    }
+    const advBtn = document.getElementById('mapsAdvancedBtn');
+    if (advBtn && !advBtn.dataset.bound) {
+      advBtn.addEventListener('click', openMapsConditionsModal);
+      advBtn.dataset.bound = '1';
+    }
+    const closeBtn = document.getElementById('mapsModalClose');
+    if (closeBtn && !closeBtn.dataset.bound) {
+      closeBtn.addEventListener('click', closeMapsConditionsModal);
+      closeBtn.dataset.bound = '1';
+    }
+    const addCond = document.getElementById('mapsAddCondition');
+    if (addCond && !addCond.dataset.bound) {
+      addCond.addEventListener('click', () => {
+        mapsState.advanced.push({ field: 'assetsmm', op: '>', value: '' });
+        renderMapsConditionRows();
+      });
+      addCond.dataset.bound = '1';
+    }
+    const resetCond = document.getElementById('mapsResetConditions');
+    if (resetCond && !resetCond.dataset.bound) {
+      resetCond.addEventListener('click', () => {
+        mapsState.advanced = [];
+        renderMapsConditionRows();
+        applyMapsFilters();
+      });
+      resetCond.dataset.bound = '1';
+    }
+    const applyCond = document.getElementById('mapsApplyConditions');
+    if (applyCond && !applyCond.dataset.bound) {
+      applyCond.addEventListener('click', () => {
+        const rows = document.querySelectorAll('#mapsConditionsBody .maps-cond');
+        const next = [];
+        rows.forEach(row => {
+          const field = row.querySelector('[data-maps-cond-field]').value;
+          const op = row.querySelector('[data-maps-cond-op]').value;
+          const value = row.querySelector('[data-maps-cond-value]').value;
+          if (value !== '') next.push({ field, op, value });
+        });
+        mapsState.advanced = next;
+        closeMapsConditionsModal();
+        applyMapsFilters();
+      });
+      applyCond.dataset.bound = '1';
+    }
+    const condBody = document.getElementById('mapsConditionsBody');
+    if (condBody && !condBody.dataset.bound) {
+      condBody.addEventListener('click', e => {
+        const remove = e.target.closest('[data-maps-cond-remove]');
+        if (remove) {
+          const idx = Number(remove.closest('[data-maps-cond-idx]').dataset.mapsCondIdx);
+          mapsState.advanced.splice(idx, 1);
+          renderMapsConditionRows();
+        }
+      });
+      condBody.addEventListener('change', e => {
+        const row = e.target.closest('[data-maps-cond-idx]');
+        if (!row) return;
+        const idx = Number(row.dataset.mapsCondIdx);
+        const cond = mapsState.advanced[idx];
+        if (!cond) return;
+        if (e.target.matches('[data-maps-cond-field]')) {
+          cond.field = e.target.value;
+          const def = MAPS_FILTER_FIELDS.find(f => f.key === cond.field);
+          cond.op = def && def.type === 'number' ? '>' : 'contains';
+          renderMapsConditionRows();
+        } else if (e.target.matches('[data-maps-cond-op]')) {
+          cond.op = e.target.value;
+        } else if (e.target.matches('[data-maps-cond-value]')) {
+          cond.value = e.target.value;
+        }
+      });
+      condBody.dataset.bound = '1';
+    }
+    const tableBody = document.getElementById('mapsBankBody');
+    if (tableBody && !tableBody.dataset.bound) {
+      tableBody.addEventListener('click', e => {
+        const tr = e.target.closest('tr[data-maps-bankid]');
+        if (!tr) return;
+        const id = tr.dataset.mapsBankid;
+        if (!id) return;
+        goTo('banks');
+        if (typeof loadBank === 'function') loadBank(id, { collapseResults: true });
+      });
+      tableBody.dataset.bound = '1';
+    }
+    const chipsEl = document.getElementById('mapsStateChips');
+    if (chipsEl && !chipsEl.dataset.bound) {
+      chipsEl.addEventListener('click', e => {
+        const x = e.target.closest('[data-maps-remove-state]');
+        if (!x) return;
+        mapsState.selectedStates.delete(x.dataset.mapsRemoveState);
+        renderMapsStateChips();
+        applyMapsFilters();
+      });
+      chipsEl.dataset.bound = '1';
+    }
   }
 
   if (document.readyState === 'loading') {
