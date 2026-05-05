@@ -41,6 +41,7 @@ const {
   getBankFromDatabase,
   importBankWorkbook,
   listBankSummaries,
+  queryBankMapDataset,
   searchBankDatabase
 } = require('./bank-data-importer');
 const {
@@ -991,55 +992,54 @@ function getBankDataStatus() {
 let mapBankCache = null;
 
 function buildMapBankList() {
-  const summaries = listBankSummaries(BANK_REPORTS_DIR) || [];
+  const dataset = queryBankMapDataset(BANK_REPORTS_DIR, '2025Q*');
+  if (!dataset) return null;
   const toMm = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v) / 1000;
   const toNum = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v);
-  const isCurrent = p => /^2025Q\d/.test(String(p || ''));
-  const banks = summaries.filter(s => isCurrent(s.period)).map(s => ({
-    bankkey: s.id || '',
-    bankname: s.displayName || s.name || '',
-    fdic: s.certNumber || '',
-    city: s.city || '',
-    state: s.state || '',
-    period: s.period || '',
-    assetsmm: toMm(s.totalAssets),
-    equitymm: toMm(s.totalEquityCapital),
-    tier1mm: toMm(s.tier1Capital),
-    depositsmm: toMm(s.totalDeposits),
-    afsmm: toMm(s.afsTotal),
-    htmmm: toMm(s.htmTotal),
-    ltd: toNum(s.loansToDeposits),
-    roa: toNum(s.roa),
-    roe: toNum(s.roe),
-    nim: toNum(s.netInterestMargin),
-    yos: toNum(s.yieldOnSecurities),
-    yieldloans: toNum(s.yieldOnLoans),
-    yea: toNum(s.yieldOnEarningAssets),
-    cof: toNum(s.costOfFunds),
-    eff: toNum(s.efficiencyRatio),
-    leverage: toNum(s.leverageRatio),
-    nibpct: toNum(s.nonInterestBearingDeposits),
-    wholesale: toNum(s.wholesaleFundingReliance)
+  const banks = dataset.banks.map(b => ({
+    bankkey: b.bankkey || '',
+    bankname: b.bankname || '',
+    fdic: b.fdic || '',
+    city: b.city || '',
+    state: b.state || '',
+    period: b.period || '',
+    assetsmm: toMm(b.totalAssets),
+    equitymm: toMm(b.totalEquityCapital),
+    tier1mm: toMm(b.tier1Capital),
+    depositsmm: toMm(b.totalDeposits),
+    afsmm: toMm(b.afsTotal),
+    htmmm: toMm(b.htmTotal),
+    ltd: toNum(b.ltd),
+    roa: toNum(b.roa),
+    roe: toNum(b.roe),
+    nim: toNum(b.nim),
+    yos: toNum(b.yos),
+    yieldloans: toNum(b.yieldloans),
+    yea: toNum(b.yea),
+    cof: toNum(b.cof),
+    eff: toNum(b.eff),
+    leverage: toNum(b.leverage),
+    nibpct: toNum(b.nibpct),
+    wholesale: toNum(b.wholesale)
   }));
-  const stateCounts = {};
-  let latestPeriod = '';
-  for (const b of banks) {
-    if (b.state) stateCounts[b.state] = (stateCounts[b.state] || 0) + 1;
-    if (b.period && b.period > latestPeriod) latestPeriod = b.period;
-  }
-  return { banks, stateCounts, latestPeriod, bankCount: banks.length };
+  return {
+    banks,
+    stateCounts: dataset.stateCounts,
+    latestPeriod: dataset.latestPeriod,
+    bankCount: banks.length
+  };
 }
 
 function getMapBankData() {
-  if (!mapBankCache) {
-    try {
-      mapBankCache = buildMapBankList();
-    } catch (err) {
-      log('warn', 'Map bank list build failed:', err.message);
-      return null;
-    }
+  if (mapBankCache) return mapBankCache;
+  try {
+    const built = buildMapBankList();
+    if (built) mapBankCache = built;
+    return built;
+  } catch (err) {
+    log('warn', 'Map bank list build failed:', err.message);
+    return null;
   }
-  return mapBankCache;
 }
 
 function invalidateMapBankCache() {

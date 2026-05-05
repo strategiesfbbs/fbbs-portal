@@ -599,6 +599,49 @@ function listBankSummaries(outputDir) {
     .map(row => JSON.parse(row.summary_json));
 }
 
+function queryBankMapDataset(outputDir, periodPattern = '2025Q*') {
+  const dbPath = databasePathForDir(outputDir);
+  if (!fs.existsSync(dbPath)) return null;
+  const safePattern = String(periodPattern).replace(/'/g, "''");
+  const banks = querySqliteJson(dbPath, `
+    SELECT
+      id AS bankkey,
+      display_name AS bankname,
+      cert_number AS fdic,
+      city,
+      state,
+      json_extract(summary_json, '$.period') AS period,
+      json_extract(summary_json, '$.totalAssets') AS totalAssets,
+      json_extract(summary_json, '$.totalEquityCapital') AS totalEquityCapital,
+      json_extract(summary_json, '$.tier1Capital') AS tier1Capital,
+      json_extract(summary_json, '$.totalDeposits') AS totalDeposits,
+      json_extract(summary_json, '$.afsTotal') AS afsTotal,
+      json_extract(summary_json, '$.htmTotal') AS htmTotal,
+      json_extract(summary_json, '$.loansToDeposits') AS ltd,
+      json_extract(summary_json, '$.roa') AS roa,
+      json_extract(summary_json, '$.roe') AS roe,
+      json_extract(summary_json, '$.netInterestMargin') AS nim,
+      json_extract(summary_json, '$.yieldOnSecurities') AS yos,
+      json_extract(summary_json, '$.yieldOnLoans') AS yieldloans,
+      json_extract(summary_json, '$.yieldOnEarningAssets') AS yea,
+      json_extract(summary_json, '$.costOfFunds') AS cof,
+      json_extract(summary_json, '$.efficiencyRatio') AS eff,
+      json_extract(summary_json, '$.leverageRatio') AS leverage,
+      json_extract(summary_json, '$.nonInterestBearingDeposits') AS nibpct,
+      json_extract(summary_json, '$.wholesaleFundingReliance') AS wholesale
+    FROM banks
+    WHERE json_extract(summary_json, '$.period') GLOB '${safePattern}'
+    ORDER BY total_assets DESC;
+  `);
+  const stateCounts = {};
+  let latestPeriod = '';
+  for (const b of banks) {
+    if (b.state) stateCounts[b.state] = (stateCounts[b.state] || 0) + 1;
+    if (b.period && b.period > latestPeriod) latestPeriod = b.period;
+  }
+  return { banks, stateCounts, latestPeriod, bankCount: banks.length };
+}
+
 module.exports = {
   BANK_DATABASE_FILENAME,
   BANK_FIELDS,
@@ -608,6 +651,7 @@ module.exports = {
   importBankWorkbook,
   listBankSummaries,
   parseBankWorkbook,
+  queryBankMapDataset,
   searchBankDatabase,
   writeBankDatabase
 };
