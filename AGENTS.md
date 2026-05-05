@@ -97,9 +97,31 @@ What's intentionally *not* there: app-level auth, CSRF tokens, rate limiting, lo
 ## Dual-agent workflow (Codex + Claude Code)
 
 - This repo is edited by both Codex (CLI/IDE) and Claude Code. Both agents read this file as their primary context — `AGENTS.md` is a mirror of `CLAUDE.md`. Update one, copy to the other.
-- Pull before you commit. Each agent should `git pull` (or just check `git log`) before starting work so it sees the other's latest changes.
-- Commit small. One feature or fix per commit so the other agent can review or revert without untangling.
-- Don't leave large uncommitted working trees — the other agent can't see them. If you pause mid-feature, commit a checkpoint with a message that says so.
+- **Single working branch.** All commits go to `codex/bank-sqlite-smoke-checkpoint`. Do not commit to `main` — it exists but is not the integration target. If asked to "push to main", confirm whether the user means the working branch (codex/...) before doing anything destructive on `main`.
+- **Pull → check origin → edit → commit → push.** Before starting any non-trivial change:
+  1. `git fetch origin` and inspect `origin/codex/bank-sqlite-smoke-checkpoint` vs. local HEAD.
+  2. If the user describes a feature that sounds in-scope, search the codebase AND `git log --all` for evidence the other agent already started it. Don't re-implement what's already on a branch — extend or fix it.
+  3. After committing, push immediately (`git push origin HEAD:codex/bank-sqlite-smoke-checkpoint`) so the other agent sees the change. Do not leave commits sitting unpushed.
+- **Commit small.** One feature or fix per commit so the other agent can review or revert without untangling.
+- **Don't leave large uncommitted working trees** — the other agent can't see them. If you pause mid-feature, commit a checkpoint with a message that says so.
+
+## Vendoring third-party assets (strict CSP)
+
+Routes outside `/current/` and `/archive/` ship a strict Content-Security-Policy: `default-src 'self'`, `script-src 'self'`, `connect-src` defaults to `'self'`. CDN script tags and runtime fetches to other origins are blocked, including subtle ones like Plotly's topojson load (`cdn.plot.ly/usa_110m.json`).
+
+If a feature needs a JS library or static asset (Plotly, Leaflet, geo data, fonts), download a pinned version into `public/vendor/<name>-<version>.<ext>` and serve from `'self'`. Do NOT widen the CSP. The "two npm deps" rule covers npm only — vendored static assets in `public/vendor/` are fine, but call them out in the commit message and keep them version-pinned.
+
+## US Bank Map page
+
+The `/maps` SPA tab renders a Plotly choropleth + filterable bank list. It is intentionally a thin client over the bank tear sheet data:
+
+- **Data source:** `data/bank-reports/bank-data.sqlite` (the `banks` table). The same `bank-data-importer.js` that powers tear sheets writes the rows.
+- **Field source:** `BANK_FIELDS` in `server/bank-data-importer.js` is the single source of truth for labels and types. The map projects a curated whitelist of `BANK_FIELDS` keys (`MAP_FIELD_KEYS`) on the server; the resulting `{ key, label, type, section }` definitions ship with the API response so the client filter UI is fully data-driven.
+- **Latest period:** `queryBankMapDataset()` walks each bank's `detail_json.periods[]` via SQL `json_each` and projects values from the entry whose `period` matches `summary_json.period`. Same blob the tear sheet reads.
+- **Period filter:** auto-detects the latest reporting year from `MAX(json_extract(summary_json, '$.period'))` and filters to `<year>Q*`. When a 2026Q1 workbook is imported, the filter switches to `2026Q*` automatically; no code change needed.
+- **Cache:** `mapBankCache` in `server/server.js` holds the projected dataset. `invalidateMapBankCache()` is called from `handleBankDataUpload` after a successful workbook import.
+- **Adding a metric to the map:** add the `BANK_FIELDS` key to `MAP_FIELD_KEYS` in `server/bank-data-importer.js`. Nothing else.
+- **Vendored assets:** `public/vendor/plotly-2.27.0.min.js` (~3.5 MB) and `public/vendor/usa_110m.json` (~49 KB). `Plotly.setPlotConfig({ topojsonURL: '/vendor/' })` keeps geo loads inside `'self'`.
 
 ## Things to leave alone unless asked
 
