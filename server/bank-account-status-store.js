@@ -6,7 +6,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 
 const ACCOUNT_STATUS_DATABASE_FILENAME = 'bank-account-statuses.sqlite';
-const ACCOUNT_STATUS_WORKBOOK_FILENAMES = ['current-bank-account-statuses.xlsb'];
+const ACCOUNT_STATUS_WORKBOOK_FILENAMES = ['current-bank-services.xlsx', 'current-bank-account-statuses.xlsb'];
 const ACCOUNT_STATUSES = new Set(['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant']);
 const DEFAULT_ACCOUNT_STATUS = 'Open';
 
@@ -57,6 +57,10 @@ function ensureAccountStatusDatabase(outputDir) {
       source TEXT,
       owner TEXT,
       services TEXT,
+      affiliate TEXT,
+      affiliate_status TEXT,
+      affiliate_rep TEXT,
+      bankers_bank_services TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -67,6 +71,16 @@ function ensureAccountStatusDatabase(outputDir) {
       value TEXT NOT NULL
     );
   `);
+  const columns = querySqliteJson(dbPath, 'PRAGMA table_info(bank_account_statuses);').map(row => row.name);
+  const migrations = [
+    ['affiliate', 'ALTER TABLE bank_account_statuses ADD COLUMN affiliate TEXT;'],
+    ['affiliate_status', 'ALTER TABLE bank_account_statuses ADD COLUMN affiliate_status TEXT;'],
+    ['affiliate_rep', 'ALTER TABLE bank_account_statuses ADD COLUMN affiliate_rep TEXT;'],
+    ['bankers_bank_services', 'ALTER TABLE bank_account_statuses ADD COLUMN bankers_bank_services TEXT;']
+  ];
+  for (const [column, sql] of migrations) {
+    if (!columns.includes(column)) runSqlite(dbPath, sql);
+  }
   return dbPath;
 }
 
@@ -119,6 +133,10 @@ function statusSelectSql(where = '1 = 1') {
       source AS source,
       owner AS owner,
       services AS services,
+      affiliate AS affiliate,
+      affiliate_status AS affiliateStatus,
+      affiliate_rep AS affiliateRep,
+      bankers_bank_services AS bankersBankServices,
       created_at AS createdAt,
       updated_at AS updatedAt
     FROM bank_account_statuses
@@ -139,6 +157,10 @@ function mapStatusRow(row, isStored = true) {
     source: row.source || (isStored ? 'manual' : 'default'),
     owner: row.owner || '',
     services: row.services || '',
+    affiliate: row.affiliate || '',
+    affiliateStatus: row.affiliateStatus || '',
+    affiliateRep: row.affiliateRep || '',
+    bankersBankServices: row.bankersBankServices || '',
     createdAt: row.createdAt || '',
     updatedAt: row.updatedAt || '',
     isStored
@@ -172,6 +194,72 @@ function getBankAccountStatuses(outputDir, bankIds = []) {
     ${statusSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)};
   `);
   return new Map(rows.map(row => [String(row.bankId), mapStatusRow(row, true)]));
+}
+
+function bankAccountStatusWhere(options = {}) {
+  const q = cleanText(options.q, 120);
+  const status = cleanText(options.status, 40);
+  const serviceFilter = cleanText(options.service, 40);
+  const conditions = [];
+  if (q) {
+    const like = sqlString(`%${q.replace(/[%_]/g, char => `\\${char}`)}%`);
+    conditions.push(`(
+      display_name LIKE ${like} ESCAPE '\\' OR
+      legal_name LIKE ${like} ESCAPE '\\' OR
+      city LIKE ${like} ESCAPE '\\' OR
+      state LIKE ${like} ESCAPE '\\' OR
+      cert_number LIKE ${like} ESCAPE '\\' OR
+      owner LIKE ${like} ESCAPE '\\' OR
+      affiliate LIKE ${like} ESCAPE '\\' OR
+      affiliate_rep LIKE ${like} ESCAPE '\\' OR
+      services LIKE ${like} ESCAPE '\\' OR
+      bankers_bank_services LIKE ${like} ESCAPE '\\'
+    )`);
+  }
+  if (ACCOUNT_STATUSES.has(status)) conditions.push(`status = ${sqlString(status)}`);
+  if (serviceFilter === 'fbbs') conditions.push(`services IS NOT NULL AND services <> ''`);
+  if (serviceFilter === 'bankersBank') conditions.push(`bankers_bank_services IS NOT NULL AND bankers_bank_services <> ''`);
+  if (serviceFilter === 'affiliate') conditions.push(`affiliate IS NOT NULL AND affiliate <> ''`);
+  return conditions.length ? conditions.join(' AND ') : '1 = 1';
+}
+
+function bankAccountStatusOrderBy(sort) {
+  return {
+    bank: 'display_name COLLATE NOCASE ASC',
+    owner: 'owner IS NULL, owner COLLATE NOCASE ASC, display_name COLLATE NOCASE ASC',
+    status: 'status COLLATE NOCASE ASC, display_name COLLATE NOCASE ASC',
+    affiliate: 'affiliate IS NULL, affiliate COLLATE NOCASE ASC, display_name COLLATE NOCASE ASC',
+    services: 'services IS NULL, services COLLATE NOCASE ASC, display_name COLLATE NOCASE ASC',
+    updated: 'updated_at DESC, display_name COLLATE NOCASE ASC'
+  }[sort] || 'display_name COLLATE NOCASE ASC';
+}
+
+function boundedListLimit(value, fallback = 250, max = 1000) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(Math.trunc(parsed), max));
+}
+
+function listBankAccountStatuses(outputDir, options = {}) {
+  const dbPath = ensureAccountStatusDatabase(outputDir);
+  const limit = boundedListLimit(options.limit || 250);
+  const where = bankAccountStatusWhere(options);
+  const rows = querySqliteJson(dbPath, `
+    ${statusSelectSql(where)}
+    ORDER BY ${bankAccountStatusOrderBy(options.sort)}
+    LIMIT ${limit};
+  `);
+  return rows.map(row => mapStatusRow(row, true));
+}
+
+function countBankAccountStatuses(outputDir, options = {}) {
+  const dbPath = ensureAccountStatusDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    SELECT COUNT(*) AS count
+    FROM bank_account_statuses
+    WHERE ${bankAccountStatusWhere(options)};
+  `);
+  return rows.length ? Number(rows[0].count || 0) : 0;
 }
 
 function writeAccountStatusMetadata(outputDir, metadata) {
@@ -227,12 +315,17 @@ function upsertBankAccountStatus(outputDir, bankSummary, input = {}) {
   const source = cleanText(input.source, 80) || (existing ? existing.source : 'manual');
   const owner = input.owner !== undefined ? cleanText(input.owner, 120) : (existing ? existing.owner : null);
   const services = input.services !== undefined ? cleanText(input.services, 500) : (existing ? existing.services : null);
+  const affiliate = input.affiliate !== undefined ? cleanText(input.affiliate, 120) : (existing ? existing.affiliate : null);
+  const affiliateStatus = input.affiliateStatus !== undefined ? cleanText(input.affiliateStatus, 80) : (existing ? existing.affiliateStatus : null);
+  const affiliateRep = input.affiliateRep !== undefined ? cleanText(input.affiliateRep, 120) : (existing ? existing.affiliateRep : null);
+  const bankersBankServices = input.bankersBankServices !== undefined ? cleanText(input.bankersBankServices, 500) : (existing ? existing.bankersBankServices : null);
   const createdAt = existing ? existing.createdAt : now;
 
   runSqlite(dbPath, `
     INSERT INTO bank_account_statuses (
       bank_id, cert_number, display_name, legal_name, city, state, status, source,
-      owner, services, created_at, updated_at
+      owner, services, affiliate, affiliate_status, affiliate_rep, bankers_bank_services,
+      created_at, updated_at
     ) VALUES (
       ${sqlString(bankId)},
       ${sqlString(normalizeCert(summary.certNumber))},
@@ -244,6 +337,10 @@ function upsertBankAccountStatus(outputDir, bankSummary, input = {}) {
       ${sqlString(source)},
       ${sqlString(owner)},
       ${sqlString(services)},
+      ${sqlString(affiliate)},
+      ${sqlString(affiliateStatus)},
+      ${sqlString(affiliateRep)},
+      ${sqlString(bankersBankServices)},
       ${sqlString(createdAt)},
       ${sqlString(now)}
     )
@@ -257,6 +354,10 @@ function upsertBankAccountStatus(outputDir, bankSummary, input = {}) {
       source = excluded.source,
       owner = excluded.owner,
       services = excluded.services,
+      affiliate = excluded.affiliate,
+      affiliate_status = excluded.affiliate_status,
+      affiliate_rep = excluded.affiliate_rep,
+      bankers_bank_services = excluded.bankers_bank_services,
       updated_at = excluded.updated_at;
   `);
 
@@ -266,7 +367,8 @@ function upsertBankAccountStatus(outputDir, bankSummary, input = {}) {
 function bankStatusInsertSql(row, now) {
   return `INSERT INTO bank_account_statuses (
     bank_id, cert_number, display_name, legal_name, city, state, status, source,
-    owner, services, created_at, updated_at
+    owner, services, affiliate, affiliate_status, affiliate_rep, bankers_bank_services,
+    created_at, updated_at
   ) VALUES (
     ${sqlString(row.bankId)},
     ${sqlString(row.certNumber)},
@@ -276,8 +378,12 @@ function bankStatusInsertSql(row, now) {
     ${sqlString(row.state)},
     ${sqlString(row.status)},
     ${sqlString(row.source)},
-    NULL,
-    NULL,
+    ${sqlString(row.owner)},
+    ${sqlString(row.services)},
+    ${sqlString(row.affiliate)},
+    ${sqlString(row.affiliateStatus)},
+    ${sqlString(row.affiliateRep)},
+    ${sqlString(row.bankersBankServices)},
     ${sqlString(now)},
     ${sqlString(now)}
   )
@@ -289,7 +395,49 @@ function bankStatusInsertSql(row, now) {
     state = excluded.state,
     status = excluded.status,
     source = excluded.source,
+    owner = excluded.owner,
+    services = excluded.services,
+    affiliate = excluded.affiliate,
+    affiliate_status = excluded.affiliate_status,
+    affiliate_rep = excluded.affiliate_rep,
+    bankers_bank_services = excluded.bankers_bank_services,
     updated_at = excluded.updated_at;`;
+}
+
+function normalizeHeader(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function findHeaderIndex(header, patterns) {
+  return header.findIndex(value => patterns.some(pattern => pattern.test(normalizeHeader(value))));
+}
+
+function findServiceColumns(header, serviceNames) {
+  const requested = new Map((serviceNames || []).map(name => [normalizeHeader(name), name]));
+  const columns = [];
+  (header || []).forEach((value, index) => {
+    const serviceName = requested.get(normalizeHeader(value));
+    if (serviceName) columns.push({ index, serviceName });
+  });
+  return columns;
+}
+
+function isTruthyServiceFlag(value) {
+  const cleaned = cleanText(value, 40);
+  if (!cleaned) return false;
+  return /^(true|yes|y|1|x)$/i.test(cleaned);
+}
+
+function serviceListFromRow(row, columns) {
+  const services = [];
+  for (const column of columns || []) {
+    if (isTruthyServiceFlag(row[column.index])) services.push(column.serviceName);
+  }
+  return services.length ? services.join(', ') : null;
 }
 
 function upsertBankAccountStatusRows(outputDir, rows) {
@@ -313,15 +461,24 @@ function findStatusSheet(workbook) {
       raw: false
     });
     if (!rows.length) continue;
-    const header = (rows[0] || []).map(value => cleanText(value, 80) || '');
-    const statusIndex = header.findIndex(value => /^status$/i.test(value));
-    const certIndex = header.findIndex(value => /^cert number$/i.test(value));
+    const headerCandidates = rows
+      .map((row, index) => {
+        const header = (row || []).map(value => cleanText(value, 120) || '');
+        const statusIndex = findHeaderIndex(header, [/^status$/]);
+        const certIndex = findHeaderIndex(header, [/^cert number$/]);
+        return { headerRowIndex: index, header, statusIndex, certIndex };
+      })
+      .filter(candidate => candidate.statusIndex >= 0 && candidate.certIndex >= 0);
+    if (!headerCandidates.length) continue;
+    const candidate = headerCandidates[0];
+    const { header, statusIndex, certIndex, headerRowIndex } = candidate;
     if (statusIndex < 0 || certIndex < 0) continue;
-    const nonBlankStatusRows = rows.slice(1).filter(row => cleanText(row[statusIndex], 40)).length;
-    const blankStatusRows = rows.slice(1).filter(row => normalizeCert(row[certIndex]) && !cleanText(row[statusIndex], 40)).length;
+    const dataRows = rows.slice(headerRowIndex + 1);
+    const nonBlankStatusRows = dataRows.filter(row => cleanText(row[statusIndex], 40)).length;
+    const blankStatusRows = dataRows.filter(row => normalizeCert(row[certIndex]) && !cleanText(row[statusIndex], 40)).length;
     const score = (nonBlankStatusRows * 10) - blankStatusRows - header.length;
     if (!best || score > best.score) {
-      best = { sheetName, rows, header, statusIndex, certIndex, score };
+      best = { sheetName, rows, header, statusIndex, certIndex, headerRowIndex, score };
     }
   }
   if (!best) throw new Error('Could not find Status and Cert Number columns in the account status workbook.');
@@ -355,9 +512,31 @@ function importBankAccountStatusWorkbook(outputDir, workbookInput, bankSummaries
     ? XLSX.read(workbookInput, { type: 'buffer', raw: false })
     : XLSX.readFile(workbookInput, { raw: false });
   const statusSheet = findStatusSheet(workbook);
-  const nameIndex = statusSheet.header.findIndex(value => /^account name$/i.test(value));
-  const cityIndex = statusSheet.header.findIndex(value => /^city$/i.test(value));
-  const stateIndex = statusSheet.header.findIndex(value => /^state$/i.test(value));
+  const nameIndex = findHeaderIndex(statusSheet.header, [/^account name$/]);
+  const cityIndex = findHeaderIndex(statusSheet.header, [/^city$/, /^city 1$/]);
+  const stateIndex = findHeaderIndex(statusSheet.header, [/^state$/, /^state province 1$/]);
+  const ownerIndex = findHeaderIndex(statusSheet.header, [/^account team members$/]);
+  const affiliateIndex = findHeaderIndex(statusSheet.header, [/^affiliate$/]);
+  const affiliateStatusIndex = findHeaderIndex(statusSheet.header, [/^affiliate status$/]);
+  const affiliateRepIndex = findHeaderIndex(statusSheet.header, [/^affiliate rep$/]);
+  const fbbsServiceColumns = findServiceColumns(statusSheet.header, ['ALM', 'BCIS', 'Brokered CDs', 'CECL', 'Bond Accounting']);
+  const bankersBankServiceColumns = findServiceColumns(statusSheet.header, [
+    'ACH Origination',
+    'Audit',
+    'Bank Stock Loan',
+    'Cash Management',
+    'Online Banking',
+    'DDA',
+    'FedNow',
+    'Fed Settlement',
+    'International Services',
+    'Image Cash Letter',
+    'Participation Loans Sold',
+    'RTP',
+    'Safekeeping',
+    'Stockholder',
+    'Wire Transfer'
+  ]);
   const byCert = new Map();
 
   for (const summary of bankSummaries || []) {
@@ -378,10 +557,14 @@ function importBankAccountStatusWorkbook(outputDir, workbookInput, bankSummaries
     duplicateCount: 0,
     conflictCount: 0,
     invalidStatusCount: 0,
+    ownerCount: 0,
+    servicesCount: 0,
+    affiliateCount: 0,
+    bankersBankServicesCount: 0,
     statuses: {}
   };
 
-  for (let i = 1; i < statusSheet.rows.length; i++) {
+  for (let i = statusSheet.headerRowIndex + 1; i < statusSheet.rows.length; i++) {
     const sourceRow = statusSheet.rows[i] || [];
     const cert = normalizeCert(sourceRow[statusSheet.certIndex]);
     if (!cert) continue;
@@ -394,7 +577,13 @@ function importBankAccountStatusWorkbook(outputDir, workbookInput, bankSummaries
       status,
       name: nameIndex >= 0 ? cleanText(sourceRow[nameIndex], 300) : null,
       city: cityIndex >= 0 ? cleanText(sourceRow[cityIndex], 120) : null,
-      state: stateIndex >= 0 ? cleanText(sourceRow[stateIndex], 40) : null
+      state: stateIndex >= 0 ? cleanText(sourceRow[stateIndex], 40) : null,
+      owner: ownerIndex >= 0 ? cleanText(sourceRow[ownerIndex], 500) : null,
+      services: serviceListFromRow(sourceRow, fbbsServiceColumns),
+      affiliate: affiliateIndex >= 0 ? cleanText(sourceRow[affiliateIndex], 120) : null,
+      affiliateStatus: affiliateStatusIndex >= 0 ? cleanText(sourceRow[affiliateStatusIndex], 80) : null,
+      affiliateRep: affiliateRepIndex >= 0 ? cleanText(sourceRow[affiliateRepIndex], 120) : null,
+      bankersBankServices: serviceListFromRow(sourceRow, bankersBankServiceColumns)
     };
     stats.rowCount += 1;
     stats.statuses[status] = (stats.statuses[status] || 0) + 1;
@@ -420,9 +609,19 @@ function importBankAccountStatusWorkbook(outputDir, workbookInput, bankSummaries
       city: cleanText(bank.city, 120),
       state: cleanText(bank.state, 40),
       status: row.status,
-      source: options.sourceFile || 'account-status-workbook'
+      source: options.sourceFile || 'account-status-workbook',
+      owner: row.owner,
+      services: row.services,
+      affiliate: row.affiliate,
+      affiliateStatus: row.affiliateStatus,
+      affiliateRep: row.affiliateRep,
+      bankersBankServices: row.bankersBankServices
     });
     stats.importedCount += 1;
+    if (row.owner) stats.ownerCount += 1;
+    if (row.services) stats.servicesCount += 1;
+    if (row.affiliate || row.affiliateStatus || row.affiliateRep) stats.affiliateCount += 1;
+    if (row.bankersBankServices) stats.bankersBankServicesCount += 1;
   }
   upsertBankAccountStatusRows(outputDir, matchedRows);
   writeAccountStatusMetadata(outputDir, stats);
@@ -436,11 +635,13 @@ module.exports = {
   ACCOUNT_STATUSES,
   DEFAULT_ACCOUNT_STATUS,
   accountStatusDatabasePathForDir,
+  countBankAccountStatuses,
   defaultAccountStatus,
   ensureAccountStatusDatabase,
   getBankAccountStatus,
   getBankAccountStatusImportStatus,
   getBankAccountStatuses,
+  listBankAccountStatuses,
   importBankAccountStatusWorkbook,
   normalizeCert,
   normalizeStatus,

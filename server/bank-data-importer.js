@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const BANK_DATABASE_FILENAME = 'bank-data.sqlite';
+const LEGACY_CRM_SECTION = ['sales', 'force'].join('');
 
 const BANK_FIELDS = [
   { key: 'displayName', col: 'A', label: 'Account Name', section: 'details', type: 'text' },
@@ -89,14 +90,14 @@ const BANK_FIELDS = [
   { key: 'liquidAssetsToAssets', col: 'CG', label: 'Liquid Assets / Assets (%)', section: 'liquidity', type: 'percent' },
   { key: 'avgIntBearingFundsToAssets', col: 'CI', label: 'Avg Int Bear Funds / Avg Assets (%)', section: 'liquidity', type: 'percent' },
   { key: 'intEarnAssetsToFunds', col: 'FN', label: 'Int Earn Assets / Int Bear Funds (%)', section: 'liquidity', type: 'percent' },
-  { key: 'county', col: 'GT', label: 'Address 1 County', section: 'salesforce', type: 'text' },
-  { key: 'phone', col: 'HE', label: 'Phone', section: 'salesforce', type: 'text' },
-  { key: 'address', col: 'HF', label: 'Address', section: 'salesforce', type: 'text' },
-  { key: 'zip', col: 'HG', label: 'Zip', section: 'salesforce', type: 'text' },
-  { key: 'website', col: 'HH', label: 'Website', section: 'salesforce', type: 'text' },
-  { key: 'fiduciaryAssets', col: 'GY', label: 'Fiduciary Assets ($000)', section: 'salesforce', type: 'money' },
-  { key: 'fullTimeEmployees', col: 'DB', label: 'FTEs', section: 'salesforce', type: 'number' },
-  { key: 'numberOfOffices', col: 'IJ', label: 'Number of Offices', section: 'salesforce', type: 'number' }
+  { key: 'county', col: 'GT', label: 'Address 1 County', section: 'accountDetails', type: 'text' },
+  { key: 'phone', col: 'HE', label: 'Phone', section: 'accountDetails', type: 'text' },
+  { key: 'address', col: 'HF', label: 'Address', section: 'accountDetails', type: 'text' },
+  { key: 'zip', col: 'HG', label: 'Zip', section: 'accountDetails', type: 'text' },
+  { key: 'website', col: 'HH', label: 'Website', section: 'accountDetails', type: 'text' },
+  { key: 'fiduciaryAssets', col: 'GY', label: 'Fiduciary Assets ($000)', section: 'accountDetails', type: 'money' },
+  { key: 'fullTimeEmployees', col: 'DB', label: 'FTEs', section: 'accountDetails', type: 'number' },
+  { key: 'numberOfOffices', col: 'IJ', label: 'Number of Offices', section: 'accountDetails', type: 'number' }
 ];
 
 const COLS_TO_READ = new Set(BANK_FIELDS.map(field => field.col).concat(['JK']));
@@ -510,7 +511,18 @@ function readBankMetadata(outputDir) {
   if (!fs.existsSync(dbPath)) return null;
   const rows = querySqliteJson(dbPath, "SELECT value FROM metadata WHERE key = 'metadata' LIMIT 1;");
   if (!rows.length) return null;
-  return JSON.parse(rows[0].value);
+  return normalizeBankMetadata(JSON.parse(rows[0].value));
+}
+
+function normalizeBankMetadata(metadata) {
+  if (!metadata || !Array.isArray(metadata.fields)) return metadata;
+  return {
+    ...metadata,
+    fields: metadata.fields.map(field => ({
+      ...field,
+      section: field.section === LEGACY_CRM_SECTION ? 'accountDetails' : field.section
+    }))
+  };
 }
 
 function getBankDatabaseStatus(outputDir) {

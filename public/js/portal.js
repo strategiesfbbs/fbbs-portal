@@ -27,6 +27,8 @@
   let bankDataStatus = null;
   let selectedBank = null;
   let savedBanks = [];
+  let accountCoverageAccounts = [];
+  let accountCoverageRequestId = 0;
   let selectedBankAccountStatus = null;
   let selectedTearSheetCoverage = null;
   let selectedBankCoverage = null;
@@ -62,7 +64,7 @@
                        'mbs-cmo', 'banks', 'strategies', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
-    { page: 'home', group: 'Home', label: 'Dashboard', description: 'Status, market snapshot, search all offerings', aliases: 'home command center summary' },
+    { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
@@ -74,7 +76,7 @@
     { page: 'agencies', group: 'Offerings', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
     { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
     { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
-    { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert salesforce' },
+    { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
@@ -110,11 +112,29 @@
 
   const COMMISSION_STORAGE_KEY = 'fbbs_commission_settings_v1';
   const BANK_RECENT_STORAGE_KEY = 'fbbs_recent_banks_v1';
-  const MAX_RECENT_BANKS = 6;
+  const MAX_RECENT_BANKS = 5;
   const BANK_COVERAGE_STATUSES = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
   const BANK_COVERAGE_PRIORITIES = ['High', 'Medium', 'Low'];
+  const FBBS_SERVICE_NAMES = ['ALM', 'BCIS', 'Brokered CDs', 'CECL', 'Bond Accounting'];
+  const BANKERS_BANK_SERVICE_NAMES = [
+    'ACH Origination',
+    'Audit',
+    'Bank Stock Loan',
+    'Cash Management',
+    'Online Banking',
+    'DDA',
+    'FedNow',
+    'Fed Settlement',
+    'International Services',
+    'Image Cash Letter',
+    'Participation Loans Sold',
+    'RTP',
+    'Safekeeping',
+    'Stockholder',
+    'Wire Transfer'
+  ];
   const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'THO Report', 'CECL Analysis', 'Miscellaneous'];
-  const STRATEGY_STATUSES = ['Open', 'In Progress', 'Completed', 'Needs Billed'];
+  const STRATEGY_STATUSES = ['Open', 'In Progress', 'Needs Billed', 'Completed'];
   const STRATEGY_PRIORITIES = ['1', '2', '3', '4', '5'];
   const COMMISSION_PRODUCT_LABELS = {
     agencies: 'Agencies',
@@ -904,6 +924,7 @@
     if (pageName === 'banks') {
       loadBankStatus();
       loadSavedBanks();
+      loadAccountCoverageAccounts();
     }
     if (pageName === 'strategies') loadStrategies();
     if (pageName === 'upload') loadBankStatus();
@@ -1068,86 +1089,19 @@
   // ============ Home ============
 
   function renderHome() {
-    const grid = document.getElementById('homeDocsGrid');
     const pkg = currentPackage || {};
-    let filled = 0;
-    grid.innerHTML = '';
-
-    SLOTS.forEach((slot, i) => {
-      const file = pkg[slot];
-      const meta = DOC_TYPES[slot];
-      if (file) filled++;
-
-      const card = document.createElement('div');
-      card.className = 'doc-card' + (file ? '' : ' empty');
-
-      const viewBtn = file
-        ? `<button class="doc-btn" data-goto="${meta.viewer}">View</button>`
-        : `<button class="doc-btn" disabled>View</button>`;
-      const downloadBtn = file
-        ? `<a class="doc-btn outline" href="/current/${encodeURIComponent(file)}?download=1">Download</a>`
-        : `<button class="doc-btn outline" disabled>Download</button>`;
-
-      let extraMeta = '';
-      if (slot === 'cdoffers' && pkg.offeringsCount) {
-        extraMeta = ` &middot; <strong>${pkg.offeringsCount} CDs extracted</strong>`;
-      } else if (slot === 'munioffers' && pkg.muniOfferingsCount) {
-        extraMeta = ` &middot; <strong>${pkg.muniOfferingsCount} munis extracted</strong>`;
-      } else if ((slot === 'agenciesBullets' || slot === 'agenciesCallables') && pkg.agencyCount) {
-        const fdate = pkg.agencyFileDate
-          ? ` &middot; file dated ${formatShortDate(pkg.agencyFileDate)}`
-          : '';
-        extraMeta = ` &middot; <strong>${pkg.agencyCount} agencies total</strong>${fdate}`;
-      } else if (slot === 'corporates' && pkg.corporatesCount) {
-        const fdate = pkg.corporatesFileDate
-          ? ` &middot; file dated ${formatShortDate(pkg.corporatesFileDate)}`
-          : '';
-        extraMeta = ` &middot; <strong>${pkg.corporatesCount} corporates extracted</strong>${fdate}`;
-      }
-
-      card.innerHTML = `
-        <div class="doc-card-body">
-          <div>
-            <div class="doc-icon"><span class="doc-ext">${meta.ext}</span></div>
-            <div class="doc-title">${meta.label}</div>
-            <div class="doc-filename">${file ? escapeHtml(file) : '— not yet uploaded —'}</div>
-          </div>
-          <div>
-            <div class="doc-meta">
-              ${file ? 'Uploaded &middot; <strong>Ready to view</strong>' + extraMeta : 'Awaiting upload'}
-            </div>
-            <div class="doc-actions">
-              ${viewBtn}
-              ${downloadBtn}
-            </div>
-          </div>
-        </div>
-      `;
-      grid.appendChild(card);
-    });
-
+    const filled = SLOTS.filter(slot => pkg[slot]).length;
     const subtitle = document.getElementById('homeSubtitle');
-    const kicker = document.getElementById('homeKicker');
     const packageStat = document.getElementById('homePackageStat');
     if (packageStat) packageStat.textContent = `${filled}/${TOTAL_SLOTS}`;
 
     if (filled === 0) {
-      subtitle.textContent = 'No documents published yet — go to Upload to publish today\'s package';
-      kicker.textContent = 'Not published';
+      if (subtitle) subtitle.textContent = 'No package has been published yet.';
     } else if (filled === TOTAL_SLOTS) {
-      subtitle.textContent = `Complete package published${pkg.publishedAt ? ' at ' + formatTime(pkg.publishedAt) : ''}`;
-      kicker.textContent = `${formatShortDate(pkg.date)} · Published ${formatTime(pkg.publishedAt)}`;
+      if (subtitle) subtitle.textContent = `Complete package for ${formatShortDate(pkg.date)}`;
     } else {
-      subtitle.textContent = `Partial package — ${filled} of ${TOTAL_SLOTS} documents published`;
-      kicker.textContent = `${formatShortDate(pkg.date)} · Partial`;
+      if (subtitle) subtitle.textContent = `${filled} of ${TOTAL_SLOTS} package files are ready.`;
     }
-
-    renderQualityStatus(filled);
-    renderHomeStatusTiles(filled);
-    renderHomeWorkList(filled);
-    renderHomeLaunchGrid();
-    renderHomeMarketTiles();
-    renderGlobalSearch();
   }
 
   function normalizeSearchText(parts) {
@@ -1834,7 +1788,10 @@
       const source = importMeta.sourceFile || 'Account status workbook';
       const countText = `${formatNumber(statusMeta.statusCount || importMeta.importedCount || 0)} statuses`;
       const unmatchedText = importMeta.unmatchedCount !== undefined ? ` · ${formatNumber(importMeta.unmatchedCount)} unmatched` : '';
-      accountStatus.textContent = `${source} imported ${formatImportedDate(importMeta.importedAt)} · ${countText}${unmatchedText}`;
+      const ownerText = importMeta.ownerCount !== undefined ? ` · ${formatNumber(importMeta.ownerCount || 0)} owners` : '';
+      const servicesText = importMeta.servicesCount !== undefined ? ` · ${formatNumber(importMeta.servicesCount || 0)} FBBS service rows` : '';
+      const bankersBankText = importMeta.bankersBankServicesCount !== undefined ? ` · ${formatNumber(importMeta.bankersBankServicesCount || 0)} Bankers Bank service rows` : '';
+      accountStatus.textContent = `${source} imported ${formatImportedDate(importMeta.importedAt)} · ${countText}${unmatchedText}${ownerText}${servicesText}${bankersBankText}`;
     } else if (accountStatus) {
       accountStatus.textContent = 'Account statuses default to Open until imported or edited.';
     }
@@ -1849,6 +1806,78 @@
     }
   }
 
+  function setupHome() {
+    const strategyOpen = document.querySelector('[data-home-strategy-open]');
+    const strategyInput = document.getElementById('homeStrategyBankSearch');
+    const strategyButton = document.getElementById('homeStrategyBankSearchBtn');
+    if (strategyOpen && strategyInput) {
+      strategyOpen.addEventListener('click', () => strategyInput.focus());
+    }
+    if (strategyInput) {
+      let t = null;
+      strategyInput.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(() => searchHomeStrategyBanks(strategyInput.value), 180);
+      });
+      strategyInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          searchHomeStrategyBanks(strategyInput.value, { openFirst: true });
+        }
+      });
+    }
+    if (strategyButton) {
+      strategyButton.addEventListener('click', () => searchHomeStrategyBanks(strategyInput ? strategyInput.value : '', { openFirst: true }));
+    }
+  }
+
+  async function searchHomeStrategyBanks(query, options = {}) {
+    const results = document.getElementById('homeStrategyBankResults');
+    const q = String(query || '').trim();
+    if (!results) return;
+    if (q.length < 2) {
+      results.innerHTML = '';
+      return;
+    }
+    results.innerHTML = '<div class="bank-search-empty">Searching banks...</div>';
+    try {
+      const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=5`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      const rows = data.results || [];
+      if (options.openFirst && rows[0]) {
+        openBankStrategyRequest(rows[0].id);
+        return;
+      }
+      renderHomeStrategyBankResults(rows);
+    } catch (e) {
+      results.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function renderHomeStrategyBankResults(rows) {
+    const results = document.getElementById('homeStrategyBankResults');
+    if (!results) return;
+    if (!rows.length) {
+      results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
+      return;
+    }
+    results.innerHTML = rows.map(row => `
+      <button type="button" class="home-strategy-result" data-home-strategy-bank="${escapeHtml(row.id)}">
+        <strong>${escapeHtml(row.displayName || row.name || 'Bank')}</strong>
+        <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
+      </button>
+    `).join('');
+    results.querySelectorAll('[data-home-strategy-bank]').forEach(btn => {
+      btn.addEventListener('click', () => openBankStrategyRequest(btn.dataset.homeStrategyBank));
+    });
+  }
+
+  function openBankStrategyRequest(bankId) {
+    if (!bankId) return;
+    goTo('banks');
+    loadBank(bankId, { collapseResults: true, openStrategyRequest: true });
+  }
+
   function setupBankSearch() {
     const input = document.getElementById('bankSearchInput');
     const btn = document.getElementById('bankSearchBtn');
@@ -1856,6 +1885,10 @@
     const statusUpload = document.getElementById('bankStatusWorkbookInput');
     const clearRecent = document.getElementById('clearRecentBanksBtn');
     const savedFilter = document.getElementById('bankSavedFilterInput');
+    const accountCoverageFilter = document.getElementById('bankAccountCoverageFilterInput');
+    const accountCoverageStatus = document.getElementById('bankAccountCoverageStatusFilter');
+    const accountCoverageService = document.getElementById('bankAccountCoverageServiceFilter');
+    const accountCoverageSort = document.getElementById('bankAccountCoverageSort');
     setupBankWorkspaceTabs();
     if (input) {
       let t = null;
@@ -1883,8 +1916,17 @@
     });
     if (clearRecent) clearRecent.addEventListener('click', clearRecentBanks);
     if (savedFilter) savedFilter.addEventListener('input', renderSavedBanks);
+    [accountCoverageFilter, accountCoverageStatus, accountCoverageService, accountCoverageSort].filter(Boolean).forEach(el => {
+      let t = null;
+      el.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(loadAccountCoverageAccounts, 180);
+      });
+      el.addEventListener('change', loadAccountCoverageAccounts);
+    });
     renderRecentBanks();
     loadSavedBanks();
+    loadAccountCoverageAccounts();
   }
 
   function setupStrategies() {
@@ -2040,6 +2082,7 @@
   }
 
   function renderStrategyCard(row) {
+    if (row.isArchived) return renderArchivedStrategyCard(row);
     const availableMoves = row.isArchived ? [] : STRATEGY_STATUSES.filter(status => status !== row.status);
     return `
       <article class="strategy-card">
@@ -2088,9 +2131,64 @@
     `;
   }
 
-  function renderStrategyEditor(row) {
+  function renderArchivedStrategyCard(row) {
+    const notes = row.comments || 'No notes added.';
     return `
-      <div class="strategy-edit-panel" id="strategyEdit-${escapeHtml(row.id)}" hidden>
+      <article class="strategy-card strategy-card-archived">
+        <button type="button" class="strategy-archive-summary" data-strategy-edit="${escapeHtml(row.id)}">
+          <span class="strategy-archive-summary-head">
+            <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
+            <span>
+              <em class="strategy-archive-badge">Archived</em>
+              <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
+            </span>
+          </span>
+          <span class="strategy-archive-task">${escapeHtml(row.requestType || 'Miscellaneous')}: ${escapeHtml(row.summary || 'Strategy request')}</span>
+          <span class="strategy-archive-notes">${escapeHtml(notes)}</span>
+          <span class="strategy-archive-meta">
+            <span>${escapeHtml(strategyCompletionLabel(row))}</span>
+            ${row.archivedAt ? `<span>Archived ${escapeHtml(formatFullTimestamp(row.archivedAt))}</span>` : '<span>Archived</span>'}
+            <span class="strategy-archive-toggle">View details</span>
+          </span>
+        </button>
+        ${renderStrategyEditor(row, { archivedDetails: true })}
+      </article>
+    `;
+  }
+
+  function strategyCompletionLabel(row) {
+    if (row.billedAt) return `Billed ${formatFullTimestamp(row.billedAt)}`;
+    if (row.completedAt) return `Completed ${formatFullTimestamp(row.completedAt)}`;
+    return `Status ${row.status || 'Open'}`;
+  }
+
+  function renderStrategyEditor(row, options = {}) {
+    return `
+      <div class="strategy-edit-panel${options.archivedDetails ? ' strategy-archive-detail-panel' : ''}" id="strategyEdit-${escapeHtml(row.id)}" hidden>
+        ${options.archivedDetails ? `
+          <div class="strategy-archive-full-details">
+            <button type="button" class="strategy-bank-link" data-strategy-bank="${escapeHtml(row.bankId || '')}">
+              ${escapeHtml(row.displayName || 'Bank')}
+            </button>
+            <div class="strategy-card-meta">
+              <span>${escapeHtml(row.requestType || 'Miscellaneous')}</span>
+              <span>${escapeHtml(row.status || 'Open')}</span>
+              <span>Priority ${escapeHtml(row.priority || '3')}/5</span>
+              ${row.requestedBy ? `<span>By ${escapeHtml(row.requestedBy)}</span>` : ''}
+              ${row.assignedTo ? `<span>Owner ${escapeHtml(row.assignedTo)}</span>` : ''}
+              ${row.invoiceContact ? `<span>Invoice ${escapeHtml(row.invoiceContact)}</span>` : ''}
+              <span>${escapeHtml([row.city, row.state].filter(Boolean).join(', '))}</span>
+              <span>Updated ${escapeHtml(formatFullTimestamp(row.updatedAt))}</span>
+              ${row.billedAt ? `<span>Billed ${escapeHtml(formatFullTimestamp(row.billedAt))}</span>` : ''}
+              ${row.archivedAt ? `<span>Archived ${escapeHtml(formatFullTimestamp(row.archivedAt))}</span>` : ''}
+            </div>
+            ${renderStrategyFiles(row)}
+            <div class="strategy-card-actions">
+              <button type="button" class="text-btn" data-strategy-cancel="${escapeHtml(row.id)}">Minimize</button>
+              <button type="button" class="text-btn" data-strategy-restore="${escapeHtml(row.id)}">Restore</button>
+            </div>
+          </div>
+        ` : ''}
         <div class="strategy-edit-grid">
           <label>
             <span>Request Type</span>
@@ -2408,16 +2506,28 @@
       results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
       return;
     }
-    results.innerHTML = rows.map(row => `
+    results.innerHTML = rows.map(row => {
+      const status = statusForBankRow(row);
+      const coverage = [
+        status.owner ? `Owner: ${status.owner}` : '',
+        status.affiliate ? `Affiliate: ${status.affiliate}` : '',
+        status.services ? `${serviceCount(status.services)} FBBS services` : '',
+        status.bankersBankServices ? `${serviceCount(status.bankersBankServices)} Bankers Bank services` : ''
+      ].filter(Boolean).join(' · ');
+      return `
       <button type="button" class="bank-result" data-bank-id="${escapeHtml(row.id)}">
-        <strong>${escapeHtml(row.displayName || row.name || 'Bank')}</strong>
+        <div>
+          <strong>${escapeHtml(row.displayName || row.name || 'Bank')}</strong>
+          ${coverage ? `<small>${escapeHtml(coverage)}</small>` : ''}
+        </div>
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
         <div class="bank-result-meta">
           <em>${escapeHtml(row.period || '')}</em>
           ${renderBankStatusChip(row)}
         </div>
       </button>
-    `).join('');
+      `;
+    }).join('');
     results.querySelectorAll('[data-bank-id]').forEach(btn => {
       btn.addEventListener('click', () => loadBank(btn.dataset.bankId, { collapseResults: true }));
     });
@@ -2475,20 +2585,22 @@
     const rows = loadRecentBanks();
     panel.hidden = rows.length === 0;
     if (!rows.length) {
-      list.innerHTML = '';
+      list.innerHTML = '<option value="">No previous searches</option>';
       return;
     }
-    list.innerHTML = rows.map(row => `
-      <button type="button" class="bank-recent-item" data-bank-id="${escapeHtml(row.id)}">
-        <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
-        <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
-        <em>${escapeHtml(row.period || '')}</em>
-        ${renderBankStatusChip(row)}
-      </button>
-    `).join('');
-    list.querySelectorAll('[data-bank-id]').forEach(btn => {
-      btn.addEventListener('click', () => loadBank(btn.dataset.bankId, { collapseResults: true }));
-    });
+    list.innerHTML = [
+      '<option value="">Select a recent bank</option>',
+      ...rows.map(row => {
+        const detail = [row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · ');
+        return `<option value="${escapeHtml(row.id)}">${escapeHtml(row.displayName || 'Bank')}${detail ? ` — ${escapeHtml(detail)}` : ''}</option>`;
+      })
+    ].join('');
+    list.value = '';
+    list.onchange = () => {
+      if (!list.value) return;
+      loadBank(list.value, { collapseResults: true });
+      list.value = '';
+    };
   }
 
   function getSavedBankById(bankId) {
@@ -2545,6 +2657,75 @@
     });
   }
 
+  async function loadAccountCoverageAccounts() {
+    const list = document.getElementById('bankAccountCoverageList');
+    const count = document.getElementById('bankAccountCoverageCount');
+    if (!list) return;
+    const requestId = ++accountCoverageRequestId;
+    const q = document.getElementById('bankAccountCoverageFilterInput')?.value || '';
+    const status = document.getElementById('bankAccountCoverageStatusFilter')?.value || '';
+    const service = document.getElementById('bankAccountCoverageServiceFilter')?.value || '';
+    const sort = document.getElementById('bankAccountCoverageSort')?.value || 'owner';
+    const params = new URLSearchParams({ limit: '300', sort });
+    if (q.trim()) params.set('q', q.trim());
+    if (status) params.set('status', status);
+    if (service) params.set('service', service);
+    list.innerHTML = '<div class="bank-search-empty">Loading account coverage matches...</div>';
+    try {
+      const res = await fetch(`/api/bank-account-statuses?${params.toString()}`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      if (requestId !== accountCoverageRequestId) return;
+      accountCoverageAccounts = Array.isArray(data.accountStatuses) ? data.accountStatuses : [];
+      if (count) {
+        const total = data.importStatus && data.importStatus.statusCount ? data.importStatus.statusCount : accountCoverageAccounts.length;
+        const resultCount = Number.isFinite(Number(data.resultCount)) ? Number(data.resultCount) : accountCoverageAccounts.length;
+        count.textContent = `${formatNumber(accountCoverageAccounts.length)} shown · ${formatNumber(resultCount)} matches${resultCount !== total ? ` · ${formatNumber(total)} total` : ''}`;
+      }
+      renderAccountCoverageAccounts();
+    } catch (e) {
+      if (requestId !== accountCoverageRequestId) return;
+      accountCoverageAccounts = [];
+      if (count) count.textContent = '0 matched';
+      list.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function renderAccountCoverageAccounts() {
+    const list = document.getElementById('bankAccountCoverageList');
+    if (!list) return;
+    if (!accountCoverageAccounts.length) {
+      list.innerHTML = '<div class="bank-search-empty">No account coverage matches fit the current filters.</div>';
+      return;
+    }
+    list.innerHTML = accountCoverageAccounts.map(row => {
+      const fbbsCount = serviceCount(row.services);
+      const bankersCount = serviceCount(row.bankersBankServices);
+      const serviceText = [
+        fbbsCount ? `${fbbsCount} FBBS` : '',
+        bankersCount ? `${bankersCount} Bankers Bank` : '',
+        row.affiliate ? `${row.affiliate}${row.affiliateStatus ? ` ${row.affiliateStatus}` : ''}` : ''
+      ].filter(Boolean).join(' · ');
+      return `
+        <button type="button" class="bank-account-coverage-item" data-bank-id="${escapeHtml(row.bankId)}">
+          <strong>${escapeHtml(row.displayName || row.legalName || 'Bank')}</strong>
+          <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
+          <span>${escapeHtml(row.owner ? `Owner: ${row.owner}` : 'Owner not assigned')}</span>
+          <div class="bank-saved-meta">
+            <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
+            ${row.affiliate ? `<em class="bank-pill">${escapeHtml(row.affiliate)}</em>` : ''}
+            ${serviceText ? `<small>${escapeHtml(serviceText)}</small>` : '<small>No services marked</small>'}
+          </div>
+        </button>
+      `;
+    }).join('');
+    list.querySelectorAll('[data-bank-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        switchBankWorkspace('tear-sheet');
+        loadBank(btn.dataset.bankId, { collapseResults: true });
+      });
+    });
+  }
+
   function renderCoverageDetailEmpty() {
     const detail = document.getElementById('bankCoverageDetail');
     if (!detail) return;
@@ -2588,7 +2769,8 @@
 
   function currentBankAccountStatus() {
     const saved = selectedTearSheetCoverage && selectedTearSheetCoverage.status ? selectedTearSheetCoverage : null;
-    const status = saved || selectedBankAccountStatus || (selectedBank && selectedBank.bank && selectedBank.bank.summary && selectedBank.bank.summary.accountStatus) || defaultBankAccountStatus();
+    const importedStatus = selectedBankAccountStatus || (selectedBank && selectedBank.bank && selectedBank.bank.summary && selectedBank.bank.summary.accountStatus) || null;
+    const status = saved ? { ...(importedStatus || {}), ...saved } : (importedStatus || defaultBankAccountStatus());
     return {
       ...defaultBankAccountStatus(),
       ...status,
@@ -2599,7 +2781,8 @@
   function statusForBankRow(row) {
     if (!row) return defaultBankAccountStatus();
     const saved = getSavedBankById(row.id || row.bankId);
-    const status = saved || row.accountStatus || defaultBankAccountStatus();
+    const importedStatus = row.accountStatus || null;
+    const status = saved ? { ...(importedStatus || {}), ...saved } : (importedStatus || defaultBankAccountStatus());
     return {
       ...defaultBankAccountStatus(),
       ...status,
@@ -2612,20 +2795,79 @@
     return `<em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>`;
   }
 
+  function serviceSet(value) {
+    return new Set(String(value || '')
+      .split(',')
+      .map(part => part.trim())
+      .filter(Boolean));
+  }
+
+  function serviceCount(value) {
+    return serviceSet(value).size;
+  }
+
+  function serviceCheck(value) {
+    return value ? '<span class="bank-service-check">&#10003;</span>' : '<span class="bank-service-empty"></span>';
+  }
+
+  function renderServiceGrid(title, countLabel, services, value) {
+    const selected = serviceSet(value);
+    return `
+      <section class="bank-section bank-service-section">
+        <div class="bank-section-title">${escapeHtml(title)}</div>
+        <div class="bank-service-count">
+          <span>${escapeHtml(countLabel)}</span>
+          <strong>${formatNumber(selected.size)}</strong>
+        </div>
+        <div class="bank-service-grid">
+          ${services.map(name => `
+            <div class="bank-service-row">
+              <span>${escapeHtml(name)}</span>
+              ${serviceCheck(selected.has(name))}
+            </div>
+          `).join('')}
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAccountDetailsSummary(values, status) {
+    const address = [values.address, [values.city, values.state, values.zip].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
+    const cells = [
+      ['Account Team Members', status.owner],
+      ['Phone', values.phone],
+      ['Address 1', address],
+      ['Affiliate', status.affiliate],
+      ['Affiliate Status', status.affiliateStatus],
+      ['Affiliate Rep', status.affiliateRep]
+    ];
+    return `
+      <section class="bank-account-coverage-summary">
+        <div class="bank-account-coverage-title">
+          <div>
+            <span>Account Details</span>
+            <strong>${escapeHtml(values.name || values.displayName || 'Bank')}</strong>
+          </div>
+          <em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>
+        </div>
+        <div class="bank-account-coverage-summary-grid">
+          ${cells.map(([label, value]) => `
+            <div>
+              <span>${escapeHtml(label)}</span>
+              <strong>${escapeHtml(value || '—')}</strong>
+            </div>
+          `).join('')}
+        </div>
+      </section>
+    `;
+  }
+
   function renderTearSheetCoverageSignal() {
-    const saved = selectedTearSheetCoverage;
     const selectedStatus = document.getElementById('bankTearSheetStatus')?.value;
     const status = { ...currentBankAccountStatus(), status: selectedStatus || currentBankAccountStatus().status || 'Open' };
-    const sub = [
-      saved && saved.priority ? `${saved.priority} priority` : '',
-      status.owner ? `Owner: ${status.owner}` : '',
-      saved && saved.nextActionDate ? `Next: ${formatShortDate(saved.nextActionDate)}` : '',
-      status.services ? `Services: ${status.services}` : ''
-    ].filter(Boolean).join(' · ');
     return `
       <div class="bank-coverage-signal-inner">
         <em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>
-        ${sub ? `<span>${escapeHtml(sub)}</span>` : ''}
       </div>
     `;
   }
@@ -2655,6 +2897,7 @@
       selectedBankNotes = [];
       selectedBankStrategyHistory = [];
       renderBankProfile();
+      if (options.openStrategyRequest) openBankStrategyRequestPanel();
       rememberRecentBank(selectedBank.bank);
       loadTearSheetCoverage(selectedBank.bank.id);
       loadBankStrategyHistory(selectedBank.bank.id);
@@ -2696,11 +2939,17 @@
         const meta = data.metadata || {};
         showToast(`Imported ${formatNumber(meta.importedCount || 0)} bank statuses`);
         if (status) {
-          status.textContent = `Imported ${formatNumber(meta.importedCount || 0)} statuses · ${formatNumber(meta.unmatchedCount || 0)} unmatched · ${meta.sheetName || 'workbook'}`;
+          const enrichedRows = [
+            meta.ownerCount ? `${formatNumber(meta.ownerCount)} owners` : '',
+            meta.servicesCount ? `${formatNumber(meta.servicesCount)} FBBS service rows` : '',
+            meta.bankersBankServicesCount ? `${formatNumber(meta.bankersBankServicesCount)} Bankers Bank service rows` : ''
+          ].filter(Boolean).join(' · ');
+          status.textContent = `Imported ${formatNumber(meta.importedCount || 0)} statuses · ${formatNumber(meta.unmatchedCount || 0)} unmatched · ${meta.sheetName || 'workbook'}${enrichedRows ? ` · ${enrichedRows}` : ''}`;
         }
         return Promise.all([
           loadBankStatus(),
           loadSavedBanks(),
+          loadAccountCoverageAccounts(),
           selectedBankId() ? loadBank(selectedBankId(), { collapseResults: false }) : Promise.resolve()
         ]);
       })
@@ -2722,6 +2971,7 @@
     const values = latest.values || {};
     const fields = meta.fields || [];
     const recentPeriods = (bank.periods || []).slice(0, 8);
+    const accountStatus = currentBankAccountStatus();
     const details = [
       ['Account Name', values.name || bank.summary.name],
       ['Parent Account', values.parentName],
@@ -2736,6 +2986,9 @@
       ['FTEs', formatBankValue(values.fullTimeEmployees, 'number')],
       ['Subchapter S Election?', values.subchapterS],
       ['Number of Offices', formatBankValue(values.numberOfOffices, 'number')],
+      ['Affiliate', accountStatus.affiliate],
+      ['Affiliate Status', accountStatus.affiliateStatus],
+      ['Affiliate Rep', accountStatus.affiliateRep],
       ['SNL Institution Key', values.id]
     ];
 
@@ -2745,7 +2998,6 @@
           <span class="tool-eyebrow">Call Report Tear Sheet</span>
           <h3>${escapeHtml(values.name || bank.summary.displayName || 'Bank')}</h3>
           <p>${escapeHtml([values.city, values.state, values.certNumber ? `Cert ${values.certNumber}` : '', values.primaryRegulator].filter(Boolean).join(' · '))}</p>
-          <div class="bank-coverage-signal" id="bankProfileCoverageSignal">${renderTearSheetCoverageSignal()}</div>
         </div>
         <div class="bank-profile-tools">
           <div class="bank-profile-actions">
@@ -2762,8 +3014,8 @@
           </div>
         </div>
       </div>
+      ${renderAccountDetailsSummary(values, accountStatus)}
       ${renderBankStrategyRequestPanel()}
-      ${renderBankStrategyHistoryPanel()}
       ${renderBankSection('Details', details, true)}
       ${renderBankFieldSection('Balance Sheet', fields, values, 'balanceSheet')}
       ${renderBankFieldSection('Securities (AFS-FV)', fields, values, 'securitiesAfs', 'afsTotal')}
@@ -2774,6 +3026,9 @@
       ${renderBankFieldSection('Asset Quality', fields, values, 'assetQuality')}
       ${renderBankFieldSection('Liquidity', fields, values, 'liquidity')}
       ${renderBankTrendTable(fields, recentPeriods)}
+      ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
+      ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
+      ${renderBankStrategyHistoryPanel()}
     `;
     updateBankSaveButton();
     const saveBtn = document.getElementById('bankSaveBtn');
@@ -2972,9 +3227,20 @@
     if (!panel) return;
     panel.hidden = !panel.hidden;
     if (!panel.hidden) {
-      const summary = document.getElementById('bankStrategySummary');
-      if (summary) summary.focus();
+      focusBankStrategyRequestSummary();
     }
+  }
+
+  function openBankStrategyRequestPanel() {
+    const panel = document.getElementById('bankStrategyRequestPanel');
+    if (!panel) return;
+    panel.hidden = false;
+    focusBankStrategyRequestSummary();
+  }
+
+  function focusBankStrategyRequestSummary() {
+    const summary = document.getElementById('bankStrategySummary');
+    if (summary) summary.focus();
   }
 
   function hideBankStrategyRequestPanel() {
@@ -3739,7 +4005,7 @@
 
     const comparisonPeriods = periods.filter(period => period.key !== 'today');
     const validPeriods = comparisonPeriods.filter(period =>
-      terms.some(row => Number.isFinite(Number(row.rates && row.rates.today)) && Number.isFinite(Number(row.rates && row.rates[period.key])))
+      terms.some(row => cdRateValue(row.rates && row.rates.today) != null)
     );
     if (!validPeriods.length) {
       if (legend) legend.innerHTML = '';
@@ -3775,14 +4041,15 @@
     }
 
     const rows = terms.map(row => {
-      const today = Number(row.rates && row.rates.today);
-      const prior = Number(row.rates && row.rates[selectedPeriod.key]);
-      const delta = Number.isFinite(today) && Number.isFinite(prior) ? today - prior : null;
+      const today = cdRateValue(row.rates && row.rates.today);
+      const periodRate = cdRateValue(row.rates && row.rates[selectedPeriod.key]);
+      const prior = periodRate == null && today != null ? today : periodRate;
+      const delta = today != null && prior != null ? today - prior : null;
       return {
         term: row.term,
         label: row.label || row.term,
-        today: Number.isFinite(today) ? today : null,
-        prior: Number.isFinite(prior) ? prior : null,
+        today,
+        prior,
         delta
       };
     });
@@ -3923,8 +4190,13 @@
 
   function formatBasisPointDelta(delta) {
     if (!Number.isFinite(delta)) return '—';
+    if (Math.abs(delta) < 0.005) return 'No change';
     const bps = Math.round(delta * 100);
     return `${bps > 0 ? '+' : ''}${bps} bp`;
+  }
+
+  function cdRateValue(value) {
+    return Number.isFinite(value) ? value : null;
   }
 
   function formatIssueShare(share) {
@@ -5580,6 +5852,7 @@
     loadCurrent();
     loadStrategyNotifications();
     loadArchive();
+    setupHome();
     setupUpload();
     setupGlobalSearch();
     setupCdCostCalculator();

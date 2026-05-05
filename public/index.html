@@ -22,7 +22,7 @@
     <div class="nav-section">
       <a class="nav-link" data-page="home" href="#home">
         <span class="nav-icon">&#8962;</span>
-        <span class="nav-label">Dashboard</span>
+        <span class="nav-label">Home</span>
       </a>
     </div>
 
@@ -174,7 +174,6 @@
         <span aria-hidden="true">&#8964;</span>
       </button>
       <div class="top-link-menu-panel external-tools-panel">
-        <a href="https://na01.safelinks.protection.outlook.com/?url=https%3A%2F%2Ffbbs.my.salesforce.com%2F%3Fec%3D301%26startURL%3D%252Fvisualforce%252Fsession%253Furl%253Dhttps%25253A%25252F%25252Ffbbs.lightning.force.com%25252Flightning%25252Fpage%25252Fhome&amp;data=05%7C02%7C%7C90bfff827e884e31152a08dea473f43e%7C84df9e7fe9f640afb435aaaaaaaaaaaa%7C1%7C0%7C639129015102639234%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdata=t%2BlTpGfu44X0fyEAaBe4tulDJWJeCFsTFK8%2BZHM%2Fyu4%3D&amp;reserved=0" target="_blank" rel="noopener">Salesforce</a>
         <a href="https://fbbs.lightning.force.com/lightning/n/Maps" target="_blank" rel="noopener">Maps</a>
         <a href="https://eportfolio.fbbsinc.com/ePortfolio/Account/Login" target="_blank" rel="noopener">Portfolio Accounting</a>
         <a href="https://www.netxinvestor.com/nxi/login" target="_blank" rel="noopener">NETX Investor</a>
@@ -189,78 +188,58 @@
   <section class="page-hero">
     <div class="page-hero-inner">
       <div>
-        <h2>Portal <strong>Command Center</strong></h2>
-        <p class="hero-sub" id="homeSubtitle">Loading status&hellip;</p>
-      </div>
-      <div class="hero-stat">
-        <div class="num" id="homePackageStat">&mdash;</div>
-        <div class="lbl">Current Files</div>
+        <h2>Home</h2>
+        <p class="hero-sub" id="homeSubtitle">Loading portal status&hellip;</p>
       </div>
     </div>
   </section>
 
   <div class="container">
-    <div class="home-section-row">
-      <div>
-        <h3>Market Snapshot</h3>
-        <p>Live totals from the current parsed offering files.</p>
-      </div>
-      <div class="kicker" id="homeKicker">&mdash;</div>
-    </div>
+    <section class="home-bubble-grid" aria-label="Home sections">
+      <article class="home-bubble-card">
+        <button type="button" class="home-bubble-button" data-goto="banks">
+          <span>Accounts</span>
+        </button>
+        <p>Bank tear sheets, account coverage, owner data, and service information.</p>
+      </article>
 
-    <div class="home-market-tiles" id="homeMarketTiles"></div>
-
-    <section class="home-launch-grid" id="homeLaunchGrid"></section>
-
-    <div class="home-workspace">
-      <section class="home-primary-panel">
-        <div class="home-panel-head">
-          <div>
-            <span class="tool-eyebrow">Find Anything</span>
-            <h3>Search the portal</h3>
-            <p>Offerings, CUSIPs, issuers, ratings, states, and product inventory.</p>
-          </div>
-          <button class="small-btn" data-goto="explorer">Open CD Explorer</button>
+      <article class="home-bubble-card">
+        <button type="button" class="home-bubble-button" data-goto="explorer">
+          <span>Markets</span>
+        </button>
+        <p>CD, muni, agency, corporate, and MBS/CMO offering explorers.</p>
+        <div class="home-bubble-links">
+          <button type="button" data-goto="explorer">CDs</button>
+          <button type="button" data-goto="muni-explorer">Munis</button>
+          <button type="button" data-goto="agencies">Agencies</button>
+          <button type="button" data-goto="corporates">Corporates</button>
         </div>
-        <div class="global-search-row">
-          <input type="text" id="globalSearchInput" placeholder="Search JPM, FHLB, Texas, 3133, A-rated, healthcare..." autocomplete="off">
+      </article>
+
+      <article class="home-bubble-card">
+        <button type="button" class="home-bubble-button" data-goto="dashboard">
+          <span>Daily Sheets</span>
+        </button>
+        <p>Sales dashboard, Economic Update, and Brokered CD Rate Sheet.</p>
+        <div class="home-bubble-links">
+          <button type="button" data-goto="dashboard">Sales</button>
+          <button type="button" data-goto="econ">Economic</button>
+          <button type="button" data-goto="cd">CD Rates</button>
         </div>
-        <div class="global-results" id="globalSearchResults">
-          <div class="global-empty">Start typing to search CDs, munis, agencies, and corporates.</div>
+      </article>
+
+      <article class="home-bubble-card strategy">
+        <button type="button" class="home-bubble-button" data-home-strategy-open>
+          <span>Strategies</span>
+        </button>
+        <p>Search a bank and open the existing strategy request form.</p>
+        <div class="home-strategy-search">
+          <input type="search" id="homeStrategyBankSearch" placeholder="Search bank for request..." autocomplete="off">
+          <button type="button" class="small-btn" id="homeStrategyBankSearchBtn">Search</button>
         </div>
-      </section>
-
-      <aside class="home-side-panel">
-        <div class="home-panel-head compact">
-          <div>
-            <span class="tool-eyebrow">Next Best Actions</span>
-            <h3>Work queue</h3>
-          </div>
-        </div>
-        <div class="home-work-list" id="homeWorkList"></div>
-      </aside>
-    </div>
-
-    <div class="home-section-row">
-      <div>
-        <h3>Current Publications</h3>
-        <p>Raw source files remain one click away for viewing and download.</p>
-      </div>
-      <button class="small-btn" data-goto="upload">Upload Package</button>
-    </div>
-
-    <div class="docs-grid" id="homeDocsGrid">
-      <!-- populated by JS -->
-    </div>
-
-    <div class="home-section-row">
-      <div>
-        <h3>Package Status</h3>
-        <p>Publish state, parser health, and date alignment for the current package.</p>
-      </div>
-    </div>
-
-    <div class="home-status-strip bottom" id="homeStatusTiles"></div>
+        <div class="home-strategy-results" id="homeStrategyBankResults"></div>
+      </article>
+    </section>
   </div>
 </div>
 
@@ -291,15 +270,16 @@
           <input type="search" id="bankSearchInput" placeholder="Start typing a bank name, city, cert number, or parent..." autocomplete="off">
           <button class="publish-btn" id="bankSearchBtn" type="button">Search</button>
         </div>
-        <div class="bank-search-results" id="bankSearchResults"></div>
-      </section>
-
-      <section class="bank-recent-panel" id="bankRecentPanel" hidden>
-        <div class="bank-recent-head">
-          <h3>Recently Viewed</h3>
+        <div class="bank-recent-dropdown" id="bankRecentPanel" hidden>
+          <label for="bankRecentList">
+            <span>Previous searches</span>
+            <select id="bankRecentList">
+              <option value="">Select a recent bank</option>
+            </select>
+          </label>
           <button type="button" class="text-btn" id="clearRecentBanksBtn">Clear</button>
         </div>
-        <div class="bank-recent-list" id="bankRecentList"></div>
+        <div class="bank-search-results" id="bankSearchResults"></div>
       </section>
 
       <section class="bank-profile" id="bankProfile">
@@ -323,6 +303,40 @@
           </div>
           <div class="bank-saved-list" id="bankSavedList">
             <div class="bank-search-empty">Save a bank from a tear sheet to start a coverage list.</div>
+          </div>
+          <div class="bank-account-coverage-panel">
+            <div class="bank-recent-head">
+              <h3>Account Coverage</h3>
+              <span class="bank-saved-count" id="bankAccountCoverageCount">0 matched</span>
+            </div>
+            <div class="bank-account-coverage-controls">
+              <input type="search" id="bankAccountCoverageFilterInput" placeholder="Search owner, bank, affiliate, cert, or service..." autocomplete="off">
+              <select id="bankAccountCoverageStatusFilter" aria-label="Account status filter">
+                <option value="">All statuses</option>
+                <option value="Client">Client</option>
+                <option value="Prospect">Prospect</option>
+                <option value="Open">Open</option>
+                <option value="Watchlist">Watchlist</option>
+                <option value="Dormant">Dormant</option>
+              </select>
+              <select id="bankAccountCoverageServiceFilter" aria-label="Account service filter">
+                <option value="">All rows</option>
+                <option value="fbbs">Has FBBS services</option>
+                <option value="bankersBank">Has Bankers Bank services</option>
+                <option value="affiliate">Has affiliate</option>
+              </select>
+              <select id="bankAccountCoverageSort" aria-label="Account coverage sort">
+                <option value="owner">Owner</option>
+                <option value="status">Status</option>
+                <option value="affiliate">Affiliate</option>
+                <option value="services">Services</option>
+                <option value="bank">Bank</option>
+                <option value="updated">Recently updated</option>
+              </select>
+            </div>
+            <div class="bank-account-coverage-list" id="bankAccountCoverageList">
+              <div class="bank-search-empty">Loading account coverage matches...</div>
+            </div>
           </div>
         </section>
 

@@ -156,10 +156,17 @@ function buildRateComparisons(snapshots, anchorDate) {
       term: term.key,
       label: term.label,
       months: term.months,
-      rates: {}
+      rates: {},
+      rateFallbacks: {}
     };
     for (const period of periodSnapshots) {
       row.rates[period.key] = period.medians[term.key] ?? null;
+    }
+    for (const key of ['previousWeek', 'previousMonth', 'previousYear']) {
+      if (Number.isFinite(row.rates.today) && !Number.isFinite(row.rates[key])) {
+        row.rates[key] = row.rates.today;
+        row.rateFallbacks[key] = true;
+      }
     }
     row.deltas = {
       previousWeek: delta(row.rates.today, row.rates.previousWeek),

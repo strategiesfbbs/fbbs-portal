@@ -54,9 +54,11 @@ const {
 } = require('./bank-coverage-store');
 const {
   defaultAccountStatus,
+  countBankAccountStatuses,
   getBankAccountStatusImportStatus,
   getBankAccountStatuses,
   importBankAccountStatusWorkbook,
+  listBankAccountStatuses,
   upsertBankAccountStatus
 } = require('./bank-account-status-store');
 const {
@@ -145,6 +147,7 @@ const CORPORATES_FILENAME = '_corporates.json';
 const META_FILENAME = '_meta.json';
 const BANK_WORKBOOK_FILENAME = 'current-bank-call-reports.xlsm';
 const BANK_STATUS_WORKBOOK_FILENAME = 'current-bank-account-statuses.xlsb';
+const BANK_SERVICES_WORKBOOK_FILENAME = 'current-bank-services.xlsx';
 
 // ---------- Helpers ----------
 
@@ -1246,13 +1249,26 @@ async function handleBankStatusUpload(req, res) {
     const metadata = importBankAccountStatusWorkbook(BANK_REPORTS_DIR, file.data, bankSummaries, {
       sourceFile: sanitizeFilename(file.filename)
     });
-    const target = path.join(BANK_REPORTS_DIR, BANK_STATUS_WORKBOOK_FILENAME);
+    const hasServicesData = Boolean(
+      metadata.ownerCount ||
+      metadata.servicesCount ||
+      metadata.affiliateCount ||
+      metadata.bankersBankServicesCount
+    );
+    const target = path.join(
+      BANK_REPORTS_DIR,
+      hasServicesData ? BANK_SERVICES_WORKBOOK_FILENAME : BANK_STATUS_WORKBOOK_FILENAME
+    );
     fs.writeFileSync(target, file.data);
     appendAuditLog({
       event: 'bank-account-status-import',
       sourceFile: sanitizeFilename(file.filename),
       importedCount: metadata.importedCount,
-      unmatchedCount: metadata.unmatchedCount
+      unmatchedCount: metadata.unmatchedCount,
+      ownerCount: metadata.ownerCount,
+      servicesCount: metadata.servicesCount,
+      affiliateCount: metadata.affiliateCount,
+      bankersBankServicesCount: metadata.bankersBankServicesCount
     });
     return sendJSON(res, 200, { success: true, metadata });
   } catch (err) {
@@ -1927,6 +1943,21 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/bank-coverage' && req.method === 'GET') {
       return sendJSON(res, 200, { savedBanks: listSavedBanks(BANK_REPORTS_DIR) });
+    }
+
+    if (pathname === '/api/bank-account-statuses' && req.method === 'GET') {
+      const filters = {
+        q: query.get('q'),
+        status: query.get('status'),
+        service: query.get('service'),
+        sort: query.get('sort'),
+        limit: query.get('limit')
+      };
+      return sendJSON(res, 200, {
+        accountStatuses: listBankAccountStatuses(BANK_REPORTS_DIR, filters),
+        resultCount: countBankAccountStatuses(BANK_REPORTS_DIR, filters),
+        importStatus: getBankAccountStatusImportStatus(BANK_REPORTS_DIR)
+      });
     }
 
     if (pathname === '/api/bank-coverage' && req.method === 'POST') {

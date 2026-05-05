@@ -403,19 +403,46 @@ function emailHeader(text, name) {
 }
 
 function emailBody(text) {
-  const idx = text.search(/\r?\n\r?\n/);
-  return idx === -1 ? text : text.slice(idx).trim();
+  const normalized = text.replace(/\r\n/g, '\n');
+  const plainPart = normalized.match(/Content-Type:\s*text\/plain[\s\S]*?\n\n([\s\S]*?)(?:\n--[^\n]+|$)/i);
+  if (plainPart) return plainPart[1].trim();
+  const idx = normalized.search(/\n\n/);
+  return idx === -1 ? normalized : normalized.slice(idx).trim();
+}
+
+function decodeQuotedPrintable(text) {
+  return String(text || '')
+    .replace(/=\n/g, '')
+    .replace(/=([A-Fa-f0-9]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+}
+
+function cleanEmailOfferText(text) {
+  const lines = decodeQuotedPrintable(text)
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .filter(line => !/^--/.test(line))
+    .filter(line => !/^Content-(Type|Transfer-Encoding|ID|Disposition):/i.test(line))
+    .filter(line => !/^boundary=/i.test(line))
+    .filter(line => !/^\[cid:/i.test(line))
+    .filter(line => !/^CAUTION:/i.test(line));
+
+  const useful = [];
+  for (const line of lines) {
+    if (/^(Thanks|Thank you|Regards|CONFIDENTIALITY NOTICE|This e-mail)/i.test(line)) break;
+    if (/^(Brian Roscoe|Direct:|www\.FBBSinc\.com|1714 Deer Tracks Trail)/i.test(line)) break;
+    useful.push(line);
+    if (useful.length >= 10) break;
+  }
+  return useful.join('\n');
 }
 
 function parseEmail(text, source) {
   const subject = emailHeader(text, 'Subject') || path.basename(source.filename, path.extname(source.filename));
-  const body = emailBody(text)
-    .replace(/=\r?\n/g, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/\r/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  const body = cleanEmailOfferText(emailBody(text));
   const amount =
     (body.match(/\$?\s*[\d,.]+\s*mm\+?\s+available/i) || [])[0] ||
     (body.match(/[\d,.]+\s*\/\s*[\d,.]+\s*mm\+?/i) || [])[0] ||
@@ -433,7 +460,7 @@ function parseEmail(text, source) {
     coupon,
     available: amount,
     settleDate: settle,
-    note: [markup, body].filter(Boolean).join('\n').slice(0, 1600),
+    note: body.slice(0, 1600),
     emailSubject: subject,
     emailFrom: emailHeader(text, 'From'),
     emailDate: emailHeader(text, 'Date')

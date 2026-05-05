@@ -279,8 +279,8 @@ function listStrategyRequests(outputDir, filters = {}) {
       CASE status
         WHEN 'Open' THEN 1
         WHEN 'In Progress' THEN 2
-        WHEN 'Completed' THEN 3
-        WHEN 'Needs Billed' THEN 4
+        WHEN 'Needs Billed' THEN 3
+        WHEN 'Completed' THEN 4
         ELSE 5
       END,
       archived_at IS NOT NULL ASC,
