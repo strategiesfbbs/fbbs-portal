@@ -5406,27 +5406,31 @@ body {
    ================================================================ */
 .maps-split {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 18px;
   margin-bottom: 24px;
+  height: calc(100vh - 240px);
+  min-height: 600px;
 }
 .maps-panel {
   background: var(--bg-card, #fff);
   border: 1px solid var(--line, #e2e2e2);
   border-radius: 12px;
   padding: 14px 16px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 .maps-panel h3 {
   margin: 0 0 10px;
   font-size: 15px;
-}
-.maps-panel {
-  overflow: hidden;
+  flex: 0 0 auto;
 }
 .maps-plot {
   width: 100%;
-  height: 78vh;
-  min-height: 620px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .maps-tip {
   color: var(--text3, #666);
@@ -5494,7 +5498,8 @@ body {
 .maps-tablewrap {
   border: 1px solid var(--line, #eee);
   border-radius: 10px;
-  max-height: 60vh;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   position: relative;
 }
