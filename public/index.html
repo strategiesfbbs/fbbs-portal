@@ -93,6 +93,9 @@
         <a class="nav-link nav-minor" data-page="banks" href="#banks">
           <span class="nav-label">Bank Tear Sheets</span>
         </a>
+        <a class="nav-link nav-minor" data-page="maps" href="#maps">
+          <span class="nav-label">Maps</span>
+        </a>
       </div>
     </div>
 
@@ -142,6 +145,7 @@
   <div class="top-strip-links">
     <a class="top-primary-link" href="#home" data-page="home">Home</a>
     <a class="top-primary-link" href="#banks" data-page="banks">Banks</a>
+    <a class="top-primary-link" href="#maps" data-page="maps">Maps</a>
     <a class="top-primary-link" href="#strategies" data-page="strategies">Strategies</a>
     <div class="top-link-menu">
       <button class="top-link-trigger" type="button">
@@ -174,7 +178,7 @@
         <span aria-hidden="true">&#8964;</span>
       </button>
       <div class="top-link-menu-panel external-tools-panel">
-        <a href="https://fbbs.lightning.force.com/lightning/n/Maps" target="_blank" rel="noopener">Maps</a>
+        <a href="https://fbbs.lightning.force.com/lightning/page/home" target="_blank" rel="noopener">Salesforce</a>
         <a href="https://eportfolio.fbbsinc.com/ePortfolio/Account/Login" target="_blank" rel="noopener">Portfolio Accounting</a>
         <a href="https://www.netxinvestor.com/nxi/login" target="_blank" rel="noopener">NETX Investor</a>
         <a href="https://fbbsinc.com" target="_blank" rel="noopener">fbbsinc.com</a>
@@ -347,6 +351,117 @@
             <p>Coverage status, next actions, and notes will live here.</p>
           </div>
         </section>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ========== MAPS PAGE ========== -->
+<div class="page" id="p-maps">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Bank <strong>Maps</strong></h2>
+        <p class="hero-sub" id="bankMapSub">Explore bank coverage by state, call report metrics, and account status.</p>
+      </div>
+      <div class="hero-stat">
+        <span id="bankMapCount">&mdash;</span>
+        <small>Shown</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <section class="bank-map-toolbar">
+      <input type="search" id="bankMapSearch" placeholder="Search banks, cities, states, certs, owners, or services..." autocomplete="off">
+      <select id="bankMapMetric" aria-label="Map metric">
+        <option value="bankCount">Bank count</option>
+        <option value="assetsMm">Assets</option>
+        <option value="securitiesMm">Securities</option>
+        <option value="loansToDeposits">Loans / Deposits</option>
+        <option value="roa">ROA</option>
+        <option value="netInterestMargin">NIM</option>
+        <option value="costOfFunds">Cost of Funds</option>
+      </select>
+      <select id="bankMapStatusFilter" aria-label="Account status">
+        <option value="">All statuses</option>
+        <option value="Client">Client</option>
+        <option value="Prospect">Prospect</option>
+        <option value="Open">Open</option>
+        <option value="Watchlist">Watchlist</option>
+        <option value="Dormant">Dormant</option>
+      </select>
+      <button type="button" class="small-btn" id="bankMapAdvancedBtn">Advanced Filters</button>
+      <button type="button" class="text-btn" id="bankMapClearBtn">Clear</button>
+    </section>
+
+    <div class="bank-map-selected" id="bankMapSelectedStates"></div>
+    <div class="bank-map-stats" id="bankMapStats"></div>
+
+    <section class="bank-map-layout">
+      <div class="bank-map-panel">
+        <div class="bank-map-head">
+          <div>
+            <span class="tool-eyebrow">State Selection</span>
+            <h3>Coverage map</h3>
+          </div>
+          <span id="bankMapMetricLabel">Bank count</span>
+        </div>
+        <div class="bank-state-map" id="bankStateMap"></div>
+      </div>
+
+      <div class="bank-map-list-panel">
+        <div class="bank-map-head">
+          <div>
+            <span class="tool-eyebrow">Bank List</span>
+            <h3 id="bankMapListTitle">All banks</h3>
+          </div>
+          <button type="button" class="text-btn" id="bankMapExportBtn">Export CSV</button>
+        </div>
+        <div class="bank-map-table-wrap">
+          <table class="bank-map-table">
+            <thead>
+              <tr>
+                <th>Bank</th>
+                <th>State</th>
+                <th>Assets</th>
+                <th>AFS</th>
+                <th>HTM</th>
+                <th>L/D</th>
+                <th>ROA</th>
+                <th>NIM</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="bankMapRows">
+              <tr><td colspan="9">Loading map data...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <aside class="bank-map-detail" id="bankMapDetail">
+        <div class="bank-empty-state">
+          <div class="ff-kicker">Map Details</div>
+          <h2>Select a bank</h2>
+          <p>Use the state map, bank list, and filters to open quick tear sheet details.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="bank-map-filter-panel" id="bankMapFilterPanel" hidden>
+      <div class="bank-map-filter-dialog">
+        <div class="bank-map-filter-head">
+          <h3>Advanced Filters</h3>
+          <button type="button" class="text-btn" id="bankMapCloseFiltersBtn">Close</button>
+        </div>
+        <div class="bank-map-filter-grid">
+          <select id="bankMapFilterField" aria-label="Filter field"></select>
+          <select id="bankMapFilterOp" aria-label="Filter operator"></select>
+          <input type="text" id="bankMapFilterValue" placeholder="Value">
+          <button type="button" class="small-btn" id="bankMapAddFilterBtn">Add Filter</button>
+        </div>
+        <div class="bank-map-filter-list" id="bankMapFilterList"></div>
       </div>
     </section>
   </div>

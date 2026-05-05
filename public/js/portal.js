@@ -35,6 +35,10 @@
   let selectedBankNotes = [];
   let activeCoverageBankId = null;
   let activeBankWorkspaceView = 'tear-sheet';
+  let bankMapData = null;
+  let bankMapSelectedStates = new Set();
+  let bankMapAdvancedFilters = [];
+  let selectedBankMapBankId = null;
   let strategyRequests = [];
   let strategyCounts = {};
   let strategyNotifications = { requests: [], counts: {} };
@@ -61,7 +65,7 @@
 
   const VALID_PAGES = ['home', 'dashboard', 'econ', 'cd', 'cdoffers', 'munioffers',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'banks', 'strategies', 'archive', 'upload', 'admin'];
+                       'mbs-cmo', 'banks', 'maps', 'strategies', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -77,6 +81,7 @@
     { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
     { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
+    { page: 'maps', group: 'Banks', label: 'Maps', description: 'Explore banks by state, metric, account status, and call report detail', aliases: 'map states location coverage heatmap geography fdic call report' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
@@ -93,7 +98,8 @@
     agencies: 'offerings',
     corporates: 'offerings',
     'mbs-cmo': 'offerings',
-    banks: 'banks'
+    banks: 'banks',
+    maps: 'banks'
   };
 
   const DEFAULT_BROKERED_CD_TERMS = [
@@ -132,6 +138,61 @@
     'Safekeeping',
     'Stockholder',
     'Wire Transfer'
+  ];
+  const STATE_NAMES = {
+    AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California',
+    CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', FL: 'Florida', GA: 'Georgia',
+    HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
+    KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
+    MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi',
+    MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire',
+    NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina',
+    ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
+    RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee',
+    TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington',
+    WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming', DC: 'District of Columbia'
+  };
+  const STATE_MAP_LAYOUT = [
+    ['AK', '', '', '', '', '', '', '', '', '', 'ME'],
+    ['', '', '', '', '', '', '', '', 'VT', 'NH', ''],
+    ['WA', 'ID', 'MT', 'ND', 'MN', 'IL', 'WI', 'MI', 'NY', 'MA', ''],
+    ['OR', 'NV', 'WY', 'SD', 'IA', 'IN', 'OH', 'PA', 'NJ', 'CT', 'RI'],
+    ['CA', 'UT', 'CO', 'NE', 'MO', 'KY', 'WV', 'VA', 'MD', 'DE', 'DC'],
+    ['', 'AZ', 'NM', 'KS', 'AR', 'TN', 'NC', 'SC', '', '', ''],
+    ['HI', '', '', 'OK', 'LA', 'MS', 'AL', 'GA', '', '', ''],
+    ['', '', '', 'TX', '', '', '', 'FL', '', '', '']
+  ];
+  const BANK_MAP_METRICS = {
+    bankCount: { label: 'Bank count', type: 'count' },
+    assetsMm: { label: 'Assets', type: 'moneyMm' },
+    securitiesMm: { label: 'Securities', type: 'moneyMm' },
+    loansToDeposits: { label: 'Loans / Deposits', type: 'percent' },
+    roa: { label: 'ROA', type: 'percent' },
+    netInterestMargin: { label: 'NIM', type: 'percent' },
+    costOfFunds: { label: 'Cost of Funds', type: 'percent' }
+  };
+  const BANK_MAP_FILTER_FIELDS = [
+    { key: 'displayName', label: 'Bank name', type: 'text' },
+    { key: 'certNumber', label: 'FDIC cert', type: 'text' },
+    { key: 'city', label: 'City', type: 'text' },
+    { key: 'state', label: 'State', type: 'text' },
+    { key: 'owner', label: 'Owner', type: 'text' },
+    { key: 'assetsMm', label: 'Assets ($MM)', type: 'number' },
+    { key: 'depositsMm', label: 'Deposits ($MM)', type: 'number' },
+    { key: 'securitiesMm', label: 'Securities ($MM)', type: 'number' },
+    { key: 'afsMm', label: 'AFS ($MM)', type: 'number' },
+    { key: 'htmMm', label: 'HTM ($MM)', type: 'number' },
+    { key: 'loansToDeposits', label: 'Loans / Deposits (%)', type: 'number' },
+    { key: 'roa', label: 'ROA (%)', type: 'number' },
+    { key: 'roe', label: 'ROE (%)', type: 'number' },
+    { key: 'netInterestMargin', label: 'NIM (%)', type: 'number' },
+    { key: 'yieldOnSecurities', label: 'Yield on Securities (%)', type: 'number' },
+    { key: 'yieldOnLoans', label: 'Yield on Loans (%)', type: 'number' },
+    { key: 'costOfFunds', label: 'Cost of Funds (%)', type: 'number' },
+    { key: 'efficiencyRatio', label: 'Efficiency Ratio (%)', type: 'number' },
+    { key: 'leverageRatio', label: 'Leverage Ratio (%)', type: 'number' },
+    { key: 'nonInterestBearingDeposits', label: 'Non-interest Bearing Deposits (%)', type: 'number' },
+    { key: 'wholesaleFundingReliance', label: 'Wholesale Funding Reliance (%)', type: 'number' }
   ];
   const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'THO Report', 'CECL Analysis', 'Miscellaneous'];
   const STRATEGY_STATUSES = ['Open', 'In Progress', 'Needs Billed', 'Completed'];
@@ -926,6 +987,7 @@
       loadSavedBanks();
       loadAccountCoverageAccounts();
     }
+    if (pageName === 'maps') loadBankMap();
     if (pageName === 'strategies') loadStrategies();
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'admin') loadAuditLog();
@@ -2536,6 +2598,522 @@
   function clearBankSearchResults() {
     const results = document.getElementById('bankSearchResults');
     if (results) results.innerHTML = '';
+  }
+
+  function setupBankMap() {
+    const search = document.getElementById('bankMapSearch');
+    const metric = document.getElementById('bankMapMetric');
+    const status = document.getElementById('bankMapStatusFilter');
+    const clear = document.getElementById('bankMapClearBtn');
+    const advanced = document.getElementById('bankMapAdvancedBtn');
+    const closeFilters = document.getElementById('bankMapCloseFiltersBtn');
+    const addFilter = document.getElementById('bankMapAddFilterBtn');
+    const field = document.getElementById('bankMapFilterField');
+    const exportBtn = document.getElementById('bankMapExportBtn');
+
+    if (field) {
+      field.innerHTML = BANK_MAP_FILTER_FIELDS
+        .map(row => `<option value="${escapeHtml(row.key)}">${escapeHtml(row.label)}</option>`)
+        .join('');
+      field.addEventListener('change', renderBankMapFilterOps);
+      renderBankMapFilterOps();
+    }
+    [search, metric, status].forEach(el => {
+      if (el) el.addEventListener('input', renderBankMap);
+      if (el) el.addEventListener('change', renderBankMap);
+    });
+    if (clear) clear.addEventListener('click', () => {
+      bankMapSelectedStates = new Set();
+      bankMapAdvancedFilters = [];
+      selectedBankMapBankId = null;
+      if (search) search.value = '';
+      if (status) status.value = '';
+      renderBankMap();
+    });
+    if (advanced) advanced.addEventListener('click', () => {
+      const panel = document.getElementById('bankMapFilterPanel');
+      if (panel) panel.hidden = false;
+      renderBankMapFilters();
+    });
+    if (closeFilters) closeFilters.addEventListener('click', () => {
+      const panel = document.getElementById('bankMapFilterPanel');
+      if (panel) panel.hidden = true;
+    });
+    if (addFilter) addFilter.addEventListener('click', addBankMapFilter);
+    if (exportBtn) exportBtn.addEventListener('click', exportBankMapCsv);
+  }
+
+  async function loadBankMap() {
+    if (bankMapData && Array.isArray(bankMapData.rows)) {
+      renderBankMap();
+      return;
+    }
+    const body = document.getElementById('bankMapRows');
+    if (body) body.innerHTML = '<tr><td colspan="9">Loading map data...</td></tr>';
+    try {
+      const res = await fetch('/api/banks/map', { cache: 'no-store' });
+      bankMapData = await readBankJson(res);
+      renderBankMap();
+    } catch (e) {
+      if (body) body.innerHTML = `<tr><td colspan="9">${escapeHtml(e.message)}</td></tr>`;
+      const sub = document.getElementById('bankMapSub');
+      if (sub) sub.textContent = e.message;
+    }
+  }
+
+  function renderBankMap() {
+    const rows = bankMapFilteredRows();
+    const allRows = bankMapAllRows();
+    const meta = (bankMapData && bankMapData.metadata) || {};
+    const count = document.getElementById('bankMapCount');
+    const sub = document.getElementById('bankMapSub');
+    const listTitle = document.getElementById('bankMapListTitle');
+    const metricSelect = document.getElementById('bankMapMetric');
+    const metricKey = metricSelect ? metricSelect.value : 'bankCount';
+    const metric = BANK_MAP_METRICS[metricKey] || BANK_MAP_METRICS.bankCount;
+    if (count) count.textContent = formatNumber(rows.length);
+    if (sub) sub.textContent = `${formatNumber(allRows.length)} banks loaded from call report data${meta.latestPeriod ? ` · latest ${meta.latestPeriod}` : ''}`;
+    if (listTitle) listTitle.textContent = bankMapSelectedStates.size
+      ? `${formatNumber(rows.length)} banks in ${[...bankMapSelectedStates].join(', ')}`
+      : `${formatNumber(rows.length)} banks`;
+    setText('bankMapMetricLabel', metric.label);
+    renderBankMapSelectedStates();
+    renderBankMapStats(rows);
+    renderBankStateMap(bankMapFilteredRows({ ignoreStates: true }), metricKey);
+    renderBankMapTable(rows);
+    const selected = rows.find(row => String(row.id) === String(selectedBankMapBankId)) || rows[0] || null;
+    selectedBankMapBankId = selected ? selected.id : null;
+    renderBankMapDetail(selected);
+    renderBankMapFilters();
+  }
+
+  function bankMapAllRows() {
+    return bankMapData && Array.isArray(bankMapData.rows) ? bankMapData.rows : [];
+  }
+
+  function bankMapFilteredRows(options = {}) {
+    const q = (document.getElementById('bankMapSearch')?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById('bankMapStatusFilter')?.value || '';
+    return bankMapAllRows().filter(row => {
+      if (!options.ignoreStates && bankMapSelectedStates.size && !bankMapSelectedStates.has(String(row.state || '').toUpperCase())) return false;
+      const status = statusForBankRow(row);
+      if (statusFilter && status.status !== statusFilter) return false;
+      if (q) {
+        const haystack = [
+          row.displayName, row.name, row.city, row.state, row.county, row.certNumber,
+          row.parentName, row.primaryRegulator, status.owner, status.affiliate,
+          status.services, status.bankersBankServices
+        ].flat().filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return bankMapAdvancedFilters.every(filter => bankMapFilterMatches(row, filter));
+    }).sort((a, b) => (Number(b.assetsMm) || 0) - (Number(a.assetsMm) || 0));
+  }
+
+  function renderBankMapSelectedStates() {
+    const el = document.getElementById('bankMapSelectedStates');
+    if (!el) return;
+    if (!bankMapSelectedStates.size && !bankMapAdvancedFilters.length) {
+      el.innerHTML = '<span class="bank-map-selection-empty">Click a state to filter the list.</span>';
+      return;
+    }
+    const states = [...bankMapSelectedStates].sort().map(state => `
+      <button type="button" class="bank-map-chip" data-map-remove-state="${escapeHtml(state)}">
+        ${escapeHtml(state)} <span aria-hidden="true">x</span>
+      </button>
+    `).join('');
+    const filters = bankMapAdvancedFilters.length
+      ? `<span class="bank-map-filter-count">${formatNumber(bankMapAdvancedFilters.length)} advanced filter${bankMapAdvancedFilters.length === 1 ? '' : 's'}</span>`
+      : '';
+    el.innerHTML = `${states}${filters}`;
+    el.querySelectorAll('[data-map-remove-state]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bankMapSelectedStates.delete(btn.dataset.mapRemoveState);
+        renderBankMap();
+      });
+    });
+  }
+
+  function renderBankMapStats(rows) {
+    const el = document.getElementById('bankMapStats');
+    if (!el) return;
+    const totalAssets = sumMap(rows, 'assetsMm');
+    const totalSecurities = sumMap(rows, 'securitiesMm');
+    const avgLtd = averageMap(rows, 'loansToDeposits');
+    const avgRoa = averageMap(rows, 'roa');
+    el.innerHTML = [
+      { label: 'Banks', value: formatNumber(rows.length) },
+      { label: 'Assets', value: formatMapMoneyMm(totalAssets) },
+      { label: 'Securities', value: formatMapMoneyMm(totalSecurities) },
+      { label: 'Avg L/D', value: formatPercentTile(avgLtd, 2) },
+      { label: 'Avg ROA', value: formatPercentTile(avgRoa, 2) }
+    ].map(item => `
+      <div>
+        <span>${escapeHtml(item.label)}</span>
+        <strong>${escapeHtml(item.value)}</strong>
+      </div>
+    `).join('');
+  }
+
+  function renderBankStateMap(rows, metricKey) {
+    const el = document.getElementById('bankStateMap');
+    if (!el) return;
+    const stats = stateMetricStats(rows, metricKey);
+    const max = Math.max(...Object.values(stats).map(row => row.value || 0), 1);
+    el.innerHTML = STATE_MAP_LAYOUT.map(line => `
+      <div class="bank-state-row">
+        ${line.map(state => state ? renderBankStateCell(state, stats[state], max, metricKey) : '<span class="bank-state-empty"></span>').join('')}
+      </div>
+    `).join('');
+    el.querySelectorAll('[data-map-state]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const state = btn.dataset.mapState;
+        if (bankMapSelectedStates.has(state)) bankMapSelectedStates.delete(state);
+        else bankMapSelectedStates.add(state);
+        selectedBankMapBankId = null;
+        renderBankMap();
+      });
+    });
+  }
+
+  function renderBankStateCell(state, stat, max, metricKey) {
+    const count = stat ? stat.count : 0;
+    const value = stat ? stat.value : 0;
+    const intensity = count ? Math.max(0.12, Math.min(1, value / max)) : 0;
+    const alpha1 = 0.08 + (intensity * 0.48);
+    const alpha2 = 0.08 + (intensity * 0.32);
+    const selected = bankMapSelectedStates.has(state);
+    const label = `${STATE_NAMES[state] || state}: ${formatMapMetricValue(value, metricKey)} (${formatNumber(count)} banks)`;
+    return `
+      <button type="button" class="bank-state-cell${selected ? ' selected' : ''}${count ? '' : ' empty'}"
+        data-map-state="${escapeHtml(state)}"
+        style="--state-alpha:${alpha1.toFixed(3)};--state-alpha-2:${alpha2.toFixed(3)}"
+        title="${escapeHtml(label)}">
+        <strong>${escapeHtml(state)}</strong>
+        <span>${escapeHtml(count ? formatMapMetricValue(value, metricKey) : '—')}</span>
+      </button>
+    `;
+  }
+
+  function stateMetricStats(rows, metricKey) {
+    return rows.reduce((acc, row) => {
+      const state = String(row.state || '').toUpperCase();
+      if (!state) return acc;
+      if (!acc[state]) acc[state] = { count: 0, sum: 0, value: 0 };
+      acc[state].count += 1;
+      if (metricKey === 'bankCount') {
+        acc[state].value = acc[state].count;
+      } else {
+        const n = Number(row[metricKey]);
+        if (isFinite(n)) {
+          acc[state].sum += n;
+          acc[state].value = ['assetsMm', 'securitiesMm'].includes(metricKey)
+            ? acc[state].sum
+            : acc[state].sum / acc[state].count;
+        }
+      }
+      return acc;
+    }, {});
+  }
+
+  function renderBankMapTable(rows) {
+    const body = document.getElementById('bankMapRows');
+    if (!body) return;
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="9">No banks match the current map filters.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.slice(0, 600).map(row => {
+      const status = statusForBankRow(row);
+      const selected = String(row.id) === String(selectedBankMapBankId);
+      const tooltip = [
+        row.displayName,
+        row.certNumber ? `Cert ${row.certNumber}` : '',
+        `Assets ${formatMapMoneyMm(row.assetsMm)}`,
+        `Securities ${formatMapMoneyMm(row.securitiesMm)}`,
+        `ROA ${formatPercentTile(row.roa, 2)}`
+      ].filter(Boolean).join(' | ');
+      return `
+        <tr class="${selected ? 'selected' : ''}" data-bank-map-id="${escapeHtml(row.id)}" title="${escapeHtml(tooltip)}">
+          <td><strong>${escapeHtml(row.name || row.displayName || 'Bank')}</strong><span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span></td>
+          <td>${escapeHtml(row.state || '')}</td>
+          <td>${escapeHtml(formatMapMoneyMm(row.assetsMm))}</td>
+          <td>${escapeHtml(formatMapMoneyMm(row.afsMm))}</td>
+          <td>${escapeHtml(formatMapMoneyMm(row.htmMm))}</td>
+          <td>${escapeHtml(formatPercentTile(row.loansToDeposits, 1))}</td>
+          <td>${escapeHtml(formatPercentTile(row.roa, 2))}</td>
+          <td>${escapeHtml(formatPercentTile(row.netInterestMargin, 2))}</td>
+          <td>${renderBankStatusChip(row)}</td>
+        </tr>
+      `;
+    }).join('');
+    body.querySelectorAll('[data-bank-map-id]').forEach(row => {
+      row.addEventListener('click', () => {
+        selectedBankMapBankId = row.dataset.bankMapId;
+        renderBankMap();
+      });
+    });
+  }
+
+  function renderBankMapDetail(row, tab = 'overview') {
+    const el = document.getElementById('bankMapDetail');
+    if (!el) return;
+    if (!row) {
+      el.innerHTML = `
+        <div class="bank-empty-state">
+          <div class="ff-kicker">Map Details</div>
+          <h2>Select a bank</h2>
+          <p>Use the state map, bank list, and filters to open quick tear sheet details.</p>
+        </div>
+      `;
+      return;
+    }
+    const status = statusForBankRow(row);
+    const dataRows = bankMapDetailRows(row, tab);
+    el.innerHTML = `
+      <div class="bank-map-detail-head">
+        <div>
+          <span class="tool-eyebrow">${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
+          <h3>${escapeHtml(row.name || row.displayName || 'Bank')}</h3>
+        </div>
+        <em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>
+      </div>
+      <div class="bank-map-detail-meta">
+        <span>${escapeHtml(row.period || 'Latest')}</span>
+        ${status.owner ? `<span>Owner ${escapeHtml(status.owner)}</span>` : ''}
+        ${row.primaryRegulator ? `<span>${escapeHtml(row.primaryRegulator)}</span>` : ''}
+      </div>
+      <div class="bank-map-detail-tabs" role="tablist">
+        ${['overview', 'securities', 'loans'].map(key => `
+          <button type="button" class="${tab === key ? 'active' : ''}" data-bank-map-tab="${escapeHtml(key)}">${escapeHtml(key === 'loans' ? 'Loans' : key[0].toUpperCase() + key.slice(1))}</button>
+        `).join('')}
+      </div>
+      <div class="bank-map-detail-table">
+        ${renderBankMapMetricRows(dataRows || [])}
+      </div>
+      <div class="bank-map-detail-actions">
+        <button type="button" class="small-btn" data-bank-map-open-tearsheet="${escapeHtml(row.id)}">Open Tear Sheet</button>
+      </div>
+    `;
+    el.querySelectorAll('[data-bank-map-tab]').forEach(btn => {
+      btn.addEventListener('click', () => renderBankMapDetail(row, btn.dataset.bankMapTab));
+    });
+    const tearSheetBtn = el.querySelector('[data-bank-map-open-tearsheet]');
+    if (tearSheetBtn) tearSheetBtn.addEventListener('click', () => {
+      goTo('banks');
+      loadBank(row.id, { collapseResults: true });
+    });
+  }
+
+  function renderBankMapMetricRows(rows) {
+    if (!rows.length) return '<div class="bank-search-empty">No data available for this section.</div>';
+    return rows.map(row => `
+      <div class="bank-map-metric-row">
+        <span>${escapeHtml(row.label)}</span>
+        <strong>${escapeHtml(formatBankMapDetailValue(row.current, row.type))}</strong>
+        <em>${escapeHtml(formatBankMapChange(row.change, row.type))}</em>
+      </div>
+    `).join('');
+  }
+
+  function bankMapDetailRows(row, tab) {
+    const prev = row.previous || {};
+    const metric = (label, currentKey, previousKey, type) => ({
+      label,
+      type,
+      current: row[currentKey],
+      previous: prev[previousKey || currentKey],
+      change: bankMapDetailChange(row[currentKey], prev[previousKey || currentKey], type)
+    });
+    if (tab === 'securities') {
+      return [
+        metric('AFS Securities', 'afsTotal', 'afsTotal', 'money'),
+        metric('HTM Securities', 'htmTotal', 'htmTotal', 'money'),
+        metric('Treasuries AFS', 'afsTreasury', 'afsTreasury', 'money'),
+        metric('Agency / Corp AFS', 'afsAgencyCorp', 'afsAgencyCorp', 'money'),
+        metric('Munis AFS', 'afsMunis', 'afsMunis', 'money'),
+        metric('MBS AFS', 'afsAllMbs', 'afsAllMbs', 'money'),
+        metric('Treasuries HTM', 'htmTreasury', 'htmTreasury', 'money'),
+        metric('Agency / Corp HTM', 'htmAgencyCorp', 'htmAgencyCorp', 'money'),
+        metric('Munis HTM', 'htmMunis', 'htmMunis', 'money'),
+        metric('MBS HTM', 'htmAllMbs', 'htmAllMbs', 'money')
+      ];
+    }
+    if (tab === 'loans') {
+      return [
+        metric('Real Estate / Loans', 'realEstateLoansToLoans', 'realEstateLoansToLoans', 'percent'),
+        metric('Farmland / Loans', 'farmLoansToLoans', 'farmLoansToLoans', 'percent'),
+        metric('Ag Production / Loans', 'agProdLoansToLoans', 'agProdLoansToLoans', 'percent'),
+        metric('C&I / Loans', 'ciLoansToLoans', 'ciLoansToLoans', 'percent'),
+        metric('Consumer / Loans', 'consumerLoansToLoans', 'consumerLoansToLoans', 'percent')
+      ];
+    }
+    return [
+      metric('Total Assets', 'totalAssets', 'totalAssets', 'money'),
+      metric('Total Deposits', 'totalDeposits', 'totalDeposits', 'money'),
+      metric('Total Loans', 'totalLoans', 'totalLoans', 'money'),
+      metric('Total Securities', 'totalSecurities', 'totalSecurities', 'money'),
+      metric('Loans / Deposits', 'loansToDeposits', 'loansToDeposits', 'percent'),
+      metric('ROA', 'roa', 'roa', 'percent'),
+      metric('NIM', 'netInterestMargin', 'netInterestMargin', 'percent'),
+      metric('Cost of Funds', 'costOfFunds', 'costOfFunds', 'percent')
+    ];
+  }
+
+  function renderBankMapFilterOps() {
+    const field = document.getElementById('bankMapFilterField');
+    const op = document.getElementById('bankMapFilterOp');
+    if (!field || !op) return;
+    const meta = BANK_MAP_FILTER_FIELDS.find(row => row.key === field.value) || BANK_MAP_FILTER_FIELDS[0];
+    const ops = meta.type === 'number'
+      ? [['>', '>'], ['>=', '>='], ['<', '<'], ['<=', '<='], ['=', '='], ['!=', '!=']]
+      : [['contains', 'contains'], ['=', '='], ['!=', '!=']];
+    op.innerHTML = ops.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
+  }
+
+  function addBankMapFilter() {
+    const field = document.getElementById('bankMapFilterField');
+    const op = document.getElementById('bankMapFilterOp');
+    const value = document.getElementById('bankMapFilterValue');
+    const raw = value ? value.value.trim() : '';
+    if (!field || !op || !raw) return;
+    const meta = BANK_MAP_FILTER_FIELDS.find(row => row.key === field.value);
+    bankMapAdvancedFilters.push({
+      field: field.value,
+      op: op.value,
+      value: raw,
+      type: meta ? meta.type : 'text'
+    });
+    if (value) value.value = '';
+    renderBankMap();
+  }
+
+  function renderBankMapFilters() {
+    const list = document.getElementById('bankMapFilterList');
+    if (!list) return;
+    if (!bankMapAdvancedFilters.length) {
+      list.innerHTML = '<div class="bank-search-empty">No advanced filters applied.</div>';
+      return;
+    }
+    list.innerHTML = bankMapAdvancedFilters.map((filter, index) => {
+      const meta = BANK_MAP_FILTER_FIELDS.find(row => row.key === filter.field);
+      return `
+        <button type="button" class="bank-map-filter-chip" data-bank-map-remove-filter="${index}">
+          ${escapeHtml(meta ? meta.label : filter.field)} ${escapeHtml(filter.op)} ${escapeHtml(filter.value)}
+          <span aria-hidden="true">x</span>
+        </button>
+      `;
+    }).join('');
+    list.querySelectorAll('[data-bank-map-remove-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bankMapAdvancedFilters.splice(Number(btn.dataset.bankMapRemoveFilter), 1);
+        renderBankMap();
+      });
+    });
+  }
+
+  function bankMapFilterMatches(row, filter) {
+    const actual = bankMapFieldValue(row, filter.field);
+    if (filter.type === 'number') {
+      const left = Number(actual);
+      const right = Number(filter.value);
+      if (!isFinite(left) || !isFinite(right)) return false;
+      if (filter.op === '>') return left > right;
+      if (filter.op === '>=') return left >= right;
+      if (filter.op === '<') return left < right;
+      if (filter.op === '<=') return left <= right;
+      if (filter.op === '!=') return left !== right;
+      return left === right;
+    }
+    const left = String(actual == null ? '' : actual).toLowerCase();
+    const right = String(filter.value || '').toLowerCase();
+    if (filter.op === '=') return left === right;
+    if (filter.op === '!=') return left !== right;
+    return left.includes(right);
+  }
+
+  function bankMapFieldValue(row, key) {
+    if (key === 'owner') return statusForBankRow(row).owner || '';
+    return row ? row[key] : null;
+  }
+
+  function exportBankMapCsv() {
+    const rows = bankMapFilteredRows();
+    const headers = ['Bank', 'City', 'State', 'FDIC Cert', 'Status', 'Owner', 'Assets $MM', 'AFS $MM', 'HTM $MM', 'Loans/Deposits', 'ROA', 'NIM', 'Cost of Funds'];
+    const csvRows = [headers].concat(rows.map(row => {
+      const status = statusForBankRow(row);
+      return [
+        row.displayName || row.name || '',
+        row.city || '',
+        row.state || '',
+        row.certNumber || '',
+        status.status || '',
+        status.owner || '',
+        row.assetsMm,
+        row.afsMm,
+        row.htmMm,
+        row.loansToDeposits,
+        row.roa,
+        row.netInterestMargin,
+        row.costOfFunds
+      ];
+    }));
+    downloadCsv(`bank-map-${new Date().toISOString().slice(0, 10)}.csv`, csvRows);
+  }
+
+  function sumMap(rows, key) {
+    return rows.reduce((sum, row) => {
+      const n = Number(row[key]);
+      return isFinite(n) ? sum + n : sum;
+    }, 0);
+  }
+
+  function averageMap(rows, key) {
+    const nums = rows.map(row => Number(row[key])).filter(isFinite);
+    return nums.length ? nums.reduce((sum, n) => sum + n, 0) / nums.length : null;
+  }
+
+  function formatMapMoneyMm(value) {
+    const n = Number(value);
+    if (!isFinite(n)) return '—';
+    if (Math.abs(n) >= 1000) return `$${(n / 1000).toFixed(1)}B`;
+    return `$${n.toFixed(n >= 100 ? 0 : 1)}MM`;
+  }
+
+  function formatMapMetricValue(value, metricKey) {
+    const metric = BANK_MAP_METRICS[metricKey] || BANK_MAP_METRICS.bankCount;
+    if (metric.type === 'moneyMm') return formatMapMoneyMm(value);
+    if (metric.type === 'percent') return formatPercentTile(value, 1);
+    return formatNumber(value);
+  }
+
+  function formatBankMapDetailValue(value, type) {
+    const n = Number(value);
+    if (!isFinite(n)) return '—';
+    if (type === 'money') return formatMoney(n * 1000, 0);
+    if (type === 'moneyMm') return formatMapMoneyMm(n);
+    if (type === 'percent') return formatPercentTile(n, 2);
+    return formatNumber(n);
+  }
+
+  function bankMapDetailChange(current, previous, type) {
+    const cur = Number(current);
+    const prev = Number(previous);
+    if (!isFinite(cur) || !isFinite(prev)) return null;
+    if (type === 'money' || type === 'moneyMm') {
+      if (prev === 0) return null;
+      return ((cur - prev) / Math.abs(prev)) * 100;
+    }
+    return cur - prev;
+  }
+
+  function formatBankMapChange(value, type) {
+    const n = Number(value);
+    if (!isFinite(n)) return 'Prior —';
+    const sign = n > 0 ? '+' : '';
+    return (type === 'money' || type === 'moneyMm')
+      ? `${sign}${n.toFixed(1)}% vs prior`
+      : `${sign}${n.toFixed(2)} pts vs prior`;
   }
 
   function loadRecentBanks() {
@@ -6142,6 +6720,7 @@
     setupCorpFilters();
     setupMbsCmo();
     setupBankSearch();
+    setupBankMap();
     setupStrategies();
     setupCommissionControls();
     setupSidebar();

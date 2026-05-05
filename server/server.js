@@ -40,6 +40,7 @@ const {
   getBankDatabaseStatus,
   getBankFromDatabase,
   importBankWorkbook,
+  listBankMapRows,
   listBankSummaries,
   searchBankDatabase
 } = require('./bank-data-importer');
@@ -948,6 +949,26 @@ function getBankById(id) {
     };
   } catch (err) {
     log('warn', `Could not read bank detail ${id}:`, err.message);
+    return null;
+  }
+}
+
+function getBankMapData() {
+  try {
+    const data = listBankMapRows(BANK_REPORTS_DIR);
+    if (!data || !Array.isArray(data.rows)) return data;
+    const bankIds = data.rows.map(row => row.id);
+    const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, bankIds);
+    const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, bankIds);
+    return {
+      ...data,
+      rows: data.rows.map(row => ({
+        ...row,
+        accountStatus: effectiveAccountStatus(row, statuses, coverageMap)
+      }))
+    };
+  } catch (err) {
+    log('warn', 'Bank map data failed:', err.message);
     return null;
   }
 }
@@ -2013,6 +2034,12 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/banks/search' && req.method === 'GET') {
       const limit = Math.min(parseInt(query.get('limit'), 10) || 12, 25);
       const data = searchBanks(query.get('q') || '', limit);
+      if (!data) return sendJSON(res, 404, { error: 'No bank data has been imported yet' });
+      return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/banks/map' && req.method === 'GET') {
+      const data = getBankMapData();
       if (!data) return sendJSON(res, 404, { error: 'No bank data has been imported yet' });
       return sendJSON(res, 200, data);
     }

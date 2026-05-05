@@ -592,6 +592,151 @@ function getBankFromDatabase(outputDir, id) {
   return { metadata, bank: JSON.parse(rows[0].detail_json) };
 }
 
+function numericValue(values, key) {
+  const value = values && values[key];
+  const n = Number(value);
+  return isFinite(n) ? n : null;
+}
+
+function moneyMillions(values, key) {
+  const n = numericValue(values, key);
+  return n == null ? null : n / 1000;
+}
+
+function listBankMapRows(outputDir) {
+  const dbPath = databasePathForDir(outputDir);
+  if (!fs.existsSync(dbPath)) return null;
+  const metadata = readBankMetadata(outputDir) || {};
+  const currentFields = [
+    'totalAssets', 'totalDeposits', 'totalLoans', 'afsTotal', 'htmTotal',
+    'totalEquityCapital', 'tier1Capital', 'loansToDeposits', 'loansToAssets',
+    'securitiesToAssets', 'roa', 'roe', 'netInterestMargin', 'yieldOnSecurities',
+    'yieldOnLoans', 'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio',
+    'leverageRatio', 'nonInterestBearingDeposits', 'wholesaleFundingReliance',
+    'texasRatio', 'afsTreasury', 'afsAgencyCorp', 'afsMunis', 'afsAllMbs',
+    'htmTreasury', 'htmAgencyCorp', 'htmMunis', 'htmAllMbs',
+    'realEstateLoansToLoans', 'farmLoansToLoans', 'agProdLoansToLoans',
+    'ciLoansToLoans', 'consumerLoansToLoans'
+  ];
+  const selects = [
+    'id',
+    'display_name AS displayName',
+    'legal_name AS name',
+    'city',
+    'state',
+    'cert_number AS certNumber',
+    'parent_name AS parentName',
+    'primary_regulator AS primaryRegulator',
+    'period',
+    "json_extract(detail_json, '$.periods[0].endDate') AS endDate",
+    "json_extract(detail_json, '$.periods[1].period') AS previousPeriod",
+    "json_extract(detail_json, '$.periods[0].values.county') AS county"
+  ];
+  currentFields.forEach(key => {
+    selects.push(`json_extract(detail_json, '$.periods[0].values.${key}') AS ${key}`);
+    selects.push(`json_extract(detail_json, '$.periods[1].values.${key}') AS prev_${key}`);
+  });
+  const rows = querySqliteJson(
+    dbPath,
+    `SELECT ${selects.join(', ')} FROM banks ORDER BY state COLLATE NOCASE, display_name COLLATE NOCASE;`
+  );
+
+  const mapRows = rows.map(row => {
+    const values = {};
+    const previousValues = {};
+    currentFields.forEach(key => {
+      values[key] = row[key];
+      previousValues[key] = row[`prev_${key}`];
+    });
+    const totalSecurities = (numericValue(values, 'afsTotal') || 0) + (numericValue(values, 'htmTotal') || 0);
+    const previousTotalSecurities = (numericValue(previousValues, 'afsTotal') || 0) + (numericValue(previousValues, 'htmTotal') || 0);
+
+    return {
+      id: String(row.id || ''),
+      displayName: row.displayName || row.name || '',
+      name: row.name || '',
+      city: row.city || '',
+      state: row.state || '',
+      county: row.county || '',
+      certNumber: row.certNumber || '',
+      primaryRegulator: row.primaryRegulator || '',
+      parentName: row.parentName || '',
+      period: row.period || '',
+      endDate: row.endDate || row.period || '',
+      previousPeriod: row.previousPeriod || '',
+      totalAssets: numericValue(values, 'totalAssets'),
+      totalDeposits: numericValue(values, 'totalDeposits'),
+      totalLoans: numericValue(values, 'totalLoans'),
+      totalSecurities,
+      afsTotal: numericValue(values, 'afsTotal'),
+      htmTotal: numericValue(values, 'htmTotal'),
+      assetsMm: moneyMillions(values, 'totalAssets'),
+      depositsMm: moneyMillions(values, 'totalDeposits'),
+      loansMm: moneyMillions(values, 'totalLoans'),
+      securitiesMm: totalSecurities ? totalSecurities / 1000 : null,
+      afsMm: moneyMillions(values, 'afsTotal'),
+      htmMm: moneyMillions(values, 'htmTotal'),
+      equityMm: moneyMillions(values, 'totalEquityCapital'),
+      tier1Mm: moneyMillions(values, 'tier1Capital'),
+      loansToDeposits: numericValue(values, 'loansToDeposits'),
+      loansToAssets: numericValue(values, 'loansToAssets'),
+      securitiesToAssets: numericValue(values, 'securitiesToAssets'),
+      roa: numericValue(values, 'roa'),
+      roe: numericValue(values, 'roe'),
+      netInterestMargin: numericValue(values, 'netInterestMargin'),
+      yieldOnSecurities: numericValue(values, 'yieldOnSecurities'),
+      yieldOnLoans: numericValue(values, 'yieldOnLoans'),
+      yieldOnEarningAssets: numericValue(values, 'yieldOnEarningAssets'),
+      costOfFunds: numericValue(values, 'costOfFunds'),
+      efficiencyRatio: numericValue(values, 'efficiencyRatio'),
+      leverageRatio: numericValue(values, 'leverageRatio'),
+      nonInterestBearingDeposits: numericValue(values, 'nonInterestBearingDeposits'),
+      wholesaleFundingReliance: numericValue(values, 'wholesaleFundingReliance'),
+      texasRatio: numericValue(values, 'texasRatio'),
+      afsTreasury: numericValue(values, 'afsTreasury'),
+      afsAgencyCorp: numericValue(values, 'afsAgencyCorp'),
+      afsMunis: numericValue(values, 'afsMunis'),
+      afsAllMbs: numericValue(values, 'afsAllMbs'),
+      htmTreasury: numericValue(values, 'htmTreasury'),
+      htmAgencyCorp: numericValue(values, 'htmAgencyCorp'),
+      htmMunis: numericValue(values, 'htmMunis'),
+      htmAllMbs: numericValue(values, 'htmAllMbs'),
+      realEstateLoansToLoans: numericValue(values, 'realEstateLoansToLoans'),
+      farmLoansToLoans: numericValue(values, 'farmLoansToLoans'),
+      agProdLoansToLoans: numericValue(values, 'agProdLoansToLoans'),
+      ciLoansToLoans: numericValue(values, 'ciLoansToLoans'),
+      consumerLoansToLoans: numericValue(values, 'consumerLoansToLoans'),
+      previous: {
+        totalAssets: numericValue(previousValues, 'totalAssets'),
+        totalDeposits: numericValue(previousValues, 'totalDeposits'),
+        totalLoans: numericValue(previousValues, 'totalLoans'),
+        totalSecurities: previousTotalSecurities || null,
+        loansToDeposits: numericValue(previousValues, 'loansToDeposits'),
+        roa: numericValue(previousValues, 'roa'),
+        netInterestMargin: numericValue(previousValues, 'netInterestMargin'),
+        costOfFunds: numericValue(previousValues, 'costOfFunds'),
+        afsTotal: numericValue(previousValues, 'afsTotal'),
+        htmTotal: numericValue(previousValues, 'htmTotal'),
+        afsTreasury: numericValue(previousValues, 'afsTreasury'),
+        afsAgencyCorp: numericValue(previousValues, 'afsAgencyCorp'),
+        afsMunis: numericValue(previousValues, 'afsMunis'),
+        afsAllMbs: numericValue(previousValues, 'afsAllMbs'),
+        htmTreasury: numericValue(previousValues, 'htmTreasury'),
+        htmAgencyCorp: numericValue(previousValues, 'htmAgencyCorp'),
+        htmMunis: numericValue(previousValues, 'htmMunis'),
+        htmAllMbs: numericValue(previousValues, 'htmAllMbs'),
+        realEstateLoansToLoans: numericValue(previousValues, 'realEstateLoansToLoans'),
+        farmLoansToLoans: numericValue(previousValues, 'farmLoansToLoans'),
+        agProdLoansToLoans: numericValue(previousValues, 'agProdLoansToLoans'),
+        ciLoansToLoans: numericValue(previousValues, 'ciLoansToLoans'),
+        consumerLoansToLoans: numericValue(previousValues, 'consumerLoansToLoans')
+      }
+    };
+  });
+
+  return { metadata, rows: mapRows };
+}
+
 function listBankSummaries(outputDir) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return [];
@@ -606,6 +751,7 @@ module.exports = {
   getBankDatabaseStatus,
   getBankFromDatabase,
   importBankWorkbook,
+  listBankMapRows,
   listBankSummaries,
   parseBankWorkbook,
   searchBankDatabase,
