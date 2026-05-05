@@ -1503,20 +1503,34 @@
 
     <div class="explorer-stats" id="mbsCmoStatTiles"></div>
 
+    <div class="mbs-cmo-tabs" role="tablist" aria-label="MBS and CMO workspace views">
+      <button type="button" class="mbs-cmo-tab active" data-mbs-cmo-view="all" role="tab" aria-selected="true">
+        <span>All Offers</span>
+        <strong id="mbsCmoTabAll">0</strong>
+      </button>
+      <button type="button" class="mbs-cmo-tab" data-mbs-cmo-view="mbs" role="tab" aria-selected="false">
+        <span>MBS</span>
+        <strong id="mbsCmoTabMbs">0</strong>
+      </button>
+      <button type="button" class="mbs-cmo-tab" data-mbs-cmo-view="cmo" role="tab" aria-selected="false">
+        <span>CMO</span>
+        <strong id="mbsCmoTabCmo">0</strong>
+      </button>
+      <button type="button" class="mbs-cmo-tab" data-mbs-cmo-view="email" role="tab" aria-selected="false">
+        <span>Email Notes</span>
+        <strong id="mbsCmoTabEmail">0</strong>
+      </button>
+      <button type="button" class="mbs-cmo-tab" data-mbs-cmo-view="sources" role="tab" aria-selected="false">
+        <span>Sources</span>
+        <strong id="mbsCmoTabSources">0</strong>
+      </button>
+    </div>
+
     <div class="agency-filters">
       <div class="af-row corp-search-row">
         <label class="ef-field af-search-field">
           <span>Search CUSIP, description, source, or note</span>
           <input type="text" id="mf-search" placeholder="Type 3133, PAC, FMED, FR RB..." autocomplete="off">
-        </label>
-        <label class="ef-field">
-          <span>Product</span>
-          <select id="mf-product">
-            <option value="">All</option>
-            <option value="MBS">MBS</option>
-            <option value="CMO">CMO</option>
-            <option value="Email Offer">Email notes</option>
-          </select>
         </label>
         <label class="ef-field">
           <span>Source</span>
@@ -1525,6 +1539,7 @@
             <option value="Bloomberg Workbook">Bloomberg Workbook</option>
             <option value="PDF Offering">PDF Offering</option>
             <option value="Email Offer">Email Offer</option>
+            <option value="Screen Snip">Screen Snip</option>
           </select>
         </label>
       </div>
@@ -1549,6 +1564,8 @@
             <th data-sort="productType" style="width:80px">Product</th>
             <th data-sort="description">Description</th>
             <th data-sort="cusip" style="width:100px">CUSIP</th>
+            <th data-sort="originalFace" style="width:85px;text-align:right">Orig</th>
+            <th data-sort="currentFace" style="width:85px;text-align:right">Current</th>
             <th data-sort="coupon" style="width:75px;text-align:right">Cpn %</th>
             <th data-sort="price" style="width:75px;text-align:right">Price</th>
             <th data-sort="yield" style="width:75px;text-align:right">Yield %</th>
@@ -1561,7 +1578,24 @@
           </tr>
         </thead>
         <tbody id="mbsCmoBody">
-          <tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">Loading MBS/CMO inventory&hellip;</td></tr>
+          <tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">Loading MBS/CMO inventory&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="explorer-table-wrap mbs-sources-wrap" id="mbsCmoSourcesWrap" hidden>
+      <table class="explorer-table mbs-sources-table">
+        <thead>
+          <tr>
+            <th>Filename</th>
+            <th style="width:90px">Type</th>
+            <th style="width:100px;text-align:right">Size</th>
+            <th style="width:170px">Uploaded</th>
+            <th style="width:110px">Open</th>
+          </tr>
+        </thead>
+        <tbody id="mbsCmoSourcesBody">
+          <tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text3)">No source files uploaded yet.</td></tr>
         </tbody>
       </table>
     </div>

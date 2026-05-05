@@ -2969,7 +2969,6 @@
     const meta = selectedBank.metadata || {};
     const latest = bank.periods && bank.periods[0] ? bank.periods[0] : { values: {} };
     const values = latest.values || {};
-    const fields = meta.fields || [];
     const recentPeriods = (bank.periods || []).slice(0, 8);
     const accountStatus = currentBankAccountStatus();
     const details = [
@@ -3017,15 +3016,13 @@
       ${renderAccountDetailsSummary(values, accountStatus)}
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
-      ${renderBankFieldSection('Balance Sheet', fields, values, 'balanceSheet')}
-      ${renderBankFieldSection('Securities (AFS-FV)', fields, values, 'securitiesAfs', 'afsTotal')}
-      ${renderBankFieldSection('Securities (HTM-FV)', fields, values, 'securitiesHtm', 'htmTotal')}
-      ${renderBankFieldSection('Loans', fields, values, 'loans')}
-      ${renderBankFieldSection('Capital', fields, values, 'capital')}
-      ${renderBankFieldSection('Profitability', fields, values, 'profitability')}
-      ${renderBankFieldSection('Asset Quality', fields, values, 'assetQuality')}
-      ${renderBankFieldSection('Liquidity', fields, values, 'liquidity')}
-      ${renderBankTrendTable(fields, recentPeriods)}
+      ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1)}
+      ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13)}
+      ${renderBankCallReportSection('Loan Composition', bankLoanCompositionRows(), recentPeriods, 26)}
+      ${renderBankCallReportSection('Capital', bankCapitalRows(), recentPeriods, 31)}
+      ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38)}
+      ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57)}
+      ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63)}
       ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
       ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
       ${renderBankStrategyHistoryPanel()}
@@ -3684,6 +3681,209 @@
     return renderBankSection(title, rows);
   }
 
+  function bankBalanceSheetRows() {
+    return [
+      { label: 'Total Assets ($000)', value: values => formatCallReportValue(values.totalAssets, 'money') },
+      { label: 'Total Securities (AFS-FV) ($000/ %)', value: values => formatCallReportMoneyShare(values.afsTotal, values.afsTotal) },
+      { label: 'Total Securities (HTM-FV) ($000/ %)', value: values => formatCallReportMoneyShare(values.htmTotal, values.htmTotal) },
+      { label: 'Total Securities / Total Assets (%)', value: values => formatCallReportValue(values.securitiesToAssets, 'percent') },
+      { label: 'Total Loans & Leases (HFI, HFS) ($000)', value: values => formatCallReportValue(values.totalLoans, 'money') },
+      { label: 'Total Loans / Assets (%)', value: values => formatCallReportValue(values.loansToAssets, 'percent') },
+      { label: 'Total Deposits ($000)', value: values => formatCallReportValue(values.totalDeposits, 'money') },
+      { label: 'Loans / Deposits (%)', value: values => formatCallReportValue(values.loansToDeposits, 'percent') },
+      { label: 'Have Fiduciary Assets? (Yes/No)', value: values => Number(values.fiduciaryAssets || 0) > 0 ? 'Yes' : 'No' },
+      { label: 'Total Borrowings ($000)', value: values => formatCallReportValue(values.totalBorrowings, 'money') }
+    ];
+  }
+
+  function bankSecuritiesRows() {
+    return [
+      { label: 'US Treasury Secs ($000/ %)', keys: ['afsTreasury', 'htmTreasury'] },
+      { label: 'US Govt Ag & US Corp ($000/ %)', keys: ['afsAgencyCorp', 'htmAgencyCorp'] },
+      { label: 'Munis ($000/ %)', keys: ['afsMunis', 'htmMunis'] },
+      { label: 'Pass Thru RMBS: Total ($000/ %)', keys: ['afsPassThroughRmbs', 'htmPassThroughRmbs'] },
+      { label: 'CMOs & Other RMBS ($000/ %)', keys: ['afsOtherRmbs', 'htmOtherRmbs'] },
+      { label: 'CMBS ($000/ %)', keys: ['afsCmbs', 'htmCmbs'] },
+      { label: 'Total All MBS ($000/ %)', keys: ['afsAllMbs', 'htmAllMbs'] },
+      { label: 'Other Debt Secs ($000/ %)', keys: ['afsOtherDebt', 'htmOtherDebt'] }
+    ].map(row => ({
+      label: row.label,
+      value: values => {
+        const total = sumBankValues(values, ['afsTotal', 'htmTotal']);
+        const amount = sumBankValues(values, row.keys);
+        return formatCallReportMoneyShare(amount, total);
+      }
+    }));
+  }
+
+  function bankLoanCompositionRows() {
+    return [
+      { label: 'Real Estate Loans / Loans (%)', key: 'realEstateLoansToLoans' },
+      { label: 'Farmland (*incl in RE) / Loans (%)', key: 'farmLoansToLoans' },
+      { label: 'Agricultural Prod / Loans (%)', key: 'agProdLoansToLoans' },
+      { label: 'Total C&I Loans / Loans (%)', key: 'ciLoansToLoans' },
+      { label: 'Total Consumer Loans / Loans (%)', key: 'consumerLoansToLoans' }
+    ].map(row => ({
+      label: row.label,
+      value: values => formatCallReportValue(values[row.key], 'percent')
+    }));
+  }
+
+  function bankCapitalRows() {
+    return [
+      { number: 31, label: 'Total Equity Capital ($000)', key: 'totalEquityCapital', type: 'money' },
+      { number: 32, label: 'Tier 1 Capital ($000)', key: 'tier1Capital', type: 'money' },
+      { number: 33, label: 'Tier 1 Risk-based Ratio (%)', key: 'tier1RiskBasedRatio', type: 'percent' },
+      { number: 34, label: 'Risk Based Capital Ratio (%)', key: 'riskBasedCapitalRatio', type: 'percent' },
+      { number: 35, label: 'Tang Equity / Tang Assets (%)', key: 'tangibleEquityToAssets', type: 'percent' },
+      { number: 35, label: 'Leverage Ratio (%)', key: 'leverageRatio', type: 'percent' },
+      { number: 36, label: 'Total Dividends Declared ($000)', key: 'dividendsDeclared', type: 'money' },
+      { number: 37, label: 'Common Divis Declared / Net Inc (%)', key: 'dividendsToNetIncome', type: 'percent' }
+    ].map(callReportFieldRow);
+  }
+
+  function bankProfitabilityRows() {
+    return [
+      { number: 38, label: 'ROA (%)', key: 'roa', type: 'percent' },
+      { number: 39, label: 'ROE (%)', key: 'roe', type: 'percent' },
+      { number: 40, label: 'Yield on Earning Assets (%)', key: 'yieldOnEarningAssets', type: 'percent' },
+      { number: 41, label: 'Yield on Loans (%)', key: 'yieldOnLoans', type: 'percent' },
+      { number: 42, label: 'Yield on Securities (Full Tax Equiv) (%)', key: 'yieldOnSecurities', type: 'percent' },
+      { number: 43, label: 'Net Interest Margin (%)', key: 'netInterestMargin', type: 'percent' },
+      { number: 44, label: 'Efficiency Ratio (FTE) (%)', key: 'efficiencyRatio', type: 'percent' },
+      { number: 45, label: 'Cost of Funds (%)', key: 'costOfFunds', type: 'percent' },
+      { number: 46, label: 'Net Income ($000)', key: 'netIncome', type: 'money' },
+      { number: 56, label: 'Realized Gain/Loss on Securities ($000)', key: 'realizedGainLossSecurities', type: 'money' }
+    ].map(callReportFieldRow);
+  }
+
+  function bankAssetQualityRows() {
+    return [
+      { label: 'Texas Ratio (%)', key: 'texasRatio', type: 'percent' },
+      { label: 'Loan Loss Reserves / Loans (%)', key: 'llrToLoans', type: 'percent' },
+      { label: 'NPLs / Loans (%)', key: 'nplsToLoans', type: 'percent' },
+      { label: 'Loan & Lease Loss Reserve ($000)', key: 'loanLossReserve', type: 'money' },
+      { label: 'Provision for Loan & Lease Losses ($000)', key: 'loanLossProvision', type: 'money' },
+      { label: 'Net Chargeoffs / Avg Loans (%)', key: 'netChargeoffsToAvgLoans', type: 'percent' }
+    ].map(callReportFieldRow);
+  }
+
+  function bankLiquidityRows() {
+    return [
+      {
+        number: 63,
+        label: 'Total Dep with Bal > $250K / Deposits (%)',
+        value: values => {
+          const pct = bankNumericShare(values.largeDepositsToDeposits, values.totalDeposits);
+          return pct == null ? '-' : formatCallReportValue(pct, 'percent');
+        }
+      },
+      { number: 64, label: 'Non-Int Bearing Dep / Deposits (%)', key: 'nonInterestBearingDeposits', type: 'percent' },
+      { number: 65, label: 'Brokered Deposits / Deposits (%)', key: 'brokeredDepositsToDeposits', type: 'percent' },
+      { number: 66, label: 'Jumbo Time Dep / Dom Deposits (%)', key: 'jumboTimeDeposits', type: 'percent' },
+      { number: 67, label: 'Public Funds / Dom Deposits (%)', key: 'publicFunds', type: 'percent' },
+      { number: 68, label: 'Net NonCore Funding Dependence (%)', key: 'netNonCoreFundingDependence', type: 'percent' },
+      { number: 69, label: 'Reliance on Wholesale Funding (%)', key: 'wholesaleFundingReliance', type: 'percent' },
+      { number: 70, label: 'Long-term Assets / Assets (%)', key: 'longTermAssetsToAssets', type: 'percent' },
+      { number: 71, label: 'Liquid Assets / Assets (%)', key: 'liquidAssetsToAssets', type: 'percent' },
+      { number: 72, label: 'Avg Int Bear Funds / Avg Assets (%)', key: 'avgIntBearingFundsToAssets', type: 'percent' },
+      { number: 73, label: 'Int Earn Assets / Int Bear Funds (%)', key: 'intEarnAssetsToFunds', type: 'percent' },
+      {
+        number: 74,
+        label: 'Pledged Securities (BV) ($000/ %)',
+        value: values => formatCallReportMoneyShare(values.pledgedSecurities, sumBankValues(values, ['afsTotal', 'htmTotal']))
+      },
+      { number: 76, label: 'Securities (FV) / Securities (BV) (%)', key: 'securitiesFvToBv', type: 'percent' }
+    ].map(row => row.value ? row : callReportFieldRow(row));
+  }
+
+  function callReportFieldRow(row) {
+    return {
+      number: row.number,
+      label: row.label,
+      value: values => formatCallReportValue(values[row.key], row.type)
+    };
+  }
+
+  function renderBankCallReportSection(title, rows, periods, startNumber) {
+    const visiblePeriods = (periods || []).slice(0, 8);
+    if (!visiblePeriods.length) return '';
+    return `
+      <section class="bank-section bank-call-report-section">
+        <div class="bank-section-title">${escapeHtml(title)}</div>
+        <div class="bank-call-report-wrap">
+          <table class="bank-call-report-table">
+            <thead>
+              <tr>
+                <th>End of Period Date</th>
+                ${visiblePeriods.map(period => `<th>${escapeHtml(formatCallReportPeriod(period))}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row, index) => `
+                <tr>
+                  <td><span>${row.number != null ? row.number : (startNumber || 1) + index}.</span> ${escapeHtml(row.label)}</td>
+                  ${visiblePeriods.map(period => `<td>${escapeHtml(row.value((period && period.values) || {}))}</td>`).join('')}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    `;
+  }
+
+  function formatCallReportPeriod(period) {
+    return formatNumericDate(period && (period.endDate || period.period));
+  }
+
+  function formatCallReportValue(value, type) {
+    if (value == null || value === '') return '-';
+    const n = Number(value);
+    if (!isFinite(n)) return String(value);
+    if (type === 'money') return formatCallReportNumber(n, 0);
+    if (type === 'percent') return formatCallReportNumber(n, 2);
+    return String(value);
+  }
+
+  function formatCallReportNumber(value, digits) {
+    const n = Number(value);
+    if (!isFinite(n)) return '-';
+    const formatted = Math.abs(n).toLocaleString('en-US', {
+      maximumFractionDigits: digits,
+      minimumFractionDigits: digits
+    });
+    return n < 0 ? `(${formatted})` : formatted;
+  }
+
+  function sumBankValues(values, keys) {
+    let total = 0;
+    let hasValue = false;
+    keys.forEach(key => {
+      const value = Number(values[key]);
+      if (isFinite(value)) {
+        total += value;
+        hasValue = true;
+      }
+    });
+    return hasValue ? total : null;
+  }
+
+  function formatCallReportMoneyShare(value, total) {
+    const amount = Number(value);
+    const denominator = Number(total);
+    if (!isFinite(amount) || amount === 0) return '- / -';
+    const pct = isFinite(denominator) && denominator !== 0 ? `${((amount / denominator) * 100).toFixed(0)}%` : '-';
+    return `${formatCallReportValue(amount, 'money')} / ${pct}`;
+  }
+
+  function bankNumericShare(value, total) {
+    const n = Number(value);
+    const d = Number(total);
+    if (!isFinite(n) || !isFinite(d) || d === 0) return null;
+    return (n / d) * 100;
+  }
+
   function renderBankSection(title, rows, details) {
     const filtered = rows.filter(([, value]) => value !== null && value !== undefined && value !== '—' && value !== '');
     const midpoint = Math.ceil(filtered.length / 2);
@@ -3698,41 +3898,6 @@
               <strong>${escapeHtml(value)}</strong>
             </div>
           `).join('')}</div>`).join('')}
-        </div>
-      </section>
-    `;
-  }
-
-  function renderBankTrendTable(fields, periods) {
-    const rows = [
-      'totalAssets', 'totalDeposits', 'totalLoans', 'loansToAssets',
-      'securitiesToAssets', 'roa', 'roe', 'netInterestMargin',
-      'efficiencyRatio', 'texasRatio', 'liquidAssetsToAssets'
-    ];
-    const fieldByKey = Object.fromEntries(fields.map(field => [field.key, field]));
-    if (!periods.length) return '';
-    return `
-      <section class="bank-section">
-        <div class="bank-section-title">Time Series - Quarterly</div>
-        <div class="bank-trend-wrap">
-          <table class="bank-trend-table">
-            <thead>
-              <tr>
-                <th>Metric</th>
-                ${periods.map(period => `<th>${escapeHtml(period.endDate || period.period)}</th>`).join('')}
-              </tr>
-            </thead>
-            <tbody>
-              ${rows.map(key => {
-                const field = fieldByKey[key];
-                if (!field) return '';
-                return `<tr>
-                  <td>${escapeHtml(field.label)}</td>
-                  ${periods.map(period => `<td>${escapeHtml(formatBankValue(period.values && period.values[key], field.type))}</td>`).join('')}
-                </tr>`;
-              }).join('')}
-            </tbody>
-          </table>
         </div>
       </section>
     `;
@@ -5534,7 +5699,6 @@
 
   let mbsCmoFilters = {
     search: '',
-    product: '',
     source: '',
     minYield: null,
     maxWal: null,
@@ -5543,6 +5707,7 @@
     maturityTo: null
   };
   let mbsCmoSort = { col: 'createdAt', dir: 'desc' };
+  let mbsCmoView = 'all';
 
   async function loadMbsCmo() {
     const body = document.getElementById('mbsCmoBody');
@@ -5553,7 +5718,7 @@
       mbsCmoData = await res.json();
     } catch (e) {
       console.error('Failed to load MBS/CMO:', e);
-      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load MBS/CMO inventory: ${escapeHtml(e.message)}
       </td></tr>`;
       return;
@@ -5564,6 +5729,9 @@
   function applyMbsCmoFilters(offers) {
     const f = mbsCmoFilters;
     return offers.filter(o => {
+      if (mbsCmoView === 'mbs' && o.productType !== 'MBS') return false;
+      if (mbsCmoView === 'cmo' && o.productType !== 'CMO') return false;
+      if (mbsCmoView === 'email' && o.sourceType !== 'Email Offer') return false;
       if (f.search) {
         const q = f.search.toLowerCase();
         const haystack = [
@@ -5572,8 +5740,6 @@
         ].filter(Boolean).join(' ').toLowerCase();
         if (!haystack.includes(q)) return false;
       }
-      if (f.product === 'Email Offer' && o.sourceType !== 'Email Offer') return false;
-      if (f.product && f.product !== 'Email Offer' && o.productType !== f.product) return false;
       if (f.source && o.sourceType !== f.source) return false;
       if (f.minYield != null && (o.yield == null || o.yield < f.minYield)) return false;
       if (f.maxWal != null && (o.wal == null || o.wal > f.maxWal)) return false;
@@ -5596,18 +5762,94 @@
     });
   }
 
+  function updateMbsCmoTabs(offers, sources) {
+    setText('mbsCmoTabAll', formatNumber(offers.length));
+    setText('mbsCmoTabMbs', formatNumber(offers.filter(o => o.productType === 'MBS').length));
+    setText('mbsCmoTabCmo', formatNumber(offers.filter(o => o.productType === 'CMO').length));
+    setText('mbsCmoTabEmail', formatNumber(offers.filter(o => o.sourceType === 'Email Offer').length));
+    setText('mbsCmoTabSources', formatNumber(sources.length));
+
+    document.querySelectorAll('.mbs-cmo-tab').forEach(tab => {
+      const active = tab.dataset.mbsCmoView === mbsCmoView;
+      tab.classList.toggle('active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+  }
+
+  function sourceMatchesMbsCmoFilters(source) {
+    const q = mbsCmoFilters.search.toLowerCase();
+    if (mbsCmoFilters.source) {
+      const ext = String(source.extension || '').toLowerCase();
+      if (mbsCmoFilters.source === 'Bloomberg Workbook' && !['xlsm', 'xlsx', 'xlsb', 'xls'].includes(ext)) return false;
+      if (mbsCmoFilters.source === 'PDF Offering' && ext !== 'pdf') return false;
+      if (mbsCmoFilters.source === 'Email Offer' && ext !== 'eml') return false;
+      if (mbsCmoFilters.source === 'Screen Snip' && !['png', 'jpg', 'jpeg'].includes(ext)) return false;
+    }
+    if (!q) return true;
+    return [source.filename, source.extension, source.uploadedAt]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+      .includes(q);
+  }
+
+  function renderMbsCmoSources(sources) {
+    const body = document.getElementById('mbsCmoSourcesBody');
+    if (!body) return;
+    const filtered = sources.filter(sourceMatchesMbsCmoFilters);
+    setText('mbsCmoStat', formatNumber(filtered.length));
+    if (!filtered.length) {
+      body.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:32px;color:var(--text3)">
+        ${sources.length ? 'No source files match the current filters.' : 'No source files uploaded yet.'}
+      </td></tr>`;
+      return;
+    }
+    body.innerHTML = filtered.map(source => `
+      <tr>
+        <td class="issuer-cell">${escapeHtml(source.filename || 'Source file')}</td>
+        <td><span class="rank-chip">${escapeHtml((source.extension || 'file').toUpperCase())}</span></td>
+        <td style="text-align:right">${escapeHtml(formatFileSize(source.size))}</td>
+        <td>${escapeHtml(formatFullTimestamp(source.uploadedAt))}</td>
+        <td>
+          <a class="source-chip" href="/api/mbs-cmo/files/${encodeURIComponent(source.id)}" target="_blank" rel="noopener">
+            Open
+          </a>
+        </td>
+      </tr>
+    `).join('');
+  }
+
   function renderMbsCmo() {
     const body = document.getElementById('mbsCmoBody');
     if (!body || !mbsCmoData) return;
     const offers = Array.isArray(mbsCmoData.offers) ? mbsCmoData.offers : [];
+    const sources = Array.isArray(mbsCmoData.sources) ? mbsCmoData.sources : [];
     const filtered = applyMbsCmoFilters(offers);
     sortMbsCmoInPlace(filtered);
 
-    setText('mbsCmoStat', formatNumber(filtered.length));
-    const sourceCount = Array.isArray(mbsCmoData.sources) ? mbsCmoData.sources.length : 0;
+    updateMbsCmoTabs(offers, sources);
+    const sourceCount = sources.length;
     const uploaded = mbsCmoData.uploadedAt ? `Updated ${formatFullTimestamp(mbsCmoData.uploadedAt)}` : 'No uploads yet';
     setText('mbsCmoKicker', `${uploaded} · ${formatNumber(sourceCount)} source files`);
     setText('mbsCmoSub', `${formatNumber(offers.length)} modeled rows from ${formatNumber(sourceCount)} uploaded sources`);
+    const offerWrap = document.querySelector('#p-mbs-cmo .mbs-cmo-table')?.closest('.explorer-table-wrap');
+    const sourcesWrap = document.getElementById('mbsCmoSourcesWrap');
+    const showingSources = mbsCmoView === 'sources';
+    if (offerWrap) offerWrap.hidden = showingSources;
+    if (sourcesWrap) sourcesWrap.hidden = !showingSources;
+    if (showingSources) {
+      const sourceFiltered = sources.filter(sourceMatchesMbsCmoFilters);
+      renderStatTiles('mbsCmoStatTiles', [
+        { label: 'Shown', value: formatNumber(sourceFiltered.length) },
+        { label: 'Workbooks', value: formatNumber(sourceFiltered.filter(s => ['xlsm', 'xlsx', 'xlsb', 'xls'].includes(String(s.extension || '').toLowerCase())).length) },
+        { label: 'PDFs', value: formatNumber(sourceFiltered.filter(s => String(s.extension || '').toLowerCase() === 'pdf').length) },
+        { label: 'Emails', value: formatNumber(sourceFiltered.filter(s => String(s.extension || '').toLowerCase() === 'eml').length) },
+        { label: 'Screen Snips', value: formatNumber(sourceFiltered.filter(s => ['png', 'jpg', 'jpeg'].includes(String(s.extension || '').toLowerCase())).length) }
+      ]);
+      renderMbsCmoSources(sources);
+      return;
+    }
+
     renderStatTiles('mbsCmoStatTiles', [
       { label: 'Shown', value: formatNumber(filtered.length) },
       { label: 'CMOs', value: formatNumber(filtered.filter(o => o.productType === 'CMO').length) },
@@ -5616,20 +5858,22 @@
       { label: 'Avg WAL', value: average(filtered.map(o => o.wal)) == null ? '—' : average(filtered.map(o => o.wal)).toFixed(2) }
     ]);
 
+    setText('mbsCmoStat', formatNumber(filtered.length));
     if (!offers.length) {
-      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
         No MBS/CMO sources uploaded yet. Use the source drop above to add Bloomberg workbooks, PDFs, offer emails, or screenshots.
       </td></tr>`;
       return;
     }
     if (!filtered.length) {
-      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
         No MBS/CMO rows match the current filters.
       </td></tr>`;
       return;
     }
 
     const fmt = (v, d = 2) => v == null || isNaN(v) ? '<span class="no-restrict">&mdash;</span>' : Number(v).toFixed(d);
+    const fmtFace = v => v == null || isNaN(v) ? '<span class="no-restrict">&mdash;</span>' : formatNumber(Math.round(Number(v)));
     const fmtDate = v => v ? formatNumericDate(v) : '<span class="no-restrict">&mdash;</span>';
     const pillClass = p => p === 'CMO' ? 'tier-a' : p === 'MBS' ? 'tier-bbb' : 'tier-nr';
 
@@ -5645,6 +5889,8 @@
           <td><span class="tier-pill ${pillClass(o.productType)}">${escapeHtml(o.productType || 'MBS/CMO')}</span></td>
           <td class="issuer-cell"><strong>${escapeHtml(o.description || o.emailSubject || 'Offer note')}</strong>${note}</td>
           <td class="cusip-cell">${escapeHtml(o.cusip || '')}</td>
+          <td style="text-align:right">${fmtFace(o.originalFace)}</td>
+          <td style="text-align:right">${fmtFace(o.currentFace)}</td>
           <td style="text-align:right">${fmt(o.coupon, 3)}</td>
           <td style="text-align:right">${fmt(o.price, 3)}</td>
           <td style="text-align:right" class="rate-cell">${fmt(o.yield, 3)}</td>
@@ -5665,10 +5911,6 @@
 
     search.addEventListener('input', () => {
       mbsCmoFilters.search = search.value.trim();
-      if (mbsCmoData) renderMbsCmo();
-    });
-    byId('mf-product').addEventListener('change', e => {
-      mbsCmoFilters.product = e.target.value;
       if (mbsCmoData) renderMbsCmo();
     });
     byId('mf-source').addEventListener('change', e => {
@@ -5696,8 +5938,9 @@
     });
 
     byId('mf-reset').addEventListener('click', () => {
-      mbsCmoFilters = { search: '', product: '', source: '', minYield: null, maxWal: null, minSpread: null, settleFrom: null, maturityTo: null };
-      ['mf-search', 'mf-product', 'mf-source', 'mf-minYield', 'mf-maxWal', 'mf-minSpread', 'mf-settleFrom', 'mf-maturityTo'].forEach(id => {
+      mbsCmoFilters = { search: '', source: '', minYield: null, maxWal: null, minSpread: null, settleFrom: null, maturityTo: null };
+      mbsCmoView = 'all';
+      ['mf-search', 'mf-source', 'mf-minYield', 'mf-maxWal', 'mf-minSpread', 'mf-settleFrom', 'mf-maturityTo'].forEach(id => {
         const el = byId(id);
         if (el) el.value = '';
       });
@@ -5717,10 +5960,17 @@
         if (mbsCmoSort.col === col) mbsCmoSort.dir = mbsCmoSort.dir === 'asc' ? 'desc' : 'asc';
         else {
           mbsCmoSort.col = col;
-          mbsCmoSort.dir = ['coupon', 'price', 'yield', 'wal', 'spread'].includes(col) ? 'desc' : 'asc';
+          mbsCmoSort.dir = ['originalFace', 'currentFace', 'coupon', 'price', 'yield', 'wal', 'spread'].includes(col) ? 'desc' : 'asc';
         }
         document.querySelectorAll('#p-mbs-cmo th').forEach(h => h.classList.remove('sort-asc', 'sort-desc'));
         th.classList.add(mbsCmoSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+        if (mbsCmoData) renderMbsCmo();
+      });
+    });
+
+    document.querySelectorAll('.mbs-cmo-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        mbsCmoView = tab.dataset.mbsCmoView || 'all';
         if (mbsCmoData) renderMbsCmo();
       });
     });
@@ -5760,6 +6010,24 @@
 
   function exportMbsCmoCsv() {
     if (!mbsCmoData) return showToast('No MBS/CMO data loaded', true);
+    if (mbsCmoView === 'sources') {
+      const sources = (mbsCmoData.sources || []).filter(sourceMatchesMbsCmoFilters);
+      if (!sources.length) return showToast('No source files match filters', true);
+      const rows = [['Filename','Type','SizeBytes','UploadedAt','FileId']];
+      sources.forEach(source => {
+        rows.push([
+          source.filename || '',
+          source.extension || '',
+          source.size ?? '',
+          source.uploadedAt || '',
+          source.id || ''
+        ]);
+      });
+      const stamp = (mbsCmoData.uploadedAt || 'mbs-cmo').slice(0, 10).replace(/[^a-z0-9_-]/gi, '_');
+      downloadCsv(`fbbs_mbs_cmo_sources_${stamp}.csv`, rows);
+      showToast(`Exported ${sources.length} MBS/CMO source rows`);
+      return;
+    }
     const filtered = applyMbsCmoFilters(mbsCmoData.offers || []);
     sortMbsCmoInPlace(filtered);
     if (!filtered.length) return showToast('No rows match filters', true);
@@ -5843,6 +6111,14 @@
         hour: 'numeric', minute: '2-digit'
       });
     } catch (e) { return iso; }
+  }
+
+  function formatFileSize(bytes) {
+    const size = Number(bytes);
+    if (!isFinite(size) || size < 0) return '—';
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   // ============ Init ============

@@ -1653,6 +1653,52 @@ body {
   min-height: 16px;
 }
 
+.mbs-cmo-tabs {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0 0 14px;
+}
+
+.mbs-cmo-tab {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text2);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  min-height: 46px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.mbs-cmo-tab:hover {
+  border-color: #9db7aa;
+  color: var(--racing-green);
+}
+
+.mbs-cmo-tab.active {
+  background: var(--racing-green);
+  border-color: var(--racing-green);
+  color: #fff;
+}
+
+.mbs-cmo-tab span {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.mbs-cmo-tab strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mbs-sources-wrap[hidden] {
+  display: none;
+}
+
 .source-chip {
   background: #eef3ef;
   border: 1px solid #d5e2db;
@@ -4930,6 +4976,81 @@ body {
   text-align: left;
 }
 
+.bank-call-report-section .bank-section-title {
+  background: var(--racing-green);
+  border-radius: 4px 4px 0 0;
+  color: #fff;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bank-call-report-wrap {
+  border: 1px solid var(--line);
+  border-top: 0;
+  overflow-x: auto;
+}
+
+.bank-call-report-table {
+  border-collapse: collapse;
+  min-width: 1080px;
+  width: 100%;
+}
+
+.bank-call-report-table th,
+.bank-call-report-table td {
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  font-size: 11.5px;
+  padding: 7px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bank-call-report-table th {
+  background: #f6f8f6;
+  color: var(--text2);
+  font-weight: 800;
+}
+
+.bank-call-report-table th:first-child,
+.bank-call-report-table td:first-child {
+  color: var(--text);
+  font-weight: 700;
+  min-width: 285px;
+  position: sticky;
+  left: 0;
+  text-align: left;
+  white-space: normal;
+  z-index: 1;
+}
+
+.bank-call-report-table th:first-child {
+  background: #eef3ef;
+  z-index: 2;
+}
+
+.bank-call-report-table td:first-child {
+  background: #fff;
+}
+
+.bank-call-report-table td:first-child span {
+  color: var(--text3);
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  margin-right: 5px;
+  min-width: 18px;
+}
+
+.bank-call-report-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.bank-call-report-table th:last-child,
+.bank-call-report-table td:last-child {
+  border-right: 0;
+}
+
 .bank-trend-wrap {
   overflow-x: auto;
 }
@@ -5081,9 +5202,29 @@ body {
   .mbs-upload-panel .publish-btn {
     width: 100%;
   }
+  .mbs-cmo-tabs {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media print {
+  @page {
+    size: landscape;
+    margin: 0.25in;
+  }
+
+  * {
+    box-shadow: none !important;
+  }
+
+  body {
+    background: #fff !important;
+    color: #111 !important;
+    font-size: 8px;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
   .sidebar,
   .top-strip,
   .page-hero,
@@ -5093,6 +5234,9 @@ body {
   .bank-saved-panel,
   .bank-coverage-detail,
   .bank-coverage-section,
+  .bank-service-section,
+  .bank-strategy-request,
+  .bank-strategy-history,
   .bank-profile-actions,
   .footer {
     display: none !important;
@@ -5123,10 +5267,136 @@ body {
   }
 
   .bank-profile-head {
+    align-items: flex-start;
     break-after: avoid;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+  }
+
+  .bank-profile-head h3 {
+    font-size: 14px;
+    margin: 0 0 2px;
+  }
+
+  .bank-profile-head p,
+  .tool-eyebrow {
+    font-size: 8px;
+  }
+
+  .bank-period-badge {
+    border: 1px solid #bbb;
+    min-width: 94px;
+    padding: 5px 7px;
+  }
+
+  .bank-period-badge strong {
+    font-size: 10px;
+  }
+
+  .bank-account-coverage-summary {
+    border: 1px solid #bbb;
+    border-radius: 0;
+    gap: 6px;
+    margin-bottom: 5px;
+    overflow: visible;
+  }
+
+  .bank-account-coverage-title {
+    border-bottom: 1px solid #bbb;
+    padding: 4px 5px;
+  }
+
+  .bank-account-coverage-title span,
+  .bank-account-coverage-summary-grid span {
+    font-size: 6.5px;
+    margin-bottom: 1px;
+  }
+
+  .bank-account-coverage-title strong,
+  .bank-account-coverage-summary-grid strong {
+    font-size: 8px;
+  }
+
+  .bank-account-coverage-summary-grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .bank-account-coverage-summary-grid div {
+    border-color: #ccc;
+    gap: 2px;
+    padding: 4px 5px;
+  }
+
+  .bank-section-title {
+    border-radius: 0;
+    font-size: 8px;
+    padding: 3px 5px;
   }
 
   .bank-section {
     break-inside: avoid;
+    margin-top: 5px;
+  }
+
+  .bank-fields-grid {
+    column-gap: 10px;
+  }
+
+  .bank-field-row {
+    gap: 8px;
+    grid-template-columns: minmax(120px, 1fr) minmax(70px, auto);
+    min-height: 18px;
+    padding: 2px 3px;
+  }
+
+  .bank-field-row span,
+  .bank-field-row strong {
+    font-size: 7px;
+  }
+
+  .bank-call-report-wrap {
+    border-color: #bbb;
+    overflow: visible;
+  }
+
+  .bank-call-report-table {
+    font-size: 6.4px;
+    min-width: 0;
+    table-layout: fixed;
+    width: 100%;
+  }
+
+  .bank-call-report-table th,
+  .bank-call-report-table td {
+    border-color: #ccc;
+    font-size: 6.4px;
+    line-height: 1.08;
+    padding: 2px 2.5px;
+    white-space: normal;
+  }
+
+  .bank-call-report-table th:first-child,
+  .bank-call-report-table td:first-child {
+    min-width: 0;
+    position: static;
+    width: 24%;
+  }
+
+  .bank-call-report-table th:not(:first-child),
+  .bank-call-report-table td:not(:first-child) {
+    width: 9.5%;
+  }
+
+  .bank-call-report-table td:first-child span {
+    margin-right: 2px;
+    min-width: 12px;
+  }
+
+  .bank-call-report-section .bank-section-title {
+    font-size: 7.5px;
+    padding: 3px 5px;
   }
 }
