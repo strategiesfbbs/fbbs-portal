@@ -599,10 +599,24 @@ function listBankSummaries(outputDir) {
     .map(row => JSON.parse(row.summary_json));
 }
 
-function queryBankMapDataset(outputDir, periodPattern = '2025Q*') {
+function queryBankMapDataset(outputDir, periodPattern = null) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return null;
-  const safePattern = String(periodPattern).replace(/'/g, "''");
+  let pattern = periodPattern;
+  if (!pattern) {
+    const latestRows = querySqliteJson(dbPath, `
+      SELECT MAX(json_extract(summary_json, '$.period')) AS p
+      FROM banks
+      WHERE json_extract(summary_json, '$.period') GLOB '????Q?';
+    `);
+    const latest = latestRows && latestRows[0] && latestRows[0].p;
+    if (latest && /^(\d{4})Q\d$/.test(latest)) {
+      pattern = latest.slice(0, 4) + 'Q*';
+    } else {
+      pattern = '*';
+    }
+  }
+  const safePattern = String(pattern).replace(/'/g, "''");
   const banks = querySqliteJson(dbPath, `
     SELECT
       id AS bankkey,

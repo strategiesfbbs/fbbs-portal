@@ -992,7 +992,7 @@ function getBankDataStatus() {
 let mapBankCache = null;
 
 function buildMapBankList() {
-  const dataset = queryBankMapDataset(BANK_REPORTS_DIR, '2025Q*');
+  const dataset = queryBankMapDataset(BANK_REPORTS_DIR);
   if (!dataset) return null;
   const toMm = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v) / 1000;
   const toNum = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v);
