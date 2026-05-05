@@ -6182,30 +6182,6 @@
 
   // ============ US Bank Map ============
 
-  const MAPS_FILTER_FIELDS = [
-    { key: 'bankname', label: 'Bank Name', type: 'text' },
-    { key: 'fdic', label: 'FDIC Cert #', type: 'text' },
-    { key: 'city', label: 'City', type: 'text' },
-    { key: 'state', label: 'State', type: 'text' },
-    { key: 'assetsmm', label: 'Total Assets ($MM)', type: 'number' },
-    { key: 'equitymm', label: 'Total Equity Capital ($MM)', type: 'number' },
-    { key: 'tier1mm', label: 'Tier 1 Capital ($MM)', type: 'number' },
-    { key: 'depositsmm', label: 'Total Deposits ($MM)', type: 'number' },
-    { key: 'afsmm', label: 'Securities AFS ($MM)', type: 'number' },
-    { key: 'htmmm', label: 'Securities HTM ($MM)', type: 'number' },
-    { key: 'ltd', label: 'Loan/Deposit (%)', type: 'number' },
-    { key: 'roa', label: 'ROA (%)', type: 'number' },
-    { key: 'roe', label: 'ROE (%)', type: 'number' },
-    { key: 'nim', label: 'Net Interest Margin (%)', type: 'number' },
-    { key: 'yos', label: 'Yield on Securities (%)', type: 'number' },
-    { key: 'yieldloans', label: 'Yield on Loans (%)', type: 'number' },
-    { key: 'yea', label: 'Yield on Earning Assets (%)', type: 'number' },
-    { key: 'cof', label: 'Cost of Funds (%)', type: 'number' },
-    { key: 'eff', label: 'Efficiency Ratio (%)', type: 'number' },
-    { key: 'leverage', label: 'Leverage Ratio (%)', type: 'number' },
-    { key: 'nibpct', label: 'Non-Int Bearing Dep / Total Dep (%)', type: 'number' },
-    { key: 'wholesale', label: 'Reliance on Wholesale Funding (%)', type: 'number' }
-  ];
   const MAPS_NUMERIC_OPS = ['>', '>=', '=', '<=', '<', '!='];
   const MAPS_TEXT_OPS = ['contains', 'equals'];
 
@@ -6213,6 +6189,8 @@
     loaded: false,
     loading: false,
     banks: [],
+    fields: [],
+    fieldByKey: {},
     stateCounts: {},
     latestPeriod: '',
     selectedStates: new Set(),
@@ -6221,15 +6199,38 @@
     plotInitialized: false
   };
 
-  function fmtMm(v) {
-    if (v == null || !Number.isFinite(v)) return '';
-    if (v >= 1000) return v.toLocaleString(undefined, { maximumFractionDigits: 0 });
-    return v.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  function mapsFieldFilterType(def) {
+    if (!def) return 'text';
+    return (def.type === 'money' || def.type === 'percent' || def.type === 'percentOf' || def.type === 'number')
+      ? 'number' : 'text';
   }
 
-  function fmtPct(v) {
-    if (v == null || !Number.isFinite(v)) return '';
-    return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  function mapsFormatValue(value, def) {
+    if (value == null || value === '') return '';
+    if (!def) return String(value);
+    if (def.type === 'money') {
+      const mm = Number(value) / 1000;
+      if (!Number.isFinite(mm)) return '';
+      if (Math.abs(mm) >= 1000) return mm.toLocaleString(undefined, { maximumFractionDigits: 0 });
+      return mm.toLocaleString(undefined, { maximumFractionDigits: 1 });
+    }
+    if (def.type === 'percent' || def.type === 'percentOf') {
+      const n = Number(value);
+      return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '';
+    }
+    if (def.type === 'number') {
+      const n = Number(value);
+      return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '';
+    }
+    return String(value);
+  }
+
+  function mapsCompareNumeric(value, def) {
+    if (value == null || value === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    if (def && def.type === 'money') return n / 1000;
+    return n;
   }
 
   async function loadMaps() {
@@ -6249,6 +6250,12 @@
       }
       const data = await res.json();
       mapsState.banks = Array.isArray(data.banks) ? data.banks : [];
+      mapsState.fields = (Array.isArray(data.fields) ? data.fields : []).map(f => ({
+        ...f,
+        label: f.type === 'money' ? f.label.replace('($000)', '($MM)') : f.label
+      }));
+      mapsState.fieldByKey = {};
+      for (const f of mapsState.fields) mapsState.fieldByKey[f.key] = f;
       mapsState.stateCounts = data.stateCounts || {};
       mapsState.latestPeriod = data.latestPeriod || '';
       mapsState.loaded = true;
@@ -6355,11 +6362,11 @@
   function rowMatchesAdvanced(bank) {
     if (!mapsState.advanced.length) return true;
     for (const cond of mapsState.advanced) {
-      const def = MAPS_FILTER_FIELDS.find(f => f.key === cond.field);
+      const def = mapsState.fieldByKey[cond.field];
       if (!def) continue;
       const val = bank[cond.field];
-      if (def.type === 'number') {
-        const lhs = (val == null || !Number.isFinite(Number(val))) ? null : Number(val);
+      if (mapsFieldFilterType(def) === 'number') {
+        const lhs = mapsCompareNumeric(val, def);
         const rhs = Number(String(cond.value).replace(/,/g, '').replace(/%/g, ''));
         if (lhs == null || !Number.isFinite(rhs)) return false;
         switch (cond.op) {
@@ -6392,24 +6399,27 @@
     for (const b of mapsState.banks) {
       if (sel.size > 0 && !sel.has(b.state)) continue;
       if (q) {
-        const hay = (b.bankname + ' ' + b.fdic + ' ' + b.city + ' ' + b.state).toLowerCase();
+        const hay = (String(b.displayName || '') + ' ' + String(b.certNumber || '') + ' ' + String(b.city || '') + ' ' + String(b.state || '')).toLowerCase();
         if (!hay.includes(q)) continue;
       }
       if (!rowMatchesAdvanced(b)) continue;
       rows.push(b);
     }
-    rows.sort((a, b) => (b.assetsmm || 0) - (a.assetsmm || 0));
+    rows.sort((a, b) => (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0));
     const limit = 1000;
     const shown = rows.slice(0, limit);
+    const assetsDef = mapsState.fieldByKey.totalAssets;
+    const roaDef = mapsState.fieldByKey.roa;
+    const nimDef = mapsState.fieldByKey.netInterestMargin;
     body.innerHTML = shown.map(b => `
-      <tr data-maps-bankid="${escapeHtml(b.bankkey)}">
-        <td>${escapeHtml(b.bankname || '')}</td>
-        <td>${escapeHtml(b.fdic || '')}</td>
+      <tr data-maps-bankid="${escapeHtml(b.id)}">
+        <td>${escapeHtml(b.displayName || '')}</td>
+        <td>${escapeHtml(b.certNumber || '')}</td>
         <td>${escapeHtml(b.city || '')}</td>
         <td>${escapeHtml(b.state || '')}</td>
-        <td class="num">${escapeHtml(fmtMm(b.assetsmm))}</td>
-        <td class="num">${escapeHtml(fmtPct(b.roa))}</td>
-        <td class="num">${escapeHtml(fmtPct(b.nim))}</td>
+        <td class="num">${escapeHtml(mapsFormatValue(b.totalAssets, assetsDef))}</td>
+        <td class="num">${escapeHtml(mapsFormatValue(b.roa, roaDef))}</td>
+        <td class="num">${escapeHtml(mapsFormatValue(b.netInterestMargin, nimDef))}</td>
       </tr>
     `).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
     if (rowCountEl) {
@@ -6426,7 +6436,7 @@
     if (!el) return;
     if (!mapsState.advanced.length) { el.textContent = ''; return; }
     const parts = mapsState.advanced.map(f => {
-      const def = MAPS_FILTER_FIELDS.find(d => d.key === f.field);
+      const def = mapsState.fieldByKey[f.field];
       return (def ? def.label : f.field) + ' ' + f.op + ' ' + f.value;
     });
     el.textContent = 'Active filter: ' + parts.join(' AND ');
@@ -6436,7 +6446,10 @@
     const backdrop = document.getElementById('mapsModalBackdrop');
     const body = document.getElementById('mapsConditionsBody');
     if (!backdrop || !body) return;
-    if (mapsState.advanced.length === 0) mapsState.advanced.push({ field: 'assetsmm', op: '>', value: '' });
+    const defaultKey = (mapsState.fields.find(f => f.key === 'totalAssets') || mapsState.fields[0] || {}).key;
+    if (mapsState.advanced.length === 0 && defaultKey) {
+      mapsState.advanced.push({ field: defaultKey, op: '>', value: '' });
+    }
     renderMapsConditionRows();
     backdrop.hidden = false;
   }
@@ -6449,10 +6462,11 @@
   function renderMapsConditionRows() {
     const body = document.getElementById('mapsConditionsBody');
     if (!body) return;
+    const allFields = mapsState.fields;
     body.innerHTML = mapsState.advanced.map((cond, idx) => {
-      const def = MAPS_FILTER_FIELDS.find(f => f.key === cond.field) || MAPS_FILTER_FIELDS[0];
-      const ops = def.type === 'number' ? MAPS_NUMERIC_OPS : MAPS_TEXT_OPS;
-      const fieldOpts = MAPS_FILTER_FIELDS.map(f => `<option value="${escapeHtml(f.key)}"${f.key === cond.field ? ' selected' : ''}>${escapeHtml(f.label)}</option>`).join('');
+      const def = mapsState.fieldByKey[cond.field] || allFields[0];
+      const ops = mapsFieldFilterType(def) === 'number' ? MAPS_NUMERIC_OPS : MAPS_TEXT_OPS;
+      const fieldOpts = allFields.map(f => `<option value="${escapeHtml(f.key)}"${def && f.key === def.key ? ' selected' : ''}>${escapeHtml(f.label)}</option>`).join('');
       const opOpts = ops.map(o => `<option value="${escapeHtml(o)}"${o === cond.op ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
       return `
         <div class="maps-cond" data-maps-cond-idx="${idx}">
@@ -6493,7 +6507,8 @@
     const addCond = document.getElementById('mapsAddCondition');
     if (addCond && !addCond.dataset.bound) {
       addCond.addEventListener('click', () => {
-        mapsState.advanced.push({ field: 'assetsmm', op: '>', value: '' });
+        const defKey = (mapsState.fields.find(f => f.key === 'totalAssets') || mapsState.fields[0] || {}).key;
+        if (defKey) mapsState.advanced.push({ field: defKey, op: '>', value: '' });
         renderMapsConditionRows();
       });
       addCond.dataset.bound = '1';
@@ -6542,8 +6557,8 @@
         if (!cond) return;
         if (e.target.matches('[data-maps-cond-field]')) {
           cond.field = e.target.value;
-          const def = MAPS_FILTER_FIELDS.find(f => f.key === cond.field);
-          cond.op = def && def.type === 'number' ? '>' : 'contains';
+          const def = mapsState.fieldByKey[cond.field];
+          cond.op = mapsFieldFilterType(def) === 'number' ? '>' : 'contains';
           renderMapsConditionRows();
         } else if (e.target.matches('[data-maps-cond-op]')) {
           cond.op = e.target.value;

@@ -992,42 +992,7 @@ function getBankDataStatus() {
 let mapBankCache = null;
 
 function buildMapBankList() {
-  const dataset = queryBankMapDataset(BANK_REPORTS_DIR);
-  if (!dataset) return null;
-  const toMm = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v) / 1000;
-  const toNum = v => (v == null || !Number.isFinite(Number(v))) ? null : Number(v);
-  const banks = dataset.banks.map(b => ({
-    bankkey: b.bankkey || '',
-    bankname: b.bankname || '',
-    fdic: b.fdic || '',
-    city: b.city || '',
-    state: b.state || '',
-    period: b.period || '',
-    assetsmm: toMm(b.totalAssets),
-    equitymm: toMm(b.totalEquityCapital),
-    tier1mm: toMm(b.tier1Capital),
-    depositsmm: toMm(b.totalDeposits),
-    afsmm: toMm(b.afsTotal),
-    htmmm: toMm(b.htmTotal),
-    ltd: toNum(b.ltd),
-    roa: toNum(b.roa),
-    roe: toNum(b.roe),
-    nim: toNum(b.nim),
-    yos: toNum(b.yos),
-    yieldloans: toNum(b.yieldloans),
-    yea: toNum(b.yea),
-    cof: toNum(b.cof),
-    eff: toNum(b.eff),
-    leverage: toNum(b.leverage),
-    nibpct: toNum(b.nibpct),
-    wholesale: toNum(b.wholesale)
-  }));
-  return {
-    banks,
-    stateCounts: dataset.stateCounts,
-    latestPeriod: dataset.latestPeriod,
-    bankCount: banks.length
-  };
+  return queryBankMapDataset(BANK_REPORTS_DIR);
 }
 
 function getMapBankData() {
