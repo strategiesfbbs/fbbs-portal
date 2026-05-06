@@ -547,6 +547,140 @@ body {
   margin-top: 14px;
   max-width: 640px;
 }
+
+/* Hero status pill (publish state) */
+.hero-status {
+  align-items: center;
+  background: rgba(16, 23, 21, 0.04);
+  border: 1px solid rgba(16, 23, 21, 0.06);
+  border-radius: 999px;
+  color: var(--text);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 8px;
+  letter-spacing: 0.2px;
+  margin-top: 18px;
+  padding: 6px 12px 6px 10px;
+}
+.hero-status-dot {
+  background: var(--text3);
+  border-radius: 999px;
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+  flex: 0 0 8px;
+}
+.hero-status[data-state="full"] {
+  background: rgba(24, 115, 90, 0.10);
+  border-color: rgba(24, 115, 90, 0.18);
+  color: var(--success);
+}
+.hero-status[data-state="full"] .hero-status-dot { background: var(--success); }
+.hero-status[data-state="partial"] {
+  background: rgba(212, 153, 38, 0.12);
+  border-color: rgba(212, 153, 38, 0.22);
+  color: #8a5d11;
+}
+.hero-status[data-state="partial"] .hero-status-dot { background: #c98a18; }
+.hero-status[data-state="empty"] {
+  color: var(--text2);
+}
+
+/* Inline "specs" line on a home tile (Apple product-card pattern) */
+.home-bubble-card .tile-spec {
+  color: var(--text2);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin: -4px 0 0;
+  text-align: center;
+  text-transform: uppercase;
+}
+.home-bubble-card .tile-spec strong {
+  color: var(--racing-green);
+  font-weight: 700;
+}
+
+/* Recently viewed banks (below the tile grid) */
+.home-recents {
+  margin-top: 36px;
+}
+.home-recents-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  justify-content: space-between;
+  margin: 0 0 14px;
+}
+.home-recents-head h3 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.home-recents-head p {
+  color: var(--text3);
+  font-size: 12.5px;
+  margin: 0;
+}
+.home-recents-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.home-recent-card {
+  align-items: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--line, var(--border));
+  border-radius: 10px;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 6px;
+  padding: 14px 16px;
+  text-align: left;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+.home-recent-card:hover,
+.home-recent-card:focus-visible {
+  border-color: rgba(0, 63, 42, 0.18);
+  box-shadow: 0 8px 18px rgba(16, 23, 21, 0.06);
+  outline: none;
+  transform: translateY(-2px);
+}
+.home-recent-name {
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.home-recent-meta {
+  color: var(--text3);
+  font-size: 11.5px;
+  letter-spacing: 0.2px;
+}
+.home-recent-status {
+  color: var(--text2);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+/* Soft cross-fade when switching pages (.active is added on navigation) */
+.page.active {
+  animation: page-fade-in 180ms ease both;
+}
+@keyframes page-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page.active { animation: none; }
+}
 .hero-stat { text-align: right; }
 .hero-stat .num {
   font-size: 28px;

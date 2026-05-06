@@ -195,6 +195,10 @@
         <p class="hero-kicker">FBBS Market Intelligence</p>
         <h2>Today on the desk.</h2>
         <p class="hero-sub" id="homeSubtitle">Loading portal status&hellip;</p>
+        <div class="hero-status" id="homeStatusPill" hidden>
+          <span class="hero-status-dot"></span>
+          <span class="hero-status-text"></span>
+        </div>
       </div>
     </div>
   </section>
@@ -213,6 +217,7 @@
           <span>Markets</span>
         </button>
         <p>CD, muni, agency, corporate, and MBS/CMO offering explorers.</p>
+        <p class="tile-spec" id="homeMarketsSpec" hidden></p>
         <div class="home-bubble-links">
           <button type="button" data-goto="explorer">CDs</button>
           <button type="button" data-goto="muni-explorer">Munis</button>
@@ -244,6 +249,14 @@
         </div>
         <div class="home-strategy-results" id="homeStrategyBankResults"></div>
       </article>
+    </section>
+
+    <section class="home-recents" id="homeRecentsSection" hidden data-reveal>
+      <div class="home-recents-head">
+        <h3>Recently viewed</h3>
+        <p>Banks you've opened on this device.</p>
+      </div>
+      <div class="home-recents-grid" id="homeRecentsGrid"></div>
     </section>
   </div>
 </div>

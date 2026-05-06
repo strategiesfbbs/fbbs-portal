@@ -916,6 +916,7 @@
       history.replaceState(null, '', '#' + pageName);
     }
 
+    if (pageName === 'home') renderHomeRecents();
     if (pageName === 'archive') loadArchive();
     if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'explorer') loadOfferings();
@@ -1105,6 +1106,88 @@
     } else {
       if (subtitle) subtitle.textContent = `${filled} of ${TOTAL_SLOTS} package files are ready.`;
     }
+
+    renderHomeStatusPill(pkg, filled);
+    renderHomeMarketsSpec(pkg);
+    renderHomeRecents();
+  }
+
+  function renderHomeStatusPill(pkg, filled) {
+    const pill = document.getElementById('homeStatusPill');
+    if (!pill) return;
+    const textEl = pill.querySelector('.hero-status-text');
+    if (!textEl) return;
+    const dateLabel = pkg && pkg.date ? formatShortDate(pkg.date) : null;
+    let state = 'empty';
+    let text = 'Awaiting today’s package';
+    if (filled === TOTAL_SLOTS) {
+      state = 'full';
+      text = dateLabel ? `Published · ${dateLabel} · ${TOTAL_SLOTS} of ${TOTAL_SLOTS}` : `Published · ${TOTAL_SLOTS} of ${TOTAL_SLOTS}`;
+    } else if (filled > 0) {
+      state = 'partial';
+      text = dateLabel
+        ? `In progress · ${dateLabel} · ${filled} of ${TOTAL_SLOTS}`
+        : `In progress · ${filled} of ${TOTAL_SLOTS}`;
+    }
+    pill.dataset.state = state;
+    textEl.textContent = text;
+    pill.hidden = false;
+  }
+
+  function renderHomeMarketsSpec(pkg) {
+    const spec = document.getElementById('homeMarketsSpec');
+    if (!spec) return;
+    const parts = [];
+    const push = (count, label) => {
+      if (typeof count === 'number' && count >= 0) {
+        parts.push(`<strong>${formatNumber(count)}</strong> ${label}`);
+      }
+    };
+    push(pkg && pkg.offeringsCount, 'CDs');
+    push(pkg && pkg.muniOfferingsCount, 'Munis');
+    push(pkg && pkg.agencyCount, 'Agencies');
+    push(pkg && pkg.corporatesCount, 'Corp');
+    if (!parts.length) {
+      spec.hidden = true;
+      spec.innerHTML = '';
+      return;
+    }
+    spec.innerHTML = parts.join(' · ');
+    spec.hidden = false;
+  }
+
+  function renderHomeRecents() {
+    const section = document.getElementById('homeRecentsSection');
+    const grid = document.getElementById('homeRecentsGrid');
+    if (!section || !grid) return;
+    const recents = (typeof loadRecentBanks === 'function' ? loadRecentBanks() : []).slice(0, 6);
+    if (!recents.length) {
+      section.hidden = true;
+      grid.innerHTML = '';
+      return;
+    }
+    grid.innerHTML = recents.map(row => {
+      const name = escapeHtml(row.displayName || 'Bank');
+      const cityState = [row.city, row.state].filter(Boolean).join(', ');
+      const meta = escapeHtml(cityState || row.primaryRegulator || '');
+      const status = row.accountStatus ? escapeHtml(String(row.accountStatus)) : '';
+      return `
+        <button type="button" class="home-recent-card" data-home-recent-id="${escapeHtml(String(row.id))}">
+          ${status ? `<span class="home-recent-status">${status}</span>` : ''}
+          <span class="home-recent-name">${name}</span>
+          <span class="home-recent-meta">${meta}</span>
+        </button>
+      `;
+    }).join('');
+    section.hidden = false;
+    grid.querySelectorAll('[data-home-recent-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-home-recent-id');
+        if (!id) return;
+        goTo('banks');
+        loadBank(id, { collapseResults: true });
+      });
+    });
   }
 
   function normalizeSearchText(parts) {
@@ -6151,6 +6234,21 @@
       });
     }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
     targets.forEach(el => observer.observe(el));
+
+    // "/" focuses the jump bar from anywhere except a typing context.
+    const jumpInput = document.getElementById('navSearchInput');
+    if (jumpInput) {
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+        const t = event.target;
+        const tag = t && t.tagName;
+        const typingInField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable);
+        if (typingInField) return;
+        event.preventDefault();
+        jumpInput.focus();
+        jumpInput.select();
+      });
+    }
   }
 
   // ============ Init ============
