@@ -1167,10 +1167,10 @@
       return;
     }
     grid.innerHTML = recents.map(row => {
-      const name = escapeHtml(row.displayName || 'Bank');
+      const name = escapeHtml(bankDisplayName(row));
       const cityState = [row.city, row.state].filter(Boolean).join(', ');
       const meta = escapeHtml(cityState || row.primaryRegulator || '');
-      const status = row.accountStatus ? escapeHtml(String(row.accountStatus)) : '';
+      const status = escapeHtml(bankAccountStatusLabel(row.accountStatus));
       return `
         <button type="button" class="home-recent-card" data-home-recent-id="${escapeHtml(String(row.id))}">
           ${status ? `<span class="home-recent-status">${status}</span>` : ''}
@@ -1949,7 +1949,7 @@
     }
     results.innerHTML = rows.map(row => `
       <button type="button" class="home-strategy-result" data-home-strategy-bank="${escapeHtml(row.id)}">
-        <strong>${escapeHtml(row.displayName || row.name || 'Bank')}</strong>
+        <strong>${escapeHtml(bankDisplayName(row))}</strong>
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
       </button>
     `).join('');
@@ -1978,20 +1978,30 @@
     setupBankWorkspaceTabs();
     if (input) {
       let t = null;
+      input.addEventListener('focus', () => {
+        if (!input.value.trim()) showBankRecentDropdown();
+      });
       input.addEventListener('input', () => {
         clearTimeout(t);
+        if (input.value.trim()) hideBankRecentDropdown();
+        else showBankRecentDropdown();
         t = setTimeout(() => searchBanks(input.value), 180);
       });
       input.addEventListener('keydown', e => {
         if (e.key === 'Enter') {
           e.preventDefault();
+          hideBankRecentDropdown();
           searchBanks(input.value, { openFirst: true });
         } else if (e.key === 'Escape') {
+          hideBankRecentDropdown();
           clearBankSearchResults();
         }
       });
     }
-    if (btn) btn.addEventListener('click', () => searchBanks(input ? input.value : '', { openFirst: true }));
+    if (btn) btn.addEventListener('click', () => {
+      hideBankRecentDropdown();
+      searchBanks(input ? input.value : '', { openFirst: true });
+    });
     if (upload) upload.addEventListener('change', e => {
       const file = e.target.files && e.target.files[0];
       if (file) uploadBankWorkbook(file);
@@ -2001,6 +2011,9 @@
       if (file) uploadBankStatusWorkbook(file);
     });
     if (clearRecent) clearRecent.addEventListener('click', clearRecentBanks);
+    document.addEventListener('click', event => {
+      if (!event.target.closest('.bank-search-panel')) hideBankRecentDropdown();
+    });
     if (savedFilter) savedFilter.addEventListener('input', renderSavedBanks);
     [accountCoverageFilter, accountCoverageStatus, accountCoverageService, accountCoverageSort].filter(Boolean).forEach(el => {
       let t = null;
@@ -2603,7 +2616,7 @@
       return `
       <button type="button" class="bank-result" data-bank-id="${escapeHtml(row.id)}">
         <div>
-          <strong>${escapeHtml(row.displayName || row.name || 'Bank')}</strong>
+          <strong>${escapeHtml(bankDisplayName(row))}</strong>
           ${coverage ? `<small>${escapeHtml(coverage)}</small>` : ''}
         </div>
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
@@ -2622,6 +2635,27 @@
   function clearBankSearchResults() {
     const results = document.getElementById('bankSearchResults');
     if (results) results.innerHTML = '';
+  }
+
+  function bankAccountStatusLabel(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (typeof value === 'object') return value.status || value.accountStatusLabel || '';
+    return String(value);
+  }
+
+  function bankDisplayName(row) {
+    if (!row) return 'Bank';
+    const displayName = String(row.displayName || row.name || row.legalName || 'Bank').trim();
+    const city = String(row.city || '').trim();
+    const state = String(row.state || '').trim();
+    if (displayName && city && state) {
+      const suffix = `, ${city}, ${state}`;
+      if (displayName.toLowerCase().endsWith(suffix.toLowerCase())) {
+        return displayName.slice(0, -suffix.length).trim() || displayName;
+      }
+    }
+    return displayName || 'Bank';
   }
 
   function loadRecentBanks() {
@@ -2652,7 +2686,7 @@
       certNumber: s.certNumber || '',
       primaryRegulator: s.primaryRegulator || '',
       period: s.period || '',
-      accountStatus: s.accountStatus || currentBankAccountStatus()
+      accountStatus: bankAccountStatusLabel(s.accountStatus || currentBankAccountStatus())
     };
     const next = [row, ...loadRecentBanks().filter(existing => String(existing.id) !== row.id)];
     saveRecentBanks(next);
@@ -2662,6 +2696,21 @@
   function clearRecentBanks() {
     saveRecentBanks([]);
     renderRecentBanks();
+    hideBankRecentDropdown();
+  }
+
+  function showBankRecentDropdown() {
+    const panel = document.getElementById('bankRecentPanel');
+    const list = document.getElementById('bankRecentList');
+    const rows = loadRecentBanks();
+    if (!panel || !list || !rows.length) return;
+    renderRecentBanks();
+    panel.hidden = false;
+  }
+
+  function hideBankRecentDropdown() {
+    const panel = document.getElementById('bankRecentPanel');
+    if (panel) panel.hidden = true;
   }
 
   function renderRecentBanks() {
@@ -2669,7 +2718,7 @@
     const list = document.getElementById('bankRecentList');
     if (!panel || !list) return;
     const rows = loadRecentBanks();
-    panel.hidden = rows.length === 0;
+    panel.hidden = true;
     if (!rows.length) {
       list.innerHTML = '<option value="">No previous searches</option>';
       return;
@@ -2678,7 +2727,7 @@
       '<option value="">Select a recent bank</option>',
       ...rows.map(row => {
         const detail = [row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · ');
-        return `<option value="${escapeHtml(row.id)}">${escapeHtml(row.displayName || 'Bank')}${detail ? ` — ${escapeHtml(detail)}` : ''}</option>`;
+        return `<option value="${escapeHtml(row.id)}">${escapeHtml(bankDisplayName(row))}${detail ? ` - ${escapeHtml(detail)}` : ''}</option>`;
       })
     ].join('');
     list.value = '';
@@ -2686,6 +2735,7 @@
       if (!list.value) return;
       loadBank(list.value, { collapseResults: true });
       list.value = '';
+      hideBankRecentDropdown();
     };
   }
 
@@ -2729,7 +2779,7 @@
     }
     list.innerHTML = rows.map(row => `
       <button type="button" class="bank-saved-item${String(row.bankId) === String(activeCoverageBankId) ? ' active' : ''}" data-bank-id="${escapeHtml(row.bankId)}">
-        <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
+        <strong>${escapeHtml(bankDisplayName(row))}</strong>
         <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
         <div class="bank-saved-meta">
           <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
@@ -2793,7 +2843,7 @@
       ].filter(Boolean).join(' · ');
       return `
         <button type="button" class="bank-account-coverage-item" data-bank-id="${escapeHtml(row.bankId)}">
-          <strong>${escapeHtml(row.displayName || row.legalName || 'Bank')}</strong>
+          <strong>${escapeHtml(bankDisplayName(row))}</strong>
           <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
           <span>${escapeHtml(row.owner ? `Owner: ${row.owner}` : 'Owner not assigned')}</span>
           <div class="bank-saved-meta">

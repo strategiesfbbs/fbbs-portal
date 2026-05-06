@@ -3851,6 +3851,7 @@ body {
 
 .bank-search-panel {
   padding: 18px;
+  position: relative;
 }
 
 .bank-search-row {
@@ -3881,12 +3882,24 @@ body {
 
 .bank-recent-dropdown {
   align-items: end;
-  border-top: 1px solid var(--line);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(19, 31, 27, 0.14);
   display: grid;
   gap: 10px;
   grid-template-columns: minmax(0, 1fr) auto;
-  margin-top: 12px;
-  padding-top: 12px;
+  left: 18px;
+  margin-top: 0;
+  padding: 12px;
+  position: absolute;
+  right: 136px;
+  top: 72px;
+  z-index: 15;
+}
+
+.bank-recent-dropdown[hidden] {
+  display: none;
 }
 
 .bank-recent-dropdown label {
@@ -5324,6 +5337,7 @@ body {
   .home-panel-head,
   .home-section-row { align-items: flex-start; flex-direction: column; }
   .home-market-tiles { grid-template-columns: 1fr; }
+  .home-strategy-search { grid-template-columns: 1fr; }
   .recap-status-grid { grid-template-columns: 1fr; }
   .cd-tool-head { flex-direction: column; }
   .market-tool-head { flex-direction: column; }
@@ -5359,6 +5373,11 @@ body {
   .bank-coverage-grid,
   .bank-note-composer {
     grid-template-columns: 1fr;
+  }
+  .bank-recent-dropdown {
+    left: 18px;
+    right: 18px;
+    top: 130px;
   }
   .bank-workspace-tabs {
     display: grid;
