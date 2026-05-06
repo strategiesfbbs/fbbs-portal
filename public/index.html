@@ -189,29 +189,35 @@
 
 <!-- ========== HOME PAGE ========== -->
 <div class="page active" id="p-home">
-  <section class="page-hero">
+  <section class="page-hero home-hero" data-reveal>
     <div class="page-hero-inner">
       <div>
-        <h2>Home</h2>
+        <p class="hero-kicker">FBBS Market Intelligence</p>
+        <h2>Today on the desk.</h2>
         <p class="hero-sub" id="homeSubtitle">Loading portal status&hellip;</p>
+        <div class="hero-status" id="homeStatusPill" hidden>
+          <span class="hero-status-dot"></span>
+          <span class="hero-status-text"></span>
+        </div>
       </div>
     </div>
   </section>
 
   <div class="container">
     <section class="home-bubble-grid" aria-label="Home sections">
-      <article class="home-bubble-card">
+      <article class="home-bubble-card" data-reveal>
         <button type="button" class="home-bubble-button" data-goto="banks">
           <span>Accounts</span>
         </button>
         <p>Bank tear sheets, account coverage, owner data, and service information.</p>
       </article>
 
-      <article class="home-bubble-card">
+      <article class="home-bubble-card" data-reveal>
         <button type="button" class="home-bubble-button" data-goto="explorer">
           <span>Markets</span>
         </button>
         <p>CD, muni, agency, corporate, and MBS/CMO offering explorers.</p>
+        <p class="tile-spec" id="homeMarketsSpec" hidden></p>
         <div class="home-bubble-links">
           <button type="button" data-goto="explorer">CDs</button>
           <button type="button" data-goto="muni-explorer">Munis</button>
@@ -220,7 +226,7 @@
         </div>
       </article>
 
-      <article class="home-bubble-card">
+      <article class="home-bubble-card" data-reveal>
         <button type="button" class="home-bubble-button" data-goto="dashboard">
           <span>Daily Sheets</span>
         </button>
@@ -232,7 +238,7 @@
         </div>
       </article>
 
-      <article class="home-bubble-card strategy">
+      <article class="home-bubble-card strategy" data-reveal>
         <button type="button" class="home-bubble-button" data-home-strategy-open>
           <span>Strategies</span>
         </button>
@@ -243,6 +249,14 @@
         </div>
         <div class="home-strategy-results" id="homeStrategyBankResults"></div>
       </article>
+    </section>
+
+    <section class="home-recents" id="homeRecentsSection" hidden data-reveal>
+      <div class="home-recents-head">
+        <h3>Recently viewed</h3>
+        <p>Banks you've opened on this device.</p>
+      </div>
+      <div class="home-recents-grid" id="homeRecentsGrid"></div>
     </section>
   </div>
 </div>
