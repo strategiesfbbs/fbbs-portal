@@ -6124,6 +6124,35 @@
     return `${(size / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  // ============ Home polish (sticky-nav shadow + scroll fade-in) ============
+
+  function setupHomePolish() {
+    const topStrip = document.querySelector('.top-strip');
+    if (topStrip) {
+      const onScroll = () => {
+        topStrip.classList.toggle('scrolled', window.scrollY > 4);
+      };
+      window.addEventListener('scroll', onScroll, { passive: true });
+      onScroll();
+    }
+
+    const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const targets = document.querySelectorAll('[data-reveal]');
+    if (reduceMotion || !('IntersectionObserver' in window)) {
+      targets.forEach(el => el.classList.add('in-view'));
+      return;
+    }
+    const observer = new IntersectionObserver((entries, obs) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in-view');
+          obs.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
+    targets.forEach(el => observer.observe(el));
+  }
+
   // ============ Init ============
 
   function init() {
@@ -6132,6 +6161,7 @@
     loadStrategyNotifications();
     loadArchive();
     setupHome();
+    setupHomePolish();
     setupUpload();
     setupGlobalSearch();
     setupCdCostCalculator();
