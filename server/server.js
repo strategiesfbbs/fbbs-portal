@@ -992,7 +992,22 @@ function getBankDataStatus() {
 let mapBankCache = null;
 
 function buildMapBankList() {
-  return queryBankMapDataset(BANK_REPORTS_DIR);
+  const data = queryBankMapDataset(BANK_REPORTS_DIR);
+  if (!data || !Array.isArray(data.banks)) return data;
+  const bankIds = data.banks.map(row => row.id);
+  const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, bankIds);
+  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, bankIds);
+  return {
+    ...data,
+    banks: data.banks.map(row => {
+      const accountStatus = effectiveAccountStatus(row, statuses, coverageMap);
+      return {
+        ...row,
+        accountStatus,
+        accountStatusLabel: accountStatus.status || 'Open'
+      };
+    })
+  };
 }
 
 function getMapBankData() {
@@ -1038,6 +1053,7 @@ async function handleSaveBankCoverage(req, res) {
       status: saved.status,
       priority: saved.priority
     });
+    invalidateMapBankCache();
     return sendJSON(res, 200, { saved, accountStatus });
   } catch (err) {
     log('error', 'Bank coverage save failed:', err.message);
@@ -1068,6 +1084,7 @@ async function handleSaveBankAccountStatus(req, res) {
       bankId,
       status: accountStatus.status
     });
+    invalidateMapBankCache();
     return sendJSON(res, 200, { accountStatus, saved });
   } catch (err) {
     log('error', 'Bank account status save failed:', err.message);
@@ -1294,6 +1311,7 @@ async function handleBankStatusUpload(req, res) {
       affiliateCount: metadata.affiliateCount,
       bankersBankServicesCount: metadata.bankersBankServicesCount
     });
+    invalidateMapBankCache();
     return sendJSON(res, 200, { success: true, metadata });
   } catch (err) {
     log('error', 'Bank account status upload failed:', err.message);

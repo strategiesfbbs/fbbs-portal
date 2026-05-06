@@ -6312,6 +6312,12 @@
 
   const MAPS_NUMERIC_OPS = ['>', '>=', '=', '<=', '<', '!='];
   const MAPS_TEXT_OPS = ['contains', 'equals'];
+  const MAPS_SECURITIES_TO_ASSETS_FIELD = {
+    key: 'securitiesToAssets',
+    label: 'Securities / Assets (%)',
+    type: 'percent',
+    section: 'balanceSheet'
+  };
 
   let mapsState = {
     loaded: false,
@@ -6344,13 +6350,52 @@
     }
     if (def.type === 'percent' || def.type === 'percentOf') {
       const n = Number(value);
-      return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '';
+      return Number.isFinite(n) ? `${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}%` : '';
     }
     if (def.type === 'number') {
       const n = Number(value);
       return Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '';
     }
     return String(value);
+  }
+
+  function mapsNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(String(value).replace(/,/g, '').replace(/%/g, '').trim());
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function mapsSecuritiesToAssets(bank) {
+    const direct = mapsNumber(bank && bank.securitiesToAssets);
+    if (direct !== null) return direct;
+    const totalAssets = mapsNumber(bank && bank.totalAssets);
+    if (!totalAssets) return null;
+    const afs = mapsNumber(bank && bank.afsTotal);
+    const htm = mapsNumber(bank && bank.htmTotal);
+    if (afs === null && htm === null) return null;
+    return ((afs || 0) + (htm || 0)) * 100 / totalAssets;
+  }
+
+  function mapsBankListName(bank) {
+    const displayName = String(bank && bank.displayName || '').trim();
+    const city = String(bank && bank.city || '').trim();
+    const state = String(bank && bank.state || '').trim();
+    if (!displayName) return '';
+    if (city && state) {
+      const suffix = `, ${city}, ${state}`;
+      if (displayName.toLowerCase().endsWith(suffix.toLowerCase())) {
+        return displayName.slice(0, -suffix.length).trim();
+      }
+    }
+    return displayName;
+  }
+
+  function mapsAccountStatusLabel(bank) {
+    const status = bank && (
+      bank.accountStatusLabel ||
+      (bank.accountStatus && bank.accountStatus.status)
+    );
+    return status || 'Open';
   }
 
   function mapsCompareNumeric(value, def) {
@@ -6377,11 +6422,16 @@
         throw new Error(body.error || 'Bank tear sheet data not available yet.');
       }
       const data = await res.json();
-      mapsState.banks = Array.isArray(data.banks) ? data.banks : [];
+      mapsState.banks = Array.isArray(data.banks)
+        ? data.banks.map(bank => ({ ...bank, securitiesToAssets: mapsSecuritiesToAssets(bank) }))
+        : [];
       mapsState.fields = (Array.isArray(data.fields) ? data.fields : []).map(f => ({
         ...f,
         label: f.type === 'money' ? f.label.replace('($000)', '($MM)') : f.label
       }));
+      if (!mapsState.fields.some(f => f.key === 'securitiesToAssets')) {
+        mapsState.fields.push({ ...MAPS_SECURITIES_TO_ASSETS_FIELD });
+      }
       mapsState.fieldByKey = {};
       for (const f of mapsState.fields) mapsState.fieldByKey[f.key] = f;
       mapsState.stateCounts = data.stateCounts || {};
@@ -6527,7 +6577,7 @@
     for (const b of mapsState.banks) {
       if (sel.size > 0 && !sel.has(b.state)) continue;
       if (q) {
-        const hay = (String(b.displayName || '') + ' ' + String(b.certNumber || '') + ' ' + String(b.city || '') + ' ' + String(b.state || '')).toLowerCase();
+        const hay = (String(b.displayName || '') + ' ' + String(b.certNumber || '') + ' ' + String(b.city || '') + ' ' + String(b.state || '') + ' ' + mapsAccountStatusLabel(b)).toLowerCase();
         if (!hay.includes(q)) continue;
       }
       if (!rowMatchesAdvanced(b)) continue;
@@ -6537,17 +6587,16 @@
     const limit = 1000;
     const shown = rows.slice(0, limit);
     const assetsDef = mapsState.fieldByKey.totalAssets;
-    const roaDef = mapsState.fieldByKey.roa;
-    const nimDef = mapsState.fieldByKey.netInterestMargin;
+    const securitiesToAssetsDef = mapsState.fieldByKey.securitiesToAssets || MAPS_SECURITIES_TO_ASSETS_FIELD;
     body.innerHTML = shown.map(b => `
       <tr data-maps-bankid="${escapeHtml(b.id)}">
-        <td>${escapeHtml(b.displayName || '')}</td>
+        <td>${escapeHtml(mapsBankListName(b))}</td>
         <td>${escapeHtml(b.certNumber || '')}</td>
         <td>${escapeHtml(b.city || '')}</td>
         <td>${escapeHtml(b.state || '')}</td>
+        <td><span class="maps-status-pill maps-status-${escapeHtml(mapsAccountStatusLabel(b).toLowerCase().replace(/[^a-z0-9]+/g, '-'))}">${escapeHtml(mapsAccountStatusLabel(b))}</span></td>
         <td class="num">${escapeHtml(mapsFormatValue(b.totalAssets, assetsDef))}</td>
-        <td class="num">${escapeHtml(mapsFormatValue(b.roa, roaDef))}</td>
-        <td class="num">${escapeHtml(mapsFormatValue(b.netInterestMargin, nimDef))}</td>
+        <td class="num">${escapeHtml(mapsFormatValue(mapsSecuritiesToAssets(b), securitiesToAssetsDef))}</td>
       </tr>
     `).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
     if (rowCountEl) {

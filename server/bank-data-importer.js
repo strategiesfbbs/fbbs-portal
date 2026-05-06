@@ -602,7 +602,7 @@ function listBankSummaries(outputDir) {
 const MAP_FIELD_KEYS = [
   'displayName', 'certNumber', 'city', 'state',
   'totalAssets', 'totalEquityCapital', 'tier1Capital', 'totalDeposits',
-  'afsTotal', 'htmTotal', 'loansToDeposits',
+  'afsTotal', 'htmTotal', 'securitiesToAssets', 'loansToDeposits',
   'roa', 'roe', 'netInterestMargin', 'yieldOnSecurities', 'yieldOnLoans',
   'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio', 'leverageRatio',
   'nonInterestBearingDeposits', 'wholesaleFundingReliance'
