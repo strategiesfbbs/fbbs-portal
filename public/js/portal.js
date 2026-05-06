@@ -6378,6 +6378,8 @@
     stateCounts: {},
     latestPeriod: '',
     selectedStates: new Set(),
+    selectedStatuses: new Set(),
+    selectedBankId: '',
     search: '',
     advanced: [],
     plotInitialized: false
@@ -6448,6 +6450,15 @@
     return status || 'Open';
   }
 
+  function mapsStatusSlug(value) {
+    return String(value || 'Open').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  }
+
+  function mapsFindBank(id) {
+    const key = String(id || '');
+    return mapsState.banks.find(bank => String(bank.id || '') === key) || null;
+  }
+
   function mapsCompareNumeric(value, def) {
     if (value == null || value === '') return null;
     const n = Number(value);
@@ -6509,6 +6520,8 @@
     }
     renderMapsChoropleth();
     renderMapsStateChips();
+    renderMapsStatusFilters();
+    renderMapsDetailPanel();
     applyMapsFilters();
   }
 
@@ -6587,6 +6600,30 @@
     chipsEl.innerHTML = html;
   }
 
+  function mapsStatusCounts() {
+    const counts = {};
+    for (const bank of mapsState.banks) {
+      const status = mapsAccountStatusLabel(bank);
+      counts[status] = (counts[status] || 0) + 1;
+    }
+    return counts;
+  }
+
+  function renderMapsStatusFilters() {
+    const el = document.getElementById('mapsStatusFilters');
+    if (!el) return;
+    const counts = mapsStatusCounts();
+    const statuses = ['Open', 'Prospect', 'Client'];
+    const allActive = mapsState.selectedStatuses.size === 0;
+    el.innerHTML = [
+      `<button type="button" class="maps-filter-chip${allActive ? ' active' : ''}" data-maps-status-filter="">All <strong>${formatNumber(mapsState.banks.length)}</strong></button>`,
+      ...statuses.map(status => {
+        const active = mapsState.selectedStatuses.has(status);
+        return `<button type="button" class="maps-filter-chip maps-status-${escapeHtml(mapsStatusSlug(status))}${active ? ' active' : ''}" data-maps-status-filter="${escapeHtml(status)}">${escapeHtml(status)} <strong>${formatNumber(counts[status] || 0)}</strong></button>`;
+      })
+    ].join('');
+  }
+
   function rowMatchesAdvanced(bank) {
     if (!mapsState.advanced.length) return true;
     for (const cond of mapsState.advanced) {
@@ -6623,9 +6660,11 @@
     if (!body) return;
     const q = (mapsState.search || '').toLowerCase().trim();
     const sel = mapsState.selectedStates;
+    const statusSel = mapsState.selectedStatuses;
     const rows = [];
     for (const b of mapsState.banks) {
       if (sel.size > 0 && !sel.has(b.state)) continue;
+      if (statusSel.size > 0 && !statusSel.has(mapsAccountStatusLabel(b))) continue;
       if (q) {
         const hay = (String(b.displayName || '') + ' ' + String(b.certNumber || '') + ' ' + String(b.city || '') + ' ' + String(b.state || '') + ' ' + mapsAccountStatusLabel(b)).toLowerCase();
         if (!hay.includes(q)) continue;
@@ -6636,19 +6675,31 @@
     rows.sort((a, b) => (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0));
     const limit = 1000;
     const shown = rows.slice(0, limit);
+    const visibleIds = new Set(shown.map(row => String(row.id || '')));
+    if (!shown.length) mapsState.selectedBankId = '';
+    else if (!visibleIds.has(String(mapsState.selectedBankId || ''))) mapsState.selectedBankId = String(shown[0].id || '');
     const assetsDef = mapsState.fieldByKey.totalAssets;
     const securitiesToAssetsDef = mapsState.fieldByKey.securitiesToAssets || MAPS_SECURITIES_TO_ASSETS_FIELD;
     body.innerHTML = shown.map(b => `
-      <tr data-maps-bankid="${escapeHtml(b.id)}">
-        <td>${escapeHtml(mapsBankListName(b))}</td>
+      <tr data-maps-bankid="${escapeHtml(b.id)}" class="${String(b.id || '') === String(mapsState.selectedBankId || '') ? 'maps-row-selected' : ''}">
+        <td><button type="button" class="maps-bank-link" data-maps-bank-preview="${escapeHtml(b.id)}">${escapeHtml(mapsBankListName(b))}</button></td>
         <td>${escapeHtml(b.certNumber || '')}</td>
         <td>${escapeHtml(b.city || '')}</td>
         <td>${escapeHtml(b.state || '')}</td>
-        <td><span class="maps-status-pill maps-status-${escapeHtml(mapsAccountStatusLabel(b).toLowerCase().replace(/[^a-z0-9]+/g, '-'))}">${escapeHtml(mapsAccountStatusLabel(b))}</span></td>
+        <td><span class="maps-status-pill maps-status-${escapeHtml(mapsStatusSlug(mapsAccountStatusLabel(b)))}">${escapeHtml(mapsAccountStatusLabel(b))}</span></td>
         <td class="num">${escapeHtml(mapsFormatValue(b.totalAssets, assetsDef))}</td>
         <td class="num">${escapeHtml(mapsFormatValue(mapsSecuritiesToAssets(b), securitiesToAssetsDef))}</td>
       </tr>
     `).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
+    const previewBank = btn => {
+      mapsState.selectedBankId = btn.dataset.mapsBankPreview || '';
+      applyMapsFilters();
+    };
+    body.querySelectorAll('[data-maps-bank-preview]').forEach(btn => {
+      btn.addEventListener('pointerdown', () => previewBank(btn));
+      btn.addEventListener('focus', () => previewBank(btn));
+      btn.addEventListener('click', event => event.stopPropagation());
+    });
     if (rowCountEl) {
       const total = rows.length.toLocaleString();
       rowCountEl.textContent = rows.length > limit
@@ -6656,6 +6707,62 @@
         : `${total} bank(s) shown`;
     }
     renderMapsActiveFilters();
+    renderMapsDetailPanel();
+  }
+
+  function mapsDetailMetric(label, value) {
+    return `
+      <div class="maps-detail-metric">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value || '')}</strong>
+      </div>
+    `;
+  }
+
+  function renderMapsDetailPanel() {
+    const panel = document.getElementById('mapsDetailPanel');
+    if (!panel) return;
+    const bank = mapsFindBank(mapsState.selectedBankId);
+    if (!bank) {
+      panel.hidden = false;
+      panel.innerHTML = '<div class="maps-detail-empty">Select a bank row to preview key map metrics.</div>';
+      return;
+    }
+    const assetsDef = mapsState.fieldByKey.totalAssets;
+    const depositsDef = mapsState.fieldByKey.totalDeposits;
+    const loansToDepositsDef = mapsState.fieldByKey.loansToDeposits;
+    const securitiesToAssetsDef = mapsState.fieldByKey.securitiesToAssets || MAPS_SECURITIES_TO_ASSETS_FIELD;
+    const status = mapsAccountStatusLabel(bank);
+    panel.hidden = false;
+    panel.innerHTML = `
+      <div class="maps-detail-head">
+        <div>
+          <span class="maps-status-pill maps-status-${escapeHtml(mapsStatusSlug(status))}">${escapeHtml(status)}</span>
+          <h4>${escapeHtml(mapsBankListName(bank))}</h4>
+          <p>${escapeHtml([bank.city, bank.state, bank.certNumber ? `FDIC ${bank.certNumber}` : ''].filter(Boolean).join(' - '))}</p>
+        </div>
+        <button type="button" class="small-btn" id="mapsDetailClose">Close</button>
+      </div>
+      <div class="maps-detail-grid">
+        ${mapsDetailMetric('Assets ($MM)', mapsFormatValue(bank.totalAssets, assetsDef))}
+        ${mapsDetailMetric('Deposits ($MM)', mapsFormatValue(bank.totalDeposits, depositsDef))}
+        ${mapsDetailMetric('Securities / Assets', mapsFormatValue(mapsSecuritiesToAssets(bank), securitiesToAssetsDef))}
+        ${mapsDetailMetric('Loans / Deposits', mapsFormatValue(bank.loansToDeposits, loansToDepositsDef))}
+      </div>
+      <div class="maps-detail-actions">
+        <button type="button" class="small-btn primary" id="mapsOpenTearSheet">Open tear sheet</button>
+      </div>
+    `;
+    const close = document.getElementById('mapsDetailClose');
+    if (close) close.addEventListener('click', () => {
+      mapsState.selectedBankId = '';
+      applyMapsFilters();
+    });
+    const open = document.getElementById('mapsOpenTearSheet');
+    if (open) open.addEventListener('click', () => {
+      goTo('banks');
+      if (typeof loadBank === 'function') loadBank(bank.id, { collapseResults: true });
+    });
   }
 
   function renderMapsActiveFilters() {
@@ -6720,6 +6827,20 @@
         applyMapsFilters();
       });
       clearBtn.dataset.bound = '1';
+    }
+    const statusFilters = document.getElementById('mapsStatusFilters');
+    if (statusFilters && !statusFilters.dataset.bound) {
+      statusFilters.addEventListener('click', e => {
+        const btn = e.target.closest('[data-maps-status-filter]');
+        if (!btn) return;
+        const status = btn.dataset.mapsStatusFilter;
+        if (!status) mapsState.selectedStatuses.clear();
+        else if (mapsState.selectedStatuses.has(status)) mapsState.selectedStatuses.delete(status);
+        else mapsState.selectedStatuses.add(status);
+        renderMapsStatusFilters();
+        applyMapsFilters();
+      });
+      statusFilters.dataset.bound = '1';
     }
     const advBtn = document.getElementById('mapsAdvancedBtn');
     if (advBtn && !advBtn.dataset.bound) {
@@ -6798,12 +6919,12 @@
     const tableBody = document.getElementById('mapsBankBody');
     if (tableBody && !tableBody.dataset.bound) {
       tableBody.addEventListener('click', e => {
+        const btn = e.target.closest('[data-maps-bank-preview]');
         const tr = e.target.closest('tr[data-maps-bankid]');
-        if (!tr) return;
-        const id = tr.dataset.mapsBankid;
+        const id = btn ? btn.dataset.mapsBankPreview : tr && tr.dataset.mapsBankid;
         if (!id) return;
-        goTo('banks');
-        if (typeof loadBank === 'function') loadBank(id, { collapseResults: true });
+        mapsState.selectedBankId = id;
+        applyMapsFilters();
       });
       tableBody.dataset.bound = '1';
     }
