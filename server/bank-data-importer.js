@@ -312,10 +312,10 @@ function runSqlite(dbPath, sql, options = {}) {
   return result.stdout || '';
 }
 
-function querySqliteJson(dbPath, sql) {
+function querySqliteJson(dbPath, sql, options = {}) {
   const result = childProcess.execFileSync('sqlite3', ['-json', dbPath, sql], {
     encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024
+    maxBuffer: options.maxBuffer || 64 * 1024 * 1024
   });
   const text = String(result || '').trim();
   return text ? JSON.parse(text) : [];
@@ -599,47 +599,69 @@ function listBankSummaries(outputDir) {
     .map(row => JSON.parse(row.summary_json));
 }
 
-function queryBankMapDataset(outputDir, periodPattern = '2025Q*') {
+const MAP_FIELD_KEYS = [
+  'displayName', 'certNumber', 'city', 'state',
+  'totalAssets', 'totalEquityCapital', 'tier1Capital', 'totalDeposits',
+  'afsTotal', 'htmTotal', 'loansToDeposits',
+  'roa', 'roe', 'netInterestMargin', 'yieldOnSecurities', 'yieldOnLoans',
+  'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio', 'leverageRatio',
+  'nonInterestBearingDeposits', 'wholesaleFundingReliance'
+];
+
+function buildMapFieldDefs() {
+  return MAP_FIELD_KEYS
+    .map(key => {
+      const def = BANK_FIELDS.find(f => f.key === key);
+      if (!def) return null;
+      return { key: def.key, label: def.label, type: def.type, section: def.section };
+    })
+    .filter(Boolean);
+}
+
+function queryBankMapDataset(outputDir, periodPattern = null) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return null;
-  const safePattern = String(periodPattern).replace(/'/g, "''");
-  const banks = querySqliteJson(dbPath, `
+  let pattern = periodPattern;
+  if (!pattern) {
+    const latestRows = querySqliteJson(dbPath, `
+      SELECT MAX(json_extract(summary_json, '$.period')) AS p
+      FROM banks
+      WHERE json_extract(summary_json, '$.period') GLOB '????Q?';
+    `);
+    const latest = latestRows && latestRows[0] && latestRows[0].p;
+    if (latest && /^(\d{4})Q\d$/.test(latest)) {
+      pattern = latest.slice(0, 4) + 'Q*';
+    } else {
+      pattern = '*';
+    }
+  }
+  const safePattern = String(pattern).replace(/'/g, "''");
+  const fields = buildMapFieldDefs();
+  // Pull each bank's latest-period values from detail_json by walking
+  // the periods array via json_each, then extracting from the entry
+  // whose period matches summary_json.period. Same source of truth as
+  // the tear sheet (which reads detail_json), but pushed entirely into
+  // SQL so we don't ship every detail blob to Node.
+  const fieldSelects = fields
+    .map(f => `json_extract(p.value, '$.values.${f.key}') AS ${f.key}`)
+    .join(',\n      ');
+  const rows = querySqliteJson(dbPath, `
     SELECT
-      id AS bankkey,
-      display_name AS bankname,
-      cert_number AS fdic,
-      city,
-      state,
-      json_extract(summary_json, '$.period') AS period,
-      json_extract(summary_json, '$.totalAssets') AS totalAssets,
-      json_extract(summary_json, '$.totalEquityCapital') AS totalEquityCapital,
-      json_extract(summary_json, '$.tier1Capital') AS tier1Capital,
-      json_extract(summary_json, '$.totalDeposits') AS totalDeposits,
-      json_extract(summary_json, '$.afsTotal') AS afsTotal,
-      json_extract(summary_json, '$.htmTotal') AS htmTotal,
-      json_extract(summary_json, '$.loansToDeposits') AS ltd,
-      json_extract(summary_json, '$.roa') AS roa,
-      json_extract(summary_json, '$.roe') AS roe,
-      json_extract(summary_json, '$.netInterestMargin') AS nim,
-      json_extract(summary_json, '$.yieldOnSecurities') AS yos,
-      json_extract(summary_json, '$.yieldOnLoans') AS yieldloans,
-      json_extract(summary_json, '$.yieldOnEarningAssets') AS yea,
-      json_extract(summary_json, '$.costOfFunds') AS cof,
-      json_extract(summary_json, '$.efficiencyRatio') AS eff,
-      json_extract(summary_json, '$.leverageRatio') AS leverage,
-      json_extract(summary_json, '$.nonInterestBearingDeposits') AS nibpct,
-      json_extract(summary_json, '$.wholesaleFundingReliance') AS wholesale
-    FROM banks
-    WHERE json_extract(summary_json, '$.period') GLOB '${safePattern}'
-    ORDER BY total_assets DESC;
-  `);
+      b.id AS id,
+      json_extract(b.summary_json, '$.period') AS period,
+      ${fieldSelects}
+    FROM banks b, json_each(b.detail_json, '$.periods') p
+    WHERE json_extract(p.value, '$.period') = json_extract(b.summary_json, '$.period')
+      AND json_extract(b.summary_json, '$.period') GLOB '${safePattern}'
+    ORDER BY b.total_assets DESC;
+  `, { maxBuffer: 256 * 1024 * 1024 });
   const stateCounts = {};
   let latestPeriod = '';
-  for (const b of banks) {
-    if (b.state) stateCounts[b.state] = (stateCounts[b.state] || 0) + 1;
-    if (b.period && b.period > latestPeriod) latestPeriod = b.period;
+  for (const r of rows) {
+    if (r.state) stateCounts[r.state] = (stateCounts[r.state] || 0) + 1;
+    if (r.period && r.period > latestPeriod) latestPeriod = r.period;
   }
-  return { banks, stateCounts, latestPeriod, bankCount: banks.length };
+  return { banks: rows, fields, stateCounts, latestPeriod, bankCount: rows.length };
 }
 
 module.exports = {
