@@ -268,51 +268,66 @@
     </section>
   </div>
 
-  <!-- ===== Showcase A: Today's package, big-type (Apple-style) ===== -->
+  <!-- ===== Market Snapshot: daily package intelligence ===== -->
   <section class="home-showcase showcase-light" data-reveal>
     <div class="showcase-inner">
-      <p class="showcase-kicker">Daily Package</p>
+      <p class="showcase-kicker">Market Snapshot</p>
       <h2 class="showcase-headline">
-        <span class="showcase-num" id="showcaseOfferingsTotal">&mdash;</span>
-        <span class="showcase-num-suffix">offerings. Every morning.</span>
+        <span class="showcase-num" id="showcasePrimaryValue">&mdash;</span>
+        <span class="showcase-num-suffix" id="showcasePrimaryLabel">Daily market read.</span>
       </h2>
-      <p class="showcase-sub">CD, muni, agency, and corporate inventory &mdash; pulled from the daily package and surfaced across the four market explorers.</p>
+      <p class="showcase-sub" id="showcaseSnapshotSub">Rates, funding levels, inventory breadth, and calendar risk from today's uploaded package.</p>
       <div class="showcase-meta" id="showcasePackageMeta" hidden></div>
     </div>
   </section>
 
-  <!-- ===== Showcase B: Sticky-scroll market explorers (Apple-style) ===== -->
-  <section class="home-showcase showcase-dark home-showcase-sticky" aria-label="Market offerings feature panel">
+  <!-- ===== Sticky Market Snapshot ===== -->
+  <section class="home-showcase showcase-dark home-showcase-sticky" aria-label="Market Snapshot panel">
     <div class="sticky-scroll">
       <div class="sticky-visual" data-reveal>
-        <div class="sticky-visual-card">
-          <p class="sticky-visual-kicker">Today's offerings</p>
-          <div class="sticky-bars" id="showcaseMarketBars">
+        <div class="market-snapshot-card">
+          <div class="snapshot-card-head">
+            <div>
+              <p class="sticky-visual-kicker">Snapshot</p>
+              <h3 id="marketSnapshotDate">Awaiting package</h3>
+            </div>
+            <span id="marketSnapshotStatus">No data</span>
+          </div>
+          <div class="snapshot-metric-grid" id="marketSnapshotMetrics">
             <div class="sticky-bars-empty">Awaiting today's package&hellip;</div>
           </div>
+          <div class="snapshot-curve" id="marketSnapshotCurve"></div>
           <p class="sticky-visual-foot" id="showcaseMarketFoot">From the most recent published package</p>
         </div>
       </div>
       <div class="sticky-copy">
         <article class="sticky-step" data-reveal>
-          <p class="sticky-step-kicker">CDs</p>
-          <h3>Brokered CD inventory, ranked by yield.</h3>
-          <p>Daily CD offerings filtered by maturity, callable, and issuer &mdash; with the Brokered CD Rate Sheet one click away.</p>
+          <p class="sticky-step-kicker">Rates</p>
+          <h3>The curve and cash benchmarks set the tone.</h3>
+          <p>Economic Update data frames the day with Treasury levels, SOFR, Prime, volatility, and the next calendar events.</p>
+          <div class="snapshot-step-metrics" id="snapshotRatesMetrics"></div>
+          <button type="button" class="snapshot-step-link" data-goto="econ">Open Economic Update</button>
         </article>
         <article class="sticky-step" data-reveal>
-          <p class="sticky-step-kicker">Munis</p>
-          <h3>Municipals, sliceable by state and tax status.</h3>
-          <p>Filter the muni explorer by state, callable, AMT, bank-qualified, and rating to surface the bonds that fit a specific account.</p>
+          <p class="sticky-step-kicker">Funding</p>
+          <h3>Brokered CDs show where funding clears.</h3>
+          <p>The uploaded rate sheet and CD offerings give the desk a quick read on front-end funding costs and available yield.</p>
+          <div class="snapshot-step-metrics" id="snapshotFundingMetrics"></div>
+          <button type="button" class="snapshot-step-link" data-goto="cd">Open CD Rate Sheet</button>
         </article>
         <article class="sticky-step" data-reveal>
-          <p class="sticky-step-kicker">Agencies</p>
-          <h3>FHLB, FFCB, FNMA, FHLMC &mdash; bullets and callables.</h3>
-          <p>One explorer for both agency files, with side-by-side spread, structure, and call schedule.</p>
+          <p class="sticky-step-kicker">Inventory</p>
+          <h3>Offerings show the day's opportunity set.</h3>
+          <p>CDs, munis, agencies, and corporates roll into one view of available inventory, yield, credit, and structure.</p>
+          <div class="snapshot-step-metrics" id="snapshotInventoryMetrics"></div>
+          <button type="button" class="snapshot-step-link" data-goto="explorer">Open CD Explorer</button>
         </article>
         <article class="sticky-step" data-reveal>
-          <p class="sticky-step-kicker">Corporates</p>
-          <h3>Investment-grade corporates, comparable at a glance.</h3>
-          <p>Sort the corporate slot by sector, rating, and spread &mdash; or jump straight to the underlying file.</p>
+          <p class="sticky-step-kicker">Context</p>
+          <h3>Relative value ties the market read together.</h3>
+          <p>The Relative Value sheet sits alongside the daily market files so sales coverage can move from rates to account-specific ideas.</p>
+          <div class="snapshot-step-metrics" id="snapshotContextMetrics"></div>
+          <button type="button" class="snapshot-step-link" data-goto="relativeValue">Open Relative Value</button>
         </article>
       </div>
     </div>

@@ -1076,6 +1076,7 @@
       currentPackage = {};
     }
     await loadQualitySummary();
+    await loadEconomicUpdate();
     renderHome();
     renderViewer('dashboard');
     renderViewer('econ');
@@ -1083,7 +1084,6 @@
     renderViewer('cd');
     renderViewer('cdoffers');
     renderViewer('munioffers');
-    await loadEconomicUpdate();
     renderCdCostCalculator();
   }
 
@@ -6330,16 +6330,14 @@
 
   function renderHomeShowcase(pkg) {
     pkg = pkg || {};
-    const markets = [
-      { key: 'cds',  label: 'CDs',        count: pkg.offeringsCount },
-      { key: 'muni', label: 'Munis',      count: pkg.muniOfferingsCount },
-      { key: 'agy',  label: 'Agencies',   count: pkg.agencyCount },
-      { key: 'corp', label: 'Corporates', count: pkg.corporatesCount }
-    ];
-    const total = markets.reduce((sum, m) => sum + (typeof m.count === 'number' ? m.count : 0), 0);
+    const snapshot = buildMarketSnapshot(pkg);
 
-    const numEl = document.getElementById('showcaseOfferingsTotal');
-    if (numEl) numEl.textContent = total > 0 ? formatNumber(total) : '—';
+    const numEl = document.getElementById('showcasePrimaryValue');
+    if (numEl) numEl.textContent = snapshot.primaryValue;
+    const labelEl = document.getElementById('showcasePrimaryLabel');
+    if (labelEl) labelEl.textContent = snapshot.primaryLabel;
+    const subEl = document.getElementById('showcaseSnapshotSub');
+    if (subEl) subEl.textContent = snapshot.subText;
 
     const metaEl = document.getElementById('showcasePackageMeta');
     if (metaEl) {
@@ -6357,37 +6355,179 @@
       }
     }
 
-    const barsEl = document.getElementById('showcaseMarketBars');
-    if (barsEl) {
-      const present = markets.filter(m => typeof m.count === 'number' && m.count > 0);
-      if (!present.length) {
-        barsEl.innerHTML = '<div class="sticky-bars-empty">Awaiting today’s package&hellip;</div>';
-      } else {
-        const max = Math.max.apply(null, present.map(m => m.count));
-        barsEl.innerHTML = markets.map(m => {
-          const has = typeof m.count === 'number' && m.count > 0;
-          const pct = has ? Math.max(6, Math.round((m.count / max) * 100)) : 0;
-          const numText = has ? formatNumber(m.count) : '—';
-          return `<div class="sticky-bar">`
-            + `<span class="sticky-bar-state">${escapeHtml(m.label)}</span>`
-            + `<span class="sticky-bar-track"><span class="sticky-bar-fill" data-pct="${pct}"></span></span>`
-            + `<span class="sticky-bar-num">${numText}</span>`
-            + `</div>`;
-        }).join('');
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            barsEl.querySelectorAll('.sticky-bar-fill').forEach(el => {
-              el.style.width = el.dataset.pct + '%';
-            });
-          });
-        });
-      }
+    const dateEl = document.getElementById('marketSnapshotDate');
+    if (dateEl) dateEl.textContent = snapshot.dateLabel;
+    const statusEl = document.getElementById('marketSnapshotStatus');
+    if (statusEl) statusEl.textContent = snapshot.statusLabel;
+    const metricsEl = document.getElementById('marketSnapshotMetrics');
+    if (metricsEl) {
+      metricsEl.innerHTML = snapshot.metrics.length
+        ? snapshot.metrics.map(snapshotMetricHtml).join('')
+        : '<div class="sticky-bars-empty">Awaiting today’s package&hellip;</div>';
     }
+    renderMarketSnapshotCurve(snapshot.curve);
+    renderSnapshotStepMetrics(snapshot);
 
     const footEl = document.getElementById('showcaseMarketFoot');
-    if (footEl && pkg.date) {
-      footEl.textContent = `From the package published ${formatShortDate(pkg.date)}`;
+    if (footEl) {
+      footEl.textContent = snapshot.footText;
     }
+  }
+
+  function buildMarketSnapshot(pkg) {
+    const econ = economicUpdateData || {};
+    const treasuries = econ.treasuries || [];
+    const marketRates = econ.marketRates || [];
+    const marketRows = econ.marketData || [];
+    const cds = marketData.cds || [];
+    const munis = marketData.munis || [];
+    const agencies = marketData.agencies || [];
+    const corporates = marketData.corporates || [];
+    const totalOfferings = [pkg.offeringsCount, pkg.muniOfferingsCount, pkg.agencyCount, pkg.corporatesCount]
+      .reduce((sum, n) => sum + (typeof n === 'number' ? n : 0), 0);
+
+    const two = treasuries.find(row => row.tenor === '2YR');
+    const ten = treasuries.find(row => row.tenor === '10YR');
+    const sofr = marketRates.find(row => row.label === 'SOFR');
+    const prime = marketRates.find(row => row.label === 'Prime Rate');
+    const vix = marketRows.find(row => row.label === 'VIX');
+    const spx = marketRows.find(row => row.label === 'SPX') || marketRows.find(row => row.label === 'S&P 500');
+    const brokered12 = (pkg.brokeredCdTerms || []).find(term => term.months === 12);
+    const brokered3 = (pkg.brokeredCdTerms || []).find(term => term.months === 3);
+    const highestCdRate = maxValue(cds.map(o => o.rate));
+    const avgAgencyYtm = average(agencies.map(o => o.ytm));
+    const avgCorpYtm = average(corporates.map(o => o.ytm));
+    const curveSlope = two && ten ? ten.yield - two.yield : null;
+    const filled = SLOTS.filter(slot => pkg[slot]).length;
+    const nextRelease = (econ.releases || [])[0];
+
+    const primaryValue = ten ? formatPercentTile(ten.yield, 3)
+      : (highestCdRate != null ? formatPercentTile(highestCdRate, 2)
+        : (totalOfferings > 0 ? formatNumber(totalOfferings) : '—'));
+    const primaryLabel = ten ? '10Y Treasury anchors the day.'
+      : (highestCdRate != null ? 'Top CD offering in the package.' : 'Daily market read.');
+
+    const metrics = [
+      {
+        label: '2Y Treasury',
+        value: two ? formatPercentTile(two.yield, 3) : '—',
+        detail: two ? formatMarketChange(two.dailyChange, 3) : 'change —',
+        tone: two ? changeClass(two.dailyChange) : ''
+      },
+      {
+        label: '10Y Treasury',
+        value: ten ? formatPercentTile(ten.yield, 3) : '—',
+        detail: ten ? formatMarketChange(ten.dailyChange, 3) : 'change —',
+        tone: ten ? changeClass(ten.dailyChange) : ''
+      },
+      {
+        label: 'Brokered 12M',
+        value: brokered12 ? formatPercentTile(brokered12.mid, 3) : '—',
+        detail: brokered12 ? `range ${formatPercentTile(brokered12.low, 2)}-${formatPercentTile(brokered12.high, 2)}` : 'rate sheet pending'
+      },
+      {
+        label: 'Top CD Offer',
+        value: highestCdRate != null ? formatPercentTile(highestCdRate, 2) : '—',
+        detail: cds.length ? `${formatNumber(cds.length)} CDs searchable` : 'offerings pending'
+      },
+      {
+        label: 'Inventory',
+        value: totalOfferings > 0 ? formatNumber(totalOfferings) : '—',
+        detail: totalOfferings > 0 ? 'CDs, munis, agencies, corporates' : 'upload offerings'
+      },
+      {
+        label: 'Volatility',
+        value: formatMarketValue(vix),
+        detail: vix ? formatMarketChange(vix.change, 2) : 'VIX pending',
+        tone: vix ? changeClass(vix.change) : ''
+      }
+    ];
+
+    const subText = ten || two
+      ? `Rates from the Economic Update, funding from the CD sheet, and ${totalOfferings > 0 ? formatNumber(totalOfferings) : 'available'} offerings from today's inventory uploads.`
+      : 'Upload the Economic Update, Relative Value, CD rate sheet, and offerings files to populate the daily market read.';
+
+    return {
+      primaryValue,
+      primaryLabel,
+      subText,
+      dateLabel: pkg.date ? formatShortDate(pkg.date) : 'Awaiting package',
+      statusLabel: filled === TOTAL_SLOTS ? 'Complete' : `${filled}/${TOTAL_SLOTS} files`,
+      footText: pkg.publishedAt ? `Published ${formatImportedDate(pkg.publishedAt)}` : 'From the most recent published package',
+      metrics,
+      curve: treasuries,
+      ratesMetrics: [
+        `2s/10s ${curveSlope != null ? curveSlope.toFixed(3) + '%' : '—'}`,
+        `SOFR ${formatMarketValue(sofr)}`,
+        `Prime ${formatMarketValue(prime)}`,
+        `SPX ${formatMarketValue(spx)}`
+      ],
+      fundingMetrics: [
+        `3M all-in ${brokered3 ? formatPercentTile(brokered3.mid, 3) : '—'}`,
+        `12M all-in ${brokered12 ? formatPercentTile(brokered12.mid, 3) : '—'}`,
+        `Top CD ${highestCdRate != null ? formatPercentTile(highestCdRate, 2) : '—'}`,
+        `Common term ${mostCommonTerm(cds)}`
+      ],
+      inventoryMetrics: [
+        `${formatNumber(cds.length)} CDs`,
+        `${formatNumber(munis.length)} munis`,
+        `${formatNumber(agencies.length)} agencies`,
+        `${formatNumber(corporates.length)} corporates`
+      ],
+      contextMetrics: [
+        pkg.relativeValue ? 'Relative Value loaded' : 'Relative Value pending',
+        nextRelease ? `Next: ${nextRelease.event || 'calendar event'}` : 'Calendar pending',
+        `Agency YTM ${formatPercentTile(avgAgencyYtm, 3)}`,
+        `Corp YTM ${formatPercentTile(avgCorpYtm, 3)}`
+      ]
+    };
+  }
+
+  function snapshotMetricHtml(metric) {
+    return `
+      <div class="snapshot-metric">
+        <span>${escapeHtml(metric.label)}</span>
+        <strong>${escapeHtml(metric.value)}</strong>
+        <em class="${escapeHtml(metric.tone || '')}">${escapeHtml(metric.detail || '')}</em>
+      </div>
+    `;
+  }
+
+  function renderMarketSnapshotCurve(treasuries) {
+    const target = document.getElementById('marketSnapshotCurve');
+    if (!target) return;
+    const rows = (treasuries || []).filter(row => row.yield != null && !isNaN(row.yield));
+    if (!rows.length) {
+      target.innerHTML = '<div class="sticky-bars-empty">Treasury curve appears after Economic Update upload.</div>';
+      return;
+    }
+    const yields = rows.map(row => row.yield);
+    const min = Math.min.apply(null, yields);
+    const max = Math.max.apply(null, yields);
+    const range = Math.max(max - min, 0.01);
+    target.innerHTML = rows.map(row => {
+      const height = 20 + ((row.yield - min) / range) * 72;
+      return `
+        <div class="snapshot-curve-bar" title="${escapeHtml(row.label)} ${escapeHtml(formatPercentTile(row.yield, 3))}">
+          <span style="height:${height.toFixed(1)}%"></span>
+          <strong>${escapeHtml(formatPercentTile(row.yield, 2))}</strong>
+          <em>${escapeHtml(row.tenor || row.label)}</em>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderSnapshotStepMetrics(snapshot) {
+    [
+      ['snapshotRatesMetrics', snapshot.ratesMetrics],
+      ['snapshotFundingMetrics', snapshot.fundingMetrics],
+      ['snapshotInventoryMetrics', snapshot.inventoryMetrics],
+      ['snapshotContextMetrics', snapshot.contextMetrics]
+    ].forEach(([id, items]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.innerHTML = (items || []).map(item => `<span>${escapeHtml(item)}</span>`).join('');
+    });
   }
 
   function init() {
