@@ -7060,8 +7060,8 @@
     if (countEl) countEl.textContent = mapsState.banks.length.toLocaleString();
     if (subtitle) {
       subtitle.textContent = mapsState.latestPeriod
-        ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · click markers or rows for detail`
-        : `${mapsState.banks.length.toLocaleString()} banks · click markers or rows for detail`;
+        ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · hover states, click states, markers, or rows`
+        : `${mapsState.banks.length.toLocaleString()} banks · hover states, click states, markers, or rows`;
     }
     renderMapsStateChips();
     renderMapsStatusFilters();
@@ -7076,7 +7076,30 @@
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
     const groups = mapsLocationGroups(rows);
     const selectedKey = mapsState.selectedLocationKey;
+    const stateEntries = Object.entries(mapsState.stateCounts).sort();
+    const portalScale = [
+      [0.00, '#fbf8df'],
+      [0.25, '#e6dfaa'],
+      [0.50, '#cfc579'],
+      [0.75, '#9eb8a8'],
+      [1.00, '#345f4a']
+    ];
     const figData = [{
+      type: 'choropleth',
+      locationmode: 'USA-states',
+      locations: stateEntries.map(([state]) => state),
+      z: stateEntries.map(([, count]) => count),
+      colorscale: portalScale,
+      showscale: false,
+      hovertemplate: '<b>%{location}</b><br>Total banks: %{z:,.0f}<br><span style="font-size:11px">Click to filter</span><extra></extra>',
+      marker: {
+        line: {
+          color: stateEntries.map(([state]) => mapsState.selectedStates.has(state) ? '#003f2a' : '#ffffff'),
+          width: stateEntries.map(([state]) => mapsState.selectedStates.has(state) ? 2 : 0.7)
+        }
+      },
+      opacity: 0.72
+    }, {
       type: 'scattergeo',
       mode: 'markers+text',
       lat: groups.map(group => group.lat),
@@ -7123,7 +7146,17 @@
       mapsState.plotInitialized = true;
       el.on('plotly_click', (data) => {
         if (!data || !data.points || !data.points.length) return;
-        const key = data.points[0].customdata;
+        const point = data.points[0];
+        if (point.fullData && point.fullData.type === 'choropleth') {
+          const st = point.location;
+          if (!st) return;
+          if (mapsState.selectedStates.has(st)) mapsState.selectedStates.delete(st);
+          else mapsState.selectedStates.add(st);
+          renderMapsStateChips();
+          applyMapsFilters();
+          return;
+        }
+        const key = point.customdata;
         if (!key) return;
         const group = mapsLocationGroups(mapsState.visibleBanks).find(item => item.key === key);
         if (!group || !group.banks.length) return;
