@@ -193,7 +193,7 @@ Files prefixed with `_` (e.g. `_meta.json`, `_offerings.json`) are internal meta
 
 ## CD Offerings Explorer
 
-When you publish the Daily CD Offerings PDF, the server extracts every row into structured data and writes it to `data/current/_offerings.json`. The **CD Offerings Explorer** page (in the top nav) provides:
+When you publish the Daily CD Offerings PDF or Excel workbook, the server extracts every row into structured data and writes it to `data/current/_offerings.json`. The **CD Offerings Explorer** page (in the top nav) provides:
 
 - **Search** by issuer name or CUSIP
 - **Filters** by term, minimum rate, issuer state, coupon frequency, and "hide CDs with restrictions"

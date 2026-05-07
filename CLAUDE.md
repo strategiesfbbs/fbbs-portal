@@ -18,7 +18,7 @@ Read `docs/company-portal-context.md` when brainstorming portal direction, Sales
 
 ## Daily package — 8 slots
 
-`dashboard` (HTML), `econ` (PDF), `cd` (PDF), `cdoffers` (PDF), `munioffers` (PDF), `agenciesBullets` (xlsx), `agenciesCallables` (xlsx), `corporates` (xlsx).
+`dashboard` (HTML), `econ` (PDF), `cd` (PDF), `cdoffers` (PDF or Excel workbook), `munioffers` (PDF), `agenciesBullets` (xlsx), `agenciesCallables` (xlsx), `corporates` (xlsx).
 
 Filename auto-classification lives in `classifyFile()` in `server/server.js`. Same-day re-publishes only replace the slots being re-uploaded (this was the v1.3.3 fix); different-day uploads roll the whole package into `data/archive/YYYY-MM-DD/`.
 

@@ -7,7 +7,7 @@ const path = require('path');
 const { extractPdfText } = require('../server/pdf-text');
 const XLSX = require('xlsx');
 
-const { parseCdOffersText } = require('../server/cd-offers-parser');
+const { parseCdOffersText, parseCdOffersWorkbook } = require('../server/cd-offers-parser');
 const { parseBrokeredCdRateSheetText } = require('../server/brokered-cd-parser');
 const { parseMuniOffersText } = require('../server/muni-offers-parser');
 const { parseEconomicUpdateText } = require('../server/economic-update-parser');
@@ -97,6 +97,7 @@ function assertClassification() {
   assert.strictEqual(classifyFile('20260424.pdf'), 'econ');
   assert.strictEqual(classifyFile('FBBS Brokered CD Rate Sheet_04_24_2026_.pdf'), 'cd');
   assert.strictEqual(classifyFile('20260424_CD_Offers.pdf'), 'cdoffers');
+  assert.strictEqual(classifyFile('20260424_CD_Offers.xlsx'), 'cdoffers');
   assert.strictEqual(classifyFile('20260424_FBBS_Offerings.pdf'), 'munioffers');
   assert.strictEqual(classifyFile('bullets 04.24.26.xlsx'), 'agenciesBullets');
   assert.strictEqual(classifyFile('callables 04.24.26.xlsx'), 'agenciesCallables');
@@ -153,6 +154,38 @@ async function assertCdParser() {
   ].join('\n'));
   assert.strictEqual(commaRestrictions.warnings.length, 0);
   assert.deepStrictEqual(commaRestrictions.offerings[0].restrictions, ['FL', 'OH', 'TX']);
+}
+
+function assertCdWorkbookParser() {
+  const workbook = XLSX.utils.book_new();
+  const rows = [
+    ['4/27/2026 Daily CD Rates'],
+    [],
+    ['TERM', 'NAME', 'RATE', 'MATURITY', 'CUSIP', 'SETTLE', 'STATE', 'RESTRICTIONS', 'CPN_FREQ'],
+    ['3m', 'THIRD FED SAV&LN CLEVLND', 0.039, new Date(2026, 7, 10), '88413QKB3', '5/11/2026', 'OH', 'FL, OH, TX', 'At Maturity'],
+    [null, 'A BANK', 4.1, '10/1/2026', '111111111', '5/12/2026', 'TX', '', 'Monthly']
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Daily CD Rates');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  const parsed = parseCdOffersWorkbook(buffer, { filename: '20260427_CD_Offers.xlsx' });
+
+  assert.strictEqual(parsed.asOfDate, '2026-04-27');
+  assert.strictEqual(parsed.offerings.length, 2);
+  assert.deepStrictEqual(parsed.offerings[0], {
+    term: '3m',
+    termMonths: 3,
+    name: 'THIRD FED SAV&LN CLEVLND',
+    rate: 3.9,
+    maturity: '2026-08-10',
+    cusip: '88413QKB3',
+    settle: '2026-05-11',
+    issuerState: 'OH',
+    restrictions: ['FL', 'OH', 'TX'],
+    couponFrequency: 'at maturity'
+  });
+  assert.strictEqual(parsed.offerings[1].term, '3m');
+  assert.strictEqual(parsed.offerings[1].rate, 4.1);
+  assert.strictEqual(parsed.offerings[1].couponFrequency, 'monthly');
 }
 
 async function assertBrokeredCdParser() {
@@ -759,6 +792,7 @@ function assertWeeklyCdWorksheetImport() {
   assertClassification();
   assertSecurityHelpers();
   await assertCdParser();
+  assertCdWorkbookParser();
   await assertBrokeredCdParser();
   await assertMuniParser();
   await assertEconomicUpdateParser();

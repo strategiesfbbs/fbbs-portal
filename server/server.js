@@ -25,7 +25,7 @@ const fs = require('fs');
 const path = require('path');
 const { extractPdfText } = require('./pdf-text');
 
-const { parseCdOffersText } = require('./cd-offers-parser');
+const { parseCdOffersText, parseCdOffersWorkbook } = require('./cd-offers-parser');
 const { parseBrokeredCdRateSheetText } = require('./brokered-cd-parser');
 const { parseMuniOffersText } = require('./muni-offers-parser');
 const { parseEconomicUpdateText } = require('./economic-update-parser');
@@ -264,7 +264,12 @@ function classifyFile(filename, explicitSlot) {
   if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'dashboard';
 
   // Agencies + Corporates: Excel files. Route by filename keyword.
-  if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+  if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
+    if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
+        lower.includes('daily_cd') || lower.includes('daily cd') ||
+        lower.includes('cd offering') || lower.includes('cd_offering')) {
+      return 'cdoffers';
+    }
     if (lower.includes('corporate') || lower.includes('corp_')) return 'corporates';
     if (lower.includes('callable') || lower.includes('call')) return 'agenciesCallables';
     if (lower.includes('bullet')) return 'agenciesBullets';
@@ -390,7 +395,14 @@ function validateUploadSignature(file, slot) {
   if (slot === 'dashboard') {
     return looksLikeHtml(file.data) ? null : `${file.filename} does not look like an HTML dashboard file.`;
   }
-  if (['econ', 'cd', 'cdoffers', 'munioffers'].includes(slot)) {
+  if (slot === 'cdoffers') {
+    const ext = path.extname(file.filename || '').toLowerCase();
+    if (['.xlsx', '.xlsm', '.xls'].includes(ext)) {
+      return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
+    }
+    return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF or Excel file.`;
+  }
+  if (['econ', 'cd', 'munioffers'].includes(slot)) {
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
   }
   if (['agenciesBullets', 'agenciesCallables', 'corporates'].includes(slot)) {
@@ -602,9 +614,13 @@ function sanitizeFilename(original) {
 
 // ---------- Offerings extraction ----------
 
-async function extractOfferings(pdfBuffer) {
+async function extractOfferings(file) {
   try {
-    const result = await extractPdfText(pdfBuffer);
+    const ext = path.extname(file.filename || '').toLowerCase();
+    if (['.xlsx', '.xlsm', '.xls'].includes(ext)) {
+      return parseCdOffersWorkbook(file.data, { filename: file.filename });
+    }
+    const result = await extractPdfText(file.data);
     const parsed = parseCdOffersText(result.text || '');
     return parsed;
   } catch (err) {
@@ -1543,14 +1559,14 @@ async function handleUpload(req, res) {
     }
   }
 
-  // Extract offerings from the CD Offers PDF if present.
+  // Extract offerings from the CD Offers PDF or Excel workbook if present.
   let offeringsCount = null;
   let offeringsWarnings = [];
   let offeringsAsOfDate = null;
   let cdHistorySnapshot = null;
   const cdOffersFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'cdoffers');
   if (cdOffersFile) {
-    const extracted = await extractOfferings(cdOffersFile.data);
+    const extracted = await extractOfferings(cdOffersFile);
     if (extracted && Array.isArray(extracted.offerings)) {
       offeringsCount = extracted.offerings.length;
       offeringsWarnings = extracted.warnings || [];
@@ -1571,12 +1587,12 @@ async function handleUpload(req, res) {
           uploadedAt: offPayload.extractedAt,
           uploadDate: todayStamp()
         });
-        log('info', `Extracted ${offeringsCount} offerings from CD Offers PDF`);
+        log('info', `Extracted ${offeringsCount} offerings from Daily CD Offerings upload`);
       } catch (err) {
         log('error', 'Failed to write offerings JSON:', err.message);
       }
     } else {
-      log('warn', 'CD Offers PDF was uploaded but no offerings were extracted');
+      log('warn', 'Daily CD Offerings file was uploaded but no offerings were extracted');
     }
   }
 

@@ -52,7 +52,7 @@
     dashboard:         { label: 'FBBS Sales Dashboard', ext: 'HTML', viewer: 'dashboard' },
     econ:              { label: 'Economic Update', ext: 'PDF',  viewer: 'econ' },
     cd:                { label: 'Brokered CD Sheet', ext: 'PDF', viewer: 'cd' },
-    cdoffers:          { label: 'Daily CD Offerings', ext: 'PDF', viewer: 'cdoffers' },
+    cdoffers:          { label: 'Daily CD Offerings', ext: 'PDF/XLSX', viewer: 'cdoffers' },
     munioffers:        { label: 'Muni Offerings', ext: 'PDF', viewer: 'munioffers' },
     agenciesBullets:   { label: 'Agencies — Bullets', ext: 'XLSX', viewer: 'agencies' },
     agenciesCallables: { label: 'Agencies — Callables', ext: 'XLSX', viewer: 'agencies' },
@@ -864,7 +864,10 @@
     if (!filename) return null;
     const lower = filename.toLowerCase();
     if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'dashboard';
-    if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) {
+    if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
+      if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
+          lower.includes('daily_cd') || lower.includes('daily cd') ||
+          lower.includes('cd offering') || lower.includes('cd_offering')) return 'cdoffers';
       if (lower.includes('corporate') || lower.includes('corp_')) return 'corporates';
       if (lower.includes('callable') || lower.includes('call')) return 'agenciesCallables';
       if (lower.includes('bullet')) return 'agenciesBullets';
@@ -1376,18 +1379,31 @@
 
     if (file) {
       const src = '/current/' + encodeURIComponent(file);
+      const isExcel = /\.(xlsx|xlsm|xls)$/i.test(file);
       // The Sales Dashboard is user-uploaded HTML. Sandbox it with
       // allow-scripts only (no allow-same-origin) so its JavaScript can still
       // run (Chart.js, inline handlers) but the iframe gets an opaque origin
       // and cannot read parent state or call our same-origin APIs.
       const sandboxAttr = slot === 'dashboard' ? ' sandbox="allow-scripts"' : '';
-      frame.innerHTML = `<iframe src="${src}" title="${meta.label}"${sandboxAttr}></iframe>`;
+      if (isExcel) {
+        const explorerPage = slot === 'cdoffers' ? 'explorer' : (meta.viewer || 'explorer');
+        frame.innerHTML = `
+          <div class="viewer-empty">
+            <div class="ff-kicker">Excel Source Loaded</div>
+            <h2>${meta.label} workbook uploaded</h2>
+            <p>Use the Explorer page for searchable offering data, or download the source workbook.</p>
+            <button class="doc-btn" data-goto="${explorerPage}">Open Explorer</button>
+          </div>`;
+      } else {
+        frame.innerHTML = `<iframe src="${src}" title="${meta.label}"${sandboxAttr}></iframe>`;
+      }
       sub.textContent = `${file} · Published ${formatTime(currentPackage.publishedAt)}`;
       if (slot === 'dashboard') {
         btn.onclick = () => window.open(src, '_blank', 'noopener');
       } else {
         btn.onclick = () => { window.location.href = src + '?download=1'; };
       }
+      if (slot !== 'dashboard') btn.textContent = isExcel ? 'Download Excel ↓' : 'Download PDF ↓';
       btn.style.display = '';
     } else {
       frame.innerHTML = `
@@ -4059,6 +4075,7 @@
 
   function slotAcceptExtensions(slot) {
     if (slot === 'dashboard') return ['.html', '.htm'];
+    if (slot === 'cdoffers') return ['.pdf', '.xlsx', '.xlsm', '.xls'];
     if (slot === 'agenciesBullets' || slot === 'agenciesCallables' || slot === 'corporates') return ['.xlsx', '.xls'];
     return ['.pdf'];
   }
