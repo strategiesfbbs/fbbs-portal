@@ -7069,9 +7069,11 @@
     applyMapsFilters();
   }
 
-  function renderMapsMarkerMap(rows) {
+  function renderMapsMarkerMap(rows, options = {}) {
     if (typeof Plotly === 'undefined') return;
-    const el = document.getElementById('mapsPlot');
+    const plotId = options.plotId || 'mapsPlot';
+    const isFull = options.full === true;
+    const el = document.getElementById(plotId);
     if (!el) return;
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
     const groups = mapsLocationGroups(rows);
@@ -7142,8 +7144,8 @@
       plot_bgcolor: 'rgba(0,0,0,0)'
     };
     Plotly.react(el, figData, layout, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d'] }).then(() => {
-      if (mapsState.plotInitialized) return;
-      mapsState.plotInitialized = true;
+      if (el.dataset.mapsClickBound) return;
+      el.dataset.mapsClickBound = '1';
       el.on('plotly_click', (data) => {
         if (!data || !data.points || !data.points.length) return;
         const point = data.points[0];
@@ -7154,6 +7156,7 @@
           else mapsState.selectedStates.add(st);
           renderMapsStateChips();
           applyMapsFilters();
+          if (!isFull) openMapsFullView();
           return;
         }
         const key = point.customdata;
@@ -7167,6 +7170,7 @@
         mapsState.selectedLocationIndex = nextIndex;
         mapsState.selectedBankId = String(group.banks[nextIndex].id || '');
         applyMapsFilters();
+        if (!isFull) openMapsFullView();
       });
     });
   }
@@ -7297,6 +7301,7 @@
     }
     renderMapsActiveFilters();
     renderMapsDetailPanel();
+    renderMapsFullView();
   }
 
   function mapsDetailMetric(label, value) {
@@ -7377,6 +7382,104 @@
       goTo('banks');
       if (typeof loadBank === 'function') loadBank(bank.id, { collapseResults: true });
     });
+  }
+
+  function renderMapsFullDetail() {
+    const detail = document.getElementById('mapsFullDetail');
+    if (!detail) return;
+    const bank = mapsFindBank(mapsState.selectedBankId);
+    if (!bank) {
+      detail.innerHTML = '<div class="maps-detail-empty">Select a bank marker or row to preview tear sheet metrics.</div>';
+      return;
+    }
+    const assetsDef = mapsState.fieldByKey.totalAssets;
+    const depositsDef = mapsState.fieldByKey.totalDeposits;
+    const loansToDepositsDef = mapsState.fieldByKey.loansToDeposits;
+    const securitiesToAssetsDef = mapsState.fieldByKey.securitiesToAssets || MAPS_SECURITIES_TO_ASSETS_FIELD;
+    const status = mapsAccountStatusLabel(bank);
+    const group = mapsSelectedLocationGroup();
+    const groupBanks = group && group.banks && group.banks.length ? group.banks : [bank];
+    const groupIndex = Math.max(0, groupBanks.findIndex(peer => String(peer.id || '') === String(bank.id || '')));
+    mapsState.selectedLocationIndex = groupIndex;
+    const accountStatus = bank.accountStatus || {};
+    const locationLine = [bank.address, bank.city, bank.state, bank.zip5 || bank.zip].filter(Boolean).join(', ');
+    detail.innerHTML = `
+      <div class="maps-detail-head">
+        <div>
+          <span class="maps-status-pill maps-status-${escapeHtml(mapsStatusSlug(status))}">${escapeHtml(status)}</span>
+          <h4>${escapeHtml(mapsBankListName(bank))}</h4>
+          <p>${escapeHtml(locationLine || [bank.city, bank.state, bank.certNumber ? `FDIC ${bank.certNumber}` : ''].filter(Boolean).join(' - '))}</p>
+        </div>
+      </div>
+      ${groupBanks.length > 1 ? `
+        <div class="maps-detail-carousel">
+          <button type="button" class="small-btn" id="mapsFullPrevOverlap" aria-label="Previous bank at this marker">&lt;</button>
+          <span>${formatNumber(groupIndex + 1)} of ${formatNumber(groupBanks.length)} banks at this marker</span>
+          <button type="button" class="small-btn" id="mapsFullNextOverlap" aria-label="Next bank at this marker">&gt;</button>
+        </div>
+      ` : ''}
+      <div class="maps-detail-grid">
+        ${mapsDetailMetric('FDIC', bank.certNumber || '')}
+        ${mapsDetailMetric('Coverage Owner', accountStatus.owner || '')}
+        ${mapsDetailMetric('City', bank.city || '')}
+        ${mapsDetailMetric('State', bank.state || '')}
+        ${mapsDetailMetric('Assets ($MM)', mapsFormatValue(bank.totalAssets, assetsDef))}
+        ${mapsDetailMetric('Securities / Assets', mapsFormatValue(mapsSecuritiesToAssets(bank), securitiesToAssetsDef))}
+        ${mapsDetailMetric('Total Loans / Assets', mapsFormatValue(bank.loansToAssets, mapsState.fieldByKey.loansToAssets))}
+        ${mapsDetailMetric('Deposits ($MM)', mapsFormatValue(bank.totalDeposits, depositsDef))}
+        ${mapsDetailMetric('Loans / Deposits', mapsFormatValue(bank.loansToDeposits, loansToDepositsDef))}
+      </div>
+      <div class="maps-detail-actions">
+        <button type="button" class="small-btn primary" id="mapsFullOpenTearSheet">Open tear sheet</button>
+      </div>
+    `;
+    const cycle = direction => {
+      if (!group || groupBanks.length <= 1) return;
+      const next = (groupIndex + direction + groupBanks.length) % groupBanks.length;
+      mapsSelectBank(groupBanks[next], group);
+      applyMapsFilters();
+    };
+    const prev = document.getElementById('mapsFullPrevOverlap');
+    if (prev) prev.addEventListener('click', () => cycle(-1));
+    const next = document.getElementById('mapsFullNextOverlap');
+    if (next) next.addEventListener('click', () => cycle(1));
+    const open = document.getElementById('mapsFullOpenTearSheet');
+    if (open) open.addEventListener('click', () => {
+      closeMapsFullView();
+      goTo('banks');
+      if (typeof loadBank === 'function') loadBank(bank.id, { collapseResults: true });
+    });
+  }
+
+  function renderMapsFullView() {
+    const backdrop = document.getElementById('mapsFullBackdrop');
+    if (!backdrop || backdrop.hidden) return;
+    const rows = mapsState.visibleBanks.length ? mapsState.visibleBanks : mapsState.banks;
+    const subtitle = document.getElementById('mapsFullSubtitle');
+    if (subtitle) {
+      const states = mapsState.selectedStates.size ? Array.from(mapsState.selectedStates).sort().join(', ') : 'all states';
+      subtitle.textContent = `${formatNumber(rows.length)} banks shown · ${states}`;
+    }
+    renderMapsMarkerMap(rows, { plotId: 'mapsFullPlot', full: true });
+    renderMapsFullDetail();
+  }
+
+  function openMapsFullView() {
+    const backdrop = document.getElementById('mapsFullBackdrop');
+    if (!backdrop) return;
+    backdrop.hidden = false;
+    renderMapsFullView();
+    setTimeout(() => {
+      if (typeof Plotly !== 'undefined') {
+        const el = document.getElementById('mapsFullPlot');
+        if (el && Plotly.Plots && Plotly.Plots.resize) Plotly.Plots.resize(el);
+      }
+    }, 50);
+  }
+
+  function closeMapsFullView() {
+    const backdrop = document.getElementById('mapsFullBackdrop');
+    if (backdrop) backdrop.hidden = true;
   }
 
   function renderMapsActiveFilters() {
@@ -7460,6 +7563,23 @@
     if (advBtn && !advBtn.dataset.bound) {
       advBtn.addEventListener('click', openMapsConditionsModal);
       advBtn.dataset.bound = '1';
+    }
+    const fullBtn = document.getElementById('mapsFullViewBtn');
+    if (fullBtn && !fullBtn.dataset.bound) {
+      fullBtn.addEventListener('click', openMapsFullView);
+      fullBtn.dataset.bound = '1';
+    }
+    const fullClose = document.getElementById('mapsFullClose');
+    if (fullClose && !fullClose.dataset.bound) {
+      fullClose.addEventListener('click', closeMapsFullView);
+      fullClose.dataset.bound = '1';
+    }
+    const fullBackdrop = document.getElementById('mapsFullBackdrop');
+    if (fullBackdrop && !fullBackdrop.dataset.bound) {
+      fullBackdrop.addEventListener('click', e => {
+        if (e.target === fullBackdrop) closeMapsFullView();
+      });
+      fullBackdrop.dataset.bound = '1';
     }
     const closeBtn = document.getElementById('mapsModalClose');
     if (closeBtn && !closeBtn.dataset.bound) {

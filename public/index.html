@@ -1899,7 +1899,10 @@
   <div class="container">
     <div class="maps-split">
       <section class="maps-panel">
-        <h3>Bank Marker Map</h3>
+        <div class="maps-panel-head">
+          <h3>Bank Marker Map</h3>
+          <button id="mapsFullViewBtn" type="button" class="small-btn">Open Full View</button>
+        </div>
         <div id="mapsPlot" class="maps-plot"></div>
         <div class="maps-tip">Tip: hover a state for total banks, click a state to filter, or click a marker to preview banks at that location.</div>
       </section>
@@ -1960,6 +1963,32 @@
         <button type="button" class="small-btn" id="mapsResetConditions">Reset</button>
         <button type="button" class="small-btn primary" id="mapsApplyConditions">Apply</button>
       </footer>
+    </div>
+  </div>
+
+  <div class="maps-full-backdrop" id="mapsFullBackdrop" hidden>
+    <div class="maps-full-shell" role="dialog" aria-modal="true" aria-label="Full bank map view">
+      <header class="maps-full-head">
+        <div>
+          <strong>Bank Map Full View</strong>
+          <span id="mapsFullSubtitle">Hover states, click states, or select a bank marker.</span>
+        </div>
+        <div class="maps-full-legend" aria-label="Marker status legend">
+          <span><i class="maps-pin-open"></i>Open</span>
+          <span><i class="maps-pin-prospect"></i>Prospect</span>
+          <span><i class="maps-pin-client"></i>Client</span>
+        </div>
+        <button type="button" class="small-btn" id="mapsFullClose">Close</button>
+      </header>
+      <div class="maps-full-body">
+        <div id="mapsFullPlot" class="maps-full-plot"></div>
+        <aside class="maps-full-side">
+          <h3>Bank Highlight</h3>
+          <div id="mapsFullDetail" class="maps-full-detail">
+            Select a bank marker or row to preview tear sheet metrics.
+          </div>
+        </aside>
+      </div>
     </div>
   </div>
 </div>
