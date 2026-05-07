@@ -1109,6 +1109,7 @@
 
     renderHomeStatusPill(pkg, filled);
     renderHomeMarketsSpec(pkg);
+    renderHomeShowcase(pkg);
     renderHomeRecents();
   }
 
@@ -6302,6 +6303,68 @@
   }
 
   // ============ Init ============
+
+  function renderHomeShowcase(pkg) {
+    pkg = pkg || {};
+    const markets = [
+      { key: 'cds',  label: 'CDs',        count: pkg.offeringsCount },
+      { key: 'muni', label: 'Munis',      count: pkg.muniOfferingsCount },
+      { key: 'agy',  label: 'Agencies',   count: pkg.agencyCount },
+      { key: 'corp', label: 'Corporates', count: pkg.corporatesCount }
+    ];
+    const total = markets.reduce((sum, m) => sum + (typeof m.count === 'number' ? m.count : 0), 0);
+
+    const numEl = document.getElementById('showcaseOfferingsTotal');
+    if (numEl) numEl.textContent = total > 0 ? formatNumber(total) : '—';
+
+    const metaEl = document.getElementById('showcasePackageMeta');
+    if (metaEl) {
+      const parts = [];
+      if (pkg.date) parts.push(`<span><strong>Date</strong>${escapeHtml(formatShortDate(pkg.date))}</span>`);
+      const filled = SLOTS.filter(slot => pkg[slot]).length;
+      if (filled) parts.push(`<span><strong>Slots</strong>${filled} of ${TOTAL_SLOTS}</span>`);
+      if (pkg.publishedAt) parts.push(`<span><strong>Published</strong>${escapeHtml(formatImportedDate(pkg.publishedAt))}</span>`);
+      if (parts.length) {
+        metaEl.innerHTML = parts.join('');
+        metaEl.hidden = false;
+      } else {
+        metaEl.hidden = true;
+        metaEl.innerHTML = '';
+      }
+    }
+
+    const barsEl = document.getElementById('showcaseMarketBars');
+    if (barsEl) {
+      const present = markets.filter(m => typeof m.count === 'number' && m.count > 0);
+      if (!present.length) {
+        barsEl.innerHTML = '<div class="sticky-bars-empty">Awaiting today’s package&hellip;</div>';
+      } else {
+        const max = Math.max.apply(null, present.map(m => m.count));
+        barsEl.innerHTML = markets.map(m => {
+          const has = typeof m.count === 'number' && m.count > 0;
+          const pct = has ? Math.max(6, Math.round((m.count / max) * 100)) : 0;
+          const numText = has ? formatNumber(m.count) : '—';
+          return `<div class="sticky-bar">`
+            + `<span class="sticky-bar-state">${escapeHtml(m.label)}</span>`
+            + `<span class="sticky-bar-track"><span class="sticky-bar-fill" data-pct="${pct}"></span></span>`
+            + `<span class="sticky-bar-num">${numText}</span>`
+            + `</div>`;
+        }).join('');
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            barsEl.querySelectorAll('.sticky-bar-fill').forEach(el => {
+              el.style.width = el.dataset.pct + '%';
+            });
+          });
+        });
+      }
+    }
+
+    const footEl = document.getElementById('showcaseMarketFoot');
+    if (footEl && pkg.date) {
+      footEl.textContent = `From the package published ${formatShortDate(pkg.date)}`;
+    }
+  }
 
   function init() {
     setHeaderDate();
