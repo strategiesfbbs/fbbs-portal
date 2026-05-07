@@ -22,6 +22,11 @@
   --border-light: #e8f0eb;
   --danger: #B94444;
   --success: #18735A;
+  --maps-open: #101715;
+  --maps-prospect: #C9972F;
+  --maps-client: #18735A;
+  --maps-watchlist: #B87524;
+  --maps-dormant: #6D7A72;
   --sidebar-width: 248px;
   --top-strip-height: 48px;
 }
@@ -5696,10 +5701,10 @@ body {
   top: 12px;
   left: 12px;
   z-index: 4;
-  background: #ffffff;
-  border: 1px solid rgba(0, 63, 42, 0.18);
+  background: rgba(251, 253, 252, 0.96);
+  border: 1px solid rgba(0, 63, 42, 0.14);
   border-radius: 10px;
-  box-shadow: 0 6px 18px rgba(15, 32, 22, 0.12);
+  box-shadow: 0 10px 28px rgba(15, 32, 22, 0.14);
   padding: 6px 6px 8px;
   min-width: 156px;
   font-size: 12.5px;
@@ -5714,7 +5719,7 @@ body {
   color: var(--text3, #888);
   font-size: 10.5px;
   padding: 4px 8px 6px;
-  border-bottom: 1px solid rgba(0, 63, 42, 0.08);
+  border-bottom: 1px solid rgba(0, 63, 42, 0.09);
   margin-bottom: 2px;
 }
 .maps-legend-item {
@@ -5732,17 +5737,20 @@ body {
   color: var(--text, #1f2925);
 }
 .maps-legend-item:hover { background: rgba(0, 63, 42, 0.07); }
-.maps-legend-item.active { background: rgba(0, 63, 42, 0.13); }
+.maps-legend-item.active {
+  background: rgba(0, 63, 42, 0.12);
+  box-shadow: inset 2px 0 0 var(--racing-green);
+}
 .maps-legend-dot {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 1.5px solid #1f2925;
+  border: 1.5px solid rgba(16, 23, 21, 0.78);
   flex: 0 0 auto;
 }
 .maps-legend-dot-all {
-  background: linear-gradient(135deg, #36d52f 0 33%, #ffeb00 33% 66%, #111 66% 100%);
-  border-color: #1f2925;
+  background: linear-gradient(135deg, var(--maps-client) 0 33%, var(--maps-prospect) 33% 66%, var(--maps-open) 66% 100%);
+  border-color: rgba(16, 23, 21, 0.78);
 }
 .maps-legend-label {
   flex: 1 1 auto;
@@ -5895,7 +5903,7 @@ body {
   cursor: pointer;
 }
 .maps-table tbody tr:hover {
-  background: #fcfcfc;
+  background: #f8fbf9;
 }
 .maps-table tbody tr.maps-row-selected {
   background: #eef6f1;
@@ -5917,19 +5925,19 @@ body {
   white-space: nowrap;
 }
 .maps-status-client {
-  border-color: #b8cebe;
-  background: #e9f3ed;
-  color: #003f2a;
+  border-color: rgba(24, 115, 90, 0.24);
+  background: #edf7f2;
+  color: #0f5b43;
 }
 .maps-status-prospect {
-  border-color: #d8c79d;
-  background: #fff8e7;
-  color: #6d4a00;
+  border-color: rgba(201, 151, 47, 0.32);
+  background: #fbf4e5;
+  color: #7a5512;
 }
 .maps-status-open {
-  border-color: #d7dde2;
-  background: #f7f9fa;
-  color: #46545f;
+  border-color: rgba(16, 23, 21, 0.16);
+  background: #f4f7f5;
+  color: #27322e;
 }
 .maps-detail-panel {
   border: 1px solid var(--line, #e2e2e2);
@@ -6070,7 +6078,7 @@ body {
   border-color: #2f6f59;
 }
 .maps-full-backdrop {
-  background: rgba(6, 18, 14, 0.72);
+  background: rgba(6, 18, 14, 0.76);
   display: flex;
   inset: 0;
   padding: 18px;
@@ -6094,8 +6102,8 @@ body {
 }
 .maps-full-head {
   align-items: center;
-  background: #ffffff;
-  border-bottom: 1px solid var(--line, #e2e2e2);
+  background: linear-gradient(180deg, #ffffff 0%, #f7faf8 100%);
+  border-bottom: 1px solid rgba(0, 63, 42, 0.12);
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -6125,15 +6133,15 @@ body {
   gap: 5px;
 }
 .maps-full-legend i {
-  border: 1px solid #1f2925;
+  border: 1px solid rgba(16, 23, 21, 0.78);
   border-radius: 999px;
   display: inline-block;
   height: 11px;
   width: 11px;
 }
-.maps-pin-open { background: #111111; }
-.maps-pin-prospect { background: #ffeb00; }
-.maps-pin-client { background: #36d52f; }
+.maps-pin-open { background: var(--maps-open); }
+.maps-pin-prospect { background: var(--maps-prospect); }
+.maps-pin-client { background: var(--maps-client); }
 .maps-full-body {
   display: grid;
   flex: 1 1 auto;

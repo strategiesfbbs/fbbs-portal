@@ -6934,12 +6934,12 @@
 
   function mapsStatusColor(value) {
     const status = mapsStatusSlug(value);
-    if (status === 'client') return '#36d52f';
-    if (status === 'prospect') return '#ffeb00';
-    if (status === 'open') return '#111111';
-    if (status === 'watchlist') return '#f59e0b';
-    if (status === 'dormant') return '#64748b';
-    return '#2f6fed';
+    if (status === 'client') return '#18735A';
+    if (status === 'prospect') return '#C9972F';
+    if (status === 'open') return '#101715';
+    if (status === 'watchlist') return '#B87524';
+    if (status === 'dormant') return '#6D7A72';
+    return '#345F4A';
   }
 
   function mapsHasCoords(bank) {
@@ -7114,11 +7114,11 @@
     const selectedKey = mapsState.selectedLocationKey;
     const stateEntries = Object.entries(mapsState.stateCounts).sort();
     const portalScale = [
-      [0.00, '#fbf8df'],
-      [0.25, '#e6dfaa'],
-      [0.50, '#cfc579'],
-      [0.75, '#9eb8a8'],
-      [1.00, '#345f4a']
+      [0.00, '#f6faf7'],
+      [0.25, '#dbe6df'],
+      [0.50, '#b8cebe'],
+      [0.75, '#6f8f7d'],
+      [1.00, '#003f2a']
     ];
     const figData = [{
       type: 'choropleth',
@@ -7142,7 +7142,7 @@
       lon: groups.map(group => group.lon),
       text: groups.map(group => group.banks.length > 1 ? String(group.banks.length) : ''),
       textposition: 'top center',
-      textfont: { color: '#111111', size: 11, family: 'inherit' },
+      textfont: { color: '#101715', size: 11, family: 'inherit' },
       customdata: groups.map(group => group.key),
       hovertemplate: groups.map(group => {
         const first = group.banks[0];
@@ -7167,11 +7167,11 @@
         scope: 'usa',
         projection: { type: 'albers usa' },
         showlakes: true,
-        lakecolor: '#dbeafe',
+        lakecolor: '#e8f1ef',
         bgcolor: 'rgba(0,0,0,0)',
-        landcolor: '#f7f3d5',
-        countrycolor: '#d7d0a0',
-        subunitcolor: '#d7d0a0',
+        landcolor: '#f6f8f5',
+        countrycolor: '#cad8cf',
+        subunitcolor: '#cad8cf',
         showcountries: true,
         showsubunits: true,
         lonaxis,
