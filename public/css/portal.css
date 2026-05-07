@@ -6315,6 +6315,12 @@ body {
   font-weight: 800;
   padding: 8px 11px;
 }
+.snapshot-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 22px;
+}
 .snapshot-step-link {
   background: #f1f5f3;
   border: 0;
@@ -6324,8 +6330,10 @@ body {
   font: inherit;
   font-size: 13px;
   font-weight: 900;
-  margin-top: 22px;
   padding: 11px 15px;
+}
+.sticky-step > .snapshot-step-link {
+  margin-top: 22px;
 }
 .snapshot-step-link:hover,
 .snapshot-step-link:focus-visible {
