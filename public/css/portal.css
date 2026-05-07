@@ -602,9 +602,12 @@ body {
   font-weight: 700;
 }
 
-/* Recently viewed banks (below the tile grid) */
+/* Recently viewed banks (home footer) */
+.home-recents-container {
+  padding-bottom: 48px;
+}
 .home-recents {
-  margin-top: 36px;
+  margin-top: 42px;
 }
 .home-recents-head {
   align-items: baseline;
