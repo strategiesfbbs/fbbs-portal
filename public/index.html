@@ -42,9 +42,6 @@
         <a class="nav-link nav-minor" data-page="relativeValue" href="#relativeValue">
           <span class="nav-label">Relative Value</span>
         </a>
-        <a class="nav-link nav-minor" data-page="treasuryNotes" href="#treasuryNotes">
-          <span class="nav-label">Treasury Notes</span>
-        </a>
       </div>
     </div>
 
@@ -244,12 +241,11 @@
         <button type="button" class="home-bubble-button" data-goto="dashboard">
           <span>Daily Sheets</span>
         </button>
-        <p>Sales dashboard, Economic Update, Relative Value, Treasury Notes, and Brokered CD Rate Sheet.</p>
+        <p>Sales dashboard, Economic Update, Relative Value, and Brokered CD Rate Sheet.</p>
         <div class="home-bubble-links">
           <button type="button" data-goto="dashboard">Sales</button>
           <button type="button" data-goto="econ">Economic</button>
           <button type="button" data-goto="relativeValue">Relative Value</button>
-          <button type="button" data-goto="treasuryNotes">Treasury Notes</button>
           <button type="button" data-goto="cd">CD Rates</button>
         </div>
       </article>
@@ -850,7 +846,7 @@
             <h4>Daily Publications</h4>
             <p>Core documents sales teams open throughout the day.</p>
           </div>
-          <span>HTML + PDFs + XLSX</span>
+          <span>HTML + PDFs</span>
         </div>
         <div class="upload-grid">
 
@@ -916,28 +912,6 @@
           </label>
           <div class="upload-status" id="status-relativeValue">
             <span>Accepts: .pdf</span>
-            <span class="pending">Awaiting</span>
-          </div>
-        </div>
-
-        <div class="upload-card">
-          <div class="upload-card-head">
-            <span>Treasury Notes</span>
-            <span class="ft">.XLSX</span>
-          </div>
-          <label class="drop-zone" data-slot="treasuryNotes">
-            <input type="file" accept=".xlsx,.xlsm,.xls" hidden>
-            <div class="drop-icon-sm">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
-                <path d="M9 12V3M5 7l4-4 4 4"/>
-                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
-              </svg>
-            </div>
-            <h5 data-default="Drop Excel File">Drop Excel File</h5>
-            <p data-default="or click to browse">or click to browse</p>
-          </label>
-          <div class="upload-status" id="status-treasuryNotes">
-            <span>Accepts: .xlsx, .xlsm, .xls</span>
             <span class="pending">Awaiting</span>
           </div>
         </div>
@@ -1028,11 +1002,33 @@
         <div class="upload-section-head">
           <div>
             <h4>Trader Excel Files</h4>
-            <p>Agency and corporate inventory workbooks from the desk.</p>
+            <p>Treasury, agency, and corporate inventory workbooks from the desk.</p>
           </div>
           <span>XLSX</span>
         </div>
         <div class="upload-grid">
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Treasury Notes</span>
+            <span class="ft">.XLSX</span>
+          </div>
+          <label class="drop-zone" data-slot="treasuryNotes">
+            <input type="file" accept=".xlsx,.xlsm,.xls" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop Treasury File">Drop Treasury File</h5>
+            <p data-default="TSY NOTE OFFERS*.xlsx, or click to browse">TSY NOTE OFFERS*.xlsx, or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-treasuryNotes">
+            <span>Accepts: .xlsx, .xlsm, .xls</span>
+            <span class="pending">Awaiting</span>
+          </div>
+        </div>
 
         <div class="upload-card">
           <div class="upload-card-head">
