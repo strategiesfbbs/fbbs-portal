@@ -6859,6 +6859,7 @@
     selectedLocationKey: '',
     selectedLocationIndex: 0,
     visibleBanks: [],
+    popupOpen: false,
     search: '',
     advanced: [],
     plotInitialized: false
@@ -6998,6 +6999,32 @@
     mapsState.selectedLocationIndex = idx >= 0 ? idx : 0;
   }
 
+  // Default geo extent (continental US) and per-state zoom helpers.
+  const MAPS_DEFAULT_LONAXIS = [-126, -66];
+  const MAPS_DEFAULT_LATAXIS = [24, 50];
+
+  function mapsComputeBounds(rows) {
+    if (!rows || !rows.length) return null;
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity, count = 0;
+    for (const r of rows) {
+      const lat = Number(r && r.latitude);
+      const lon = Number(r && r.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      count += 1;
+    }
+    if (!count) return null;
+    const padLat = Math.max(0.5, (maxLat - minLat) * 0.18);
+    const padLon = Math.max(0.5, (maxLon - minLon) * 0.18);
+    return {
+      lon: [minLon - padLon, maxLon + padLon],
+      lat: [minLat - padLat, maxLat + padLat]
+    };
+  }
+
   function mapsFindBank(id) {
     const key = String(id || '');
     return mapsState.banks.find(bank => String(bank.id || '') === key) || null;
@@ -7054,15 +7081,22 @@
     }
   }
 
-  function renderMapsView() {
+  function renderMapsSubtitle() {
     const subtitle = document.getElementById('mapsSubtitle');
+    if (!subtitle) return;
+    const hasStates = mapsState.selectedStates.size > 0;
+    const tail = hasStates
+      ? 'Click a pin for status and key stats — click another state to add it.'
+      : 'Click any state to drop pins for the banks there.';
+    subtitle.textContent = mapsState.latestPeriod
+      ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · ${tail}`
+      : `${mapsState.banks.length.toLocaleString()} banks · ${tail}`;
+  }
+
+  function renderMapsView() {
     const countEl = document.getElementById('mapsBankCount');
     if (countEl) countEl.textContent = mapsState.banks.length.toLocaleString();
-    if (subtitle) {
-      subtitle.textContent = mapsState.latestPeriod
-        ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · hover states, click states, markers, or rows`
-        : `${mapsState.banks.length.toLocaleString()} banks · hover states, click states, markers, or rows`;
-    }
+    renderMapsSubtitle();
     renderMapsStateChips();
     renderMapsStatusFilters();
     renderMapsDetailPanel();
@@ -7076,7 +7110,9 @@
     const el = document.getElementById(plotId);
     if (!el) return;
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
-    const groups = mapsLocationGroups(rows);
+    if (!el.style.position) el.style.position = 'relative';
+    const showMarkers = mapsState.selectedStates.size > 0;
+    const groups = showMarkers ? mapsLocationGroups(rows) : [];
     const selectedKey = mapsState.selectedLocationKey;
     const stateEntries = Object.entries(mapsState.stateCounts).sort();
     const portalScale = [
@@ -7093,14 +7129,14 @@
       z: stateEntries.map(([, count]) => count),
       colorscale: portalScale,
       showscale: false,
-      hovertemplate: '<b>%{location}</b><br>Total banks: %{z:,.0f}<br><span style="font-size:11px">Click to filter</span><extra></extra>',
+      hovertemplate: '<b>%{location}</b><br>Total banks: %{z:,.0f}<br><span style="font-size:11px">Click to drop pins</span><extra></extra>',
       marker: {
         line: {
           color: stateEntries.map(([state]) => mapsState.selectedStates.has(state) ? '#003f2a' : '#ffffff'),
-          width: stateEntries.map(([state]) => mapsState.selectedStates.has(state) ? 2 : 0.7)
+          width: stateEntries.map(([state]) => mapsState.selectedStates.has(state) ? 2.4 : 0.7)
         }
       },
-      opacity: 0.72
+      opacity: showMarkers ? 0.55 : 0.85
     }, {
       type: 'scattergeo',
       mode: 'markers+text',
@@ -7116,7 +7152,7 @@
         return `<b>${escapeHtml(bankLabel)}</b><br>${escapeHtml(group.label || '')}<extra></extra>`;
       }),
       marker: {
-        size: groups.map(group => group.key === selectedKey ? 18 : Math.min(22, 11 + Math.sqrt(group.banks.length) * 3)),
+        size: groups.map(group => group.key === selectedKey ? 20 : Math.min(24, 12 + Math.sqrt(group.banks.length) * 3)),
         color: groups.map(group => mapsStatusColor(mapsAccountStatusLabel(group.banks[0]))),
         opacity: 0.95,
         line: {
@@ -7125,6 +7161,9 @@
         }
       }
     }];
+    const bounds = showMarkers ? mapsComputeBounds(rows) : null;
+    const lonaxis = bounds ? { range: bounds.lon } : { range: MAPS_DEFAULT_LONAXIS.slice() };
+    const lataxis = bounds ? { range: bounds.lat } : { range: MAPS_DEFAULT_LATAXIS.slice() };
     const layout = {
       geo: {
         scope: 'usa',
@@ -7136,7 +7175,9 @@
         countrycolor: '#d7d0a0',
         subunitcolor: '#d7d0a0',
         showcountries: true,
-        showsubunits: true
+        showsubunits: true,
+        lonaxis,
+        lataxis
       },
       font: { family: 'inherit', color: '#1f2925' },
       margin: { t: 10, r: 10, b: 10, l: 10 },
@@ -7144,6 +7185,7 @@
       plot_bgcolor: 'rgba(0,0,0,0)'
     };
     Plotly.react(el, figData, layout, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d'] }).then(() => {
+      if (plotId === 'mapsPlot') renderMapsPinPopup();
       if (el.dataset.mapsClickBound) return;
       el.dataset.mapsClickBound = '1';
       el.on('plotly_click', (data) => {
@@ -7154,9 +7196,9 @@
           if (!st) return;
           if (mapsState.selectedStates.has(st)) mapsState.selectedStates.delete(st);
           else mapsState.selectedStates.add(st);
+          mapsState.popupOpen = false;
           renderMapsStateChips();
           applyMapsFilters();
-          if (!isFull) openMapsFullView();
           return;
         }
         const key = point.customdata;
@@ -7169,10 +7211,105 @@
         mapsState.selectedLocationKey = key;
         mapsState.selectedLocationIndex = nextIndex;
         mapsState.selectedBankId = String(group.banks[nextIndex].id || '');
+        if (!isFull) mapsState.popupOpen = true;
         applyMapsFilters();
-        if (!isFull) openMapsFullView();
       });
     });
+  }
+
+  function mapsProjectLatLon(lat, lon) {
+    const el = document.getElementById('mapsPlot');
+    if (!el || !el._fullLayout || !el._fullLayout.geo || !el._fullLayout.geo._subplot) return null;
+    const sub = el._fullLayout.geo._subplot;
+    if (!sub.projection) return null;
+    const px = sub.projection([lon, lat]);
+    if (!px || !Number.isFinite(px[0]) || !Number.isFinite(px[1])) return null;
+    const ox = (sub.xaxis && Number.isFinite(sub.xaxis._offset)) ? sub.xaxis._offset : 0;
+    const oy = (sub.yaxis && Number.isFinite(sub.yaxis._offset)) ? sub.yaxis._offset : 0;
+    return [px[0] + ox, px[1] + oy];
+  }
+
+  function renderMapsPinPopup() {
+    const el = document.getElementById('mapsPlot');
+    if (!el) return;
+    let popup = el.querySelector('.maps-pin-popup');
+    const hide = () => { if (popup) popup.remove(); };
+    if (!mapsState.popupOpen || !mapsState.selectedLocationKey) { hide(); return; }
+    const groups = mapsLocationGroups(mapsState.visibleBanks);
+    const group = groups.find(g => g.key === mapsState.selectedLocationKey);
+    if (!group || !group.banks.length) { hide(); return; }
+    const idx = Math.min(Math.max(mapsState.selectedLocationIndex || 0, 0), group.banks.length - 1);
+    const bank = group.banks[idx];
+    if (!bank || !mapsHasCoords(bank)) { hide(); return; }
+    const coords = mapsProjectLatLon(group.lat, group.lon);
+    if (!coords) { hide(); return; }
+    const status = mapsAccountStatusLabel(bank);
+    const accountStatus = bank.accountStatus || {};
+    const assetsDef = mapsState.fieldByKey.totalAssets;
+    const securitiesToAssetsDef = mapsState.fieldByKey.securitiesToAssets || MAPS_SECURITIES_TO_ASSETS_FIELD;
+    const loansToAssetsDef = mapsState.fieldByKey.loansToAssets;
+    const locationLine = [bank.address, bank.city, bank.state, bank.zip5 || bank.zip].filter(Boolean).join(', ');
+    if (!popup) {
+      popup = document.createElement('div');
+      popup.className = 'maps-pin-popup';
+      el.appendChild(popup);
+    }
+    popup.innerHTML = `
+      <button type="button" class="maps-pin-popup-close" aria-label="Close popup">&times;</button>
+      <div class="maps-pin-popup-head">
+        <span class="maps-status-pill maps-status-${escapeHtml(mapsStatusSlug(status))}">${escapeHtml(status)}</span>
+        <h4>${escapeHtml(mapsBankListName(bank))}</h4>
+        <p>${escapeHtml(locationLine || [bank.city, bank.state].filter(Boolean).join(', '))}</p>
+      </div>
+      ${group.banks.length > 1 ? `
+        <div class="maps-pin-popup-pager">
+          <button type="button" class="maps-pin-popup-pgbtn" data-popup-prev aria-label="Previous bank">&lsaquo;</button>
+          <span>${formatNumber(idx + 1)} of ${formatNumber(group.banks.length)} at this pin</span>
+          <button type="button" class="maps-pin-popup-pgbtn" data-popup-next aria-label="Next bank">&rsaquo;</button>
+        </div>` : ''}
+      <dl class="maps-pin-popup-grid">
+        <dt>Coverage Owner</dt><dd>${escapeHtml(accountStatus.owner || '—')}</dd>
+        <dt>Assets</dt><dd>${escapeHtml(mapsFormatValue(bank.totalAssets, assetsDef) || '—')}</dd>
+        <dt>Loans / Assets</dt><dd>${escapeHtml(mapsFormatValue(bank.loansToAssets, loansToAssetsDef) || '—')}</dd>
+        <dt>Securities / Assets</dt><dd>${escapeHtml(mapsFormatValue(mapsSecuritiesToAssets(bank), securitiesToAssetsDef) || '—')}</dd>
+        ${bank.certNumber ? `<dt>FDIC Cert</dt><dd>${escapeHtml(String(bank.certNumber))}</dd>` : ''}
+      </dl>
+      <button type="button" class="maps-pin-popup-cta" data-popup-open>Open tear sheet</button>
+    `;
+    const plotW = el.clientWidth, plotH = el.clientHeight;
+    const popW = popup.offsetWidth || 280;
+    const popH = popup.offsetHeight || 240;
+    let left = coords[0] + 16;
+    let top = coords[1] - popH / 2;
+    if (left + popW + 8 > plotW) left = coords[0] - popW - 16;
+    if (left < 8) left = 8;
+    if (top < 8) top = 8;
+    if (top + popH + 8 > plotH) top = plotH - popH - 8;
+    popup.style.left = left + 'px';
+    popup.style.top = top + 'px';
+    const closeBtn = popup.querySelector('.maps-pin-popup-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+      mapsState.popupOpen = false;
+      renderMapsPinPopup();
+    });
+    const prev = popup.querySelector('[data-popup-prev]');
+    if (prev) prev.addEventListener('click', () => mapsCyclePinPopup(-1));
+    const next = popup.querySelector('[data-popup-next]');
+    if (next) next.addEventListener('click', () => mapsCyclePinPopup(1));
+    const open = popup.querySelector('[data-popup-open]');
+    if (open) open.addEventListener('click', () => {
+      goTo('banks');
+      if (typeof loadBank === 'function') loadBank(bank.id, { collapseResults: true });
+    });
+  }
+
+  function mapsCyclePinPopup(direction) {
+    const groups = mapsLocationGroups(mapsState.visibleBanks);
+    const group = groups.find(g => g.key === mapsState.selectedLocationKey);
+    if (!group || group.banks.length <= 1) return;
+    const next = (mapsState.selectedLocationIndex + direction + group.banks.length) % group.banks.length;
+    mapsSelectBank(group.banks[next], group);
+    applyMapsFilters();
   }
 
   function renderMapsStateChips() {
@@ -7262,6 +7399,7 @@
     }
     rows.sort((a, b) => (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0));
     mapsState.visibleBanks = rows;
+    renderMapsSubtitle();
     const limit = 1000;
     const shown = rows.slice(0, limit);
     const visibleIds = new Set(shown.map(row => String(row.id || '')));
@@ -7286,6 +7424,7 @@
     const previewBank = btn => {
       const bank = mapsFindBank(btn.dataset.mapsBankPreview || '');
       mapsSelectBank(bank, mapsLocationGroups(rows).find(group => group.key === mapsLocationKey(bank)));
+      if (bank && mapsHasCoords(bank) && mapsState.selectedStates.size > 0) mapsState.popupOpen = true;
       applyMapsFilters();
     };
     body.querySelectorAll('[data-maps-bank-preview]').forEach(btn => {
@@ -7540,6 +7679,7 @@
     if (clearBtn && !clearBtn.dataset.bound) {
       clearBtn.addEventListener('click', () => {
         mapsState.selectedStates.clear();
+        mapsState.popupOpen = false;
         renderMapsStateChips();
         applyMapsFilters();
       });
@@ -7659,6 +7799,7 @@
         if (!id) return;
         const bank = mapsFindBank(id);
         mapsSelectBank(bank, mapsLocationGroups(mapsState.visibleBanks).find(group => group.key === mapsLocationKey(bank)));
+        if (bank && mapsHasCoords(bank) && mapsState.selectedStates.size > 0) mapsState.popupOpen = true;
         applyMapsFilters();
       });
       tableBody.dataset.bound = '1';
@@ -7669,6 +7810,7 @@
         const x = e.target.closest('[data-maps-remove-state]');
         if (!x) return;
         mapsState.selectedStates.delete(x.dataset.mapsRemoveState);
+        if (mapsState.selectedStates.size === 0) mapsState.popupOpen = false;
         renderMapsStateChips();
         applyMapsFilters();
       });
