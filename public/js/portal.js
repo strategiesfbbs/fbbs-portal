@@ -7285,6 +7285,22 @@
     if (left < 8) left = 8;
     if (top < 8) top = 8;
     if (top + popH + 8 > plotH) top = plotH - popH - 8;
+    const legend = el.querySelector('.maps-legend');
+    if (legend) {
+      const legendRight = legend.offsetLeft + legend.offsetWidth + 8;
+      const legendBottom = legend.offsetTop + legend.offsetHeight + 8;
+      const overlapsHoriz = left < legendRight && (left + popW) > legend.offsetLeft;
+      const overlapsVert = top < legendBottom && (top + popH) > legend.offsetTop;
+      if (overlapsHoriz && overlapsVert) {
+        if (top + popH + 8 <= plotH - (legendBottom - 8) + popH) {
+          const pushedTop = legendBottom;
+          if (pushedTop + popH + 8 <= plotH) top = pushedTop;
+          else if (legendRight + popW + 8 <= plotW) left = legendRight;
+        } else if (legendRight + popW + 8 <= plotW) {
+          left = legendRight;
+        }
+      }
+    }
     popup.style.left = left + 'px';
     popup.style.top = top + 'px';
     const closeBtn = popup.querySelector('.maps-pin-popup-close');
@@ -7335,16 +7351,27 @@
   }
 
   function renderMapsStatusFilters() {
-    const el = document.getElementById('mapsStatusFilters');
+    const el = document.getElementById('mapsLegend');
     if (!el) return;
     const counts = mapsStatusCounts();
     const statuses = ['Open', 'Prospect', 'Client'];
     const allActive = mapsState.selectedStatuses.size === 0;
+    const total = mapsState.banks.length;
     el.innerHTML = [
-      `<button type="button" class="maps-filter-chip${allActive ? ' active' : ''}" data-maps-status-filter="">All <strong>${formatNumber(mapsState.banks.length)}</strong></button>`,
+      `<div class="maps-legend-title">Status</div>`,
+      `<button type="button" class="maps-legend-item${allActive ? ' active' : ''}" data-maps-status-filter="">
+         <span class="maps-legend-dot maps-legend-dot-all" aria-hidden="true"></span>
+         <span class="maps-legend-label">All</span>
+         <span class="maps-legend-count">${formatNumber(total)}</span>
+       </button>`,
       ...statuses.map(status => {
         const active = mapsState.selectedStatuses.has(status);
-        return `<button type="button" class="maps-filter-chip maps-status-${escapeHtml(mapsStatusSlug(status))}${active ? ' active' : ''}" data-maps-status-filter="${escapeHtml(status)}">${escapeHtml(status)} <strong>${formatNumber(counts[status] || 0)}</strong></button>`;
+        const count = counts[status] || 0;
+        return `<button type="button" class="maps-legend-item maps-status-${escapeHtml(mapsStatusSlug(status))}${active ? ' active' : ''}" data-maps-status-filter="${escapeHtml(status)}">
+          <span class="maps-legend-dot" style="background:${mapsStatusColor(status)}" aria-hidden="true"></span>
+          <span class="maps-legend-label">${escapeHtml(status)}</span>
+          <span class="maps-legend-count">${formatNumber(count)}</span>
+        </button>`;
       })
     ].join('');
   }
@@ -7685,7 +7712,7 @@
       });
       clearBtn.dataset.bound = '1';
     }
-    const statusFilters = document.getElementById('mapsStatusFilters');
+    const statusFilters = document.getElementById('mapsLegend');
     if (statusFilters && !statusFilters.dataset.bound) {
       statusFilters.addEventListener('click', e => {
         const btn = e.target.closest('[data-maps-status-filter]');

@@ -5691,6 +5691,68 @@ body {
   font-size: 12px;
   margin-top: 6px;
 }
+.maps-legend {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 4;
+  background: #ffffff;
+  border: 1px solid rgba(0, 63, 42, 0.18);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(15, 32, 22, 0.12);
+  padding: 6px 6px 8px;
+  min-width: 156px;
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.maps-legend-title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text3, #888);
+  font-size: 10.5px;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid rgba(0, 63, 42, 0.08);
+  margin-bottom: 2px;
+}
+.maps-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text, #1f2925);
+}
+.maps-legend-item:hover { background: rgba(0, 63, 42, 0.07); }
+.maps-legend-item.active { background: rgba(0, 63, 42, 0.13); }
+.maps-legend-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid #1f2925;
+  flex: 0 0 auto;
+}
+.maps-legend-dot-all {
+  background: linear-gradient(135deg, #36d52f 0 33%, #ffeb00 33% 66%, #111 66% 100%);
+  border-color: #1f2925;
+}
+.maps-legend-label {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+.maps-legend-count {
+  color: var(--text2, #555);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .maps-pin-popup {
   position: absolute;
   z-index: 5;

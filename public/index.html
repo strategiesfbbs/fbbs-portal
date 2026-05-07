@@ -1903,8 +1903,10 @@
           <h3>Bank Marker Map</h3>
           <button id="mapsFullViewBtn" type="button" class="small-btn">Open Full View</button>
         </div>
-        <div id="mapsPlot" class="maps-plot"></div>
-        <div class="maps-tip">Click a state to drop bank pins (green = Client, yellow = Prospect, black = Open). Click a pin for status and key stats.</div>
+        <div id="mapsPlot" class="maps-plot">
+          <div id="mapsLegend" class="maps-legend" aria-label="Filter map and list by account status"></div>
+        </div>
+        <div class="maps-tip">Click a state to drop bank pins. Use the legend to filter by status. Click a pin for the bank's stats.</div>
       </section>
 
       <section class="maps-panel">
@@ -1914,10 +1916,6 @@
             <span class="maps-control-label">Selected states:</span>
             <div id="mapsStateChips" class="maps-chips"></div>
             <button id="mapsClearStates" type="button" class="small-btn">Clear</button>
-          </div>
-          <div class="maps-control-row">
-            <span class="maps-control-label">Status:</span>
-            <div id="mapsStatusFilters" class="maps-status-filters" aria-label="Filter map banks by status"></div>
           </div>
           <div class="maps-control-row">
             <input type="search" id="mapsSearchBox" placeholder="Search bank, FDIC, city&hellip;" autocomplete="off">
