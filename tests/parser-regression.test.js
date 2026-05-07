@@ -95,6 +95,7 @@ function assertDateSniffing() {
 function assertClassification() {
   assert.strictEqual(classifyFile('FBBS_Dashboard_20260424.html'), 'dashboard');
   assert.strictEqual(classifyFile('20260424.pdf'), 'econ');
+  assert.strictEqual(classifyFile('Relative Value 04.24.2026.pdf'), 'relativeValue');
   assert.strictEqual(classifyFile('FBBS Brokered CD Rate Sheet_04_24_2026_.pdf'), 'cd');
   assert.strictEqual(classifyFile('20260424_CD_Offers.pdf'), 'cdoffers');
   assert.strictEqual(classifyFile('20260424_CD_Offers.xlsx'), 'cdoffers');

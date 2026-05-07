@@ -41,16 +41,17 @@
   let selectedBankStrategyHistory = [];
   let mbsCmoData = null;
   let selectedFiles = {
-    dashboard: null, econ: null, cd: null, cdoffers: null, munioffers: null,
+    dashboard: null, econ: null, relativeValue: null, cd: null, cdoffers: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
   };
 
-  const SLOTS = ['dashboard', 'econ', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+  const SLOTS = ['dashboard', 'econ', 'relativeValue', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
   const TOTAL_SLOTS = SLOTS.length;
 
   const DOC_TYPES = {
     dashboard:         { label: 'FBBS Sales Dashboard', ext: 'HTML', viewer: 'dashboard' },
     econ:              { label: 'Economic Update', ext: 'PDF',  viewer: 'econ' },
+    relativeValue:     { label: 'Relative Value', ext: 'PDF', viewer: 'relativeValue' },
     cd:                { label: 'Brokered CD Sheet', ext: 'PDF', viewer: 'cd' },
     cdoffers:          { label: 'Daily CD Offerings', ext: 'PDF/XLSX', viewer: 'cdoffers' },
     munioffers:        { label: 'Muni Offerings', ext: 'PDF', viewer: 'munioffers' },
@@ -59,7 +60,7 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'dashboard', 'econ', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'dashboard', 'econ', 'relativeValue', 'cd', 'cdoffers', 'munioffers',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'banks', 'maps', 'strategies', 'archive', 'upload', 'admin'];
 
@@ -67,6 +68,7 @@
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
+    { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
@@ -87,6 +89,7 @@
   const NAV_GROUP_BY_PAGE = {
     dashboard: 'fbbs',
     econ: 'fbbs',
+    relativeValue: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
     explorer: 'offerings',
@@ -874,6 +877,8 @@
       return 'agenciesBullets';  // ambiguous → default; user can drop into the right slot
     }
     if (lower.endsWith('.pdf')) {
+      if (lower.includes('relative_value') || lower.includes('relative value') ||
+          lower.includes('relativevalue')) return 'relativeValue';
       const isMuni =
         (lower.includes('fbbs_offering') || lower.includes('fbbs offering') ||
          lower.includes('muni_offering')  || lower.includes('muni offering')  ||
@@ -1074,6 +1079,7 @@
     renderHome();
     renderViewer('dashboard');
     renderViewer('econ');
+    renderViewer('relativeValue');
     renderViewer('cd');
     renderViewer('cdoffers');
     renderViewer('munioffers');
@@ -1785,7 +1791,7 @@
       ? `${escapeHtml(day.publishedBy || 'Portal User')} · ${formatTime(day.publishedAt)}`
       : '—';
 
-    const viewFirst = day.dashboard || day.econ || day.cd || day.cdoffers || day.munioffers;
+    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.cd || day.cdoffers || day.munioffers;
     const viewLink = viewFirst ? `${basePath}${encodeURIComponent(viewFirst)}` : '#';
     const rowClass = isCurrent ? 'current-row' : '';
 
@@ -1797,6 +1803,7 @@
         <td>
           ${chip(day.dashboard, 'Dashboard.html')}
           ${chip(day.econ, 'Econ_Update.pdf')}
+          ${chip(day.relativeValue, 'Relative_Value.pdf')}
           ${chip(day.cd, 'CD_Rate_Sheet.pdf')}
           ${chip(day.cdoffers, 'CD_Offerings.pdf')}
           ${chip(day.munioffers, 'Muni_Offerings.pdf')}
@@ -4164,7 +4171,7 @@
         }
 
         selectedFiles = {
-          dashboard: null, econ: null, cd: null, cdoffers: null, munioffers: null,
+          dashboard: null, econ: null, relativeValue: null, cd: null, cdoffers: null, munioffers: null,
           agenciesBullets: null, agenciesCallables: null, corporates: null
         };
         SLOTS.forEach(resetDropZone);

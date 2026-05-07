@@ -4,10 +4,11 @@
  * Serves the portal UI and accepts daily document uploads:
  *   • Market Intelligence Dashboard (HTML)
  *   • Economic Update (PDF)
+ *   • Relative Value (PDF)
  *   • Brokered CD Rate Sheet (PDF)
- *   • Daily CD Offerings (PDF)   ← also parsed into structured Offerings
+ *   • Daily CD Offerings (PDF or Excel)   ← also parsed into structured Offerings
  *
- * Dependencies: pdf-parse (for extracting text from the CD Offers PDF).
+ * Dependencies: pdf-parse (for extracting PDF text) and xlsx (for workbook parsing).
  *               Everything else is Node built-ins.
  *
  * Configuration (environment variables, all optional):
@@ -139,7 +140,7 @@ const MIME_TYPES = {
   '.txt':  'text/plain; charset=utf-8'
 };
 
-const SLOT_NAMES = ['dashboard', 'econ', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 const OFFERINGS_FILENAME = '_offerings.json';
 const MUNI_OFFERINGS_FILENAME = '_muni_offerings.json';
 const ECONOMIC_UPDATE_FILENAME = '_economic_update.json';
@@ -277,6 +278,10 @@ function classifyFile(filename, explicitSlot) {
   }
 
   if (lower.endsWith('.pdf')) {
+    if (lower.includes('relative_value') || lower.includes('relative value') ||
+        lower.includes('relativevalue')) {
+      return 'relativeValue';
+    }
     // Muni offerings: "FBBS_Offerings", "Muni_Offerings", "Municipal_Offerings",
     // but NOT "CD_Offerings" / "CD_Offers" (those belong to cdoffers).
     const isMuni =
@@ -402,7 +407,7 @@ function validateUploadSignature(file, slot) {
     }
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF or Excel file.`;
   }
-  if (['econ', 'cd', 'munioffers'].includes(slot)) {
+  if (['econ', 'relativeValue', 'cd', 'munioffers'].includes(slot)) {
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
   }
   if (['agenciesBullets', 'agenciesCallables', 'corporates'].includes(slot)) {
@@ -534,7 +539,7 @@ function parseMultipart(req, boundary, limit) {
             if (SLOT_NAMES.includes(fieldName)) {
               explicitSlot = fieldName;
             } else {
-              const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|cdoffers|munioffers|agenciesBullets|agenciesCallables|corporates|cd)/i);
+              const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|relativeValue|cdoffers|munioffers|agenciesBullets|agenciesCallables|corporates|cd)/i);
               if (m) {
                 const token = m[1];
                 // Normalize the canonical form (case-sensitive slot names)
@@ -743,6 +748,7 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     date: dateIfMissingMeta,
     dashboard: null,
     econ: null,
+    relativeValue: null,
     cd: null,
     cdoffers: null,
     munioffers: null,
