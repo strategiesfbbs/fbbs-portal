@@ -1131,9 +1131,130 @@
     }
 
     renderHomeStatusPill(pkg, filled);
-    renderHomeMarketsSpec(pkg);
+    renderHomeTiles();
     renderHomeShowcase(pkg);
     renderHomeRecents();
+  }
+
+  function renderHomeTiles() {
+    renderHomeTileAccounts();
+    renderHomeTileMarkets();
+    renderHomeTileDaily();
+    renderHomeTileStrategies();
+  }
+
+  function setHomeTilePulse(numId, labelId, footId, opts) {
+    const numEl = document.getElementById(numId);
+    const labelEl = document.getElementById(labelId);
+    const footEl = document.getElementById(footId);
+    if (numEl) numEl.textContent = opts.num != null ? opts.num : '—';
+    if (labelEl) labelEl.textContent = opts.label || '';
+    if (footEl) {
+      footEl.innerHTML = opts.footHtml || (opts.foot ? escapeHtml(opts.foot) : '');
+      footEl.classList.toggle('is-warn', !!opts.warn);
+      footEl.classList.toggle('is-empty', !!opts.empty);
+    }
+  }
+
+  function renderHomeTileAccounts() {
+    const status = bankDataStatus || {};
+    const accountInfo = status.accountStatuses || {};
+    const bankCount = status.available
+      ? (status.bankCount || (status.metadata && status.metadata.bankCount))
+      : null;
+
+    if (!status.available) {
+      setHomeTilePulse('homeTileAccountsNum', 'homeTileAccountsLabel', 'homeTileAccountsFoot', {
+        num: '—', label: 'Banks',
+        foot: 'Upload the SNL call report workbook to enable.', empty: true
+      });
+      return;
+    }
+
+    const counts = (accountInfo.metadata && accountInfo.metadata.statuses) || {};
+    const clients = Number(counts.Client || 0);
+    const prospects = Number(counts.Prospect || 0);
+    const watchlist = Number(counts.Watchlist || 0);
+    const open = Number(counts.Open || 0);
+    const tagged = clients + prospects + watchlist + open;
+
+    const parts = [];
+    if (clients) parts.push(`<strong>${formatNumber(clients)}</strong> clients`);
+    if (prospects) parts.push(`<strong>${formatNumber(prospects)}</strong> prospects`);
+    if (watchlist) parts.push(`<strong>${formatNumber(watchlist)}</strong> watchlist`);
+    if (!parts.length && open) parts.push(`<strong>${formatNumber(open)}</strong> tagged`);
+    if (!parts.length && accountInfo.available) parts.push(`<strong>${formatNumber(accountInfo.statusCount || 0)}</strong> tagged`);
+
+    const period = (status.metadata && status.metadata.latestPeriod) || null;
+    const footPieces = parts.length ? parts.join('<span class="home-tile-foot-divider">·</span>') : '';
+    const periodSuffix = period ? `<span class="home-tile-foot-divider">·</span>${escapeHtml(period)}` : '';
+    const taggedSuffix = !parts.length && tagged === 0
+      ? 'No accounts tagged yet'
+      : footPieces + periodSuffix;
+
+    setHomeTilePulse('homeTileAccountsNum', 'homeTileAccountsLabel', 'homeTileAccountsFoot', {
+      num: formatNumber(bankCount),
+      label: 'Banks',
+      footHtml: taggedSuffix
+    });
+  }
+
+  function renderHomeTileMarkets() {
+    const list = document.getElementById('homeTileMarketsBreakdown');
+    if (!list) return;
+
+    const items = [
+      { count: (marketData.treasuryNotes || []).length, label: 'Treasuries', page: 'treasury-explorer' },
+      { count: (marketData.cds || []).length, label: 'CDs', page: 'explorer' },
+      { count: (marketData.munis || []).length, label: 'Munis', page: 'muni-explorer' },
+      { count: (marketData.agencies || []).length, label: 'Agencies', page: 'agencies' },
+      { count: (marketData.corporates || []).length, label: 'Corporates', page: 'corporates' }
+    ];
+
+    const total = items.reduce((sum, item) => sum + item.count, 0);
+    if (!total) {
+      list.innerHTML = '<li class="home-tile-breakdown-empty">No offering data in the current package.</li>';
+      return;
+    }
+
+    list.innerHTML = items.map(item => `
+      <li>
+        <span class="home-tile-breakdown-num">${formatNumber(item.count)}</span>
+        <span class="home-tile-breakdown-label">${escapeHtml(item.label)}</span>
+        <button type="button" class="home-tile-breakdown-btn" data-goto="${escapeHtml(item.page)}" aria-label="Open ${escapeHtml(item.label)} explorer">
+          Open <span aria-hidden="true">&rarr;</span>
+        </button>
+      </li>
+    `).join('');
+  }
+
+  function renderHomeTileDaily() {
+    const dateEl = document.getElementById('homeTileDailyDate');
+    if (!dateEl) return;
+    const pkg = currentPackage || {};
+    const filled = SLOTS.filter(slot => pkg[slot]).length;
+    const dateLabel = pkg.date ? formatShortDate(pkg.date) : null;
+    dateEl.textContent = filled === 0 ? '—' : (dateLabel || 'Today');
+  }
+
+  function renderHomeTileStrategies() {
+    const footEl = document.getElementById('homeTileStrategiesFoot');
+    if (!footEl) return;
+    const counts = strategyNotifications.counts || {};
+    const open = Number(counts.Open || 0);
+    const inProgress = Number(counts['In Progress'] || 0);
+    const needsBilled = Number(counts['Needs Billed'] || 0);
+
+    const parts = [];
+    if (open) parts.push(`<strong>${formatNumber(open)}</strong> open`);
+    if (inProgress) parts.push(`<strong>${formatNumber(inProgress)}</strong> in progress`);
+    if (needsBilled) parts.push(`<strong>${formatNumber(needsBilled)}</strong> needs billed`);
+
+    footEl.classList.toggle('is-warn', needsBilled > 0);
+    footEl.classList.toggle('is-empty', parts.length === 0);
+    footEl.innerHTML = parts.length
+      ? parts.join('<span class="home-tile-foot-divider">·</span>')
+      : '';
   }
 
   function renderHomeStatusPill(pkg, filled) {
@@ -1156,29 +1277,6 @@
     pill.dataset.state = state;
     textEl.textContent = text;
     pill.hidden = false;
-  }
-
-  function renderHomeMarketsSpec(pkg) {
-    const spec = document.getElementById('homeMarketsSpec');
-    if (!spec) return;
-    const parts = [];
-    const push = (count, label) => {
-      if (typeof count === 'number' && count >= 0) {
-        parts.push(`<strong>${formatNumber(count)}</strong> ${label}`);
-      }
-    };
-    push(pkg && pkg.treasuryNotesCount, 'Treasuries');
-    push(pkg && pkg.offeringsCount, 'CDs');
-    push(pkg && pkg.muniOfferingsCount, 'Munis');
-    push(pkg && pkg.agencyCount, 'Agencies');
-    push(pkg && pkg.corporatesCount, 'Corp');
-    if (!parts.length) {
-      spec.hidden = true;
-      spec.innerHTML = '';
-      return;
-    }
-    spec.innerHTML = parts.join(' · ');
-    spec.hidden = false;
   }
 
   function renderHomeRecents() {
@@ -1927,6 +2025,8 @@
     } else if (accountStatus) {
       accountStatus.textContent = 'Account statuses default to Open until imported or edited.';
     }
+
+    if (typeof renderHomeTileAccounts === 'function') renderHomeTileAccounts();
   }
 
   function formatImportedDate(iso) {
@@ -2118,6 +2218,7 @@
     const filled = SLOTS.filter(slot => currentPackage && currentPackage[slot]).length;
     renderHomeWorkList(filled);
     renderHomeLaunchGrid();
+    if (typeof renderHomeTileStrategies === 'function') renderHomeTileStrategies();
   }
 
   function filteredStrategies() {
@@ -6781,6 +6882,7 @@
     setHeaderDate();
     loadCurrent();
     loadStrategyNotifications();
+    loadBankStatus();
     loadArchive();
     setupHome();
     setupHomePolish();

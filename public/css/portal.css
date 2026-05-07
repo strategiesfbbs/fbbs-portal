@@ -3210,6 +3210,356 @@ body {
   font-size: 11px;
 }
 
+/* ============================================================
+   Home tile grid — modern data-bearing replacement for the
+   four pastel circle buttons. Typography matches the
+   Market Snapshot showcase below (gradient numerals,
+   small-caps kicker, tight tracking).
+   ============================================================ */
+.home-tile-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.home-tile {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 248px;
+  padding: 20px 22px 22px;
+  position: relative;
+  transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+
+.home-tile:hover {
+  transform: translateY(-3px);
+  border-color: rgba(0, 63, 42, 0.18);
+  box-shadow: 0 18px 36px rgba(16, 23, 21, 0.10), 0 4px 10px rgba(16, 23, 21, 0.05);
+}
+
+.home-tile-head {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 32px;
+}
+
+.home-tile-kicker {
+  color: var(--racing-green);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 2.4px;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.home-tile-jump {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text2);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.4px;
+  padding: 6px 11px;
+  text-transform: uppercase;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.home-tile-jump span {
+  display: inline-block;
+  transform: translateX(0);
+  transition: transform 180ms ease;
+}
+
+.home-tile:hover .home-tile-jump,
+.home-tile-jump:hover,
+.home-tile-jump:focus-visible {
+  background: var(--racing-green);
+  border-color: var(--racing-green);
+  color: #fff;
+  outline: none;
+}
+
+.home-tile:hover .home-tile-jump span,
+.home-tile-jump:hover span {
+  transform: translateX(2px);
+}
+
+.home-tile-pulse {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  margin: 4px 0 0;
+}
+
+.home-tile-num {
+  background: linear-gradient(135deg, var(--racing-green), var(--hookers-green));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: clamp(38px, 4.4vw, 56px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
+  line-height: 1;
+}
+
+.home-tile-num-label {
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.home-tile-foot {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin: 0;
+  min-height: 1.4em;
+}
+
+.home-tile-foot strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.home-tile-foot .home-tile-foot-divider {
+  color: var(--text3);
+  margin: 0 6px;
+  opacity: 0.5;
+}
+
+.home-tile-foot.is-warn strong { color: #8a5d11; }
+.home-tile-foot.is-empty { color: var(--text3); font-weight: 500; }
+
+.home-tile-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.home-tile-chips button {
+  background: #eef6f1;
+  border: 1px solid #cfe3d6;
+  border-radius: 999px;
+  color: var(--racing-green);
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 10px 16px;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.home-tile-chips button:hover,
+.home-tile-chips button:focus-visible {
+  background: var(--racing-green);
+  border-color: var(--racing-green);
+  color: #fff;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+/* Markets tile — vertical breakdown by asset class (no hero number) */
+.home-tile-breakdown {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.home-tile-breakdown li {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(56px, auto) 1fr auto;
+}
+
+.home-tile-breakdown li .home-tile-breakdown-num {
+  background: linear-gradient(135deg, var(--racing-green), var(--hookers-green));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-align: left;
+}
+
+.home-tile-breakdown li .home-tile-breakdown-label {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.home-tile-breakdown li .home-tile-breakdown-btn {
+  align-items: center;
+  background: #eef6f1;
+  border: 1px solid #cfe3d6;
+  border-radius: 999px;
+  color: var(--racing-green);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.4px;
+  padding: 6px 12px;
+  text-transform: uppercase;
+  transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.home-tile-breakdown li .home-tile-breakdown-btn:hover,
+.home-tile-breakdown li .home-tile-breakdown-btn:focus-visible {
+  background: var(--racing-green);
+  border-color: var(--racing-green);
+  color: #fff;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.home-tile-breakdown-empty {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Daily Sheets tile — package date + status chip (no hero fraction) */
+.home-tile-package {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 4px 0 0;
+}
+
+.home-tile-package-date {
+  background: linear-gradient(135deg, var(--racing-green), var(--hookers-green));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: clamp(28px, 2.4vw, 36px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.home-tile-package-state {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 5px 10px;
+  text-transform: uppercase;
+}
+
+.home-tile-package-state[data-state="full"] {
+  background: rgba(24, 115, 90, 0.10);
+  border-color: rgba(24, 115, 90, 0.22);
+  color: var(--success);
+}
+
+.home-tile-package-state[data-state="partial"] {
+  background: rgba(212, 153, 38, 0.12);
+  border-color: rgba(212, 153, 38, 0.28);
+  color: #8a5d11;
+}
+
+.home-tile-package-state[data-state="warn"] {
+  background: rgba(212, 153, 38, 0.12);
+  border-color: rgba(212, 153, 38, 0.28);
+  color: #8a5d11;
+}
+
+/* Strategies tile headline — replaces the hero number with a
+   descriptive label since the count isn't always meaningful. */
+.home-tile-headline {
+  margin: 4px 0 0;
+}
+
+.home-tile-headline-text {
+  background: linear-gradient(135deg, var(--racing-green), var(--hookers-green));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-size: clamp(22px, 1.9vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+
+/* Strategies tile — stack the bank search vertically and center it
+   in the tile so input and button live above/below each other. */
+.home-tile-strategies .home-strategy-search {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 1fr;
+  margin: auto 0;
+}
+
+.home-tile-strategies .home-strategy-search .small-btn {
+  background: var(--racing-green);
+  border: 1px solid var(--racing-green);
+  border-radius: 8px;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  padding: 11px 14px;
+  transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.home-tile-strategies .home-strategy-search .small-btn:hover,
+.home-tile-strategies .home-strategy-search .small-btn:focus-visible {
+  background: var(--racing-green-dark);
+  border-color: var(--racing-green-dark);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.home-tile-strategies .home-strategy-results:empty {
+  display: none;
+}
+
+.home-tile-strategies .home-strategy-results {
+  margin-top: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-tile,
+  .home-tile-jump,
+  .home-tile-jump span,
+  .home-tile-chips button {
+    transition: none;
+  }
+  .home-tile:hover { transform: none; }
+}
+
 .universal-search-panel {
   background: #ffffff;
   border: 1px solid var(--border);
@@ -3785,6 +4135,7 @@ body {
   .home-workspace { grid-template-columns: 1fr; }
   .home-launch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-bubble-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-tile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .home-market-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .recap-status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .recap-chart-grid { grid-template-columns: 1fr; }
@@ -5341,7 +5692,8 @@ body {
   .docs-grid, .upload-grid { grid-template-columns: 1fr; }
   .home-status-strip,
   .home-launch-grid,
-  .home-bubble-grid { grid-template-columns: 1fr; }
+  .home-bubble-grid,
+  .home-tile-grid { grid-template-columns: 1fr; }
   .home-panel-head,
   .home-section-row { align-items: flex-start; flex-direction: column; }
   .home-market-tiles { grid-template-columns: 1fr; }

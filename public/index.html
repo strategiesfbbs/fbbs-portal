@@ -214,35 +214,45 @@
   </section>
 
   <div class="container">
-    <section class="home-bubble-grid" aria-label="Home sections">
-      <article class="home-bubble-card" data-reveal>
-        <button type="button" class="home-bubble-button" data-goto="banks">
-          <span>Accounts</span>
-        </button>
-        <p>Bank tear sheets, account coverage, owner data, and service information.</p>
-      </article>
-
-      <article class="home-bubble-card" data-reveal>
-        <button type="button" class="home-bubble-button" data-goto="explorer">
-          <span>Markets</span>
-        </button>
-        <p>Treasury, CD, muni, agency, corporate, and MBS/CMO offering explorers.</p>
-        <p class="tile-spec" id="homeMarketsSpec" hidden></p>
-        <div class="home-bubble-links">
-          <button type="button" data-goto="treasury-explorer">Treasuries</button>
-          <button type="button" data-goto="explorer">CDs</button>
-          <button type="button" data-goto="muni-explorer">Munis</button>
-          <button type="button" data-goto="agencies">Agencies</button>
-          <button type="button" data-goto="corporates">Corporates</button>
+    <section class="home-tile-grid" aria-label="Home sections">
+      <article class="home-tile" data-tile="accounts" data-reveal>
+        <header class="home-tile-head">
+          <p class="home-tile-kicker">Accounts</p>
+          <button type="button" class="home-tile-jump" data-goto="banks" aria-label="Open Bank Tear Sheets">
+            Open <span aria-hidden="true">&rarr;</span>
+          </button>
+        </header>
+        <div class="home-tile-pulse">
+          <span class="home-tile-num" id="homeTileAccountsNum">&mdash;</span>
+          <span class="home-tile-num-label" id="homeTileAccountsLabel">Banks</span>
+        </div>
+        <p class="home-tile-foot" id="homeTileAccountsFoot">Loading account coverage&hellip;</p>
+        <div class="home-tile-chips">
+          <button type="button" data-goto="banks">Tear sheets</button>
+          <button type="button" data-goto="maps">Map</button>
         </div>
       </article>
 
-      <article class="home-bubble-card" data-reveal>
-        <button type="button" class="home-bubble-button" data-goto="dashboard">
-          <span>Daily Sheets</span>
-        </button>
-        <p>Sales dashboard, Economic Update, Relative Value, and Brokered CD Rate Sheet.</p>
-        <div class="home-bubble-links">
+      <article class="home-tile" data-tile="markets" data-reveal>
+        <header class="home-tile-head">
+          <p class="home-tile-kicker">Markets</p>
+        </header>
+        <ul class="home-tile-breakdown" id="homeTileMarketsBreakdown" aria-label="Live offerings by asset class">
+          <li class="home-tile-breakdown-empty">Loading offering counts&hellip;</li>
+        </ul>
+      </article>
+
+      <article class="home-tile" data-tile="daily" data-reveal>
+        <header class="home-tile-head">
+          <p class="home-tile-kicker">Daily Sheets</p>
+          <button type="button" class="home-tile-jump" data-goto="dashboard" aria-label="Open Sales Dashboard">
+            Open <span aria-hidden="true">&rarr;</span>
+          </button>
+        </header>
+        <div class="home-tile-package">
+          <span class="home-tile-package-date" id="homeTileDailyDate">&mdash;</span>
+        </div>
+        <div class="home-tile-chips">
           <button type="button" data-goto="dashboard">Sales</button>
           <button type="button" data-goto="econ">Economic</button>
           <button type="button" data-goto="relativeValue">Relative Value</button>
@@ -250,13 +260,19 @@
         </div>
       </article>
 
-      <article class="home-bubble-card strategy" data-reveal>
-        <button type="button" class="home-bubble-button" data-home-strategy-open>
-          <span>Strategies</span>
-        </button>
-        <p>Search a bank and open the existing strategy request form.</p>
-        <div class="home-strategy-search">
-          <input type="search" id="homeStrategyBankSearch" placeholder="Search bank..." autocomplete="off">
+      <article class="home-tile home-tile-strategies" data-tile="strategies" data-reveal>
+        <header class="home-tile-head">
+          <p class="home-tile-kicker">Strategies</p>
+          <button type="button" class="home-tile-jump" data-goto="strategies" aria-label="Open Strategies queue">
+            Queue <span aria-hidden="true">&rarr;</span>
+          </button>
+        </header>
+        <div class="home-tile-headline">
+          <span class="home-tile-headline-text">Strategies Requests</span>
+        </div>
+        <p class="home-tile-foot" id="homeTileStrategiesFoot"></p>
+        <div class="home-strategy-search" data-home-strategy-open>
+          <input type="search" id="homeStrategyBankSearch" placeholder="Search bank to open strategy form&hellip;" autocomplete="off">
           <button type="button" class="small-btn" id="homeStrategyBankSearchBtn">Search</button>
         </div>
         <div class="home-strategy-results" id="homeStrategyBankResults"></div>
