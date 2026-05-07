@@ -90,18 +90,18 @@ What's intentionally *not* there: app-level auth, CSRF tokens, rate limiting, lo
 
 ## Branch / workflow
 
-- Active branch: `codex/bank-sqlite-smoke-checkpoint`. Both Codex and Claude Code commit here. Keep commits small and self-contained so the other agent can `git log` and pick up where you left off.
+- Single trunk: `main`. Both Codex and Claude Code commit here. Keep commits small and self-contained so the other agent can `git log` and pick up where you left off.
 - Tests: `npm test` (runs `tests/parser-regression.test.js`).
 - Start: `npm start` or `node server/server.js`, or double-click the platform launcher.
 
 ## Dual-agent workflow (Codex + Claude Code)
 
 - This repo is edited by both Codex (CLI/IDE) and Claude Code. Both agents read this file as their primary context — `AGENTS.md` is a mirror of `CLAUDE.md`. Update one, copy to the other.
-- **Single working branch.** All commits go to `codex/bank-sqlite-smoke-checkpoint`. Do not commit to `main` — it exists but is not the integration target. If asked to "push to main", confirm whether the user means the working branch (codex/...) before doing anything destructive on `main`.
+- **Single working branch.** All commits go to `main`. Worktree branches under `claude/*` and `codex/*` are scratch space for in-progress work; merge or fast-forward back to `main` when done and don't leave them lingering on origin.
 - **Pull → check origin → edit → commit → push.** Before starting any non-trivial change:
-  1. `git fetch origin` and inspect `origin/codex/bank-sqlite-smoke-checkpoint` vs. local HEAD.
+  1. `git fetch origin` and inspect `origin/main` vs. local HEAD.
   2. If the user describes a feature that sounds in-scope, search the codebase AND `git log --all` for evidence the other agent already started it. Don't re-implement what's already on a branch — extend or fix it.
-  3. After committing, push immediately (`git push origin HEAD:codex/bank-sqlite-smoke-checkpoint`) so the other agent sees the change. Do not leave commits sitting unpushed.
+  3. After committing, push immediately (`git push origin HEAD:main`) so the other agent sees the change. Do not leave commits sitting unpushed.
 - **Commit small.** One feature or fix per commit so the other agent can review or revert without untangling.
 - **Don't leave large uncommitted working trees** — the other agent can't see them. If you pause mid-feature, commit a checkpoint with a message that says so.
 
