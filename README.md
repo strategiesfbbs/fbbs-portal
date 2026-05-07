@@ -5,6 +5,7 @@ Internal web app for publishing the daily FBBS document package:
 - **Market Intelligence Dashboard** (HTML)
 - **Economic Update** (PDF)
 - **Relative Value** (PDF)
+- **Treasury Notes** (Excel)
 - **Brokered CD Rate Sheet** (PDF)
 - **Daily CD Offerings** (PDF or Excel workbook) — also parsed into a **searchable CD Offerings Explorer**
 - **Muni Offerings** (PDF) — also parsed into a **searchable Muni Offerings Explorer**
@@ -44,7 +45,7 @@ Browse to [http://localhost:3000](http://localhost:3000).
 ### 5. Publish the daily package
 
 1. Click **Upload**
-2. Drop the daily files into their slots — filenames are auto-detected, you'll get a warning if something's in the wrong slot. The portal currently supports nine slots: Dashboard, Economic Update, Relative Value, Brokered CD Sheet, CD Offerings, Muni Offerings, Agencies Bullets, Agencies Callables, and Corporates.
+2. Drop the daily files into their slots — filenames are auto-detected, you'll get a warning if something's in the wrong slot. The portal currently supports ten slots: Dashboard, Economic Update, Relative Value, Treasury Notes, Brokered CD Sheet, CD Offerings, Muni Offerings, Agencies Bullets, Agencies Callables, and Corporates.
 3. Click **Publish Package**
 
 Yesterday's files are archived automatically; the home page updates immediately.
@@ -184,7 +185,7 @@ Handy if the team ever wants to script publishing or pull data elsewhere.
 | `GET` | `/api/agencies` | Structured Agency offerings (bullets + callables unified) from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/corporates` | Structured Corporate bond offerings from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/audit-log` | Publish history, newest first (pass `?limit=N`, default 200, max 1000) |
-| `POST` | `/api/upload` | Multipart/form-data upload — field names `dashboard`, `econ`, `relativeValue`, `cd`, `cdoffers`, `munioffers`, `agenciesBullets`, `agenciesCallables`, `corporates` |
+| `POST` | `/api/upload` | Multipart/form-data upload — field names `dashboard`, `econ`, `relativeValue`, `treasuryNotes`, `cd`, `cdoffers`, `munioffers`, `agenciesBullets`, `agenciesCallables`, `corporates` |
 | `GET` | `/current/<file>` | Serves a file from the current package (`?download=1` to force download) |
 | `GET` | `/archive/<YYYY-MM-DD>/<file>` | Serves a file from that archived day |
 

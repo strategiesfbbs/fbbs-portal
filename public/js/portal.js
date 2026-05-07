@@ -41,17 +41,18 @@
   let selectedBankStrategyHistory = [];
   let mbsCmoData = null;
   let selectedFiles = {
-    dashboard: null, econ: null, relativeValue: null, cd: null, cdoffers: null, munioffers: null,
+    dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
   };
 
-  const SLOTS = ['dashboard', 'econ', 'relativeValue', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+  const SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
   const TOTAL_SLOTS = SLOTS.length;
 
   const DOC_TYPES = {
     dashboard:         { label: 'FBBS Sales Dashboard', ext: 'HTML', viewer: 'dashboard' },
     econ:              { label: 'Economic Update', ext: 'PDF',  viewer: 'econ' },
     relativeValue:     { label: 'Relative Value', ext: 'PDF', viewer: 'relativeValue' },
+    treasuryNotes:     { label: 'Treasury Notes', ext: 'XLSX', viewer: 'treasuryNotes' },
     cd:                { label: 'Brokered CD Sheet', ext: 'PDF', viewer: 'cd' },
     cdoffers:          { label: 'Daily CD Offerings', ext: 'PDF/XLSX', viewer: 'cdoffers' },
     munioffers:        { label: 'Muni Offerings', ext: 'PDF', viewer: 'munioffers' },
@@ -60,7 +61,7 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'dashboard', 'econ', 'relativeValue', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'banks', 'maps', 'strategies', 'archive', 'upload', 'admin'];
 
@@ -69,6 +70,7 @@
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
+    { page: 'treasuryNotes', group: 'FBBS', label: 'Treasury Notes', description: 'Download the uploaded Treasury Notes workbook', aliases: 'treasury notes tsy excel xlsx workbook daily sheet document' },
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
@@ -90,6 +92,7 @@
     dashboard: 'fbbs',
     econ: 'fbbs',
     relativeValue: 'fbbs',
+    treasuryNotes: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
     explorer: 'offerings',
@@ -868,6 +871,8 @@
     const lower = filename.toLowerCase();
     if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'dashboard';
     if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
+      if ((lower.includes('treasury') || lower.includes('tsy')) &&
+          (lower.includes('note') || lower.includes('notes'))) return 'treasuryNotes';
       if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
           lower.includes('daily_cd') || lower.includes('daily cd') ||
           lower.includes('cd offering') || lower.includes('cd_offering')) return 'cdoffers';
@@ -1081,6 +1086,7 @@
     renderViewer('dashboard');
     renderViewer('econ');
     renderViewer('relativeValue');
+    renderViewer('treasuryNotes');
     renderViewer('cd');
     renderViewer('cdoffers');
     renderViewer('munioffers');
@@ -1393,12 +1399,18 @@
       const sandboxAttr = slot === 'dashboard' ? ' sandbox="allow-scripts"' : '';
       if (isExcel) {
         const explorerPage = slot === 'cdoffers' ? 'explorer' : (meta.viewer || 'explorer');
+        const excelCopy = slot === 'cdoffers'
+          ? 'Use the Explorer page for searchable offering data, or download the source workbook.'
+          : 'Download the source workbook to review the uploaded sheet.';
+        const excelButton = slot === 'cdoffers'
+          ? `<button class="doc-btn" data-goto="${explorerPage}">Open Explorer</button>`
+          : '';
         frame.innerHTML = `
           <div class="viewer-empty">
             <div class="ff-kicker">Excel Source Loaded</div>
             <h2>${meta.label} workbook uploaded</h2>
-            <p>Use the Explorer page for searchable offering data, or download the source workbook.</p>
-            <button class="doc-btn" data-goto="${explorerPage}">Open Explorer</button>
+            <p>${excelCopy}</p>
+            ${excelButton}
           </div>`;
       } else {
         frame.innerHTML = `<iframe src="${src}" title="${meta.label}"${sandboxAttr}></iframe>`;
@@ -1791,7 +1803,7 @@
       ? `${escapeHtml(day.publishedBy || 'Portal User')} · ${formatTime(day.publishedAt)}`
       : '—';
 
-    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.cd || day.cdoffers || day.munioffers;
+    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.treasuryNotes || day.cd || day.cdoffers || day.munioffers;
     const viewLink = viewFirst ? `${basePath}${encodeURIComponent(viewFirst)}` : '#';
     const rowClass = isCurrent ? 'current-row' : '';
 
@@ -1804,6 +1816,7 @@
           ${chip(day.dashboard, 'Dashboard.html')}
           ${chip(day.econ, 'Econ_Update.pdf')}
           ${chip(day.relativeValue, 'Relative_Value.pdf')}
+          ${chip(day.treasuryNotes, 'Treasury_Notes.xlsx')}
           ${chip(day.cd, 'CD_Rate_Sheet.pdf')}
           ${chip(day.cdoffers, 'CD_Offerings.pdf')}
           ${chip(day.munioffers, 'Muni_Offerings.pdf')}
@@ -4082,6 +4095,7 @@
 
   function slotAcceptExtensions(slot) {
     if (slot === 'dashboard') return ['.html', '.htm'];
+    if (slot === 'treasuryNotes') return ['.xlsx', '.xlsm', '.xls'];
     if (slot === 'cdoffers') return ['.pdf', '.xlsx', '.xlsm', '.xls'];
     if (slot === 'agenciesBullets' || slot === 'agenciesCallables' || slot === 'corporates') return ['.xlsx', '.xls'];
     return ['.pdf'];
@@ -4171,7 +4185,7 @@
         }
 
         selectedFiles = {
-          dashboard: null, econ: null, relativeValue: null, cd: null, cdoffers: null, munioffers: null,
+          dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, munioffers: null,
           agenciesBullets: null, agenciesCallables: null, corporates: null
         };
         SLOTS.forEach(resetDropZone);
@@ -6476,6 +6490,7 @@
       ],
       contextMetrics: [
         pkg.relativeValue ? 'Relative Value loaded' : 'Relative Value pending',
+        pkg.treasuryNotes ? 'Treasury Notes loaded' : 'Treasury Notes pending',
         nextRelease ? `Next: ${nextRelease.event || 'calendar event'}` : 'Calendar pending',
         `Agency YTM ${formatPercentTile(avgAgencyYtm, 3)}`,
         `Corp YTM ${formatPercentTile(avgCorpYtm, 3)}`

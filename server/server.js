@@ -5,6 +5,7 @@
  *   • Market Intelligence Dashboard (HTML)
  *   • Economic Update (PDF)
  *   • Relative Value (PDF)
+ *   • Treasury Notes (Excel)
  *   • Brokered CD Rate Sheet (PDF)
  *   • Daily CD Offerings (PDF or Excel)   ← also parsed into structured Offerings
  *
@@ -140,7 +141,7 @@ const MIME_TYPES = {
   '.txt':  'text/plain; charset=utf-8'
 };
 
-const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 const OFFERINGS_FILENAME = '_offerings.json';
 const MUNI_OFFERINGS_FILENAME = '_muni_offerings.json';
 const ECONOMIC_UPDATE_FILENAME = '_economic_update.json';
@@ -264,8 +265,12 @@ function classifyFile(filename, explicitSlot) {
 
   if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'dashboard';
 
-  // Agencies + Corporates: Excel files. Route by filename keyword.
+  // Excel workbook slots. Route by filename keyword.
   if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
+    if ((lower.includes('treasury') || lower.includes('tsy')) &&
+        (lower.includes('note') || lower.includes('notes'))) {
+      return 'treasuryNotes';
+    }
     if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
         lower.includes('daily_cd') || lower.includes('daily cd') ||
         lower.includes('cd offering') || lower.includes('cd_offering')) {
@@ -410,7 +415,7 @@ function validateUploadSignature(file, slot) {
   if (['econ', 'relativeValue', 'cd', 'munioffers'].includes(slot)) {
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
   }
-  if (['agenciesBullets', 'agenciesCallables', 'corporates'].includes(slot)) {
+  if (['treasuryNotes', 'agenciesBullets', 'agenciesCallables', 'corporates'].includes(slot)) {
     return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
   }
   return null;
@@ -539,7 +544,7 @@ function parseMultipart(req, boundary, limit) {
             if (SLOT_NAMES.includes(fieldName)) {
               explicitSlot = fieldName;
             } else {
-              const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|relativeValue|cdoffers|munioffers|agenciesBullets|agenciesCallables|corporates|cd)/i);
+              const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|relativeValue|treasuryNotes|cdoffers|munioffers|agenciesBullets|agenciesCallables|corporates|cd)/i);
               if (m) {
                 const token = m[1];
                 // Normalize the canonical form (case-sensitive slot names)
@@ -749,6 +754,7 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     dashboard: null,
     econ: null,
     relativeValue: null,
+    treasuryNotes: null,
     cd: null,
     cdoffers: null,
     munioffers: null,
@@ -1468,11 +1474,14 @@ async function handleUpload(req, res) {
           agenciesCallables: [AGENCIES_FILENAME],
           corporates:        [CORPORATES_FILENAME]
         };
+        const priorSlotByFilename = new Map(
+          Object.entries(priorMeta.slotFilenames || {}).map(([slot, filename]) => [filename, slot])
+        );
         for (const f of existing) {
           if (f === META_FILENAME || f === 'audit.log') continue;
           const classifiedSlot = f.startsWith('_')
             ? Object.entries(perSlotJson).find(([, jsons]) => jsons.includes(f))?.[0]
-            : classifyFile(f);
+            : (priorSlotByFilename.get(f) || classifyFile(f));
           if (classifiedSlot && incomingSlots.has(classifiedSlot)) {
             try { fs.unlinkSync(path.join(CURRENT_DIR, f)); } catch (_) {}
           }

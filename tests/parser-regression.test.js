@@ -96,6 +96,7 @@ function assertClassification() {
   assert.strictEqual(classifyFile('FBBS_Dashboard_20260424.html'), 'dashboard');
   assert.strictEqual(classifyFile('20260424.pdf'), 'econ');
   assert.strictEqual(classifyFile('Relative Value 04.24.2026.pdf'), 'relativeValue');
+  assert.strictEqual(classifyFile('Treasury Notes 04.24.2026.xlsx'), 'treasuryNotes');
   assert.strictEqual(classifyFile('FBBS Brokered CD Rate Sheet_04_24_2026_.pdf'), 'cd');
   assert.strictEqual(classifyFile('20260424_CD_Offers.pdf'), 'cdoffers');
   assert.strictEqual(classifyFile('20260424_CD_Offers.xlsx'), 'cdoffers');
@@ -258,9 +259,11 @@ function assertPackageReaderUsesSlotMetadata() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-package-meta-'));
   try {
     fs.writeFileSync(path.join(tmp, 'generic spreadsheet.xlsx'), 'not parsed here');
+    fs.writeFileSync(path.join(tmp, 'dealer note sheet.xlsx'), 'not parsed here');
     fs.writeFileSync(path.join(tmp, '_meta.json'), JSON.stringify({
       date: '2026-04-28',
       slotFilenames: {
+        treasuryNotes: 'dealer note sheet.xlsx',
         corporates: 'generic spreadsheet.xlsx'
       },
       corporatesCount: 12
@@ -268,6 +271,7 @@ function assertPackageReaderUsesSlotMetadata() {
 
     const pkg = readPackageDir(tmp);
     assert.strictEqual(pkg.date, '2026-04-28');
+    assert.strictEqual(pkg.treasuryNotes, 'dealer note sheet.xlsx');
     assert.strictEqual(pkg.corporates, 'generic spreadsheet.xlsx');
     assert.strictEqual(pkg.agenciesBullets, null);
     assert.strictEqual(pkg.corporatesCount, 12);
