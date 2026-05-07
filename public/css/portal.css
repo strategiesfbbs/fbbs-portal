@@ -5893,6 +5893,22 @@ body {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 12px;
 }
+.maps-detail-carousel {
+  align-items: center;
+  background: rgba(0, 63, 42, 0.06);
+  border: 1px solid rgba(0, 63, 42, 0.12);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin: 12px 0;
+  padding: 8px;
+}
+.maps-detail-carousel span {
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 800;
+}
 .maps-detail-metric {
   background: var(--bg-soft, #f7f7f7);
   border: 1px solid var(--line, #eee);

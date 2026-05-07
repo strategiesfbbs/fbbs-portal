@@ -3,6 +3,8 @@
 const childProcess = require('child_process');
 const fs = require('fs');
 const path = require('path');
+// 2025 Census Gazetteer ZCTA internal points, keyed by ZIP/ZCTA.
+const ZIP_CENTROIDS = require('./us-zcta-centroids-2025.json');
 
 const BANK_DATABASE_FILENAME = 'bank-data.sqlite';
 const LEGACY_CRM_SECTION = ['sales', 'force'].join('');
@@ -600,13 +602,47 @@ function listBankSummaries(outputDir) {
 }
 
 const MAP_FIELD_KEYS = [
-  'displayName', 'certNumber', 'city', 'state',
+  'displayName', 'certNumber', 'city', 'state', 'county', 'address', 'zip',
   'totalAssets', 'totalEquityCapital', 'tier1Capital', 'totalDeposits',
-  'afsTotal', 'htmTotal', 'securitiesToAssets', 'loansToDeposits',
+  'afsTotal', 'htmTotal', 'securitiesToAssets', 'loansToAssets', 'loansToDeposits',
   'roa', 'roe', 'netInterestMargin', 'yieldOnSecurities', 'yieldOnLoans',
   'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio', 'leverageRatio',
   'nonInterestBearingDeposits', 'wholesaleFundingReliance'
 ];
+
+function zip5(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  return digits.length < 5 ? digits.padStart(5, '0') : digits.slice(0, 5);
+}
+
+function normalizeLocationPart(value) {
+  return String(value || '').trim().toUpperCase().replace(/\s+/g, ' ');
+}
+
+function mapLocationForRow(row) {
+  const zip = zip5(row.zip);
+  const centroid = zip && ZIP_CENTROIDS[zip];
+  const city = normalizeLocationPart(row.city);
+  const county = normalizeLocationPart(row.county);
+  const state = normalizeLocationPart(row.state);
+  const key = [zip, city, county, state].filter(Boolean).join('|');
+  const countyRaw = String(row.county || '').trim();
+  const countyLabel = countyRaw && countyRaw.includes(',') ? countyRaw : (countyRaw ? `${countyRaw} County` : '');
+  const label = [
+    String(row.city || '').trim(),
+    countyLabel,
+    String(row.state || '').trim(),
+    zip
+  ].filter(Boolean).join(' · ');
+  return {
+    zip5: zip,
+    locationKey: key,
+    locationLabel: label,
+    latitude: centroid ? centroid[0] : null,
+    longitude: centroid ? centroid[1] : null
+  };
+}
 
 function buildMapFieldDefs() {
   return MAP_FIELD_KEYS
@@ -656,12 +692,15 @@ function queryBankMapDataset(outputDir, periodPattern = null) {
     ORDER BY b.total_assets DESC;
   `, { maxBuffer: 256 * 1024 * 1024 });
   const stateCounts = {};
+  let mappedCount = 0;
   let latestPeriod = '';
   for (const r of rows) {
     if (r.state) stateCounts[r.state] = (stateCounts[r.state] || 0) + 1;
     if (r.period && r.period > latestPeriod) latestPeriod = r.period;
+    Object.assign(r, mapLocationForRow(r));
+    if (Number.isFinite(r.latitude) && Number.isFinite(r.longitude)) mappedCount += 1;
   }
-  return { banks: rows, fields, stateCounts, latestPeriod, bankCount: rows.length };
+  return { banks: rows, fields, stateCounts, latestPeriod, bankCount: rows.length, mappedCount };
 }
 
 module.exports = {

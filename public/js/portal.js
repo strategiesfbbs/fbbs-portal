@@ -6852,9 +6852,13 @@
     fieldByKey: {},
     stateCounts: {},
     latestPeriod: '',
+    mappedCount: 0,
     selectedStates: new Set(),
     selectedStatuses: new Set(),
     selectedBankId: '',
+    selectedLocationKey: '',
+    selectedLocationIndex: 0,
+    visibleBanks: [],
     search: '',
     advanced: [],
     plotInitialized: false
@@ -6929,6 +6933,71 @@
     return String(value || 'Open').toLowerCase().replace(/[^a-z0-9]+/g, '-');
   }
 
+  function mapsStatusColor(value) {
+    const status = mapsStatusSlug(value);
+    if (status === 'client') return '#36d52f';
+    if (status === 'prospect') return '#ffeb00';
+    if (status === 'open') return '#111111';
+    if (status === 'watchlist') return '#f59e0b';
+    if (status === 'dormant') return '#64748b';
+    return '#2f6fed';
+  }
+
+  function mapsHasCoords(bank) {
+    return Number.isFinite(Number(bank && bank.latitude)) && Number.isFinite(Number(bank && bank.longitude));
+  }
+
+  function mapsLocationKey(bank) {
+    if (!bank) return '';
+    return bank.locationKey || [bank.zip5 || bank.zip, bank.city, bank.county, bank.state].filter(Boolean).join('|');
+  }
+
+  function mapsLocationGroups(banks) {
+    const groups = new Map();
+    for (const bank of banks || []) {
+      if (!mapsHasCoords(bank)) continue;
+      const key = mapsLocationKey(bank) || `${bank.latitude},${bank.longitude}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          lat: 0,
+          lon: 0,
+          label: bank.locationLabel || [bank.city, bank.county, bank.state, bank.zip5 || bank.zip].filter(Boolean).join(' · '),
+          banks: []
+        });
+      }
+      const group = groups.get(key);
+      group.lat += Number(bank.latitude);
+      group.lon += Number(bank.longitude);
+      group.banks.push(bank);
+    }
+    return Array.from(groups.values()).map(group => {
+      group.banks.sort((a, b) => mapsBankListName(a).localeCompare(mapsBankListName(b)));
+      if (group.banks.length) {
+        group.lat = group.lat / group.banks.length;
+        group.lon = group.lon / group.banks.length;
+      }
+      return group;
+    });
+  }
+
+  function mapsSelectedLocationGroup() {
+    const bank = mapsFindBank(mapsState.selectedBankId);
+    const key = mapsState.selectedLocationKey || mapsLocationKey(bank);
+    if (!key) return null;
+    return mapsLocationGroups(mapsState.visibleBanks.length ? mapsState.visibleBanks : mapsState.banks)
+      .find(group => group.key === key) || null;
+  }
+
+  function mapsSelectBank(bank, group) {
+    if (!bank) return;
+    mapsState.selectedBankId = String(bank.id || '');
+    mapsState.selectedLocationKey = group ? group.key : mapsLocationKey(bank);
+    const peers = group ? group.banks : mapsLocationGroups(mapsState.visibleBanks).find(g => g.key === mapsState.selectedLocationKey)?.banks;
+    const idx = peers ? peers.findIndex(peer => String(peer.id || '') === String(bank.id || '')) : -1;
+    mapsState.selectedLocationIndex = idx >= 0 ? idx : 0;
+  }
+
   function mapsFindBank(id) {
     const key = String(id || '');
     return mapsState.banks.find(bank => String(bank.id || '') === key) || null;
@@ -6972,6 +7041,7 @@
       for (const f of mapsState.fields) mapsState.fieldByKey[f.key] = f;
       mapsState.stateCounts = data.stateCounts || {};
       mapsState.latestPeriod = data.latestPeriod || '';
+      mapsState.mappedCount = data.mappedCount || mapsState.banks.filter(mapsHasCoords).length;
       mapsState.loaded = true;
       mapsBindHandlers();
       renderMapsView();
@@ -6990,73 +7060,79 @@
     if (countEl) countEl.textContent = mapsState.banks.length.toLocaleString();
     if (subtitle) {
       subtitle.textContent = mapsState.latestPeriod
-        ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · click states or rows for detail`
-        : `${mapsState.banks.length.toLocaleString()} banks · click states or rows for detail`;
+        ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · click markers or rows for detail`
+        : `${mapsState.banks.length.toLocaleString()} banks · click markers or rows for detail`;
     }
-    renderMapsChoropleth();
     renderMapsStateChips();
     renderMapsStatusFilters();
     renderMapsDetailPanel();
     applyMapsFilters();
   }
 
-  function renderMapsChoropleth() {
+  function renderMapsMarkerMap(rows) {
     if (typeof Plotly === 'undefined') return;
     const el = document.getElementById('mapsPlot');
     if (!el) return;
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
-    const entries = Object.entries(mapsState.stateCounts).sort();
-    const locations = entries.map(([s]) => s);
-    const z = entries.map(([, n]) => n);
-    const portalScale = [
-      [0.00, '#f3f8f5'],
-      [0.25, '#B8CEBE'],
-      [0.50, '#9EB8A8'],
-      [0.75, '#345F4A'],
-      [1.00, '#003F2A']
-    ];
+    const groups = mapsLocationGroups(rows);
+    const selectedKey = mapsState.selectedLocationKey;
     const figData = [{
-      type: 'choropleth',
-      locationmode: 'USA-states',
-      locations,
-      z,
-      colorscale: portalScale,
-      hovertemplate: '<b>%{location}</b><br>Banks: %{z:,.0f}<extra></extra>',
-      marker: { line: { color: '#ffffff', width: 0.6 } },
-      colorbar: {
-        title: { text: 'Banks', font: { color: '#1f2925', size: 12 } },
-        tickfont: { color: '#1f2925', size: 11 },
-        outlinecolor: '#dbe6df',
-        outlinewidth: 1,
-        thickness: 12,
-        len: 0.85
+      type: 'scattergeo',
+      mode: 'markers+text',
+      lat: groups.map(group => group.lat),
+      lon: groups.map(group => group.lon),
+      text: groups.map(group => group.banks.length > 1 ? String(group.banks.length) : ''),
+      textposition: 'top center',
+      textfont: { color: '#111111', size: 11, family: 'inherit' },
+      customdata: groups.map(group => group.key),
+      hovertemplate: groups.map(group => {
+        const first = group.banks[0];
+        const bankLabel = group.banks.length === 1 ? mapsBankListName(first) : `${group.banks.length} banks`;
+        return `<b>${escapeHtml(bankLabel)}</b><br>${escapeHtml(group.label || '')}<extra></extra>`;
+      }),
+      marker: {
+        size: groups.map(group => group.key === selectedKey ? 18 : Math.min(22, 11 + Math.sqrt(group.banks.length) * 3)),
+        color: groups.map(group => mapsStatusColor(mapsAccountStatusLabel(group.banks[0]))),
+        opacity: 0.95,
+        line: {
+          color: groups.map(group => group.key === selectedKey ? '#ffffff' : '#1f2925'),
+          width: groups.map(group => group.key === selectedKey ? 3 : 1.4)
+        }
       }
     }];
     const layout = {
       geo: {
         scope: 'usa',
+        projection: { type: 'albers usa' },
         showlakes: true,
-        lakecolor: '#f7faf8',
+        lakecolor: '#dbeafe',
         bgcolor: 'rgba(0,0,0,0)',
-        landcolor: '#fbfdfc',
-        subunitcolor: '#dbe6df'
+        landcolor: '#f7f3d5',
+        countrycolor: '#d7d0a0',
+        subunitcolor: '#d7d0a0',
+        showcountries: true,
+        showsubunits: true
       },
       font: { family: 'inherit', color: '#1f2925' },
       margin: { t: 10, r: 10, b: 10, l: 10 },
-      coloraxis: undefined,
       paper_bgcolor: 'rgba(0,0,0,0)',
       plot_bgcolor: 'rgba(0,0,0,0)'
     };
-    Plotly.react(el, figData, layout, { responsive: true, displaylogo: false }).then(() => {
+    Plotly.react(el, figData, layout, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d'] }).then(() => {
       if (mapsState.plotInitialized) return;
       mapsState.plotInitialized = true;
       el.on('plotly_click', (data) => {
         if (!data || !data.points || !data.points.length) return;
-        const st = data.points[0].location;
-        if (!st) return;
-        if (mapsState.selectedStates.has(st)) mapsState.selectedStates.delete(st);
-        else mapsState.selectedStates.add(st);
-        renderMapsStateChips();
+        const key = data.points[0].customdata;
+        if (!key) return;
+        const group = mapsLocationGroups(mapsState.visibleBanks).find(item => item.key === key);
+        if (!group || !group.banks.length) return;
+        const nextIndex = mapsState.selectedLocationKey === key
+          ? (mapsState.selectedLocationIndex + 1) % group.banks.length
+          : 0;
+        mapsState.selectedLocationKey = key;
+        mapsState.selectedLocationIndex = nextIndex;
+        mapsState.selectedBankId = String(group.banks[nextIndex].id || '');
         applyMapsFilters();
       });
     });
@@ -7148,11 +7224,15 @@
       rows.push(b);
     }
     rows.sort((a, b) => (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0));
+    mapsState.visibleBanks = rows;
     const limit = 1000;
     const shown = rows.slice(0, limit);
     const visibleIds = new Set(shown.map(row => String(row.id || '')));
     if (!shown.length) mapsState.selectedBankId = '';
-    else if (!visibleIds.has(String(mapsState.selectedBankId || ''))) mapsState.selectedBankId = String(shown[0].id || '');
+    else if (!visibleIds.has(String(mapsState.selectedBankId || ''))) {
+      mapsSelectBank(shown[0], mapsLocationGroups(rows).find(group => group.key === mapsLocationKey(shown[0])));
+    }
+    renderMapsMarkerMap(rows);
     const assetsDef = mapsState.fieldByKey.totalAssets;
     const securitiesToAssetsDef = mapsState.fieldByKey.securitiesToAssets || MAPS_SECURITIES_TO_ASSETS_FIELD;
     body.innerHTML = shown.map(b => `
@@ -7167,7 +7247,8 @@
       </tr>
     `).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
     const previewBank = btn => {
-      mapsState.selectedBankId = btn.dataset.mapsBankPreview || '';
+      const bank = mapsFindBank(btn.dataset.mapsBankPreview || '');
+      mapsSelectBank(bank, mapsLocationGroups(rows).find(group => group.key === mapsLocationKey(bank)));
       applyMapsFilters();
     };
     body.querySelectorAll('[data-maps-bank-preview]').forEach(btn => {
@@ -7208,20 +7289,35 @@
     const loansToDepositsDef = mapsState.fieldByKey.loansToDeposits;
     const securitiesToAssetsDef = mapsState.fieldByKey.securitiesToAssets || MAPS_SECURITIES_TO_ASSETS_FIELD;
     const status = mapsAccountStatusLabel(bank);
+    const group = mapsSelectedLocationGroup();
+    const groupBanks = group && group.banks && group.banks.length ? group.banks : [bank];
+    const groupIndex = Math.max(0, groupBanks.findIndex(peer => String(peer.id || '') === String(bank.id || '')));
+    mapsState.selectedLocationIndex = groupIndex;
+    const accountStatus = bank.accountStatus || {};
+    const locationLine = [bank.address, bank.city, bank.state, bank.zip5 || bank.zip].filter(Boolean).join(', ');
     panel.hidden = false;
     panel.innerHTML = `
       <div class="maps-detail-head">
         <div>
           <span class="maps-status-pill maps-status-${escapeHtml(mapsStatusSlug(status))}">${escapeHtml(status)}</span>
           <h4>${escapeHtml(mapsBankListName(bank))}</h4>
-          <p>${escapeHtml([bank.city, bank.state, bank.certNumber ? `FDIC ${bank.certNumber}` : ''].filter(Boolean).join(' - '))}</p>
+          <p>${escapeHtml(locationLine || [bank.city, bank.state, bank.certNumber ? `FDIC ${bank.certNumber}` : ''].filter(Boolean).join(' - '))}</p>
         </div>
         <button type="button" class="small-btn" id="mapsDetailClose">Close</button>
       </div>
+      ${groupBanks.length > 1 ? `
+        <div class="maps-detail-carousel">
+          <button type="button" class="small-btn" id="mapsPrevOverlap" aria-label="Previous bank at this marker">&lt;</button>
+          <span>${formatNumber(groupIndex + 1)} of ${formatNumber(groupBanks.length)} banks at this marker</span>
+          <button type="button" class="small-btn" id="mapsNextOverlap" aria-label="Next bank at this marker">&gt;</button>
+        </div>
+      ` : ''}
       <div class="maps-detail-grid">
+        ${mapsDetailMetric('Coverage Owner', accountStatus.owner || '')}
         ${mapsDetailMetric('Assets ($MM)', mapsFormatValue(bank.totalAssets, assetsDef))}
-        ${mapsDetailMetric('Deposits ($MM)', mapsFormatValue(bank.totalDeposits, depositsDef))}
+        ${mapsDetailMetric('Total Loans / Assets', mapsFormatValue(bank.loansToAssets, mapsState.fieldByKey.loansToAssets))}
         ${mapsDetailMetric('Securities / Assets', mapsFormatValue(mapsSecuritiesToAssets(bank), securitiesToAssetsDef))}
+        ${mapsDetailMetric('Deposits ($MM)', mapsFormatValue(bank.totalDeposits, depositsDef))}
         ${mapsDetailMetric('Loans / Deposits', mapsFormatValue(bank.loansToDeposits, loansToDepositsDef))}
       </div>
       <div class="maps-detail-actions">
@@ -7233,6 +7329,16 @@
       mapsState.selectedBankId = '';
       applyMapsFilters();
     });
+    const cycle = direction => {
+      if (!group || groupBanks.length <= 1) return;
+      const next = (groupIndex + direction + groupBanks.length) % groupBanks.length;
+      mapsSelectBank(groupBanks[next], group);
+      applyMapsFilters();
+    };
+    const prev = document.getElementById('mapsPrevOverlap');
+    if (prev) prev.addEventListener('click', () => cycle(-1));
+    const next = document.getElementById('mapsNextOverlap');
+    if (next) next.addEventListener('click', () => cycle(1));
     const open = document.getElementById('mapsOpenTearSheet');
     if (open) open.addEventListener('click', () => {
       goTo('banks');
@@ -7398,7 +7504,8 @@
         const tr = e.target.closest('tr[data-maps-bankid]');
         const id = btn ? btn.dataset.mapsBankPreview : tr && tr.dataset.mapsBankid;
         if (!id) return;
-        mapsState.selectedBankId = id;
+        const bank = mapsFindBank(id);
+        mapsSelectBank(bank, mapsLocationGroups(mapsState.visibleBanks).find(group => group.key === mapsLocationKey(bank)));
         applyMapsFilters();
       });
       tableBody.dataset.bound = '1';
