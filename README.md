@@ -5,7 +5,7 @@ Internal web app for publishing the daily FBBS document package:
 - **Market Intelligence Dashboard** (HTML)
 - **Economic Update** (PDF)
 - **Relative Value** (PDF)
-- **Treasury Notes** (Excel)
+- **Treasury Notes** (Excel) — parsed into a **searchable Treasury Notes Explorer**
 - **Brokered CD Rate Sheet** (PDF)
 - **Daily CD Offerings** (PDF or Excel workbook) — also parsed into a **searchable CD Offerings Explorer**
 - **Muni Offerings** (PDF) — also parsed into a **searchable Muni Offerings Explorer**
@@ -180,6 +180,7 @@ Handy if the team ever wants to script publishing or pull data elsewhere.
 | `GET` | `/api/current` | JSON describing the current published package |
 | `GET` | `/api/archive` | JSON array of all archived days |
 | `GET` | `/api/economic-update` | Structured Economic Update market data from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
+| `GET` | `/api/treasury-notes` | Structured Treasury Notes from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/offerings` | Structured CD offerings from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/muni-offerings` | Structured Muni offerings from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/agencies` | Structured Agency offerings (bullets + callables unified) from the current package (pass `?date=YYYY-MM-DD` for an archived day) |

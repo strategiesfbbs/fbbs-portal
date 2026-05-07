@@ -5,7 +5,7 @@
  *   • Market Intelligence Dashboard (HTML)
  *   • Economic Update (PDF)
  *   • Relative Value (PDF)
- *   • Treasury Notes (Excel)
+ *   • Treasury Notes (Excel)             ← also parsed into structured Notes
  *   • Brokered CD Rate Sheet (PDF)
  *   • Daily CD Offerings (PDF or Excel)   ← also parsed into structured Offerings
  *
@@ -31,6 +31,7 @@ const { parseCdOffersText, parseCdOffersWorkbook } = require('./cd-offers-parser
 const { parseBrokeredCdRateSheetText } = require('./brokered-cd-parser');
 const { parseMuniOffersText } = require('./muni-offers-parser');
 const { parseEconomicUpdateText } = require('./economic-update-parser');
+const { parseTreasuryNotesWorkbook } = require('./treasury-notes-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
 const { parseCorporatesFiles } = require('./corporates-parser');
 const {
@@ -144,6 +145,7 @@ const MIME_TYPES = {
 const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 const OFFERINGS_FILENAME = '_offerings.json';
 const MUNI_OFFERINGS_FILENAME = '_muni_offerings.json';
+const TREASURY_NOTES_FILENAME = '_treasury_notes.json';
 const ECONOMIC_UPDATE_FILENAME = '_economic_update.json';
 const AGENCIES_FILENAME = '_agencies.json';
 const CORPORATES_FILENAME = '_corporates.json';
@@ -765,6 +767,7 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     publishedBy: null,
     offeringsCount: null,
     muniOfferingsCount: null,
+    treasuryNotesCount: null,
     agencyCount: null,
     agencyFileDate: null,
     corporatesCount: null,
@@ -791,6 +794,7 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
   if (meta.publishedBy) pkg.publishedBy = meta.publishedBy;
   if (typeof meta.offeringsCount === 'number') pkg.offeringsCount = meta.offeringsCount;
   if (typeof meta.muniOfferingsCount === 'number') pkg.muniOfferingsCount = meta.muniOfferingsCount;
+  if (typeof meta.treasuryNotesCount === 'number') pkg.treasuryNotesCount = meta.treasuryNotesCount;
   if (typeof meta.agencyCount === 'number') pkg.agencyCount = meta.agencyCount;
   if (meta.agencyFileDate) pkg.agencyFileDate = meta.agencyFileDate;
   if (typeof meta.corporatesCount === 'number') pkg.corporatesCount = meta.corporatesCount;
@@ -907,6 +911,28 @@ function loadArchivedMuniOfferings(date) {
   if (!fs.existsSync(offPath)) return null;
   try {
     return JSON.parse(fs.readFileSync(offPath, 'utf-8'));
+  } catch (e) {
+    return null;
+  }
+}
+
+function loadCurrentTreasuryNotes() {
+  const p = path.join(CURRENT_DIR, TREASURY_NOTES_FILENAME);
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch (e) {
+    log('warn', 'Could not read treasury notes file:', e.message);
+    return null;
+  }
+}
+
+function loadArchivedTreasuryNotes(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const p = path.join(ARCHIVE_DIR, date, TREASURY_NOTES_FILENAME);
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8'));
   } catch (e) {
     return null;
   }
@@ -1468,6 +1494,7 @@ async function handleUpload(req, res) {
         // also cleared so the re-upload can write fresh ones.
         const perSlotJson = {
           econ:              [ECONOMIC_UPDATE_FILENAME],
+          treasuryNotes:     [TREASURY_NOTES_FILENAME],
           cdoffers:          [OFFERINGS_FILENAME],
           munioffers:        [MUNI_OFFERINGS_FILENAME],
           agenciesBullets:   [AGENCIES_FILENAME],
@@ -1643,6 +1670,34 @@ async function handleUpload(req, res) {
     }
   }
 
+  // Extract treasury notes from the uploaded Excel workbook if present.
+  let treasuryNotesCount = null;
+  let treasuryNotesWarnings = [];
+  const treasuryNotesFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'treasuryNotes');
+  if (treasuryNotesFile) {
+    const sourceFile = slotFilenames.treasuryNotes || sanitizeFilename(treasuryNotesFile.filename);
+    const parsed = parseTreasuryNotesWorkbook(treasuryNotesFile.data, { filename: sourceFile });
+    treasuryNotesCount = parsed.notes.length;
+    treasuryNotesWarnings = parsed.warnings || [];
+    if (parsed.notes.length) {
+      try {
+        fs.writeFileSync(path.join(CURRENT_DIR, TREASURY_NOTES_FILENAME), JSON.stringify({
+          asOfDate: parsed.asOfDate || null,
+          extractedAt: new Date().toISOString(),
+          sourceFile,
+          warnings: treasuryNotesWarnings,
+          sources: parsed.sources || [],
+          notes: parsed.notes
+        }, null, 2));
+        log('info', `Extracted ${treasuryNotesCount} treasury notes`);
+      } catch (err) {
+        log('error', 'Failed to write treasury notes JSON:', err.message);
+      }
+    } else {
+      log('warn', 'Treasury Notes workbook was uploaded but no notes were extracted');
+    }
+  }
+
   // Extract agency offerings from any uploaded Excel files (bullets + callables).
   let agencyCount = null;
   let agencyWarnings = [];
@@ -1755,6 +1810,7 @@ async function handleUpload(req, res) {
 
   const mergedOfferingsCount      = incomingSlots.has('cdoffers')    ? offeringsCount      : (priorMeta.offeringsCount ?? null);
   const mergedMuniOfferingsCount  = incomingSlots.has('munioffers')  ? muniOfferingsCount  : (priorMeta.muniOfferingsCount ?? null);
+  const mergedTreasuryNotesCount  = incomingSlots.has('treasuryNotes') ? treasuryNotesCount : (priorMeta.treasuryNotesCount ?? null);
   const mergedAgencyCount         = touchesAgencies ? agencyCount        : (priorMeta.agencyCount ?? null);
   const mergedAgencyFileDate      = touchesAgencies ? agencyFileDate     : (priorMeta.agencyFileDate ?? null);
   const mergedCorporatesCount     = incomingSlots.has('corporates')  ? corporatesCount     : (priorMeta.corporatesCount ?? null);
@@ -1771,6 +1827,7 @@ async function handleUpload(req, res) {
     publishedBy: 'Portal User',
     offeringsCount:      mergedOfferingsCount,
     muniOfferingsCount:  mergedMuniOfferingsCount,
+    treasuryNotesCount:  mergedTreasuryNotesCount,
     agencyCount:         mergedAgencyCount,
     agencyFileDate:      mergedAgencyFileDate,
     corporatesCount:     mergedCorporatesCount,
@@ -1789,6 +1846,7 @@ async function handleUpload(req, res) {
     offeringsCount,
     cdHistorySnapshot,
     muniOfferingsCount,
+    treasuryNotesCount,
     agencyCount,
     agencyFileDate,
     corporatesCount,
@@ -1799,6 +1857,7 @@ async function handleUpload(req, res) {
       cd: brokeredCdWarnings,
       cdoffers: offeringsWarnings,
       munioffers: muniOfferingsWarnings,
+      treasuryNotes: treasuryNotesWarnings,
       agencies: agencyWarnings,
       corporates: corporatesWarnings
     }
@@ -1815,6 +1874,8 @@ async function handleUpload(req, res) {
     cdHistorySnapshot,
     muniOfferingsCount,
     muniOfferingsWarnings,
+    treasuryNotesCount,
+    treasuryNotesWarnings,
     agencyCount,
     agencyWarnings,
     agencySources,
@@ -1930,6 +1991,19 @@ const server = http.createServer(async (req, res) => {
           error: date
             ? `No muni offerings data for ${date}`
             : 'No muni offerings data in the current package'
+        });
+      }
+      return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/treasury-notes' && req.method === 'GET') {
+      const date = query.get('date');
+      const data = date ? loadArchivedTreasuryNotes(date) : loadCurrentTreasuryNotes();
+      if (!data) {
+        return sendJSON(res, 404, {
+          error: date
+            ? `No treasury notes data for ${date}`
+            : 'No treasury notes data in the current package'
         });
       }
       return sendJSON(res, 200, data);

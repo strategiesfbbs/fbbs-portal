@@ -11,6 +11,7 @@ const { parseCdOffersText, parseCdOffersWorkbook } = require('../server/cd-offer
 const { parseBrokeredCdRateSheetText } = require('../server/brokered-cd-parser');
 const { parseMuniOffersText } = require('../server/muni-offers-parser');
 const { parseEconomicUpdateText } = require('../server/economic-update-parser');
+const { parseTreasuryNotesWorkbook } = require('../server/treasury-notes-parser');
 const { parseAgenciesFiles } = require('../server/agencies-parser');
 const { parseCorporatesFiles } = require('../server/corporates-parser');
 const {
@@ -253,6 +254,44 @@ function assertCorporatesParser() {
   assert.strictEqual(parsed.offerings[0].cusip, '24422EXD6');
   assert.strictEqual(parsed.offerings[0].creditTier, 'A');
   assert.strictEqual(parsed.offerings[0].investmentGrade, true);
+}
+
+function assertTreasuryNotesParser() {
+  const workbook = XLSX.utils.book_new();
+  const rows = [
+    ['CUSIP(s)', 'Cpn(s)', 'Maturity(s)', 'Ask Amt', 'NET OFFER COST', 'NET OFFER YTM'],
+    ['912828U24', 2, '11/15/2026', 5000, 99.20292663574219, 3.562],
+    ['91282CJK8', 4.625, '11/15/2026', 5000, 100.53955078125, 3.566]
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Worksheet');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+  const parsed = parseTreasuryNotesWorkbook(buffer, { filename: 'TSY NOTE OFFERS 5.7.26.xlsx' });
+  assert.strictEqual(parsed.asOfDate, '2026-05-07');
+  assert.strictEqual(parsed.notes.length, 2);
+  assert.strictEqual(parsed.sources[0].rowCount, 2);
+  assert.deepStrictEqual(parsed.notes[0], {
+    description: 'Treasury Note 2.000% due 2026-11-15',
+    cusip: '912828U24',
+    coupon: 2,
+    maturity: '2026-11-15',
+    settle: null,
+    price: 99.202927,
+    yield: 3.562,
+    spread: null,
+    quantity: 5000,
+    quantityRaw: '5000',
+    benchmark: '',
+    type: '',
+    rawFields: {
+      'CUSIP(s)': '912828U24',
+      'Cpn(s)': 2,
+      'Maturity(s)': '11/15/2026',
+      'Ask Amt': 5000,
+      'NET OFFER COST': 99.202927,
+      'NET OFFER YTM': 3.562
+    }
+  });
 }
 
 function assertPackageReaderUsesSlotMetadata() {
@@ -801,6 +840,7 @@ function assertWeeklyCdWorksheetImport() {
   await assertBrokeredCdParser();
   await assertMuniParser();
   await assertEconomicUpdateParser();
+  assertTreasuryNotesParser();
   assertAgenciesParser();
   assertCorporatesParser();
   assertPackageReaderUsesSlotMetadata();

@@ -55,6 +55,9 @@
         <span class="nav-caret">&#8250;</span>
       </button>
       <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="treasury-explorer" href="#treasury-explorer">
+          <span class="nav-label">Treasury Explorer</span>
+        </a>
         <a class="nav-link nav-minor" data-page="explorer" href="#explorer">
           <span class="nav-label">CD Explorer</span>
         </a>
@@ -226,9 +229,10 @@
         <button type="button" class="home-bubble-button" data-goto="explorer">
           <span>Markets</span>
         </button>
-        <p>CD, muni, agency, corporate, and MBS/CMO offering explorers.</p>
+        <p>Treasury, CD, muni, agency, corporate, and MBS/CMO offering explorers.</p>
         <p class="tile-spec" id="homeMarketsSpec" hidden></p>
         <div class="home-bubble-links">
+          <button type="button" data-goto="treasury-explorer">Treasuries</button>
           <button type="button" data-goto="explorer">CDs</button>
           <button type="button" data-goto="muni-explorer">Munis</button>
           <button type="button" data-goto="agencies">Agencies</button>
@@ -1188,6 +1192,82 @@
           <tr><td colspan="7" style="text-align:center;padding:36px;color:var(--text3)">Loading&hellip;</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- ========== TREASURY NOTES EXPLORER PAGE ========== -->
+<div class="page" id="p-treasury-explorer">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Treasury Notes <strong>Explorer</strong></h2>
+        <p class="hero-sub" id="treasuryExplorerSub">Loading&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="treasuryExplorerStat">&mdash;</div>
+        <div class="lbl">Notes Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Filter &amp; Sort Treasury Notes</h3>
+      <div class="kicker" id="treasuryExplorerKicker">&mdash;</div>
+    </div>
+
+    <div class="explorer-stats" id="treasuryStatTiles"></div>
+
+    <div class="explorer-filters">
+      <label class="ef-field">
+        <span>Search</span>
+        <input type="text" id="tf-search" placeholder="Description, CUSIP, benchmark&hellip;" autocomplete="off">
+      </label>
+      <label class="ef-field">
+        <span>Min yield %</span>
+        <input type="number" id="tf-minyield" step="0.01" min="0" max="20" placeholder="e.g. 4.25">
+      </label>
+      <label class="ef-field">
+        <span>Max maturity</span>
+        <input type="date" id="tf-maxmaturity">
+      </label>
+      <label class="ef-field">
+        <span>Benchmark</span>
+        <select id="tf-benchmark">
+          <option value="">All benchmarks</option>
+        </select>
+      </label>
+      <div class="ef-actions">
+        <button type="button" class="small-btn" id="tf-reset">Reset</button>
+        <button type="button" class="small-btn" id="tf-export">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table treasury-table">
+        <thead>
+          <tr>
+            <th data-sort="description">Description</th>
+            <th data-sort="cusip" style="width:110px">CUSIP</th>
+            <th data-sort="coupon" style="width:80px;text-align:right">Coupon %</th>
+            <th data-sort="maturity" style="width:120px">Maturity</th>
+            <th data-sort="yield" style="width:80px;text-align:right">Yield %</th>
+            <th data-sort="price" style="width:85px;text-align:right">Price</th>
+            <th data-sort="spread" style="width:80px;text-align:right">Spread</th>
+            <th data-sort="quantity" style="width:95px;text-align:right">Size</th>
+            <th data-sort="benchmark" style="width:120px">Benchmark</th>
+          </tr>
+        </thead>
+        <tbody id="treasuryExplorerBody">
+          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">Loading treasury notes&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="legend-box">
+      <strong>Tip:</strong>
+      Treasury Notes data is extracted automatically from the uploaded Treasury Notes workbook. Use export if you want the filtered view as a CSV.
     </div>
   </div>
 </div>

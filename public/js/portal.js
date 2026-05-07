@@ -62,6 +62,7 @@
   };
 
   const VALID_PAGES = ['home', 'dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+                       'treasury-explorer',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'banks', 'maps', 'strategies', 'archive', 'upload', 'admin'];
 
@@ -74,6 +75,7 @@
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
+    { page: 'treasury-explorer', group: 'Offerings', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
     { page: 'explorer', group: 'Offerings', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates offerings' },
     { page: 'munioffers', group: 'Documents', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
     { page: 'muni-explorer', group: 'Offerings', label: 'Muni Explorer', description: 'Filter, sort, and export muni offerings', aliases: 'municipal bonds state rating munis offerings' },
@@ -95,6 +97,7 @@
     treasuryNotes: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
+    'treasury-explorer': 'offerings',
     explorer: 'offerings',
     'muni-explorer': 'offerings',
     agencies: 'offerings',
@@ -627,6 +630,7 @@
 
   function renderHomeMarketTiles() {
     const cds = marketData.cds || [];
+    const treasuries = marketData.treasuryNotes || [];
     const munis = marketData.munis || [];
     const agencies = marketData.agencies || [];
     const corporates = marketData.corporates || [];
@@ -764,6 +768,7 @@
     const cards = [
       { page: 'strategies', label: 'Strategies', title: 'Strategies Queue', detail: 'Track Bond Swap, Muni BCIS, THO, CECL, miscellaneous, and billing requests.', metric: `${formatNumber(strategyCounts.Open || 0)} open` },
       { page: 'banks', label: 'Banks', title: 'Bank Tear Sheets', detail: 'Call report tear sheets, saved banks, notes, and coverage status.', metric: 'Coverage workspace' },
+      { page: 'treasury-explorer', label: 'Treasuries', title: 'Treasury Explorer', detail: 'Review uploaded Treasury Notes by CUSIP, coupon, maturity, yield, price, and spread.', metric: `${formatNumber(treasuries.length)} notes` },
       { page: 'explorer', label: 'CDs', title: 'CD Explorer', detail: 'Search daily CD offerings by issuer, CUSIP, term, rate, and restrictions.', metric: `${formatNumber(cds.length)} CDs` },
       { page: 'muni-explorer', label: 'Munis', title: 'Muni Explorer', detail: 'Browse municipal offerings by issuer, state, rating, yield, and call status.', metric: `${formatNumber(munis.length)} munis` },
       { page: 'agencies', label: 'Agencies', title: 'Agency Explorer', detail: 'Review bullet and callable agencies with commission-adjusted context.', metric: `${formatNumber(agencies.length)} offerings` },
@@ -792,16 +797,18 @@
   }
 
   async function loadQualitySummary() {
-    const [cds, munis, agencies, corporates] = await Promise.all([
+    const [cds, treasuries, munis, agencies, corporates] = await Promise.all([
       fetchOptionalJson('/api/offerings'),
+      fetchOptionalJson('/api/treasury-notes'),
       fetchOptionalJson('/api/muni-offerings'),
       fetchOptionalJson('/api/agencies'),
       fetchOptionalJson('/api/corporates')
     ]);
 
-    const datasets = [cds, munis, agencies, corporates].filter(Boolean);
+    const datasets = [cds, treasuries, munis, agencies, corporates].filter(Boolean);
     marketData = {
       cds: Array.isArray(cds && cds.offerings) ? cds.offerings : [],
+      treasuryNotes: Array.isArray(treasuries && treasuries.notes) ? treasuries.notes : [],
       munis: Array.isArray(munis && munis.offerings) ? munis.offerings : [],
       agencies: Array.isArray(agencies && agencies.offerings) ? agencies.offerings : [],
       corporates: Array.isArray(corporates && corporates.offerings) ? corporates.offerings : []
@@ -814,6 +821,7 @@
     const packageDates = [
       pkg.date,
       cds && cds.asOfDate,
+      treasuries && treasuries.asOfDate,
       munis && munis.asOfDate,
       agencies && agencies.fileDate,
       corporates && corporates.fileDate
@@ -822,6 +830,7 @@
 
     const countParts = [
       pkg.offeringsCount != null ? `${formatNumber(pkg.offeringsCount)} CDs` : null,
+      pkg.treasuryNotesCount != null ? `${formatNumber(pkg.treasuryNotesCount)} treasuries` : null,
       pkg.muniOfferingsCount != null ? `${formatNumber(pkg.muniOfferingsCount)} munis` : null,
       pkg.agencyCount != null ? `${formatNumber(pkg.agencyCount)} agencies` : null,
       pkg.corporatesCount != null ? `${formatNumber(pkg.corporatesCount)} corporates` : null
@@ -932,6 +941,7 @@
     if (pageName === 'home') renderHomeRecents();
     if (pageName === 'archive') loadArchive();
     if (pageName === 'cd-recap') loadCdRecap();
+    if (pageName === 'treasury-explorer') loadTreasuryNotes();
     if (pageName === 'explorer') loadOfferings();
     if (pageName === 'muni-explorer') loadMuniOfferings();
     if (pageName === 'agencies') loadAgencies();
@@ -1159,6 +1169,7 @@
         parts.push(`<strong>${formatNumber(count)}</strong> ${label}`);
       }
     };
+    push(pkg && pkg.treasuryNotesCount, 'Treasuries');
     push(pkg && pkg.offeringsCount, 'CDs');
     push(pkg && pkg.muniOfferingsCount, 'Munis');
     push(pkg && pkg.agencyCount, 'Agencies');
@@ -4174,6 +4185,7 @@
       if (res.ok && data.success) {
         const parts = [];
         if (typeof data.offeringsCount === 'number') parts.push(`${data.offeringsCount} CDs`);
+        if (typeof data.treasuryNotesCount === 'number') parts.push(`${data.treasuryNotesCount} treasuries`);
         if (typeof data.muniOfferingsCount === 'number') parts.push(`${data.muniOfferingsCount} munis`);
         if (typeof data.agencyCount === 'number') parts.push(`${data.agencyCount} agencies`);
         if (typeof data.corporatesCount === 'number') parts.push(`${data.corporatesCount} corporates`);
@@ -4555,6 +4567,226 @@
     }
   }
 
+  // ============ Treasury Notes Explorer ============
+
+  let treasuryData = null;   // { asOfDate, notes[], sourceFile, extractedAt }
+  let treasuryFilters = { search: '', minYield: null, maxMaturity: '', benchmark: '' };
+  let treasurySort = { col: 'yield', dir: 'desc' };
+
+  async function loadTreasuryNotes() {
+    const body = document.getElementById('treasuryExplorerBody');
+    const sub = document.getElementById('treasuryExplorerSub');
+    try {
+      const res = await fetch('/api/treasury-notes', { cache: 'no-store' });
+      if (res.status === 404) {
+        treasuryData = null;
+        body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
+          No treasury notes data yet. Upload today's Treasury Notes Excel file on the Upload page and notes will appear here automatically.
+        </td></tr>`;
+        sub.textContent = 'No treasury notes data';
+        document.getElementById('treasuryExplorerStat').textContent = '0';
+        document.getElementById('treasuryExplorerKicker').textContent = 'Empty';
+        renderStatTiles('treasuryStatTiles', [
+          { label: 'Shown', value: '0' },
+          { label: 'Highest YTM', value: '—' },
+          { label: 'Average YTM', value: '—' },
+          { label: 'Total Ask Amt', value: '—' }
+        ]);
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      treasuryData = await res.json();
+    } catch (e) {
+      console.error('Failed to load treasury notes:', e);
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">
+        Failed to load treasury notes: ${escapeHtml(e.message)}
+      </td></tr>`;
+      sub.textContent = 'Error loading treasury notes';
+      return;
+    }
+
+    populateTreasuryFilters();
+    renderTreasuryNotes();
+  }
+
+  function populateTreasuryFilters() {
+    if (!treasuryData || !treasuryData.notes) return;
+    const notes = treasuryData.notes;
+    const benchmarks = [...new Set(notes.map(n => n.benchmark).filter(Boolean))].sort();
+    const select = document.getElementById('tf-benchmark');
+    const keepBenchmark = select.value;
+    select.innerHTML = '<option value="">All benchmarks</option>' +
+      benchmarks.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+    select.value = keepBenchmark;
+
+    const asOf = treasuryData.asOfDate
+      ? ` &middot; As of ${formatNumericDate(treasuryData.asOfDate)}`
+      : '';
+    document.getElementById('treasuryExplorerSub').innerHTML =
+      `${notes.length} treasury notes available${asOf}`;
+    document.getElementById('treasuryExplorerKicker').textContent =
+      treasuryData.asOfDate ? formatNumericDate(treasuryData.asOfDate) : 'Current package';
+  }
+
+  function renderTreasuryNotes() {
+    const body = document.getElementById('treasuryExplorerBody');
+    if (!treasuryData) return;
+
+    const filtered = applyTreasuryFilters(treasuryData.notes || []);
+    sortTreasuryInPlace(filtered);
+
+    document.getElementById('treasuryExplorerStat').textContent = filtered.length;
+    renderStatTiles('treasuryStatTiles', [
+      { label: 'Shown', value: formatNumber(filtered.length) },
+      { label: 'Highest YTM', value: formatPercentTile(maxValue(filtered.map(n => n.yield)), 3) },
+      { label: 'Average YTM', value: formatPercentTile(average(filtered.map(n => n.yield)), 3) },
+      { label: 'Total Ask Amt', value: formatTreasuryQuantity(filtered.reduce((sum, n) => sum + (Number(n.quantity) || 0), 0)) }
+    ]);
+
+    if (filtered.length === 0) {
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
+        No treasury notes match the current filters.
+      </td></tr>`;
+      return;
+    }
+
+    body.innerHTML = filtered.map(n => `
+      <tr>
+        <td class="issuer-cell">${escapeHtml(n.description || 'Treasury Note')}</td>
+        <td class="cusip-cell">${escapeHtml(n.cusip || '')}</td>
+        <td style="text-align:right" class="rate-cell">${n.coupon == null ? '—' : Number(n.coupon).toFixed(3)}</td>
+        <td>${n.maturity ? formatNumericDate(n.maturity) : '—'}</td>
+        <td style="text-align:right" class="rate-cell">${n.yield == null ? '—' : Number(n.yield).toFixed(3)}</td>
+        <td style="text-align:right">${n.price == null ? '—' : Number(n.price).toFixed(3)}</td>
+        <td style="text-align:right">${n.spread == null ? '—' : formatNumber(n.spread)}</td>
+        <td style="text-align:right">${formatTreasuryQuantity(n.quantity, n.quantityRaw)}</td>
+        <td>${escapeHtml(n.benchmark || '')}</td>
+      </tr>
+    `).join('');
+  }
+
+  function applyTreasuryFilters(notes) {
+    return notes.filter(n => {
+      if (treasuryFilters.search) {
+        const q = treasuryFilters.search.toLowerCase();
+        const haystack = [
+          n.description,
+          n.cusip,
+          n.benchmark,
+          n.type,
+          ...Object.values(n.rawFields || {})
+        ].join(' ').toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      if (treasuryFilters.minYield != null && !(Number(n.yield) >= treasuryFilters.minYield)) return false;
+      if (treasuryFilters.maxMaturity && (!n.maturity || n.maturity > treasuryFilters.maxMaturity)) return false;
+      if (treasuryFilters.benchmark && n.benchmark !== treasuryFilters.benchmark) return false;
+      return true;
+    });
+  }
+
+  function sortTreasuryInPlace(arr) {
+    const { col, dir } = treasurySort;
+    const mult = dir === 'asc' ? 1 : -1;
+    arr.sort((a, b) => {
+      const av = a[col], bv = b[col];
+      if (av == null || av === '') return 1;
+      if (bv == null || bv === '') return -1;
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult;
+      return String(av).localeCompare(String(bv)) * mult;
+    });
+  }
+
+  function setupTreasuryFilters() {
+    const search = document.getElementById('tf-search');
+    const minYield = document.getElementById('tf-minyield');
+    const maxMaturity = document.getElementById('tf-maxmaturity');
+    const benchmark = document.getElementById('tf-benchmark');
+    if (!search || !minYield || !maxMaturity || !benchmark) return;
+
+    search.addEventListener('input', () => {
+      treasuryFilters.search = search.value.trim();
+      if (treasuryData) renderTreasuryNotes();
+    });
+    minYield.addEventListener('input', () => {
+      const v = parseFloat(minYield.value);
+      treasuryFilters.minYield = isNaN(v) ? null : v;
+      if (treasuryData) renderTreasuryNotes();
+    });
+    maxMaturity.addEventListener('change', () => {
+      treasuryFilters.maxMaturity = maxMaturity.value;
+      if (treasuryData) renderTreasuryNotes();
+    });
+    benchmark.addEventListener('change', () => {
+      treasuryFilters.benchmark = benchmark.value;
+      if (treasuryData) renderTreasuryNotes();
+    });
+
+    document.getElementById('tf-reset').addEventListener('click', () => {
+      search.value = '';
+      minYield.value = '';
+      maxMaturity.value = '';
+      benchmark.value = '';
+      treasuryFilters = { search: '', minYield: null, maxMaturity: '', benchmark: '' };
+      if (treasuryData) renderTreasuryNotes();
+    });
+
+    document.getElementById('tf-export').addEventListener('click', exportTreasuryCsv);
+
+    document.querySelectorAll('#p-treasury-explorer th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.sort;
+        if (treasurySort.col === col) {
+          treasurySort.dir = treasurySort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          treasurySort.col = col;
+          treasurySort.dir = ['yield', 'coupon', 'price', 'spread', 'quantity'].includes(col) ? 'desc' : 'asc';
+        }
+        document.querySelectorAll('#p-treasury-explorer th').forEach(h => {
+          h.classList.remove('sort-asc', 'sort-desc');
+        });
+        th.classList.add(treasurySort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+        if (treasuryData) renderTreasuryNotes();
+      });
+    });
+  }
+
+  function exportTreasuryCsv() {
+    if (!treasuryData) return showToast('No treasury notes loaded', true);
+    const filtered = applyTreasuryFilters(treasuryData.notes || []);
+    sortTreasuryInPlace(filtered);
+    if (filtered.length === 0) return showToast('No treasury notes match filters', true);
+
+    const rows = [
+      ['Description','CUSIP','Coupon','Maturity','Settle','Net Offer YTM','Net Offer Cost','Spread','Ask Amt','Benchmark','Type'],
+      ...filtered.map(n => [
+        n.description || '',
+        n.cusip || '',
+        n.coupon ?? '',
+        n.maturity || '',
+        n.settle || '',
+        n.yield ?? '',
+        n.price ?? '',
+        n.spread ?? '',
+        n.quantity ?? '',
+        n.benchmark || '',
+        n.type || ''
+      ])
+    ];
+    const stamp = treasuryData.asOfDate || 'treasury_notes';
+    downloadCsv(`fbbs_treasury_notes_${stamp}.csv`, rows);
+    showToast(`Exported ${filtered.length} treasury notes`);
+  }
+
+  function formatTreasuryQuantity(value, fallback = '') {
+    const n = Number(value);
+    if (!isFinite(n) || n === 0) return fallback || '—';
+    if (Math.abs(n) >= 1000000000) return `${(n / 1000000000).toFixed(2)}B`;
+    if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+    if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(0)}K`;
+    return formatNumber(n);
+  }
+
   // ============ Offerings Explorer ============
 
   let offeringsData = null;   // { asOfDate, offerings[], sourceFile, extractedAt }
@@ -4747,7 +4979,7 @@
     document.getElementById('ef-export').addEventListener('click', exportOfferingsCsv);
 
     // Column header sorting
-    document.querySelectorAll('.explorer-table th[data-sort]').forEach(th => {
+    document.querySelectorAll('#p-explorer th[data-sort]').forEach(th => {
       th.addEventListener('click', () => {
         const col = th.dataset.sort;
         if (offeringsSort.col === col) {
@@ -4756,7 +4988,7 @@
           offeringsSort.col = col;
           offeringsSort.dir = (col === 'rate' || col === 'maturity') ? 'desc' : 'asc';
         }
-        document.querySelectorAll('.explorer-table th').forEach(h => {
+        document.querySelectorAll('#p-explorer th').forEach(h => {
           h.classList.remove('sort-asc', 'sort-desc');
         });
         th.classList.add(offeringsSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
@@ -6394,10 +6626,11 @@
     const marketRates = econ.marketRates || [];
     const marketRows = econ.marketData || [];
     const cds = marketData.cds || [];
+    const treasuryNotes = marketData.treasuryNotes || [];
     const munis = marketData.munis || [];
     const agencies = marketData.agencies || [];
     const corporates = marketData.corporates || [];
-    const totalOfferings = [pkg.offeringsCount, pkg.muniOfferingsCount, pkg.agencyCount, pkg.corporatesCount]
+    const totalOfferings = [pkg.treasuryNotesCount, pkg.offeringsCount, pkg.muniOfferingsCount, pkg.agencyCount, pkg.corporatesCount]
       .reduce((sum, n) => sum + (typeof n === 'number' ? n : 0), 0);
 
     const two = treasuries.find(row => row.tenor === '2YR');
@@ -6447,7 +6680,7 @@
       {
         label: 'Inventory',
         value: totalOfferings > 0 ? formatNumber(totalOfferings) : '—',
-        detail: totalOfferings > 0 ? 'CDs, munis, agencies, corporates' : 'upload offerings'
+        detail: totalOfferings > 0 ? 'treasuries, CDs, munis, agencies, corporates' : 'upload offerings'
       },
       {
         label: 'Volatility',
@@ -6483,6 +6716,7 @@
         `Common term ${mostCommonTerm(cds)}`
       ],
       inventoryMetrics: [
+        `${formatNumber(treasuryNotes.length)} treasuries`,
         `${formatNumber(cds.length)} CDs`,
         `${formatNumber(munis.length)} munis`,
         `${formatNumber(agencies.length)} agencies`,
@@ -6559,6 +6793,7 @@
     setupNavSearch();
     setupMarketNav();
     setupCdRecap();
+    setupTreasuryFilters();
     setupOfferingsFilters();
     setupMuniFilters();
     setupAgencyFilters();

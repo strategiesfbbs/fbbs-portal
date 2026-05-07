@@ -18,7 +18,7 @@ Read `docs/company-portal-context.md` when brainstorming portal direction, Sales
 
 ## Daily package — 10 slots
 
-`dashboard` (HTML), `econ` (PDF), `relativeValue` (PDF), `treasuryNotes` (xlsx), `cd` (PDF), `cdoffers` (PDF or Excel workbook), `munioffers` (PDF), `agenciesBullets` (xlsx), `agenciesCallables` (xlsx), `corporates` (xlsx).
+`dashboard` (HTML), `econ` (PDF), `relativeValue` (PDF), `treasuryNotes` (xlsx, parsed into Treasury Explorer), `cd` (PDF), `cdoffers` (PDF or Excel workbook), `munioffers` (PDF), `agenciesBullets` (xlsx), `agenciesCallables` (xlsx), `corporates` (xlsx).
 
 Filename auto-classification lives in `classifyFile()` in `server/server.js`. Same-day re-publishes only replace the slots being re-uploaded (this was the v1.3.3 fix); different-day uploads roll the whole package into `data/archive/YYYY-MM-DD/`.
 
@@ -84,7 +84,7 @@ What's intentionally *not* there: app-level auth, CSRF tokens, rate limiting, lo
 - Logging: `log('info' | 'warn' | 'error' | 'debug', ...)`. Goes to stdout/stderr; iisnode captures it on Windows.
 - Audit log entries: `{ event, ...payload, at: <ISO> }`, one JSON object per line in `data/audit.log`.
 - Archive folder names are strictly `YYYY-MM-DD`; readers regex-validate before trusting.
-- Internal JSON files mirror the slot names: `_offerings.json`, `_muni_offerings.json`, `_agencies.json`, `_corporates.json`, `_economic_update.json`, plus `_meta.json` for package-level metadata.
+- Internal JSON files mirror the slot names: `_offerings.json`, `_muni_offerings.json`, `_treasury_notes.json`, `_agencies.json`, `_corporates.json`, `_economic_update.json`, plus `_meta.json` for package-level metadata.
 - All explorer CSV exports include the package date in the filename.
 - New parsers should return `{ asOfDate, warnings, offerings, ... }` — the publisher injects `extractedAt`/`uploadedAt` and source filenames before writing.
 
