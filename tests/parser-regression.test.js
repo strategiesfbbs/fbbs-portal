@@ -54,6 +54,20 @@ const {
   listStrategyRequests,
   updateStrategyRequest
 } = require('../server/strategy-store');
+const {
+  getAveragedSeriesStatus,
+  loadAveragedSeriesDataset,
+  saveAveragedSeriesWorkbook
+} = require('../server/averaged-series-store');
+const {
+  getBondAccountingForBank,
+  getBondAccountingStatus,
+  importBondAccountingFolder,
+  loadBondAccountingManifest,
+  parseBankListWorkbook,
+  parsePortfolioFilename,
+  resolveBondAccountingStoredFile
+} = require('../server/bond-accounting-store');
 
 const ROOT = path.join(__dirname, '..');
 const CURRENT_DIR = path.join(ROOT, 'data', 'current');
@@ -101,6 +115,7 @@ function assertClassification() {
   assert.strictEqual(classifyFile('FBBS Brokered CD Rate Sheet_04_24_2026_.pdf'), 'cd');
   assert.strictEqual(classifyFile('20260424_CD_Offers.pdf'), 'cdoffers');
   assert.strictEqual(classifyFile('20260424_CD_Offers.xlsx'), 'cdoffers');
+  assert.strictEqual(classifyFile('new issue cds - cost - 5.8.26.xlsx'), 'cdoffers');
   assert.strictEqual(classifyFile('20260424_FBBS_Offerings.pdf'), 'munioffers');
   assert.strictEqual(classifyFile('bullets 04.24.26.xlsx'), 'agenciesBullets');
   assert.strictEqual(classifyFile('callables 04.24.26.xlsx'), 'agenciesCallables');
@@ -164,9 +179,9 @@ function assertCdWorkbookParser() {
   const rows = [
     ['4/27/2026 Daily CD Rates'],
     [],
-    ['TERM', 'NAME', 'RATE', 'MATURITY', 'CUSIP', 'SETTLE', 'STATE', 'RESTRICTIONS', 'CPN_FREQ'],
-    ['3m', 'THIRD FED SAV&LN CLEVLND', 0.039, new Date(2026, 7, 10), '88413QKB3', '5/11/2026', 'OH', 'FL, OH, TX', 'At Maturity'],
-    [null, 'A BANK', 4.1, '10/1/2026', '111111111', '5/12/2026', 'TX', '', 'Monthly']
+    ['TERM', 'NAME', 'RATE', 'MATURITY', 'CUSIP', 'SETTLE', 'STATE', 'RESTRICTIONS', 'CPN_FREQ', 'COST'],
+    ['3m', 'THIRD FED SAV&LN CLEVLND', 0.039, new Date(2026, 7, 10), '88413QKB3', '5/11/2026', 'OH', 'FL, OH, TX', 'At Maturity', 99.95],
+    [null, 'A BANK', 4.1, '10/1/2026', '111111111', '5/12/2026', 'TX', '', 'Monthly', 99.5]
   ];
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Daily CD Rates');
   const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
@@ -184,11 +199,30 @@ function assertCdWorkbookParser() {
     settle: '2026-05-11',
     issuerState: 'OH',
     restrictions: ['FL', 'OH', 'TX'],
-    couponFrequency: 'at maturity'
+    couponFrequency: 'at maturity',
+    cost: 99.95,
+    commission: 0.5
   });
   assert.strictEqual(parsed.offerings[1].term, '3m');
   assert.strictEqual(parsed.offerings[1].rate, 4.1);
   assert.strictEqual(parsed.offerings[1].couponFrequency, 'monthly');
+  assert.strictEqual(parsed.offerings[1].commission, 5);
+
+  const compactWorkbook = XLSX.utils.book_new();
+  const compactRows = [
+    ['CUSIP(s)', 'Issuer(s)', 'COUPON(s)', 'Maturity(s)', 'First Sett Dt(s)', 'Cpn Freq(s)', 'Ask Amt', 'Inside/Trader Cost'],
+    ['02905LDA0', 'AMERICAN PLUS BANK NA', 3.75, '05/13/2027', '05/13/2026', 12, 500, 99.95],
+    ['06051YAC4', 'BANK OF AMERICA NA', 3.9, '11/13/2026', '05/13/2026', 0, 500, 99.975],
+    ['06051YAB6', 'BANK OF AMERICA NA', 4, '11/15/2027', '05/13/2026', 2, 500, 99.85]
+  ];
+  XLSX.utils.book_append_sheet(compactWorkbook, XLSX.utils.aoa_to_sheet(compactRows), 'Worksheet');
+  const compactBuffer = XLSX.write(compactWorkbook, { type: 'buffer', bookType: 'xlsx' });
+  const compactParsed = parseCdOffersWorkbook(compactBuffer, { filename: 'new issue cds - cost - 5.8.26.xlsx' });
+  assert.strictEqual(compactParsed.asOfDate, '2026-05-08');
+  assert.strictEqual(compactParsed.offerings.length, 3);
+  assert.deepStrictEqual(compactParsed.offerings.map(o => o.term), ['1y', '6m', '18m']);
+  assert.deepStrictEqual(compactParsed.offerings.map(o => o.couponFrequency), ['monthly', 'at maturity', 'semiannually']);
+  assert.strictEqual(compactParsed.offerings[0].commission, 0.5);
 }
 
 async function assertBrokeredCdParser() {
@@ -689,6 +723,133 @@ function assertStrategyStore() {
   }
 }
 
+function assertAveragedSeriesStore() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-avg-series-'));
+  const workbookPath = path.join(tmp, 'Averaged Series.xlsx');
+  const workbook = XLSX.utils.book_new();
+  const rows = [
+    [null, null, null, 'Banks with below 1.5B in Total Assets'],
+    ['Total Asset Range', null, null, 'Total Asset Range', 'below 1.5B'],
+    ['Ag Prod and Farmland Loans/Total Loans', null, null, 'Ag Prod and Farmland Loans / Total Loans', 'ALL BANKS'],
+    ['Memo: Subchapter S Election? Yes/No', null, null, 'Memo: Subchapter S Election? Yes/No', 'S-Corp'],
+    ['State', null, null, 'State / Region', 'MO'],
+    [null, null, null, 'Population Count / Percentage of Population', 12, '/ 10%'],
+    ['AVERAGE DATA'],
+    ['S-Corp Count'],
+    ['C-Corp Count'],
+    ['SNL Institution Key'],
+    [null, null, null, null, '2026Q1', '2025Q4'],
+    [null, null, null, null, '03/31/2026', '12/31/2025'],
+    ['Year'],
+    [null, null, null, 'BALANCE SHEET'],
+    ['Total Assets ($000)', null, null, '1. Total Assets ($000)', 500000, 490000, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 'P'],
+    ['Total Securities (AFS-FV) ($000)', null, null, '2. Total Securities (AFS-FV) ($000)', '75,267 / 86%', '75,778 / 85%', null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 'AL'],
+    [null, null, null, 'PROFITABILITY'],
+    ['Yield on Securities (Full Tax Equiv) (%)', null, null, '43. Yield on Securities (Full Tax Equiv) (%)', 3.18, 3.14, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 'BO']
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'AVERAGED_SERIES');
+  XLSX.writeFile(workbook, workbookPath);
+
+  try {
+    const metadata = saveAveragedSeriesWorkbook(tmp, workbookPath, { sourceFile: 'Averaged Series.xlsx' });
+    assert.strictEqual(metadata.latestPeriod, '2026Q1');
+    assert.strictEqual(metadata.metricCount, 3);
+    assert.strictEqual(metadata.seriesRowCount, 6);
+
+    const status = getAveragedSeriesStatus(tmp);
+    assert.strictEqual(status.available, true);
+    assert.strictEqual(status.dataset.seriesRowCount, 6);
+
+    const dataset = loadAveragedSeriesDataset(tmp);
+    assert.strictEqual(dataset.peerGroups[0].criteria.subchapterS, 'S-Corp');
+    assert.strictEqual(dataset.metrics.find(row => row.label === 'Total Assets ($000)').section, 'BALANCE SHEET');
+    const securitiesMetric = dataset.metrics.find(row => row.label === 'Total Securities (AFS-FV) ($000)');
+    const securitiesQ1 = dataset.series.find(row => row.metricKey === securitiesMetric.key && row.period === '2026Q1');
+    assert.strictEqual(securitiesQ1.amount, 75267);
+    assert.strictEqual(securitiesQ1.percent, 86);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function assertBondAccountingStore() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-bond-accounting-'));
+  const bankListPath = path.join(tmp, 'BankList.xlsx');
+  const portfolioDir = path.join(tmp, 'portfolios');
+  fs.mkdirSync(portfolioDir, { recursive: true });
+  const workbook = XLSX.utils.book_new();
+  const rows = [
+    ['Bank List Export'],
+    [],
+    ['As Of', '04/30/2026'],
+    [],
+    ['ClientID', 'Client', 'ABANumber', 'Account', 'Code', 'RSSDID', 'FDIC Certificate Number', 'State', 'City', 'Accounting Client', 'Status'],
+    ['1', 'Sample Bank', '071000000', '13239', 'P1455', '123456', '12345', 'IL', 'Springfield', 'Yes', 'Active'],
+    ['2', 'No SNL Match Bank', '081000000', '182000060', '53', '999999', '34597', 'MO', 'Clayton', 'Yes', 'Active']
+  ];
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'bank list');
+  XLSX.writeFile(workbook, bankListPath);
+
+  const matchedName = '13239(Account)_Sample Bank_20260430_P1455.xlsm';
+  const pOnlyName = '182000060(Account)_No SNL Match Bank_20260430_P53.xlsm';
+  const unknownName = '000(Account)_Unknown Bank_20260430_P9999.xlsm';
+  fs.writeFileSync(path.join(portfolioDir, matchedName), 'sample');
+  fs.writeFileSync(path.join(portfolioDir, pOnlyName), 'sample');
+  fs.writeFileSync(path.join(portfolioDir, unknownName), 'sample');
+
+  try {
+    assert.deepStrictEqual(parsePortfolioFilename(matchedName), {
+      filename: matchedName,
+      account: '13239',
+      clientName: 'Sample Bank',
+      reportDate: '2026-04-30',
+      pCode: 'P1455',
+      extension: 'xlsm'
+    });
+
+    const bankList = parseBankListWorkbook(bankListPath);
+    assert.strictEqual(bankList.rowCount, 2);
+    assert.strictEqual(bankList.pCodeCount, 2);
+    assert.strictEqual(bankList.byPCode.get('P53').certNumber, '34597');
+
+    const manifest = importBondAccountingFolder(tmp, bankListPath, portfolioDir, {
+      bankSummaries: [{
+        id: 'bank-1',
+        displayName: 'Sample Bank, Springfield, IL',
+        certNumber: '12345'
+      }]
+    });
+    assert.strictEqual(manifest.portfolioFileCount, 3);
+    assert.strictEqual(manifest.matchedCount, 1);
+    assert.strictEqual(manifest.pCodeMatchedCount, 1);
+    assert.strictEqual(manifest.unmatchedCount, 2);
+    assert.strictEqual(manifest.matches.find(row => row.pCode === 'P1455').status, 'matched');
+    assert.strictEqual(manifest.matches.find(row => row.pCode === 'P53').status, 'needs-bank-data-match');
+    assert.strictEqual(manifest.matches.find(row => row.pCode === 'P9999').status, 'unmatched-pcode');
+    assert(fs.existsSync(path.join(tmp, 'bond-accounting', manifest.matches.find(row => row.pCode === 'P1455').storedPath)));
+
+    const status = getBondAccountingStatus(tmp);
+    assert.strictEqual(status.available, true);
+    assert.strictEqual(status.portfolioFileCount, 3);
+    assert.strictEqual(status.matchedCount, 1);
+
+    const storedManifest = loadBondAccountingManifest(tmp);
+    assert.strictEqual(storedManifest.matches.length, 3);
+
+    const bankPortfolios = getBondAccountingForBank(tmp, 'bank-1');
+    assert.strictEqual(bankPortfolios.available, true);
+    assert.strictEqual(bankPortfolios.portfolioFileCount, 1);
+    assert.strictEqual(bankPortfolios.latestReportDate, '2026-04-30');
+    const storedPath = storedManifest.matches.find(row => row.pCode === 'P1455').storedPath;
+    const resolvedStoredPath = resolveBondAccountingStoredFile(tmp, storedPath);
+    assert(resolvedStoredPath);
+    assert(fs.existsSync(resolvedStoredPath));
+    assert.strictEqual(resolveBondAccountingStoredFile(tmp, '../bank-data.sqlite'), null);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function assertCdHistoryWeeklyDedupe() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-cd-history-'));
   const baseOfferings = [
@@ -849,6 +1010,8 @@ function assertWeeklyCdWorksheetImport() {
   assertBankCoverageStore();
   assertBankAccountStatusStore();
   assertStrategyStore();
+  assertAveragedSeriesStore();
+  assertBondAccountingStore();
   assertCdHistoryWeeklyDedupe();
   assertCdHistoryResetsOnNewWeek();
   assertWeeklyCdWorksheetImport();

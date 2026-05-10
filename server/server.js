@@ -48,6 +48,18 @@ const {
   searchBankDatabase
 } = require('./bank-data-importer');
 const {
+  getAveragedSeriesStatus,
+  loadAveragedSeriesDataset,
+  saveAveragedSeriesWorkbook
+} = require('./averaged-series-store');
+const {
+  getBondAccountingForBank,
+  getBondAccountingStatus,
+  importBondAccountingFolder,
+  loadBondAccountingManifest,
+  resolveBondAccountingStoredFile
+} = require('./bond-accounting-store');
+const {
   addBankNote,
   getBankCoverage,
   getSavedBankCoverageMap,
@@ -143,10 +155,12 @@ const MIME_TYPES = {
 };
 
 const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+const CD_COST_FIELD_NAMES = new Set(['cdoffersCost', 'cdCostWorkbook', 'cdCost']);
 const OFFERINGS_FILENAME = '_offerings.json';
 const MUNI_OFFERINGS_FILENAME = '_muni_offerings.json';
 const TREASURY_NOTES_FILENAME = '_treasury_notes.json';
 const ECONOMIC_UPDATE_FILENAME = '_economic_update.json';
+const RELATIVE_VALUE_FILENAME = '_relative_value.json';
 const AGENCIES_FILENAME = '_agencies.json';
 const CORPORATES_FILENAME = '_corporates.json';
 const META_FILENAME = '_meta.json';
@@ -186,7 +200,7 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
       'Cache-Control': 'no-cache'
     };
     if (download) {
-      const downloadName = path.basename(filename || filePath).replace(/"/g, '');
+      const downloadName = path.basename(filename || filePath).replace(/["\r\n]/g, '');
       headers['Content-Disposition'] =
         `attachment; filename="${downloadName}"`;
     }
@@ -275,7 +289,9 @@ function classifyFile(filename, explicitSlot) {
     }
     if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
         lower.includes('daily_cd') || lower.includes('daily cd') ||
-        lower.includes('cd offering') || lower.includes('cd_offering')) {
+        lower.includes('cd offering') || lower.includes('cd_offering') ||
+        lower.includes('new issue cd') || lower.includes('new issue cds') ||
+        lower.includes('cds - cost')) {
       return 'cdoffers';
     }
     if (lower.includes('corporate') || lower.includes('corp_')) return 'corporates';
@@ -543,7 +559,11 @@ function parseMultipart(req, boundary, limit) {
 
           if (filenameMatch && filenameMatch[1]) {
             let explicitSlot = null;
-            if (SLOT_NAMES.includes(fieldName)) {
+            let companionRole = null;
+            if (CD_COST_FIELD_NAMES.has(fieldName)) {
+              explicitSlot = 'cdoffers';
+              companionRole = 'cdCostWorkbook';
+            } else if (SLOT_NAMES.includes(fieldName)) {
               explicitSlot = fieldName;
             } else {
               const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|relativeValue|treasuryNotes|cdoffers|munioffers|agenciesBullets|agenciesCallables|corporates|cd)/i);
@@ -558,7 +578,8 @@ function parseMultipart(req, boundary, limit) {
               fieldName,
               filename: filenameMatch[1],
               data: body,
-              explicitSlot
+              explicitSlot,
+              companionRole
             });
           } else {
             fields[fieldName] = body.toString('utf-8');
@@ -637,6 +658,83 @@ async function extractOfferings(file) {
     return parsed;
   } catch (err) {
     log('warn', 'Offerings extraction failed:', err.message);
+    return null;
+  }
+}
+
+async function extractCdOfferingsPackage(files) {
+  const cdFiles = (files || []).filter(f => classifyFile(f.filename, f.explicitSlot) === 'cdoffers');
+  if (!cdFiles.length) return null;
+
+  const pdfFile = cdFiles.find(f => f.companionRole !== 'cdCostWorkbook' && /\.pdf$/i.test(f.filename || ''));
+  const workbookFile = cdFiles.find(f =>
+    f.companionRole === 'cdCostWorkbook' || /\.(xlsx|xlsm|xls)$/i.test(f.filename || '')
+  );
+  const primaryFile = pdfFile || workbookFile || cdFiles[0];
+  const existingPayload = !pdfFile && workbookFile ? loadExistingCdOfferingsPayload() : null;
+  const primary = existingPayload || await extractOfferings(primaryFile);
+  if (!primary || !Array.isArray(primary.offerings)) return primary;
+
+  const sources = Array.isArray(primary.sourceFiles)
+    ? [...primary.sourceFiles]
+    : [primary.sourceFile || sanitizeFilename(primaryFile.filename)].filter(Boolean);
+  let costSourceFile = null;
+  let warnings = Array.isArray(primary.warnings) ? [...primary.warnings] : [];
+  let offerings = primary.offerings;
+  let asOfDate = primary.asOfDate || null;
+
+  if (workbookFile) {
+    const workbook = await extractOfferings(workbookFile);
+    if (!sources.includes(sanitizeFilename(workbookFile.filename))) {
+      sources.push(sanitizeFilename(workbookFile.filename));
+    }
+    costSourceFile = sanitizeFilename(workbookFile.filename);
+    if (workbook && Array.isArray(workbook.offerings)) {
+      warnings = warnings.concat((workbook.warnings || []).map(w => `Cost workbook: ${w}`));
+      if (!asOfDate && workbook.asOfDate) asOfDate = workbook.asOfDate;
+      offerings = mergeCdCostFields(offerings, workbook.offerings);
+    } else {
+      warnings.push('Cost workbook was uploaded but could not be parsed.');
+    }
+  }
+
+  return {
+    ...primary,
+    asOfDate,
+    warnings,
+    offerings,
+    sourceFile: existingPayload ? primary.sourceFile : sanitizeFilename(primaryFile.filename),
+    sourceFiles: sources,
+    costSourceFile
+  };
+}
+
+function mergeCdCostFields(baseOfferings, costOfferings) {
+  const costsByCusip = new Map();
+  for (const row of costOfferings || []) {
+    const cusip = String(row && row.cusip || '').toUpperCase();
+    if (!cusip) continue;
+    costsByCusip.set(cusip, row);
+  }
+
+  return (baseOfferings || []).map(row => {
+    const costRow = costsByCusip.get(String(row && row.cusip || '').toUpperCase());
+    if (!costRow) return row;
+    const merged = { ...row };
+    if (costRow.cost != null) merged.cost = costRow.cost;
+    if (costRow.commission != null) merged.commission = costRow.commission;
+    return merged;
+  });
+}
+
+function loadExistingCdOfferingsPayload() {
+  const p = path.join(CURRENT_DIR, OFFERINGS_FILENAME);
+  if (!fs.existsSync(p)) return null;
+  try {
+    const payload = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    return payload && Array.isArray(payload.offerings) ? payload : null;
+  } catch (err) {
+    log('warn', 'Could not read existing CD offerings for cost merge:', err.message);
     return null;
   }
 }
@@ -759,6 +857,8 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     treasuryNotes: null,
     cd: null,
     cdoffers: null,
+    cdoffersCost: null,
+    cdoffersFiles: [],
     munioffers: null,
     agenciesBullets: null,
     agenciesCallables: null,
@@ -771,10 +871,15 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     agencyCount: null,
     agencyFileDate: null,
     corporatesCount: null,
-    corporatesFileDate: null
+    corporatesFileDate: null,
+    relativeValueRowsCount: null
   };
 
   const assignedFromMeta = new Set();
+  for (const filenames of Object.values(meta.slotFileLists || {})) {
+    if (!Array.isArray(filenames)) continue;
+    filenames.forEach(filename => assignedFromMeta.add(filename));
+  }
   for (const slot of SLOT_NAMES) {
     const filename = metadataSlotFilename(meta, slot, dirPath, files);
     if (filename) {
@@ -801,6 +906,38 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
   if (meta.corporatesFileDate) pkg.corporatesFileDate = meta.corporatesFileDate;
   if (Array.isArray(meta.brokeredCdTerms)) pkg.brokeredCdTerms = meta.brokeredCdTerms;
   if (meta.brokeredCdAsOfDate) pkg.brokeredCdAsOfDate = meta.brokeredCdAsOfDate;
+  if (typeof meta.relativeValueRowsCount === 'number') pkg.relativeValueRowsCount = meta.relativeValueRowsCount;
+
+  const cdOfferFiles = Array.isArray(meta.slotFileLists && meta.slotFileLists.cdoffers)
+    ? meta.slotFileLists.cdoffers.filter(filename => fileExistsInDir(dirPath, filename))
+    : [];
+  if (cdOfferFiles.length) {
+    pkg.cdoffersFiles = cdOfferFiles;
+    const pdf = cdOfferFiles.find(filename => /\.pdf$/i.test(filename));
+    const workbook = cdOfferFiles.find(filename => /\.(xlsx|xlsm|xls)$/i.test(filename));
+    if (pdf) pkg.cdoffers = pdf;
+    if (workbook) pkg.cdoffersCost = workbook;
+  } else {
+    const offeringsPath = path.join(dirPath, OFFERINGS_FILENAME);
+    if (fs.existsSync(offeringsPath)) {
+      try {
+        const offerings = JSON.parse(fs.readFileSync(offeringsPath, 'utf-8'));
+        if (offerings.costSourceFile && fileExistsInDir(dirPath, offerings.costSourceFile)) {
+          pkg.cdoffersCost = offerings.costSourceFile;
+        }
+      } catch (_) {}
+    }
+  }
+
+  if (pkg.relativeValueRowsCount == null) {
+    const rvPath = path.join(dirPath, RELATIVE_VALUE_FILENAME);
+    if (fs.existsSync(rvPath)) {
+      try {
+        const rv = JSON.parse(fs.readFileSync(rvPath, 'utf-8'));
+        if (Array.isArray(rv.rows)) pkg.relativeValueRowsCount = rv.rows.length;
+      } catch (_) {}
+    }
+  }
 
   return pkg;
 }
@@ -938,6 +1075,122 @@ function loadArchivedTreasuryNotes(date) {
   }
 }
 
+function relativeValueNumber(value) {
+  if (value == null || /^#?N\/A$/i.test(String(value))) return null;
+  const n = Number(String(value).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function muniTeyFromRate(yieldPct, taxRatePct) {
+  const y = Number(yieldPct);
+  const r = Number(taxRatePct);
+  if (!Number.isFinite(y) || !Number.isFinite(r) || r >= 100) return null;
+  return y / (1 - (r / 100));
+}
+
+function parseRelativeValueSnapshotText(text) {
+  const terms = new Set(['6 Mo', '9 Mo', '12 Mo', '18 Mo', '2 Yr', '3 Yr', '4 Yr', '5 Yr', '7 Yr', '10 Yr']);
+  const rows = [];
+
+  String(text || '').split(/\r?\n/).forEach(line => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 10) return;
+    const term = `${parts[0]} ${parts[1]}`;
+    if (!terms.has(term)) return;
+
+    const values = parts.slice(2);
+    if (!/^-?\d+(\.\d+)?$/.test(values[0] || '')) return;
+
+    const ust = relativeValueNumber(values[0]);
+    const cd = relativeValueNumber(values[1]);
+    let cdSpread = null;
+    let agencyIndex = 2;
+    if (values.length >= 9) {
+      cdSpread = relativeValueNumber(values[2]);
+      agencyIndex = 3;
+    }
+
+    const agency = relativeValueNumber(values[agencyIndex]);
+    const agencySpread = relativeValueNumber(values[agencyIndex + 1]);
+    const muni = relativeValueNumber(values[agencyIndex + 2]);
+    const muniSpread = relativeValueNumber(values[agencyIndex + 3]);
+    const corp = relativeValueNumber(values[agencyIndex + 4]);
+    const corpSpread = relativeValueNumber(values[agencyIndex + 5]);
+
+    if (ust == null || agency == null || muni == null || corp == null) return;
+    rows.push({
+      term,
+      ust,
+      cd,
+      cdSpread,
+      agency,
+      agencySpread,
+      muni,
+      muniSpread,
+      muniTey296: muniTeyFromRate(muni, 29.6),
+      muniTey21: muniTeyFromRate(muni, 21),
+      corp,
+      corpSpread
+    });
+  });
+
+  return rows;
+}
+
+async function loadRelativeValueSnapshotFromDir(dirPath) {
+  const jsonPath = path.join(dirPath, RELATIVE_VALUE_FILENAME);
+  const pkg = readPackageDir(dirPath);
+  if (!pkg || !pkg.relativeValue) return null;
+  if (fs.existsSync(jsonPath)) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+      if (cached && cached.sourceFile === pkg.relativeValue && Array.isArray(cached.rows)) {
+        return cached;
+      }
+    } catch (err) {
+      log('warn', 'Could not read relative value cache:', err.message);
+    }
+  }
+
+  const pdfPath = safeJoin(dirPath, pkg.relativeValue);
+  if (!pdfPath || !fs.existsSync(pdfPath)) return null;
+
+  const extracted = await extractPdfText(fs.readFileSync(pdfPath));
+  const rows = parseRelativeValueSnapshotText(extracted && extracted.text);
+  const parsed = {
+    asOfDate: pkg.date || null,
+    publishedAt: pkg.publishedAt || null,
+    extractedAt: new Date().toISOString(),
+    sourceFile: pkg.relativeValue,
+    rows,
+    series: [
+      { key: 'ust', label: 'UST Yield' },
+      { key: 'agency', label: 'US AGY' },
+      { key: 'muniTey296', label: "MUNI GO 'AA' TEY (29.6%)" },
+      { key: 'muniTey21', label: "MUNI GO 'AA' TEY (21%)" },
+      { key: 'corp', label: "'AA' Corp" }
+    ],
+    warnings: rows.length ? [] : ['Could not extract the rate snapshot table from the Relative Value PDF.']
+  };
+
+  try {
+    fs.writeFileSync(jsonPath, JSON.stringify(parsed, null, 2));
+  } catch (err) {
+    log('warn', 'Could not cache relative value JSON:', err.message);
+  }
+
+  return parsed;
+}
+
+function loadCurrentRelativeValueSnapshot() {
+  return loadRelativeValueSnapshotFromDir(CURRENT_DIR);
+}
+
+function loadArchivedRelativeValueSnapshot(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  return loadRelativeValueSnapshotFromDir(path.join(ARCHIVE_DIR, date));
+}
+
 function loadCurrentAgencies() {
   const p = path.join(CURRENT_DIR, AGENCIES_FILENAME);
   if (!fs.existsSync(p)) return null;
@@ -971,6 +1224,351 @@ function loadCurrentCorporates() {
   }
 }
 
+function numericValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function yearsUntil(dateStr, anchorDate) {
+  if (!dateStr) return null;
+  const date = new Date(`${dateStr}T00:00:00Z`);
+  const anchor = anchorDate ? new Date(`${anchorDate}T00:00:00Z`) : new Date();
+  if (Number.isNaN(date.getTime()) || Number.isNaN(anchor.getTime())) return null;
+  return (date.getTime() - anchor.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+}
+
+function chooseTop(rows, scoreFn) {
+  return (Array.isArray(rows) ? rows : [])
+    .map(row => ({ row, score: scoreFn(row) }))
+    .filter(item => Number.isFinite(item.score))
+    .sort((a, b) => b.score - a.score)[0]?.row || null;
+}
+
+function firstBySort(rows, compareFn) {
+  return (Array.isArray(rows) ? rows : []).slice().sort(compareFn)[0] || null;
+}
+
+function pickRetailCd(offerings) {
+  const row = firstBySort(offerings, (a, b) => {
+    const rateDiff = (numericValue(b.rate) || -Infinity) - (numericValue(a.rate) || -Infinity);
+    if (rateDiff) return rateDiff;
+    return (numericValue(a.termMonths) || Infinity) - (numericValue(b.termMonths) || Infinity);
+  });
+  if (!row) return null;
+  return {
+    type: 'Retail CD',
+    audience: ['Bank', 'RIA'],
+    label: row.term || 'CD',
+    title: row.name || 'CD offering',
+    value: row.rate != null ? `${Number(row.rate).toFixed(2)}%` : null,
+    detail: [row.term, row.maturity, row.issuerState].filter(Boolean).join(' | '),
+    cusip: row.cusip || '',
+    page: 'explorer',
+    reason: 'Highest retail CD offering rate in the current package, with shorter terms winning ties.'
+  };
+}
+
+function pickMuniBq(offerings) {
+  const row = chooseTop((offerings || []).filter(o => String(o.section || '').toUpperCase() === 'BQ'), o => numericValue(o.ytw));
+  if (!row) return null;
+  const ytw = numericValue(row.ytw);
+  const tey296 = ytw == null ? null : ytw / (1 - 0.296);
+  const tey21 = ytw == null ? null : ytw / (1 - 0.21);
+  return {
+    type: 'BQ Muni',
+    audience: ['S-Corp Bank', 'Tax-aware'],
+    label: row.issuerState || 'BQ',
+    title: row.issuerName || 'Bank-qualified muni',
+    value: ytw != null ? `${ytw.toFixed(3)}% YTW` : null,
+    detail: [
+      row.maturity,
+      row.callDate ? `call ${row.callDate}` : '',
+      row.moodysRating || row.spRating || ''
+    ].filter(Boolean).join(' | '),
+    cusip: row.cusip || '',
+    page: 'muni-explorer',
+    metrics: {
+      tey21: tey21 == null ? null : Number(tey21.toFixed(3)),
+      tey296: tey296 == null ? null : Number(tey296.toFixed(3))
+    },
+    reason: 'Highest YTW in the current bank-qualified muni slate; TEY is calculated from YTW.'
+  };
+}
+
+function pickAgencySpread(offerings, packageDate) {
+  const candidates = (offerings || []).filter(o => {
+    const years = yearsUntil(o.maturity, packageDate);
+    return numericValue(o.askSpread) != null && years != null && years > 0 && years <= 10.5;
+  });
+  const row = chooseTop(candidates, o => {
+    const spread = numericValue(o.askSpread) || 0;
+    const ytm = numericValue(o.ytm) || 0;
+    const size = Math.log10(Math.max(numericValue(o.availableSize) || 0, 1));
+    return spread * 3 + ytm + size;
+  });
+  if (!row) return null;
+  return {
+    type: 'Agency RV',
+    audience: ['C-Corp Bank', 'Bank'],
+    label: row.structure || 'Agency',
+    title: `${row.ticker || 'Agency'} ${row.coupon != null ? Number(row.coupon).toFixed(3) + '%' : ''} ${row.maturity || ''}`.trim(),
+    value: row.ytm != null ? `${Number(row.ytm).toFixed(3)}% YTM` : null,
+    detail: [
+      row.askSpread != null ? `${Number(row.askSpread).toFixed(1)}bp vs ${row.benchmark || 'benchmark'}` : '',
+      row.availableSize != null ? `$${Number(row.availableSize).toFixed(2)}MM available` : ''
+    ].filter(Boolean).join(' | '),
+    cusip: row.cusip || '',
+    page: 'agencies',
+    reason: 'Best positive spread score inside a bank-friendly maturity window, with size used as a tie-breaker.'
+  };
+}
+
+function pickAgencyCallable(offerings, packageDate) {
+  const candidates = (offerings || []).filter(o => {
+    const years = yearsUntil(o.maturity, packageDate);
+    const ytnc = numericValue(o.ytnc);
+    return o.structure === 'Callable' && years != null && years > 0 && years <= 15 && ytnc != null && ytnc > 0 && ytnc < 20;
+  });
+  const row = chooseTop(candidates, o => {
+    const coupon = numericValue(o.coupon) || 0;
+    const ytm = numericValue(o.ytm) || 0;
+    const ytnc = numericValue(o.ytnc) || 0;
+    return coupon * 0.7 + ytm + Math.min(ytnc, 10) * 0.4;
+  });
+  if (!row) return null;
+  return {
+    type: 'Callable Agency',
+    audience: ['Bank'],
+    label: row.callType || 'Callable',
+    title: `${row.ticker || 'Agency'} ${row.coupon != null ? Number(row.coupon).toFixed(3) + '%' : ''} ${row.maturity || ''}`.trim(),
+    value: row.ytm != null ? `${Number(row.ytm).toFixed(3)}% YTM` : null,
+    detail: [
+      row.nextCallDate ? `next call ${row.nextCallDate}` : '',
+      row.ytnc != null ? `${Number(row.ytnc).toFixed(3)}% YTNC` : ''
+    ].filter(Boolean).join(' | '),
+    cusip: row.cusip || '',
+    page: 'agencies',
+    reason: 'Callable screen favors usable YTM, higher coupon income, and realistic yield-to-next-call values.'
+  };
+}
+
+function pickTreasury(offers, packageDate) {
+  const candidates = (offers || []).filter(o => {
+    const years = yearsUntil(o.maturity, packageDate);
+    return years != null && years > 0.25 && years <= 10.5 && numericValue(o.yield) != null;
+  });
+  const row = chooseTop(candidates, o => {
+    const yld = numericValue(o.yield) || 0;
+    const spread = numericValue(o.spread) || 0;
+    const price = numericValue(o.price);
+    const discountBonus = price != null && price < 100 ? (100 - price) * 0.03 : 0;
+    return yld + spread * 0.01 + discountBonus;
+  });
+  if (!row) return null;
+  return {
+    type: 'Treasury',
+    audience: ['Bank', 'RIA'],
+    label: row.benchmark || row.type || 'UST',
+    title: row.description || 'Treasury offering',
+    value: row.yield != null ? `${Number(row.yield).toFixed(3)}% YTM` : null,
+    detail: [row.maturity, row.price != null ? `price ${Number(row.price).toFixed(3)}` : ''].filter(Boolean).join(' | '),
+    cusip: row.cusip || '',
+    page: 'treasury-explorer',
+    reason: 'Highest Treasury score inside 10 years, factoring yield, spread, and discount entry.'
+  };
+}
+
+function pickCorporateRia(offerings, packageDate) {
+  const candidates = (offerings || []).filter(o => {
+    const years = yearsUntil(o.maturity, packageDate);
+    return o.investmentGrade && years != null && years > 0 && years <= 30 && numericValue(o.ytm) != null;
+  });
+  const row = chooseTop(candidates, o => {
+    const ytm = numericValue(o.ytm) || 0;
+    const tierPenalty = o.creditTier === 'BBB' ? 0.15 : 0;
+    const size = Math.log10(Math.max(numericValue(o.availableSize) || 0, 1)) * 0.02;
+    return ytm - tierPenalty + size;
+  });
+  if (!row) return null;
+  return {
+    type: 'Corporate',
+    audience: ['RIA'],
+    label: row.creditTier || 'IG',
+    title: row.issuerName || row.ticker || 'Corporate bond',
+    value: row.ytm != null ? `${Number(row.ytm).toFixed(3)}% YTM` : null,
+    detail: [row.ticker, row.sector, row.maturity].filter(Boolean).join(' | '),
+    cusip: row.cusip || '',
+    page: 'corporates',
+    reason: 'RIA-only screen for the highest scoring investment-grade corporate yield in the current inventory.'
+  };
+}
+
+function pickBrokeredCdFunding(meta) {
+  const terms = Array.isArray(meta && meta.brokeredCdTerms) ? meta.brokeredCdTerms : [];
+  const row = chooseTop(terms, term => {
+    const mid = numericValue(term.mid);
+    const months = numericValue(term.months) || 0;
+    if (mid == null) return -Infinity;
+    return mid + Math.min(months, 120) * 0.002;
+  });
+  if (!row) return null;
+  return {
+    type: 'Brokered CD Funding',
+    audience: ['Funding Desk', 'Bank'],
+    label: row.label || 'BCD',
+    title: `${row.label || 'Term'} all-in midpoint`,
+    value: row.mid != null ? `${Number(row.mid).toFixed(3)}%` : null,
+    detail: row.low != null && row.high != null ? `range ${Number(row.low).toFixed(3)}% to ${Number(row.high).toFixed(3)}%` : '',
+    cusip: '',
+    page: 'cd',
+    reason: 'Highest current all-in brokered CD midpoint from the parsed rate sheet; benchmark spread logic can be added once FHLB/SOFR inputs are stored.'
+  };
+}
+
+function buildRuleBasedSalesCues({ economicUpdate, cdRows, treasuryRows, muniRows, agencyRows, corporateRows }) {
+  const cues = [];
+  const marketTreasuries = economicUpdate && Array.isArray(economicUpdate.treasuries) ? economicUpdate.treasuries : [];
+  const biggestMover = chooseTop(marketTreasuries, row => Math.abs(numericValue(row.dailyChange) || 0));
+  if (biggestMover && numericValue(biggestMover.dailyChange) !== null) {
+    const change = numericValue(biggestMover.dailyChange);
+    cues.push({
+      title: `${biggestMover.label || biggestMover.tenor || 'Treasury'} moved the most`,
+      body: `${change >= 0 ? 'Up' : 'Down'} ${Math.abs(change).toFixed(3)} today; use that benchmark as the first rate-context note before moving into inventory.`
+    });
+  }
+
+  const pricedCdCount = (cdRows || []).filter(row => numericValue(row.cost) !== null || numericValue(row.commission) !== null).length;
+  if ((cdRows || []).length) {
+    cues.push({
+      title: 'CD PDF and cost workbook matched',
+      body: `${pricedCdCount} of ${cdRows.length} CD rows have price or commission data attached by CUSIP. Use the matched rows when quoting all-in economics.`
+    });
+  }
+
+  const topCd = firstBySort(cdRows || [], (a, b) => {
+    const rateDiff = (numericValue(b.rate) || -Infinity) - (numericValue(a.rate) || -Infinity);
+    if (rateDiff) return rateDiff;
+    return (numericValue(a.termMonths) || Infinity) - (numericValue(b.termMonths) || Infinity);
+  });
+  if (topCd) {
+    cues.push({
+      title: 'Lead with the strongest retail CD',
+      body: `${topCd.name || 'Top CD'} is showing ${numericValue(topCd.rate) != null ? Number(topCd.rate).toFixed(2) + '%' : 'a top rate'}${topCd.term ? ` in ${topCd.term}` : ''}${topCd.cusip ? ` (${topCd.cusip})` : ''}.`
+    });
+  }
+
+  const releases = economicUpdate && Array.isArray(economicUpdate.releases) ? economicUpdate.releases : [];
+  const nextRelease = releases.find(row => row && (row.event || row.label));
+  if (nextRelease) {
+    cues.push({
+      title: 'Watch the next economic release',
+      body: `${nextRelease.event || nextRelease.label}${nextRelease.dateTime ? ` at ${nextRelease.dateTime}` : ''}; flag rate-sensitive recommendations before that print.`
+    });
+  }
+
+  const breadth = [
+    cdRows && cdRows.length ? `${cdRows.length} CDs` : '',
+    muniRows && muniRows.length ? `${muniRows.length} munis` : '',
+    agencyRows && agencyRows.length ? `${agencyRows.length} agencies` : '',
+    corporateRows && corporateRows.length ? `${corporateRows.length} corporates` : '',
+    treasuryRows && treasuryRows.length ? `${treasuryRows.length} treasuries` : ''
+  ].filter(Boolean);
+  if (breadth.length) {
+    cues.push({
+      title: 'Inventory breadth is ready',
+      body: `Current parsed inventory includes ${breadth.join(', ')}. Start broad, then narrow by client tax profile and duration target.`
+    });
+  }
+
+  return cues;
+}
+
+function mergeSalesCues(existing, generated) {
+  const seen = new Set();
+  return [...(existing || []), ...(generated || [])].filter(cue => {
+    const key = `${cue && cue.title}|${cue && cue.body}`.toLowerCase();
+    if (!cue || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
+async function buildDailyIntelligence() {
+  const pkg = getCurrentPackage() || {};
+  const meta = readMetaFile(CURRENT_DIR);
+  const [economicUpdate, cdOfferings, muniOfferings, treasuryNotes, agencies, corporates] = await Promise.all([
+    loadCurrentEconomicUpdate(),
+    Promise.resolve(loadCurrentOfferings()),
+    Promise.resolve(loadCurrentMuniOfferings()),
+    Promise.resolve(loadCurrentTreasuryNotes()),
+    Promise.resolve(loadCurrentAgencies()),
+    Promise.resolve(loadCurrentCorporates())
+  ]);
+
+  const cdRows = Array.isArray(cdOfferings && cdOfferings.offerings) ? cdOfferings.offerings : [];
+  const muniRows = Array.isArray(muniOfferings && muniOfferings.offerings) ? muniOfferings.offerings : [];
+  const treasuryRows = Array.isArray(treasuryNotes && treasuryNotes.notes) ? treasuryNotes.notes : [];
+  const agencyRows = Array.isArray(agencies && agencies.offerings) ? agencies.offerings : [];
+  const corporateRows = Array.isArray(corporates && corporates.offerings) ? corporates.offerings : [];
+  const packageDate = pkg.date || (economicUpdate && economicUpdate.asOfDate) || (cdOfferings && cdOfferings.asOfDate) || null;
+
+  const picks = [
+    pickAgencySpread(agencyRows, packageDate),
+    pickMuniBq(muniRows),
+    pickRetailCd(cdRows),
+    pickTreasury(treasuryRows, packageDate),
+    pickAgencyCallable(agencyRows, packageDate),
+    pickBrokeredCdFunding(meta),
+    pickCorporateRia(corporateRows, packageDate)
+  ].filter(Boolean);
+
+  const warnings = [
+    ...(economicUpdate && Array.isArray(economicUpdate.warnings) ? economicUpdate.warnings.map(w => ({ source: 'Economic Update', message: w })) : []),
+    ...(cdOfferings && Array.isArray(cdOfferings.warnings) ? cdOfferings.warnings.map(w => ({ source: 'CD Offerings', message: w })) : []),
+    ...(muniOfferings && Array.isArray(muniOfferings.warnings) ? muniOfferings.warnings.map(w => ({ source: 'Muni Offerings', message: w })) : []),
+    ...(treasuryNotes && Array.isArray(treasuryNotes.warnings) ? treasuryNotes.warnings.map(w => ({ source: 'Treasury Notes', message: w })) : []),
+    ...(agencies && Array.isArray(agencies.warnings) ? agencies.warnings.map(w => ({ source: 'Agencies', message: w })) : []),
+    ...(corporates && Array.isArray(corporates.warnings) ? corporates.warnings.map(w => ({ source: 'Corporates', message: w })) : [])
+  ];
+  const generatedSalesCues = buildRuleBasedSalesCues({ economicUpdate, cdRows, treasuryRows, muniRows, agencyRows, corporateRows });
+  const extractedSalesCues = economicUpdate && Array.isArray(economicUpdate.salesCues) ? economicUpdate.salesCues : [];
+
+  return {
+    package: pkg,
+    asOfDate: packageDate,
+    publishedAt: pkg.publishedAt || null,
+    counts: {
+      treasuries: treasuryRows.length,
+      cds: cdRows.length,
+      munis: muniRows.length,
+      agencies: agencyRows.length,
+      corporates: corporateRows.length,
+      brokeredCdTerms: Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms.length : 0
+    },
+    market: {
+      treasuries: economicUpdate && Array.isArray(economicUpdate.treasuries) ? economicUpdate.treasuries : [],
+      marketRates: economicUpdate && Array.isArray(economicUpdate.marketRates) ? economicUpdate.marketRates : [],
+      marketData: economicUpdate && Array.isArray(economicUpdate.marketData) ? economicUpdate.marketData : [],
+      bondIndices: economicUpdate && Array.isArray(economicUpdate.bondIndices) ? economicUpdate.bondIndices : [],
+      releases: economicUpdate && Array.isArray(economicUpdate.releases) ? economicUpdate.releases : [],
+      salesCues: mergeSalesCues(extractedSalesCues, generatedSalesCues)
+    },
+    brokeredCdTerms: Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms : [],
+    picks,
+    warnings,
+    gaps: [
+      !economicUpdate ? 'Economic Update data is missing.' : null,
+      !treasuryRows.length ? 'Treasury Notes inventory is missing.' : null,
+      !cdRows.length ? 'Retail CD offerings are missing.' : null,
+      !muniRows.length ? 'Muni offerings are missing.' : null,
+      !agencyRows.length ? 'Agency inventory is missing.' : null,
+      !corporateRows.length ? 'Corporate inventory is missing.' : null,
+      'Structured products are not yet a parsed daily slot.',
+      'MBS/CMO featured idea still depends on the MBS/CMO source workspace.'
+    ].filter(Boolean)
+  };
+}
+
 function searchBanks(query, limit = 12) {
   try {
     const data = searchBankDatabase(BANK_REPORTS_DIR, query, limit);
@@ -998,7 +1596,8 @@ function getBankById(id) {
       ...data,
       bank: {
         ...data.bank,
-        summary: enrichBankSummary(data.bank.summary, statuses, coverageMap)
+        summary: enrichBankSummary(data.bank.summary, statuses, coverageMap),
+        bondAccounting: getBondAccountingForBank(BANK_REPORTS_DIR, data.bank.id)
       }
     };
   } catch (err) {
@@ -1039,7 +1638,9 @@ function getBankDataStatus() {
   const bankStatus = getBankDatabaseStatus(BANK_REPORTS_DIR);
   return {
     ...bankStatus,
-    accountStatuses: getBankAccountStatusImportStatus(BANK_REPORTS_DIR)
+    accountStatuses: getBankAccountStatusImportStatus(BANK_REPORTS_DIR),
+    averagedSeries: getAveragedSeriesStatus(BANK_REPORTS_DIR),
+    bondAccounting: getBondAccountingStatus(BANK_REPORTS_DIR)
   };
 }
 
@@ -1373,6 +1974,106 @@ async function handleBankStatusUpload(req, res) {
   }
 }
 
+async function handleAveragedSeriesUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const file = files.find(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename));
+    if (!file) return sendJSON(res, 400, { error: 'Upload an averaged-series workbook (.xlsm, .xlsx, or .xls).' });
+    if (!looksLikeExcel(file.data)) {
+      return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
+    }
+
+    fs.mkdirSync(BANK_REPORTS_DIR, { recursive: true });
+    const tmpTarget = path.join(BANK_REPORTS_DIR, `averaged-series-upload.tmp-${process.pid}-${Date.now()}${path.extname(file.filename || '.xlsm') || '.xlsm'}`);
+    fs.writeFileSync(tmpTarget, file.data);
+    const metadata = saveAveragedSeriesWorkbook(BANK_REPORTS_DIR, tmpTarget, {
+      sourceFile: sanitizeFilename(file.filename)
+    });
+    fs.rmSync(tmpTarget, { force: true });
+    appendAuditLog({
+      event: 'averaged-series-import',
+      sourceFile: sanitizeFilename(file.filename),
+      latestPeriod: metadata.latestPeriod,
+      metricCount: metadata.metricCount,
+      populationCount: metadata.populationCount
+    });
+    return sendJSON(res, 200, { success: true, metadata });
+  } catch (err) {
+    try {
+      const staleTemps = fs.readdirSync(BANK_REPORTS_DIR)
+        .filter(name => name.startsWith('averaged-series-upload.tmp-'));
+      staleTemps.forEach(name => fs.rmSync(path.join(BANK_REPORTS_DIR, name), { force: true }));
+    } catch (_) {}
+    log('error', 'Averaged-series workbook upload failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Averaged-series workbook import failed' });
+  }
+}
+
+async function handleBondAccountingUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  let tmpDir = '';
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const bankListFile = files.find(f => f.fieldName === 'bondBankList' || /bank.*list/i.test(f.filename || ''));
+    const portfolioFiles = files.filter(f => f !== bankListFile && /\.(xlsm|xlsx|xls)$/i.test(f.filename || ''));
+
+    if (!bankListFile) return sendJSON(res, 400, { error: 'Upload the bond-accounting bank list workbook.' });
+    if (!portfolioFiles.length) return sendJSON(res, 400, { error: 'Choose the portfolio folder or upload at least one portfolio workbook.' });
+    if (!looksLikeExcel(bankListFile.data)) {
+      return sendJSON(res, 400, { error: `${bankListFile.filename} does not look like an Excel workbook.` });
+    }
+    for (const file of portfolioFiles) {
+      if (!looksLikeExcel(file.data)) {
+        return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
+      }
+    }
+
+    const bankSummaries = listBankSummaries(BANK_REPORTS_DIR);
+    if (!bankSummaries.length) {
+      return sendJSON(res, 400, { error: 'Import bank call report data before importing bond-accounting portfolios.' });
+    }
+
+    fs.mkdirSync(BANK_REPORTS_DIR, { recursive: true });
+    tmpDir = fs.mkdtempSync(path.join(BANK_REPORTS_DIR, 'bond-accounting-upload-'));
+    const portfolioDir = path.join(tmpDir, 'portfolios');
+    fs.mkdirSync(portfolioDir, { recursive: true });
+
+    const bankListPath = path.join(tmpDir, sanitizeFilename(bankListFile.filename || 'bond-accounting-bank-list.xlsx'));
+    fs.writeFileSync(bankListPath, bankListFile.data);
+    for (const file of portfolioFiles) {
+      fs.writeFileSync(path.join(portfolioDir, sanitizeFilename(file.filename)), file.data);
+    }
+
+    const manifest = importBondAccountingFolder(BANK_REPORTS_DIR, bankListPath, portfolioDir, {
+      bankSummaries,
+      sourceFolderLabel: `${portfolioFiles.length} uploaded portfolio workbook${portfolioFiles.length === 1 ? '' : 's'}`
+    });
+    appendAuditLog({
+      event: 'bond-accounting-import',
+      bankListSourceFile: sanitizeFilename(bankListFile.filename),
+      portfolioFileCount: manifest.portfolioFileCount,
+      matchedCount: manifest.matchedCount,
+      pCodeMatchedCount: manifest.pCodeMatchedCount,
+      unmatchedCount: manifest.unmatchedCount
+    });
+    return sendJSON(res, 200, { success: true, manifest });
+  } catch (err) {
+    log('error', 'Bond accounting import failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Bond accounting import failed' });
+  } finally {
+    if (tmpDir) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+}
+
 function loadArchivedCorporates(date) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const p = path.join(ARCHIVE_DIR, date, CORPORATES_FILENAME);
@@ -1439,6 +2140,11 @@ async function handleUpload(req, res) {
 
   // Determine which slots this upload is touching
   const incomingSlots = new Set();
+  const hasCdCostOnlyUpload = files.some(f => f.companionRole === 'cdCostWorkbook');
+  const hasCdPrimaryUpload = files.some(f =>
+    classifyFile(f.filename, f.explicitSlot) === 'cdoffers' &&
+    f.companionRole !== 'cdCostWorkbook'
+  );
   for (const f of files) {
     const s = classifyFile(f.filename, f.explicitSlot);
     if (s) incomingSlots.add(s);
@@ -1494,6 +2200,7 @@ async function handleUpload(req, res) {
         // also cleared so the re-upload can write fresh ones.
         const perSlotJson = {
           econ:              [ECONOMIC_UPDATE_FILENAME],
+          relativeValue:     [RELATIVE_VALUE_FILENAME],
           treasuryNotes:     [TREASURY_NOTES_FILENAME],
           cdoffers:          [OFFERINGS_FILENAME],
           munioffers:        [MUNI_OFFERINGS_FILENAME],
@@ -1504,12 +2211,17 @@ async function handleUpload(req, res) {
         const priorSlotByFilename = new Map(
           Object.entries(priorMeta.slotFilenames || {}).map(([slot, filename]) => [filename, slot])
         );
+        for (const [slot, filenames] of Object.entries(priorMeta.slotFileLists || {})) {
+          if (!Array.isArray(filenames)) continue;
+          for (const filename of filenames) priorSlotByFilename.set(filename, slot);
+        }
         for (const f of existing) {
           if (f === META_FILENAME || f === 'audit.log') continue;
           const classifiedSlot = f.startsWith('_')
             ? Object.entries(perSlotJson).find(([, jsons]) => jsons.includes(f))?.[0]
             : (priorSlotByFilename.get(f) || classifyFile(f));
-          if (classifiedSlot && incomingSlots.has(classifiedSlot)) {
+          const preserveForCostMerge = classifiedSlot === 'cdoffers' && hasCdCostOnlyUpload && !hasCdPrimaryUpload;
+          if (classifiedSlot && incomingSlots.has(classifiedSlot) && !preserveForCostMerge) {
             try { fs.unlinkSync(path.join(CURRENT_DIR, f)); } catch (_) {}
           }
         }
@@ -1521,10 +2233,12 @@ async function handleUpload(req, res) {
     return sendJSON(res, 500, { error: 'Failed to rotate existing package' });
   }
 
-  // Save uploaded files and sniff dates. All slots are single-file (later wins).
+  // Save uploaded files and sniff dates. Most slots are single-file (later wins);
+  // CD offerings can include a PDF plus an Excel cost workbook.
   const saved = [];
   const bySlot = {};
   const slotFilenames = {};
+  const slotFileLists = {};
   const dateSniffs = {};
 
   for (const file of files) {
@@ -1544,16 +2258,27 @@ async function handleUpload(req, res) {
       continue;
     }
 
+    const isCdOfferingsPair = slot === 'cdoffers';
+
     // Single-file per slot within THIS upload: later upload replaces earlier.
-    if (bySlot[slot]) {
+    if (bySlot[slot] && !isCdOfferingsPair) {
       try { fs.unlinkSync(path.join(CURRENT_DIR, bySlot[slot])); } catch (_) {}
       saved.splice(saved.findIndex(s => s.type === slot), 1);
     }
     fs.writeFileSync(target, file.data);
     bySlot[slot] = safeName;
-    slotFilenames[slot] = safeName;
+    if (file.companionRole !== 'cdCostWorkbook') {
+      slotFilenames[slot] = safeName;
+    }
+    if (!slotFileLists[slot]) slotFileLists[slot] = [];
+    slotFileLists[slot].push(safeName);
     dateSniffs[slot] = sniffDateFromFilename(file.filename);
     saved.push({ filename: safeName, type: slot, size: file.data.length });
+  }
+
+  if (slotFileLists.cdoffers && slotFileLists.cdoffers.length > 1) {
+    const pdfName = slotFileLists.cdoffers.find(name => /\.pdf$/i.test(name));
+    if (pdfName) slotFilenames.cdoffers = pdfName;
   }
 
   if (saved.length === 0) {
@@ -1582,6 +2307,38 @@ async function handleUpload(req, res) {
     }
   }
 
+  // Extract the Relative Value PDF rate snapshot into structured data if present.
+  let relativeValueRowsCount = null;
+  let relativeValueWarnings = [];
+  const relativeValueFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'relativeValue');
+  if (relativeValueFile) {
+    const sourceFile = slotFilenames.relativeValue || sanitizeFilename(relativeValueFile.filename);
+    const extracted = await extractPdfText(relativeValueFile.data);
+    const rows = parseRelativeValueSnapshotText(extracted && extracted.text);
+    relativeValueRowsCount = rows.length;
+    relativeValueWarnings = rows.length ? [] : ['Relative Value PDF was uploaded but the rate snapshot table could not be extracted.'];
+    const payload = {
+      asOfDate: dateSniffs.relativeValue || null,
+      extractedAt: new Date().toISOString(),
+      sourceFile,
+      rows,
+      series: [
+        { key: 'ust', label: 'UST Yield' },
+        { key: 'agency', label: 'US AGY' },
+        { key: 'muniTey296', label: "MUNI GO 'AA' TEY (29.6%)" },
+        { key: 'muniTey21', label: "MUNI GO 'AA' TEY (21%)" },
+        { key: 'corp', label: "'AA' Corp" }
+      ],
+      warnings: relativeValueWarnings
+    };
+    try {
+      fs.writeFileSync(path.join(CURRENT_DIR, RELATIVE_VALUE_FILENAME), JSON.stringify(payload, null, 2));
+      log('info', `Extracted ${relativeValueRowsCount} relative value snapshot rows from ${sourceFile}`);
+    } catch (err) {
+      log('error', 'Failed to write relative value JSON:', err.message);
+    }
+  }
+
   // Extract the Brokered CD Rate Sheet all-in ranges for the calculator.
   let brokeredCdTerms = null;
   let brokeredCdAsOfDate = null;
@@ -1606,9 +2363,9 @@ async function handleUpload(req, res) {
   let offeringsWarnings = [];
   let offeringsAsOfDate = null;
   let cdHistorySnapshot = null;
-  const cdOffersFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'cdoffers');
-  if (cdOffersFile) {
-    const extracted = await extractOfferings(cdOffersFile);
+  const cdOffersFiles = files.filter(f => classifyFile(f.filename, f.explicitSlot) === 'cdoffers');
+  if (cdOffersFiles.length) {
+    const extracted = await extractCdOfferingsPackage(files);
     if (extracted && Array.isArray(extracted.offerings)) {
       offeringsCount = extracted.offerings.length;
       offeringsWarnings = extracted.warnings || [];
@@ -1616,7 +2373,9 @@ async function handleUpload(req, res) {
       const offPayload = {
         asOfDate: extracted.asOfDate,
         extractedAt: new Date().toISOString(),
-        sourceFile: slotFilenames.cdoffers,
+        sourceFile: extracted.sourceFile || slotFilenames.cdoffers,
+        sourceFiles: extracted.sourceFiles || slotFileLists.cdoffers || [slotFilenames.cdoffers].filter(Boolean),
+        costSourceFile: extracted.costSourceFile || null,
         warnings: offeringsWarnings,
         offerings: extracted.offerings
       };
@@ -1817,9 +2576,22 @@ async function handleUpload(req, res) {
   const mergedCorporatesFileDate  = incomingSlots.has('corporates')  ? corporatesFileDate  : (priorMeta.corporatesFileDate ?? null);
   const mergedBrokeredCdTerms     = incomingSlots.has('cd')          ? brokeredCdTerms     : (priorMeta.brokeredCdTerms ?? null);
   const mergedBrokeredCdAsOfDate  = incomingSlots.has('cd')          ? brokeredCdAsOfDate  : (priorMeta.brokeredCdAsOfDate ?? null);
+  const mergedRelativeValueRowsCount = incomingSlots.has('relativeValue')
+    ? relativeValueRowsCount
+    : (priorMeta.relativeValueRowsCount ?? null);
 
   // Merged slot filenames: preserve prior filenames for untouched slots
   const mergedSlotFilenames = { ...(priorMeta.slotFilenames || {}), ...slotFilenames };
+  const mergedSlotFileLists = { ...(priorMeta.slotFileLists || {}) };
+  for (const [slot, filenames] of Object.entries(slotFileLists)) {
+    if (slot === 'cdoffers' && hasCdCostOnlyUpload && !hasCdPrimaryUpload) {
+      mergedSlotFileLists[slot] = [
+        ...new Set([...(mergedSlotFileLists[slot] || []), ...filenames])
+      ];
+    } else {
+      mergedSlotFileLists[slot] = filenames;
+    }
+  }
 
   const meta = {
     date: packageDate,
@@ -1834,7 +2606,9 @@ async function handleUpload(req, res) {
     corporatesFileDate:  mergedCorporatesFileDate,
     brokeredCdTerms:     mergedBrokeredCdTerms,
     brokeredCdAsOfDate:  mergedBrokeredCdAsOfDate,
-    slotFilenames:       mergedSlotFilenames
+    relativeValueRowsCount: mergedRelativeValueRowsCount,
+    slotFilenames:       mergedSlotFilenames,
+    slotFileLists:       mergedSlotFileLists
   };
   fs.writeFileSync(path.join(CURRENT_DIR, META_FILENAME), JSON.stringify(meta, null, 2));
 
@@ -1845,6 +2619,7 @@ async function handleUpload(req, res) {
     files: saved.map(s => ({ type: s.type, filename: s.filename, size: s.size })),
     offeringsCount,
     cdHistorySnapshot,
+    relativeValueRowsCount,
     muniOfferingsCount,
     treasuryNotesCount,
     agencyCount,
@@ -1952,6 +2727,10 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { status: 'ok', now: new Date().toISOString() });
     }
 
+    if (pathname === '/api/daily-intelligence' && req.method === 'GET') {
+      return sendJSON(res, 200, await buildDailyIntelligence());
+    }
+
     if (pathname === '/api/offerings' && req.method === 'GET') {
       const date = query.get('date');
       const data = date ? loadArchivedOfferings(date) : loadCurrentOfferings();
@@ -1973,6 +2752,19 @@ const server = http.createServer(async (req, res) => {
           error: date
             ? `No economic update data for ${date}`
             : 'No economic update data in the current package'
+        });
+      }
+      return sendJSON(res, 200, data);
+    }
+
+    if (pathname === '/api/relative-value' && req.method === 'GET') {
+      const date = query.get('date');
+      const data = date ? await loadArchivedRelativeValueSnapshot(date) : await loadCurrentRelativeValueSnapshot();
+      if (!data) {
+        return sendJSON(res, 404, {
+          error: date
+            ? `No relative value data for ${date}`
+            : 'No relative value data in the current package'
         });
       }
       return sendJSON(res, 200, data);
@@ -2170,6 +2962,33 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, data);
     }
 
+    if (pathname === '/api/banks/averaged-series/upload' && req.method === 'POST') {
+      return await handleAveragedSeriesUpload(req, res);
+    }
+
+    if (pathname === '/api/banks/averaged-series' && req.method === 'GET') {
+      const dataset = loadAveragedSeriesDataset(BANK_REPORTS_DIR);
+      if (!dataset) return sendJSON(res, 404, { error: 'No averaged-series peer data has been imported yet' });
+      return sendJSON(res, 200, dataset);
+    }
+
+    if (pathname === '/api/banks/bond-accounting/upload' && req.method === 'POST') {
+      return await handleBondAccountingUpload(req, res);
+    }
+
+    if (pathname.startsWith('/api/banks/bond-accounting/files/') && req.method === 'GET') {
+      const storedPath = safeDecodeURIComponent(pathname.slice('/api/banks/bond-accounting/files/'.length));
+      const filePath = resolveBondAccountingStoredFile(BANK_REPORTS_DIR, storedPath);
+      if (!filePath) return sendText(res, 404, 'Not found');
+      return sendFile(res, filePath, { download: true });
+    }
+
+    if (pathname === '/api/banks/bond-accounting' && req.method === 'GET') {
+      const manifest = loadBondAccountingManifest(BANK_REPORTS_DIR);
+      if (!manifest) return sendJSON(res, 404, { error: 'No bond accounting portfolios have been imported yet' });
+      return sendJSON(res, 200, manifest);
+    }
+
     if (pathname.startsWith('/api/banks/') && req.method === 'GET') {
       const id = pathname.slice('/api/banks/'.length);
       const data = getBankById(id);
@@ -2183,6 +3002,16 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/bank-account-statuses/upload' && req.method === 'POST') {
       return await handleBankStatusUpload(req, res);
+    }
+
+    if (pathname === '/api/bank-averaged-series/upload' && req.method === 'POST') {
+      return await handleAveragedSeriesUpload(req, res);
+    }
+
+    if (pathname === '/api/bank-averaged-series' && req.method === 'GET') {
+      const dataset = loadAveragedSeriesDataset(BANK_REPORTS_DIR);
+      if (!dataset) return sendJSON(res, 404, { error: 'No averaged-series peer data has been imported yet' });
+      return sendJSON(res, 200, dataset);
     }
 
     if (pathname === '/api/audit-log' && req.method === 'GET') {
@@ -2201,7 +3030,8 @@ const server = http.createServer(async (req, res) => {
     // --- File serving: current package ---
 
     if (pathname.startsWith('/current/')) {
-      const filename = pathname.slice('/current/'.length);
+      const filename = safeDecodeURIComponent(pathname.slice('/current/'.length));
+      if (filename == null) return sendText(res, 400, 'Invalid path');
       if (hasPrivatePathSegment(filename)) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(CURRENT_DIR, filename);
       if (!filePath) return sendText(res, 400, 'Invalid path');
@@ -2216,7 +3046,8 @@ const server = http.createServer(async (req, res) => {
       const slash = rest.indexOf('/');
       if (slash === -1) return sendText(res, 404, 'Not found');
       const date = rest.slice(0, slash);
-      const filename = rest.slice(slash + 1);
+      const filename = safeDecodeURIComponent(rest.slice(slash + 1));
+      if (filename == null) return sendText(res, 400, 'Invalid path');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendText(res, 400, 'Invalid date');
       if (hasPrivatePathSegment(filename)) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(ARCHIVE_DIR, date, filename);

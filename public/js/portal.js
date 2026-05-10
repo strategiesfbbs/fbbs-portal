@@ -19,6 +19,8 @@
     agencies: [],
     corporates: []
   };
+  let dailyIntelData = null;
+  let relativeValueData = null;
   let economicUpdateData = null;
   let selectedMarketSection = 'rates';
   let selectedCdCalcTerm = 3;
@@ -40,13 +42,15 @@
   let strategyNotifications = { requests: [], counts: {} };
   let selectedBankStrategyHistory = [];
   let mbsCmoData = null;
+  let bondAccountingManifest = null;
   let selectedFiles = {
-    dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, munioffers: null,
+    dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
   };
 
   const SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
   const TOTAL_SLOTS = SLOTS.length;
+  const UPLOAD_SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 
   const DOC_TYPES = {
     dashboard:         { label: 'FBBS Sales Dashboard', ext: 'HTML', viewer: 'dashboard' },
@@ -54,20 +58,22 @@
     relativeValue:     { label: 'Relative Value', ext: 'PDF', viewer: 'relativeValue' },
     treasuryNotes:     { label: 'Treasury Notes', ext: 'XLSX', viewer: 'treasuryNotes' },
     cd:                { label: 'Brokered CD Sheet', ext: 'PDF', viewer: 'cd' },
-    cdoffers:          { label: 'Daily CD Offerings', ext: 'PDF/XLSX', viewer: 'cdoffers' },
+    cdoffers:          { label: 'Daily CD Offerings PDF', ext: 'PDF', viewer: 'cdoffers' },
+    cdoffersCost:      { label: 'CD Cost Workbook', ext: 'XLSX', viewer: 'explorer' },
     munioffers:        { label: 'Muni Offerings', ext: 'PDF', viewer: 'munioffers' },
     agenciesBullets:   { label: 'Agencies — Bullets', ext: 'XLSX', viewer: 'agencies' },
     agenciesCallables: { label: 'Agencies — Callables', ext: 'XLSX', viewer: 'agencies' },
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'banks', 'maps', 'strategies', 'archive', 'upload', 'admin'];
+                       'mbs-cmo', 'banks', 'maps', 'reports', 'strategies', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
+    { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
@@ -83,6 +89,7 @@
     { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
     { page: 'maps', group: 'Banks', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' },
+    { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
@@ -90,6 +97,7 @@
   ];
 
   const NAV_GROUP_BY_PAGE = {
+    'daily-intelligence': 'fbbs',
     dashboard: 'fbbs',
     econ: 'fbbs',
     relativeValue: 'fbbs',
@@ -102,7 +110,8 @@
     corporates: 'offerings',
     'mbs-cmo': 'offerings',
     banks: 'banks',
-    maps: 'banks'
+    maps: 'banks',
+    reports: 'banks'
   };
 
   const DEFAULT_BROKERED_CD_TERMS = [
@@ -153,6 +162,12 @@
     agencies: { enabled: false, method: 'dollars', dollarMarkup: 5, bpMarkup: 50 },
     corporates: { enabled: false, method: 'dollars', dollarMarkup: 5, bpMarkup: 50 }
   };
+  const MUNI_TAX_AUDIENCES = {
+    ccorp: { label: 'C-Corp', rate: 21 },
+    scorp: { label: 'S-Corp', rate: 29.6 },
+    ria: { label: 'RIA/Money Manager', rate: 35 }
+  };
+  let muniTaxSettings = { audience: 'ccorp', rate: 21 };
   let commissionSettings = loadCommissionSettings();
 
   // ============ Utilities ============
@@ -656,11 +671,22 @@
       : 'Clean';
 
     renderStatTiles('homeStatusTiles', [
-      { label: 'Package', value: `${filled} / ${TOTAL_SLOTS} files` },
+      { label: 'Package', value: `${packageCountText(pkg)} files` },
       { label: 'Published', value: pkg.publishedAt ? formatTime(pkg.publishedAt) : 'Not yet' },
       { label: 'Data Health', value: warningText },
       { label: 'Date Check', value: dateText }
     ]);
+  }
+
+  function packageUploadedCount(pkg) {
+    pkg = pkg || {};
+    const canonical = SLOTS.filter(slot => pkg[slot]).length;
+    const companionCount = pkg.cdoffersCost && !SLOTS.includes('cdoffersCost') ? 1 : 0;
+    return Math.min(TOTAL_SLOTS, canonical + companionCount);
+  }
+
+  function packageCountText(pkg) {
+    return `${packageUploadedCount(pkg)} / ${TOTAL_SLOTS}`;
   }
 
   function homeMissingDocs() {
@@ -882,7 +908,9 @@
           (lower.includes('note') || lower.includes('notes'))) return 'treasuryNotes';
       if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
           lower.includes('daily_cd') || lower.includes('daily cd') ||
-          lower.includes('cd offering') || lower.includes('cd_offering')) return 'cdoffers';
+          lower.includes('cd offering') || lower.includes('cd_offering') ||
+          lower.includes('new issue cd') || lower.includes('new issue cds') ||
+          lower.includes('cds - cost')) return 'cdoffers';
       if (lower.includes('corporate') || lower.includes('corp_')) return 'corporates';
       if (lower.includes('callable') || lower.includes('call')) return 'agenciesCallables';
       if (lower.includes('bullet')) return 'agenciesBullets';
@@ -937,6 +965,8 @@
     }
 
     if (pageName === 'home') renderHomeRecents();
+    if (pageName === 'daily-intelligence') loadDailyIntelligence();
+    if (pageName === 'relativeValue') loadRelativeValueSnapshot();
     if (pageName === 'archive') loadArchive();
     if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'treasury-explorer') loadTreasuryNotes();
@@ -951,6 +981,10 @@
       loadAccountCoverageAccounts();
     }
     if (pageName === 'maps') loadMaps();
+    if (pageName === 'reports') {
+      loadBankStatus();
+      loadBondAccountingManifest();
+    }
     if (pageName === 'strategies') loadStrategies();
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'admin') loadAuditLog();
@@ -1089,6 +1123,8 @@
       currentPackage = {};
     }
     await loadQualitySummary();
+    renderQualityStatus(packageUploadedCount(currentPackage));
+    updateUploadStat();
     await loadEconomicUpdate();
     renderHome();
     renderViewer('dashboard');
@@ -1099,6 +1135,12 @@
     renderViewer('cdoffers');
     renderViewer('munioffers');
     renderCdCostCalculator();
+    if (document.getElementById('p-relativeValue')?.classList.contains('active')) {
+      loadRelativeValueSnapshot();
+    }
+    if (document.getElementById('p-daily-intelligence')?.classList.contains('active')) {
+      loadDailyIntelligence();
+    }
   }
 
   async function loadArchive() {
@@ -1117,7 +1159,7 @@
 
   function renderHome() {
     const pkg = currentPackage || {};
-    const filled = SLOTS.filter(slot => pkg[slot]).length;
+    const filled = packageUploadedCount(pkg);
     const subtitle = document.getElementById('homeSubtitle');
     const packageStat = document.getElementById('homePackageStat');
     if (packageStat) packageStat.textContent = `${filled}/${TOTAL_SLOTS}`;
@@ -1232,7 +1274,7 @@
     const dateEl = document.getElementById('homeTileDailyDate');
     if (!dateEl) return;
     const pkg = currentPackage || {};
-    const filled = SLOTS.filter(slot => pkg[slot]).length;
+    const filled = packageUploadedCount(pkg);
     const dateLabel = pkg.date ? formatShortDate(pkg.date) : null;
     dateEl.textContent = filled === 0 ? '—' : (dateLabel || 'Today');
   }
@@ -1766,6 +1808,345 @@
     });
   }
 
+  // ============ Daily Intelligence ============
+
+  async function loadDailyIntelligence() {
+    const picksEl = document.getElementById('dailyIntelPicks');
+    if (picksEl) picksEl.innerHTML = '<div class="market-empty">Building rule-based picks&hellip;</div>';
+    try {
+      const res = await fetch('/api/daily-intelligence', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      dailyIntelData = await res.json();
+    } catch (e) {
+      console.error('Failed to load daily intelligence:', e);
+      dailyIntelData = null;
+    }
+    renderDailyIntelligence();
+  }
+
+  function dailyMarketRow(rows, labels) {
+    return (rows || []).find(row => labels.includes(row.label));
+  }
+
+  function dailyTreasuryRow(treasuries, tenor) {
+    return (treasuries || []).find(row => row.tenor === tenor);
+  }
+
+  function renderDailyCurveChart(treasuries) {
+    const curve = document.getElementById('dailyIntelCurveChart');
+    if (!curve) return;
+    if (!treasuries || !treasuries.length) {
+      curve.innerHTML = '<div class="market-empty small">Treasury curve unavailable.</div>';
+      return;
+    }
+    const yields = treasuries.map(row => row.yield).filter(n => n != null && !isNaN(n));
+    if (!yields.length) {
+      curve.innerHTML = '<div class="market-empty small">Treasury curve unavailable.</div>';
+      return;
+    }
+    const min = Math.min.apply(null, yields);
+    const max = Math.max.apply(null, yields);
+    const range = Math.max(max - min, 0.01);
+    curve.innerHTML = treasuries.map(row => {
+      const yieldValue = Number(row.yield);
+      const height = 18 + ((yieldValue - min) / range) * 72;
+      return `
+        <div class="curve-bar" title="${escapeHtml(row.label)} ${escapeHtml(formatPercentTile(row.yield, 3))}">
+          <span style="height:${height.toFixed(1)}%"></span>
+          <strong>${escapeHtml(formatPercentTile(row.yield, 2))}</strong>
+          <em>${escapeHtml(row.label || row.tenor || '')}</em>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function dailySummaryCard(label, value, detail, tone = '') {
+    return `
+      <div class="market-summary-card">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value || '—')}</strong>
+        <em class="${escapeHtml(tone)}">${escapeHtml(detail || '')}</em>
+      </div>
+    `;
+  }
+
+  function renderDailyPickCard(pick) {
+    const audience = (pick.audience || []).join(' / ');
+    const metrics = pick.metrics && pick.metrics.tey296 != null
+      ? `<div class="daily-pick-metrics">
+          <span>TEY 21% ${escapeHtml(formatPercentTile(pick.metrics.tey21, 3))}</span>
+          <span>TEY 29.6% ${escapeHtml(formatPercentTile(pick.metrics.tey296, 3))}</span>
+        </div>`
+      : '';
+    return `
+      <article class="daily-pick-card">
+        <div class="daily-pick-head">
+          <span>${escapeHtml(pick.type || 'Pick')}</span>
+          <em>${escapeHtml(audience || pick.label || '')}</em>
+        </div>
+        <h4>${escapeHtml(pick.title || 'Untitled pick')}</h4>
+        <div class="daily-pick-value">${escapeHtml(pick.value || 'Review')}</div>
+        <p>${escapeHtml(pick.detail || '')}</p>
+        ${metrics}
+        <div class="daily-pick-foot">
+          ${pick.cusip ? `<code>${escapeHtml(pick.cusip)}</code>` : '<span></span>'}
+          <button type="button" class="small-btn" data-goto="${escapeHtml(pick.page || 'home')}">Open</button>
+        </div>
+        <div class="daily-pick-reason">${escapeHtml(pick.reason || '')}</div>
+      </article>
+    `;
+  }
+
+  function renderDailyIntelligence() {
+    const sub = document.getElementById('dailyIntelSub');
+    const stat = document.getElementById('dailyIntelStat');
+    const kicker = document.getElementById('dailyIntelKicker');
+    const status = document.getElementById('dailyIntelStatus');
+    const summary = document.getElementById('dailyIntelSummary');
+    const slopeEl = document.getElementById('dailyIntelCurveSlope');
+    const cues = document.getElementById('dailyIntelSalesCues');
+    const cueCount = document.getElementById('dailyIntelCueCount');
+    const picksEl = document.getElementById('dailyIntelPicks');
+    const gapsEl = document.getElementById('dailyIntelGaps');
+    if (!sub || !stat || !kicker || !status || !summary || !slopeEl || !cues || !cueCount || !picksEl || !gapsEl) return;
+
+    const data = dailyIntelData;
+    if (!data) {
+      sub.textContent = 'Daily intelligence could not be loaded.';
+      stat.textContent = '0';
+      kicker.textContent = 'Error';
+      status.innerHTML = '<div class="daily-intel-alert">Could not load the daily intelligence endpoint.</div>';
+      summary.innerHTML = '';
+      picksEl.innerHTML = '<div class="market-empty">No rule-based picks available.</div>';
+      gapsEl.innerHTML = '';
+      renderDailyCurveChart([]);
+      return;
+    }
+
+    const market = data.market || {};
+    const treasuries = market.treasuries || [];
+    const marketRows = market.marketData || [];
+    const marketRates = market.marketRates || [];
+    const two = dailyTreasuryRow(treasuries, '2YR');
+    const five = dailyTreasuryRow(treasuries, '5YR');
+    const ten = dailyTreasuryRow(treasuries, '10YR');
+    const thirty = dailyTreasuryRow(treasuries, '30YR');
+    const vix = dailyMarketRow(marketRows, ['VIX']);
+    const spx = dailyMarketRow(marketRows, ['SPX', 'S&P 500']);
+    const crude = dailyMarketRow(marketRows, ['CRUDE FUTURE', 'Crude Oil']);
+    const sofr = dailyMarketRow(marketRates, ['SOFR']);
+    const counts = data.counts || {};
+    const picks = data.picks || [];
+    const warnings = data.warnings || [];
+    const gaps = data.gaps || [];
+
+    stat.textContent = formatNumber(picks.length);
+    sub.textContent = data.asOfDate
+      ? `Auto-generated from the ${formatShortDate(data.asOfDate)} uploaded package.`
+      : 'Auto-generated from the current uploaded package.';
+    kicker.textContent = data.publishedAt ? `Published ${formatFullTimestamp(data.publishedAt)}` : 'Current package';
+    slopeEl.textContent = two && ten ? `2s/10s ${(ten.yield - two.yield).toFixed(3)}%` : '2s/10s —';
+
+    status.innerHTML = `
+      <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.treasuries || 0))}</strong> Treasuries</div>
+      <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.cds || 0))}</strong> CDs</div>
+      <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.munis || 0))}</strong> Munis</div>
+      <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.agencies || 0))}</strong> Agencies</div>
+      <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.corporates || 0))}</strong> Corporates</div>
+      <div class="daily-intel-pill ${warnings.length ? 'warn' : ''}"><strong>${escapeHtml(formatNumber(warnings.length))}</strong> Warnings</div>
+    `;
+
+    summary.innerHTML = [
+      dailySummaryCard('2Y Treasury', two ? formatPercentTile(two.yield, 3) : '—', two ? formatMarketChange(two.dailyChange, 3) : '—', changeClass(two && two.dailyChange)),
+      dailySummaryCard('5Y Treasury', five ? formatPercentTile(five.yield, 3) : '—', five ? formatMarketChange(five.dailyChange, 3) : '—', changeClass(five && five.dailyChange)),
+      dailySummaryCard('10Y Treasury', ten ? formatPercentTile(ten.yield, 3) : '—', ten ? formatMarketChange(ten.dailyChange, 3) : '—', changeClass(ten && ten.dailyChange)),
+      dailySummaryCard('30Y Treasury', thirty ? formatPercentTile(thirty.yield, 3) : '—', thirty ? formatMarketChange(thirty.dailyChange, 3) : '—', changeClass(thirty && thirty.dailyChange)),
+      dailySummaryCard('SOFR', formatMarketValue(sofr), sofr ? formatMarketChange(sofr.change, 3) : '—', changeClass(sofr && sofr.change)),
+      dailySummaryCard('S&P 500', formatMarketValue(spx), spx ? formatMarketChange(spx.change, 2) : '—', changeClass(spx && spx.change)),
+      dailySummaryCard('VIX', formatMarketValue(vix), vix ? formatMarketChange(vix.change, 2) : '—', changeClass(vix && vix.change)),
+      dailySummaryCard('Crude', formatMarketValue(crude), crude ? formatMarketChange(crude.change, 2) : '—', changeClass(crude && crude.change))
+    ].join('');
+
+    renderDailyCurveChart(treasuries);
+    const cueRows = market.salesCues || [];
+    cueCount.textContent = `${cueRows.length} cues`;
+    cues.innerHTML = cueRows.length ? cueRows.map(cue => `
+      <div class="sales-cue">
+        <strong>${escapeHtml(cue.title || 'Sales cue')}</strong>
+        <p>${escapeHtml(cue.body || '')}</p>
+      </div>
+    `).join('') : '<div class="market-empty small">No sales cues extracted.</div>';
+
+    picksEl.innerHTML = picks.length
+      ? picks.map(renderDailyPickCard).join('')
+      : '<div class="market-empty">No rule-based picks available from the current package.</div>';
+
+    gapsEl.innerHTML = gaps.length
+      ? gaps.map(gap => `<div class="daily-gap-item">${escapeHtml(gap)}</div>`).join('')
+      : '<div class="daily-gap-item good">Core daily package data is available.</div>';
+  }
+
+  // ============ Native Relative Value ============
+
+  const RV_SERIES = [
+    { key: 'ust', label: 'UST Yield', color: '#1f4f3a' },
+    { key: 'agency', label: 'US AGY', color: '#2f6f9f' },
+    { key: 'muniTey296', label: "MUNI GO 'AA' TEY (29.6%)", color: '#b5862d' },
+    { key: 'muniTey21', label: "MUNI GO 'AA' TEY (21%)", color: '#6f7f3c' },
+    { key: 'corp', label: "'AA' Corp", color: '#8b3f2f' }
+  ];
+
+  async function loadRelativeValueSnapshot() {
+    const chart = document.getElementById('rvRateSnapshotChart');
+    if (chart) chart.innerHTML = '<div class="market-empty small">Loading rate snapshot&hellip;</div>';
+    try {
+      const res = await fetch('/api/relative-value', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      relativeValueData = await res.json();
+    } catch (e) {
+      console.error('Failed to load relative value snapshot:', e);
+      relativeValueData = null;
+    }
+    renderRelativeValueNative();
+  }
+
+  function rvRateValue(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${n.toFixed(2)}%` : '—';
+  }
+
+  function rvSpreadValue(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(0)}` : '—';
+  }
+
+  function rvBestBy(rows, key) {
+    return rows
+      .filter(row => Number.isFinite(Number(row[key])))
+      .sort((a, b) => Number(b[key]) - Number(a[key]))[0] || null;
+  }
+
+  function renderRelativeValueChart(rows) {
+    const el = document.getElementById('rvRateSnapshotChart');
+    if (!el) return;
+    if (!rows.length) {
+      el.innerHTML = '<div class="market-empty small">Rate snapshot table unavailable.</div>';
+      return;
+    }
+
+    const width = 860;
+    const height = 340;
+    const left = 54;
+    const right = 24;
+    const top = 24;
+    const bottom = 46;
+    const plotWidth = width - left - right;
+    const plotHeight = height - top - bottom;
+    const values = [];
+    rows.forEach(row => {
+      RV_SERIES.forEach(series => {
+        const value = Number(row[series.key]);
+        if (Number.isFinite(value)) values.push(value);
+      });
+    });
+    const rawMin = Math.min(...values);
+    const rawMax = Math.max(...values);
+    const min = Math.floor((rawMin - 0.12) * 4) / 4;
+    const max = Math.ceil((rawMax + 0.12) * 4) / 4;
+    const range = Math.max(max - min, 0.25);
+    const xFor = index => left + (rows.length <= 1 ? 0 : (index / (rows.length - 1)) * plotWidth);
+    const yFor = value => top + ((max - value) / range) * plotHeight;
+    const ticks = [];
+    for (let v = min; v <= max + 0.001; v += 0.25) ticks.push(Number(v.toFixed(2)));
+
+    const grid = ticks.map(tick => {
+      const y = yFor(tick);
+      return `
+        <line x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}" class="rv-grid-line"></line>
+        <text x="${left - 10}" y="${(y + 4).toFixed(1)}" class="rv-axis-label" text-anchor="end">${tick.toFixed(2)}</text>
+      `;
+    }).join('');
+
+    const seriesSvg = RV_SERIES.map(series => {
+      const points = rows.map((row, index) => {
+        const value = Number(row[series.key]);
+        return Number.isFinite(value) ? `${xFor(index).toFixed(1)},${yFor(value).toFixed(1)}` : null;
+      }).filter(Boolean);
+      if (points.length < 2) return '';
+      const dots = rows.map((row, index) => {
+        const value = Number(row[series.key]);
+        if (!Number.isFinite(value)) return '';
+        return `<circle cx="${xFor(index).toFixed(1)}" cy="${yFor(value).toFixed(1)}" r="3.5" fill="${series.color}"><title>${escapeHtml(series.label)} ${escapeHtml(row.term)} ${escapeHtml(rvRateValue(value))}</title></circle>`;
+      }).join('');
+      return `
+        <polyline points="${points.join(' ')}" fill="none" stroke="${series.color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        ${dots}
+      `;
+    }).join('');
+
+    const xLabels = rows.map((row, index) => `
+      <text x="${xFor(index).toFixed(1)}" y="${height - 18}" class="rv-axis-label" text-anchor="middle">${escapeHtml(row.term)}</text>
+    `).join('');
+
+    const legend = RV_SERIES.map(series => `
+      <span><i style="background:${series.color}"></i>${escapeHtml(series.label)}</span>
+    `).join('');
+
+    el.innerHTML = `
+      <div class="rv-line-legend">${legend}</div>
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Relative value rate snapshot line chart">
+        <rect x="${left}" y="${top}" width="${plotWidth}" height="${plotHeight}" class="rv-plot-bg"></rect>
+        ${grid}
+        <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}" class="rv-axis-line"></line>
+        <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}" class="rv-axis-line"></line>
+        ${seriesSvg}
+        ${xLabels}
+      </svg>
+    `;
+  }
+
+  function renderRelativeValueNative() {
+    const tool = document.getElementById('relativeValueTool');
+    if (!tool) return;
+    const data = relativeValueData;
+    const rows = data && Array.isArray(data.rows) ? data.rows : [];
+    const loadFailed = data === null;
+    const ten = rows.find(row => row.term === '10 Yr');
+    const two = rows.find(row => row.term === '2 Yr');
+    const topAgency = rvBestBy(rows, 'agencySpread');
+    const topCorp = rvBestBy(rows, 'corpSpread');
+    const topMuni = rvBestBy(rows, 'muniTey296');
+
+    setText('relativeValueNativeKicker', data && data.asOfDate ? formatShortDate(data.asOfDate) : (loadFailed ? 'Not loaded' : 'Current package'));
+    setText('rvRateChartLabel', data && data.sourceFile ? data.sourceFile : (loadFailed ? 'Snapshot unavailable' : 'Relative Value PDF'));
+    renderStatTiles('relativeValueStatTiles', [
+      { label: '2Y UST', value: two ? rvRateValue(two.ust) : '—' },
+      { label: '10Y UST', value: ten ? rvRateValue(ten.ust) : '—' },
+      { label: '2s/10s', value: two && ten ? `${((ten.ust - two.ust) * 100).toFixed(0)} bp` : '—' },
+      { label: 'Best Agency Pickup', value: topAgency ? `${rvSpreadValue(topAgency.agencySpread)} bp` : '—' },
+      { label: 'Best Corp Pickup', value: topCorp ? `${rvSpreadValue(topCorp.corpSpread)} bp` : '—' },
+      { label: 'Top Muni TEY 29.6%', value: topMuni ? rvRateValue(topMuni.muniTey296) : '—' }
+    ]);
+    renderRelativeValueChart(rows);
+
+    const body = document.getElementById('rvRateSnapshotTableBody');
+    if (body) {
+      body.innerHTML = rows.length ? rows.map(row => `
+        <tr>
+          <td><strong>${escapeHtml(row.term)}</strong></td>
+          <td>${escapeHtml(rvRateValue(row.ust))}</td>
+          <td>${escapeHtml(rvRateValue(row.agency))}</td>
+          <td>${escapeHtml(rvSpreadValue(row.agencySpread))}</td>
+          <td>${escapeHtml(rvRateValue(row.muni))}</td>
+          <td>${escapeHtml(rvRateValue(row.muniTey296))}</td>
+          <td>${escapeHtml(rvRateValue(row.muniTey21))}</td>
+          <td>${escapeHtml(rvRateValue(row.corp))}</td>
+          <td>${escapeHtml(rvSpreadValue(row.corpSpread))}</td>
+        </tr>
+      `).join('') : `<tr><td colspan="9">${loadFailed ? 'Could not load /api/relative-value. Restart the portal server after this update.' : 'Rate snapshot table unavailable.'}</td></tr>`;
+    }
+  }
+
   // ============ Brokered CD Cost Calculator ============
 
   function parseMoneyInput(value) {
@@ -1878,7 +2259,7 @@
     const tbody = document.getElementById('archiveBody');
     const countEl = document.getElementById('archiveCount');
 
-    const hasCurrent = currentPackage && SLOTS.some(s => currentPackage[s]);
+    const hasCurrent = currentPackage && (SLOTS.some(s => currentPackage[s]) || currentPackage.cdoffersCost);
     const total = archiveData.length + (hasCurrent ? 1 : 0);
     countEl.textContent = total;
 
@@ -1910,9 +2291,12 @@
       ? `${escapeHtml(day.publishedBy || 'Portal User')} · ${formatTime(day.publishedAt)}`
       : '—';
 
-    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.treasuryNotes || day.cd || day.cdoffers || day.munioffers;
+    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.treasuryNotes || day.cd || day.cdoffers || day.cdoffersCost || day.munioffers;
     const viewLink = viewFirst ? `${basePath}${encodeURIComponent(viewFirst)}` : '#';
     const rowClass = isCurrent ? 'current-row' : '';
+    const cdOfferIsWorkbook = day.cdoffers && /\.(xlsx|xlsm|xls)$/i.test(day.cdoffers);
+    const costFile = day.cdoffersCost && day.cdoffersCost !== day.cdoffers ? day.cdoffersCost : null;
+    const qualityHtml = renderArchiveQuality(day, { cdOfferIsWorkbook, costFile });
 
     return `
       <tr class="${rowClass}">
@@ -1925,8 +2309,10 @@
           ${chip(day.relativeValue, 'Relative_Value.pdf')}
           ${chip(day.treasuryNotes, 'Treasury_Notes.xlsx')}
           ${chip(day.cd, 'CD_Rate_Sheet.pdf')}
-          ${chip(day.cdoffers, 'CD_Offerings.pdf')}
+          ${chip(cdOfferIsWorkbook ? null : day.cdoffers, 'CD_Offerings.pdf')}
+          ${chip(cdOfferIsWorkbook ? day.cdoffers : costFile, 'CD_Cost.xlsx')}
           ${chip(day.munioffers, 'Muni_Offerings.pdf')}
+          ${qualityHtml}
         </td>
         <td>${publishedText}</td>
         <td style="text-align:right">
@@ -1934,6 +2320,26 @@
         </td>
       </tr>
     `;
+  }
+
+  function renderArchiveQuality(day, context = {}) {
+    const countChip = (label, value) => {
+      const n = Number(value);
+      const ok = Number.isFinite(n) && n > 0;
+      return `<span class="archive-quality-pill ${ok ? 'ok' : 'warn'}">${escapeHtml(label)} ${ok ? formatNumber(n) : 'missing'}</span>`;
+    };
+    const warnings = Number(day.warningCount || day.warningsCount || 0);
+    const cdCostReady = Boolean(day.cdoffersCost || context.costFile || context.cdOfferIsWorkbook);
+    const pills = [
+      countChip('CD rows', day.offeringsCount),
+      countChip('Treasury rows', day.treasuryNotesCount),
+      countChip('Muni rows', day.muniOfferingsCount),
+      countChip('Agency rows', day.agencyCount),
+      countChip('Corp rows', day.corporatesCount),
+      `<span class="archive-quality-pill ${cdCostReady ? 'ok' : 'warn'}">CD cost ${cdCostReady ? 'loaded' : 'missing'}</span>`,
+      `<span class="archive-quality-pill ${warnings ? 'warn' : 'ok'}">${warnings ? `${formatNumber(warnings)} warnings` : 'No warnings'}</span>`
+    ];
+    return `<div class="archive-quality">${pills.join('')}</div>`;
   }
 
   // ============ Upload ============
@@ -1994,6 +2400,12 @@
     const count = document.getElementById('bankDataCount');
     const status = document.getElementById('bankImportStatus');
     const accountStatus = document.getElementById('bankStatusImportStatus');
+    const averagedSeriesStatus = document.getElementById('averagedSeriesImportStatus');
+    const reportsAveragedSeriesStatus = document.getElementById('reportsAveragedSeriesStatus');
+    const reportsBondAccountingStatus = document.getElementById('reportsBondAccountingStatus');
+    const reportsBondAccountingCardStatus = document.getElementById('reportsBondAccountingCardStatus');
+    const reportsBondAccountingCard = document.getElementById('reportsBondAccountingCard');
+    const reportsBondAccountingStageBtn = document.getElementById('reportsBondAccountingStageBtn');
     try {
       const res = await fetch('/api/banks/status', { cache: 'no-store' });
       bankDataStatus = await readBankJson(res);
@@ -2026,7 +2438,88 @@
       accountStatus.textContent = 'Account statuses default to Open until imported or edited.';
     }
 
+    const averagedMeta = bankDataStatus && bankDataStatus.averagedSeries ? bankDataStatus.averagedSeries : {};
+    const averagedImportMeta = averagedMeta.metadata || {};
+    if (averagedMeta.available) {
+      const averagedDataset = averagedMeta.dataset || {};
+      const text = `${averagedImportMeta.sourceFile || 'Averaged-series workbook'} imported ${formatImportedDate(averagedImportMeta.importedAt)} · latest ${averagedImportMeta.latestPeriod || '—'} · ${formatNumber(averagedDataset.metricCount || averagedImportMeta.metricCount || 0)} metrics · ${formatNumber(averagedDataset.seriesRowCount || averagedImportMeta.seriesRowCount || 0)} peer rows`;
+      if (averagedSeriesStatus) averagedSeriesStatus.textContent = text;
+      if (reportsAveragedSeriesStatus) reportsAveragedSeriesStatus.textContent = text;
+    } else {
+      const text = averagedMeta.error || 'Averaged-series peer data has not been imported yet.';
+      if (averagedSeriesStatus) averagedSeriesStatus.textContent = text;
+      if (reportsAveragedSeriesStatus) reportsAveragedSeriesStatus.textContent = text;
+    }
+
+    const bondMeta = bankDataStatus && bankDataStatus.bondAccounting ? bankDataStatus.bondAccounting : {};
+    if (bondMeta.available) {
+      const text = `${formatNumber(bondMeta.matchedCount || 0)} matched portfolio files · ${formatNumber(bondMeta.pCodeMatchedCount || 0)} P-code only · ${formatNumber(bondMeta.unmatchedCount || 0)} unmatched · imported ${formatImportedDate(bondMeta.importedAt)}`;
+      if (reportsBondAccountingStatus) reportsBondAccountingStatus.textContent = text;
+      if (reportsBondAccountingCardStatus) reportsBondAccountingCardStatus.textContent = `${formatNumber(bondMeta.matchedCount || 0)} matched files`;
+      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.add('report-card-ready');
+      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.toggle('report-card-warning', Boolean(bondMeta.unmatchedCount));
+      if (reportsBondAccountingStageBtn) reportsBondAccountingStageBtn.disabled = false;
+    } else {
+      const text = bondMeta.error || 'Bond accounting portfolios have not been imported yet.';
+      if (reportsBondAccountingStatus) reportsBondAccountingStatus.textContent = text;
+      if (reportsBondAccountingCardStatus) reportsBondAccountingCardStatus.textContent = 'Import portfolio files';
+      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.remove('report-card-ready', 'report-card-warning');
+      if (reportsBondAccountingStageBtn) reportsBondAccountingStageBtn.disabled = true;
+    }
+
     if (typeof renderHomeTileAccounts === 'function') renderHomeTileAccounts();
+  }
+
+  async function loadBondAccountingManifest() {
+    const list = document.getElementById('bondAccountingMatchList');
+    try {
+      const res = await fetch('/api/banks/bond-accounting', { cache: 'no-store' });
+      bondAccountingManifest = await readBankJson(res);
+    } catch (e) {
+      bondAccountingManifest = null;
+      if (list) list.innerHTML = '<div class="bank-search-empty">No bond accounting import has been run yet.</div>';
+      return;
+    }
+    renderBondAccountingMatches();
+  }
+
+  function bondAccountingFileUrl(row) {
+    return `/api/banks/bond-accounting/files/${encodeURIComponent(row.storedPath || '')}`;
+  }
+
+  function bondAccountingStatusLabel(row) {
+    if (!row) return 'Unmatched';
+    if (row.status === 'matched') return 'Matched';
+    if (row.status === 'needs-bank-data-match') return 'P-code only';
+    if (row.status === 'unmatched-pcode') return 'Unmatched P-code';
+    return row.status || 'Unmatched';
+  }
+
+  function renderBondAccountingMatches() {
+    const list = document.getElementById('bondAccountingMatchList');
+    const status = document.getElementById('bondAccountingImportStatus');
+    if (!list || !bondAccountingManifest) return;
+    const rows = Array.isArray(bondAccountingManifest.matches) ? bondAccountingManifest.matches : [];
+    if (status) {
+      status.textContent = `Last import: ${formatNumber(bondAccountingManifest.matchedCount || 0)} matched, ${formatNumber(bondAccountingManifest.pCodeMatchedCount || 0)} P-code only, ${formatNumber(bondAccountingManifest.unmatchedCount || 0)} unmatched.`;
+    }
+    if (!rows.length) {
+      list.innerHTML = '<div class="bank-search-empty">The last bond-accounting import did not include any portfolio files.</div>';
+      return;
+    }
+    list.innerHTML = rows.slice(0, 40).map(row => `
+      <div class="reports-match-row">
+        <div>
+          <strong>${escapeHtml(row.bankDisplayName || row.portfolioClientName || row.filename || 'Portfolio file')}</strong>
+          <span>${escapeHtml([row.pCode, row.reportDate, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
+        </div>
+        <div>
+          <strong>${escapeHtml(bondAccountingStatusLabel(row))}</strong>
+          <small>${escapeHtml(row.filename || '')}</small>
+        </div>
+        ${row.storedPath ? `<a class="text-btn" href="${bondAccountingFileUrl(row)}" target="_blank" rel="noopener">Open</a>` : '<span></span>'}
+      </div>
+    `).join('') + (rows.length > 40 ? `<div class="bank-search-empty">Showing 40 of ${formatNumber(rows.length)} portfolio files.</div>` : '');
   }
 
   function formatImportedDate(iso) {
@@ -2115,6 +2608,7 @@
     const btn = document.getElementById('bankSearchBtn');
     const upload = document.getElementById('bankWorkbookInput');
     const statusUpload = document.getElementById('bankStatusWorkbookInput');
+    const averagedSeriesUpload = document.getElementById('averagedSeriesWorkbookInput');
     const clearRecent = document.getElementById('clearRecentBanksBtn');
     const savedFilter = document.getElementById('bankSavedFilterInput');
     const accountCoverageFilter = document.getElementById('bankAccountCoverageFilterInput');
@@ -2156,6 +2650,10 @@
       const file = e.target.files && e.target.files[0];
       if (file) uploadBankStatusWorkbook(file);
     });
+    if (averagedSeriesUpload) averagedSeriesUpload.addEventListener('change', e => {
+      const file = e.target.files && e.target.files[0];
+      if (file) uploadAveragedSeriesWorkbook(file);
+    });
     if (clearRecent) clearRecent.addEventListener('click', clearRecentBanks);
     document.addEventListener('click', event => {
       if (!event.target.closest('.bank-search-panel')) hideBankRecentDropdown();
@@ -2168,6 +2666,13 @@
         t = setTimeout(loadAccountCoverageAccounts, 180);
       });
       el.addEventListener('change', loadAccountCoverageAccounts);
+    });
+    document.querySelectorAll('[data-account-queue]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (accountCoverageStatus) accountCoverageStatus.value = btn.dataset.accountQueue || '';
+        if (accountCoverageService) accountCoverageService.value = '';
+        loadAccountCoverageAccounts();
+      });
     });
     renderRecentBanks();
     loadSavedBanks();
@@ -2183,6 +2688,103 @@
     if (type) type.addEventListener('change', renderStrategyBoard);
     if (archive) archive.addEventListener('change', loadStrategies);
     if (refresh) refresh.addEventListener('click', loadStrategies);
+  }
+
+  function setupReports() {
+    const bankListInput = document.getElementById('bondAccountingBankListInput');
+    const portfolioInput = document.getElementById('bondAccountingPortfolioInput');
+    const importBtn = document.getElementById('bondAccountingImportBtn');
+    const stageBtn = document.getElementById('reportsBondAccountingStageBtn');
+    if (bankListInput) {
+      bankListInput.addEventListener('change', () => {
+        const file = bankListInput.files && bankListInput.files[0];
+        setText('bondAccountingBankListName', file ? file.name : 'No workbook selected');
+      });
+    }
+    if (portfolioInput) {
+      portfolioInput.addEventListener('change', () => updateBondAccountingPortfolioPicker());
+    }
+    document.querySelectorAll('.reports-picker').forEach(picker => {
+      ['dragenter', 'dragover'].forEach(type => picker.addEventListener(type, event => {
+        event.preventDefault();
+        picker.classList.add('dragging');
+      }));
+      ['dragleave', 'drop'].forEach(type => picker.addEventListener(type, event => {
+        event.preventDefault();
+        picker.classList.remove('dragging');
+      }));
+    });
+    const bankPicker = document.getElementById('bondAccountingBankListPicker');
+    if (bankPicker && bankListInput) {
+      bankPicker.addEventListener('drop', event => {
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (!file) return;
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        bankListInput.files = transfer.files;
+        setText('bondAccountingBankListName', file.name);
+      });
+    }
+    const portfolioPicker = document.getElementById('bondAccountingPortfolioPicker');
+    if (portfolioPicker && portfolioInput) {
+      portfolioPicker.addEventListener('drop', event => {
+        const files = event.dataTransfer && event.dataTransfer.files ? [...event.dataTransfer.files] : [];
+        if (!files.length) return;
+        const transfer = new DataTransfer();
+        files.filter(file => /\.(xlsm|xlsx|xls)$/i.test(file.name)).forEach(file => transfer.items.add(file));
+        portfolioInput.files = transfer.files;
+        updateBondAccountingPortfolioPicker();
+      });
+    }
+    if (importBtn) importBtn.addEventListener('click', uploadBondAccountingImport);
+    if (stageBtn) stageBtn.addEventListener('click', () => {
+      document.getElementById('bondAccountingImportPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  function updateBondAccountingPortfolioPicker() {
+    const input = document.getElementById('bondAccountingPortfolioInput');
+    const files = input && input.files ? [...input.files].filter(file => /\.(xlsm|xlsx|xls)$/i.test(file.name)) : [];
+    const folderNames = [...new Set(files.map(file => String(file.webkitRelativePath || '').split('/')[0]).filter(Boolean))];
+    const label = files.length
+      ? `${formatNumber(files.length)} workbook${files.length === 1 ? '' : 's'}${folderNames.length ? ` from ${folderNames.slice(0, 2).join(', ')}` : ''}`
+      : 'No folder selected';
+    setText('bondAccountingPortfolioName', label);
+  }
+
+  function uploadBondAccountingImport() {
+    const bankListInput = document.getElementById('bondAccountingBankListInput');
+    const portfolioInput = document.getElementById('bondAccountingPortfolioInput');
+    const status = document.getElementById('bondAccountingImportStatus');
+    const bankListFile = bankListInput && bankListInput.files ? bankListInput.files[0] : null;
+    const portfolioFiles = portfolioInput && portfolioInput.files
+      ? [...portfolioInput.files].filter(file => /\.(xlsm|xlsx|xls)$/i.test(file.name))
+      : [];
+    if (!bankListFile) return showToast('Choose the bond-accounting bank list workbook', true);
+    if (!portfolioFiles.length) return showToast('Choose the portfolio folder', true);
+    const formData = new FormData();
+    formData.append('bondBankList', bankListFile, bankListFile.name);
+    portfolioFiles.forEach(file => formData.append('bondPortfolioFiles', file, file.name));
+    if (status) status.textContent = `Importing ${formatNumber(portfolioFiles.length)} portfolio workbook${portfolioFiles.length === 1 ? '' : 's'}...`;
+    fetch('/api/banks/bond-accounting/upload', { method: 'POST', body: formData })
+      .then(async res => {
+        const data = await readBankJson(res);
+        bondAccountingManifest = data.manifest || null;
+        const manifest = bondAccountingManifest || {};
+        showToast(`Matched ${formatNumber(manifest.matchedCount || 0)} portfolio files`);
+        renderBondAccountingMatches();
+        return loadBankStatus();
+      })
+      .catch(err => {
+        showToast(err.message, true);
+        if (status) status.textContent = err.message;
+      })
+      .finally(() => {
+        if (bankListInput) bankListInput.value = '';
+        if (portfolioInput) portfolioInput.value = '';
+        setText('bondAccountingBankListName', 'No workbook selected');
+        setText('bondAccountingPortfolioName', 'No folder selected');
+      });
   }
 
   async function loadStrategies() {
@@ -2215,7 +2817,7 @@
     } catch (e) {
       strategyNotifications = { requests: [], counts: {} };
     }
-    const filled = SLOTS.filter(slot => currentPackage && currentPackage[slot]).length;
+    const filled = packageUploadedCount(currentPackage);
     renderHomeWorkList(filled);
     renderHomeLaunchGrid();
     if (typeof renderHomeTileStrategies === 'function') renderHomeTileStrategies();
@@ -3245,6 +3847,28 @@
       });
   }
 
+  function uploadAveragedSeriesWorkbook(file) {
+    const status = document.getElementById('averagedSeriesImportStatus');
+    const input = document.getElementById('averagedSeriesWorkbookInput');
+    const formData = new FormData();
+    formData.append('averagedSeriesWorkbook', file, file.name);
+    if (status) status.textContent = `Importing peer averages from ${file.name}...`;
+    fetch('/api/banks/averaged-series/upload', { method: 'POST', body: formData })
+      .then(async res => {
+        const data = await readBankJson(res);
+        const meta = data.metadata || {};
+        showToast(`Stored peer averages · latest ${meta.latestPeriod || '—'} · ${formatNumber(meta.metricCount || 0)} metrics`);
+        return loadBankStatus();
+      })
+      .catch(err => {
+        showToast(err.message, true);
+        if (status) status.textContent = err.message;
+      })
+      .finally(() => {
+        if (input) input.value = '';
+      });
+  }
+
   function renderBankProfile() {
     const profile = document.getElementById('bankProfile');
     if (!profile || !selectedBank || !selectedBank.bank) return;
@@ -3306,6 +3930,7 @@
       ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38)}
       ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57)}
       ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63)}
+      ${renderBankBondAccountingPanel(bank.bondAccounting)}
       ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
       ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
       ${renderBankStrategyHistoryPanel()}
@@ -3328,6 +3953,35 @@
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
     wireStrategyDropZones(profile);
+  }
+
+  function renderBankBondAccountingPanel(bondAccounting) {
+    const portfolios = bondAccounting && Array.isArray(bondAccounting.portfolios) ? bondAccounting.portfolios : [];
+    const title = `Bond Accounting Portfolios${bondAccounting && bondAccounting.latestReportDate ? ` · ${formatShortDate(bondAccounting.latestReportDate)}` : ''}`;
+    if (!portfolios.length) {
+      return `
+        <section class="bank-section">
+          <div class="bank-section-title">${escapeHtml(title)}</div>
+          <div class="bank-search-empty">No matched bond-accounting portfolio file for this bank yet.</div>
+        </section>
+      `;
+    }
+    return `
+      <section class="bank-section">
+        <div class="bank-section-title">${escapeHtml(title)}</div>
+        <div class="bank-bond-list">
+          ${portfolios.map(row => `
+            <div class="bank-bond-item">
+              <div>
+                <strong>${escapeHtml(row.filename || 'Portfolio workbook')}</strong>
+                <span>${escapeHtml([row.pCode, row.reportDate, row.account ? `Account ${row.account}` : '', row.matchedBy].filter(Boolean).join(' · '))}</span>
+              </div>
+              <a class="text-btn" href="${bondAccountingFileUrl(row)}" target="_blank" rel="noopener">Open</a>
+            </div>
+          `).join('')}
+        </div>
+      </section>
+    `;
   }
 
   async function loadBankStrategyHistory(bankId) {
@@ -4206,7 +4860,8 @@
   function slotAcceptExtensions(slot) {
     if (slot === 'dashboard') return ['.html', '.htm'];
     if (slot === 'treasuryNotes') return ['.xlsx', '.xlsm', '.xls'];
-    if (slot === 'cdoffers') return ['.pdf', '.xlsx', '.xlsm', '.xls'];
+    if (slot === 'cdoffers') return ['.pdf'];
+    if (slot === 'cdoffersCost') return ['.xlsx', '.xlsm', '.xls'];
     if (slot === 'agenciesBullets' || slot === 'agenciesCallables' || slot === 'corporates') return ['.xlsx', '.xls'];
     return ['.pdf'];
   }
@@ -4223,7 +4878,8 @@
       return;
     }
     const detected = classifyFile(file.name);
-    if (detected && detected !== slot) {
+    const expectedSlot = slot === 'cdoffersCost' ? 'cdoffers' : slot;
+    if (detected && detected !== expectedSlot) {
       showToast(`Heads up: filename looks like a ${DOC_TYPES[detected].label} but you're putting it in the ${DOC_TYPES[slot].label} slot. Double-check before publishing.`, true);
     }
 
@@ -4237,6 +4893,7 @@
     const statusEl = document.getElementById('status-' + slot);
     statusEl.innerHTML = `<span>${formatSize(file.size)}</span><span class="ok">Ready</span>`;
     updateUploadStat();
+    renderUploadQaPreview();
   }
 
   function resetDropZone(slot) {
@@ -4252,16 +4909,99 @@
     const statusEl = document.getElementById('status-' + slot);
     if (!statusEl) return;
     const accept = slotAcceptExtensions(slot).join(', ');
-    statusEl.innerHTML = `<span>Accepts: ${accept}</span><span class="pending">Awaiting</span>`;
+    const stateLabel = slot === 'cdoffersCost' ? 'Optional' : 'Awaiting';
+    statusEl.innerHTML = `<span>Accepts: ${accept}</span><span class="pending">${stateLabel}</span>`;
+    renderUploadQaPreview();
   }
 
   function updateUploadStat() {
     const count = Object.values(selectedFiles).filter(Boolean).length;
-    document.getElementById('uploadStat').textContent = `${count} / ${TOTAL_SLOTS}`;
+    const el = document.getElementById('uploadStat');
+    if (!el) return;
+    el.textContent = count
+      ? `${count} selected`
+      : packageCountText(currentPackage);
+  }
+
+  function selectedUploadEntries() {
+    return Object.entries(selectedFiles).filter(([, file]) => file !== null);
+  }
+
+  function sniffDateFromFilename(filename) {
+    const name = String(filename || '');
+    const mdy = name.match(/(?:^|[^0-9])(\d{1,2})[._-](\d{1,2})[._-](\d{2,4})(?:[^0-9]|$)/);
+    if (mdy) {
+      let year = Number(mdy[3]);
+      if (year < 100) year += 2000;
+      const month = Number(mdy[1]);
+      const day = Number(mdy[2]);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+    const ymd = name.match(/(?:^|[^0-9])(\d{4})[._-](\d{1,2})[._-](\d{1,2})(?:[^0-9]|$)/);
+    if (ymd) return `${ymd[1]}-${String(Number(ymd[2])).padStart(2, '0')}-${String(Number(ymd[3])).padStart(2, '0')}`;
+    return '';
+  }
+
+  function renderUploadQaPreview() {
+    const panel = document.getElementById('uploadQaPanel');
+    const body = document.getElementById('uploadQaBody');
+    const summary = document.getElementById('uploadQaSummary');
+    if (!panel || !body || !summary) return;
+
+    const entries = selectedUploadEntries();
+    if (!entries.length) {
+      panel.hidden = true;
+      body.innerHTML = '';
+      summary.textContent = '0 selected';
+      return;
+    }
+
+    const selectedDates = entries
+      .map(([, file]) => sniffDateFromFilename(file.name))
+      .filter(Boolean);
+    const uniqueDates = [...new Set(selectedDates)];
+    const hasCdPdf = Boolean(selectedFiles.cdoffers);
+    const hasCdCost = Boolean(selectedFiles.cdoffersCost);
+    const warnings = [];
+    if (uniqueDates.length > 1) warnings.push('Filename dates do not all match');
+    if (hasCdPdf && !hasCdCost) warnings.push('CD PDF selected without cost workbook');
+    if (hasCdCost && !hasCdPdf && !(currentPackage && currentPackage.cdoffers && !/\.(xlsx|xlsm|xls)$/i.test(currentPackage.cdoffers))) {
+      warnings.push('Cost workbook selected without a CD PDF in this upload or current package');
+    }
+
+    panel.hidden = false;
+    summary.textContent = warnings.length
+      ? `${entries.length} selected · ${warnings.length} check${warnings.length === 1 ? '' : 's'}`
+      : `${entries.length} selected · looks ready`;
+
+    const rows = entries.map(([slot, file]) => {
+      const detected = classifyFile(file.name);
+      const expectedSlot = slot === 'cdoffersCost' ? 'cdoffers' : slot;
+      const date = sniffDateFromFilename(file.name);
+      const slotOk = !detected || detected === expectedSlot;
+      const typeOk = fileMatchesSlot(slot, file.name);
+      const rowTone = slotOk && typeOk ? 'ok' : 'warn';
+      return `
+        <div class="upload-qa-row ${rowTone}">
+          <strong>${escapeHtml(DOC_TYPES[slot].label)}</strong>
+          <span>${escapeHtml(file.name)}</span>
+          <em>${escapeHtml(formatSize(file.size))}</em>
+          <b>${escapeHtml(date ? formatShortDate(date) : 'No filename date')}</b>
+          <small>${escapeHtml(slotOk ? 'Slot match' : `Looks like ${DOC_TYPES[detected]?.label || detected}`)}</small>
+        </div>
+      `;
+    });
+
+    const footer = warnings.length
+      ? `<div class="upload-qa-warnings">${warnings.map(w => `<span>${escapeHtml(w)}</span>`).join('')}</div>`
+      : '<div class="upload-qa-warnings ok"><span>Selected files are consistent enough to publish.</span></div>';
+    body.innerHTML = rows.join('') + footer;
   }
 
   async function publishPackage() {
-    const entries = Object.entries(selectedFiles).filter(([, f]) => f !== null);
+    const entries = selectedUploadEntries();
     if (entries.length === 0) {
       showToast('No files selected', true);
       return;
@@ -4296,10 +5036,10 @@
         }
 
         selectedFiles = {
-          dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, munioffers: null,
+          dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
           agenciesBullets: null, agenciesCallables: null, corporates: null
         };
-        SLOTS.forEach(resetDropZone);
+        UPLOAD_SLOTS.forEach(resetDropZone);
         updateUploadStat();
         await loadCurrent();
         await loadArchive();
@@ -4679,7 +5419,7 @@
       const res = await fetch('/api/treasury-notes', { cache: 'no-store' });
       if (res.status === 404) {
         treasuryData = null;
-        body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3)">
           No treasury notes data yet. Upload today's Treasury Notes Excel file on the Upload page and notes will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No treasury notes data';
@@ -4688,8 +5428,7 @@
         renderStatTiles('treasuryStatTiles', [
           { label: 'Shown', value: '0' },
           { label: 'Highest YTM', value: '—' },
-          { label: 'Average YTM', value: '—' },
-          { label: 'Total Ask Amt', value: '—' }
+          { label: 'Average YTM', value: '—' }
         ]);
         return;
       }
@@ -4697,7 +5436,7 @@
       treasuryData = await res.json();
     } catch (e) {
       console.error('Failed to load treasury notes:', e);
-      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load treasury notes: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading treasury notes';
@@ -4738,12 +5477,11 @@
     renderStatTiles('treasuryStatTiles', [
       { label: 'Shown', value: formatNumber(filtered.length) },
       { label: 'Highest YTM', value: formatPercentTile(maxValue(filtered.map(n => n.yield)), 3) },
-      { label: 'Average YTM', value: formatPercentTile(average(filtered.map(n => n.yield)), 3) },
-      { label: 'Total Ask Amt', value: formatTreasuryQuantity(filtered.reduce((sum, n) => sum + (Number(n.quantity) || 0), 0)) }
+      { label: 'Average YTM', value: formatPercentTile(average(filtered.map(n => n.yield)), 3) }
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3)">
         No treasury notes match the current filters.
       </td></tr>`;
       return;
@@ -4758,7 +5496,6 @@
         <td style="text-align:right" class="rate-cell">${n.yield == null ? '—' : Number(n.yield).toFixed(3)}</td>
         <td style="text-align:right">${n.price == null ? '—' : Number(n.price).toFixed(3)}</td>
         <td style="text-align:right">${n.spread == null ? '—' : formatNumber(n.spread)}</td>
-        <td style="text-align:right">${formatTreasuryQuantity(n.quantity, n.quantityRaw)}</td>
         <td>${escapeHtml(n.benchmark || '')}</td>
       </tr>
     `).join('');
@@ -4839,7 +5576,7 @@
           treasurySort.dir = treasurySort.dir === 'asc' ? 'desc' : 'asc';
         } else {
           treasurySort.col = col;
-          treasurySort.dir = ['yield', 'coupon', 'price', 'spread', 'quantity'].includes(col) ? 'desc' : 'asc';
+          treasurySort.dir = ['yield', 'coupon', 'price', 'spread'].includes(col) ? 'desc' : 'asc';
         }
         document.querySelectorAll('#p-treasury-explorer th').forEach(h => {
           h.classList.remove('sort-asc', 'sort-desc');
@@ -4857,7 +5594,7 @@
     if (filtered.length === 0) return showToast('No treasury notes match filters', true);
 
     const rows = [
-      ['Description','CUSIP','Coupon','Maturity','Settle','Net Offer YTM','Net Offer Cost','Spread','Ask Amt','Benchmark','Type'],
+      ['Description','CUSIP','Coupon','Maturity','Settle','Net Offer YTM','Net Offer Cost','Spread','Benchmark','Type'],
       ...filtered.map(n => [
         n.description || '',
         n.cusip || '',
@@ -4867,7 +5604,6 @@
         n.yield ?? '',
         n.price ?? '',
         n.spread ?? '',
-        n.quantity ?? '',
         n.benchmark || '',
         n.type || ''
       ])
@@ -4877,21 +5613,12 @@
     showToast(`Exported ${filtered.length} treasury notes`);
   }
 
-  function formatTreasuryQuantity(value, fallback = '') {
-    const n = Number(value);
-    if (!isFinite(n) || n === 0) return fallback || '—';
-    if (Math.abs(n) >= 1000000000) return `${(n / 1000000000).toFixed(2)}B`;
-    if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-    if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(0)}K`;
-    return formatNumber(n);
-  }
-
   // ============ Offerings Explorer ============
 
   let offeringsData = null;   // { asOfDate, offerings[], sourceFile, extractedAt }
   let offeringsFilters = {
-    search: '', term: '', minRate: null, state: '',
-    cpnFreq: '', noRestrictions: false
+    search: '', term: '', minRate: null, minPrice: null, maxCommission: null, state: '',
+    cpnFreq: '', noRestrictions: false, pricedOnly: false
   };
   let offeringsSort = { col: 'rate', dir: 'desc' };
 
@@ -4902,7 +5629,7 @@
       const res = await fetch('/api/offerings', { cache: 'no-store' });
       if (res.status === 404) {
         offeringsData = null;
-        body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text3)">
           No offerings data yet. Upload today's CD Offerings PDF on the Upload page and offerings will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No offerings data';
@@ -4912,7 +5639,8 @@
           { label: 'Shown', value: '0' },
           { label: 'Highest Rate', value: '—' },
           { label: 'Average Rate', value: '—' },
-          { label: 'Most Common Term', value: '—' }
+          { label: 'Most Common Term', value: '—' },
+          { label: 'Cost Match', value: '—' }
         ]);
         return;
       }
@@ -4920,7 +5648,7 @@
       offeringsData = await res.json();
     } catch (e) {
       console.error('Failed to load offerings:', e);
-      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load offerings: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading offerings';
@@ -4968,17 +5696,20 @@
 
     const filtered = applyOfferingsFilters(offeringsData.offerings);
     sortOfferingsInPlace(filtered);
+    const pricedCount = (offeringsData.offerings || []).filter(o => Number.isFinite(Number(o.cost)) || Number.isFinite(Number(o.commission))).length;
+    const totalCount = (offeringsData.offerings || []).length || 0;
 
     document.getElementById('explorerStat').textContent = filtered.length;
     renderStatTiles('cdStatTiles', [
       { label: 'Shown', value: formatNumber(filtered.length) },
       { label: 'Highest Rate', value: formatPercentTile(maxValue(filtered.map(o => o.rate)), 2) },
       { label: 'Average Rate', value: formatPercentTile(average(filtered.map(o => o.rate)), 2) },
-      { label: 'Most Common Term', value: mostCommonTerm(filtered) }
+      { label: 'Most Common Term', value: mostCommonTerm(filtered) },
+      { label: 'Cost Match', value: totalCount ? `${formatNumber(pricedCount)} / ${formatNumber(totalCount)}` : '—' }
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text3)">
         No offerings match the current filters.
       </td></tr>`;
       return;
@@ -4997,8 +5728,22 @@
           ? `<span class="restrict-chip" title="Not available in: ${o.restrictions.join(', ')}">${o.restrictions.join(', ')}</span>`
           : '<span class="no-restrict">&mdash;</span>'}</td>
         <td class="cpn-cell">${escapeHtml(o.couponFrequency || '')}</td>
+        <td style="text-align:right">${formatCdPrice(o.cost)}</td>
+        <td style="text-align:right">${formatCdCommission(o.commission)}</td>
       </tr>
     `).join('');
+  }
+
+  function formatCdPrice(value) {
+    const n = Number(value);
+    if (!isFinite(n)) return '<span class="no-restrict">&mdash;</span>';
+    return `<span class="rate-cell">${n.toFixed(3)}</span>`;
+  }
+
+  function formatCdCommission(value) {
+    const n = Number(value);
+    if (!isFinite(n)) return '<span class="no-restrict">&mdash;</span>';
+    return `<span class="rate-cell">$${n.toFixed(2)}</span>`;
   }
 
   function applyOfferingsFilters(offerings) {
@@ -5009,11 +5754,24 @@
       }
       if (offeringsFilters.term && o.term !== offeringsFilters.term) return false;
       if (offeringsFilters.minRate != null && o.rate < offeringsFilters.minRate) return false;
+      if (offeringsFilters.minPrice != null && !passesNumberMinimum(o.cost, offeringsFilters.minPrice)) return false;
+      if (offeringsFilters.maxCommission != null && !passesNumberMaximum(o.commission, offeringsFilters.maxCommission)) return false;
       if (offeringsFilters.state && o.issuerState !== offeringsFilters.state) return false;
       if (offeringsFilters.cpnFreq && o.couponFrequency !== offeringsFilters.cpnFreq) return false;
       if (offeringsFilters.noRestrictions && o.restrictions.length > 0) return false;
+      if (offeringsFilters.pricedOnly && !Number.isFinite(Number(o.cost)) && !Number.isFinite(Number(o.commission))) return false;
       return true;
     });
+  }
+
+  function passesNumberMinimum(value, minimum) {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= minimum;
+  }
+
+  function passesNumberMaximum(value, maximum) {
+    const n = Number(value);
+    return Number.isFinite(n) && n <= maximum;
   }
 
   function sortOfferingsInPlace(arr) {
@@ -5034,9 +5792,12 @@
     const search = document.getElementById('ef-search');
     const term = document.getElementById('ef-term');
     const minRate = document.getElementById('ef-minrate');
+    const minPrice = document.getElementById('ef-minprice');
+    const maxCommission = document.getElementById('ef-maxcommission');
     const state = document.getElementById('ef-state');
     const cpn = document.getElementById('ef-cpn');
     const noRestrict = document.getElementById('ef-noRestrictions');
+    const pricedOnly = document.getElementById('ef-pricedOnly');
 
     search.addEventListener('input', () => {
       offeringsFilters.search = search.value.trim();
@@ -5051,6 +5812,16 @@
       offeringsFilters.minRate = isNaN(v) ? null : v;
       if (offeringsData) renderOfferings();
     });
+    minPrice.addEventListener('input', () => {
+      const v = parseFloat(minPrice.value);
+      offeringsFilters.minPrice = isNaN(v) ? null : v;
+      if (offeringsData) renderOfferings();
+    });
+    maxCommission.addEventListener('input', () => {
+      const v = parseFloat(maxCommission.value);
+      offeringsFilters.maxCommission = isNaN(v) ? null : v;
+      if (offeringsData) renderOfferings();
+    });
     state.addEventListener('change', () => {
       offeringsFilters.state = state.value;
       if (offeringsData) renderOfferings();
@@ -5063,15 +5834,22 @@
       offeringsFilters.noRestrictions = noRestrict.checked;
       if (offeringsData) renderOfferings();
     });
+    pricedOnly.addEventListener('change', () => {
+      offeringsFilters.pricedOnly = pricedOnly.checked;
+      if (offeringsData) renderOfferings();
+    });
 
     document.getElementById('ef-reset').addEventListener('click', () => {
       search.value = '';
       term.value = '';
       minRate.value = '';
+      minPrice.value = '';
+      maxCommission.value = '';
       state.value = '';
       cpn.value = '';
       noRestrict.checked = false;
-      offeringsFilters = { search: '', term: '', minRate: null, state: '', cpnFreq: '', noRestrictions: false };
+      pricedOnly.checked = false;
+      offeringsFilters = { search: '', term: '', minRate: null, minPrice: null, maxCommission: null, state: '', cpnFreq: '', noRestrictions: false, pricedOnly: false };
       if (offeringsData) renderOfferings();
     });
 
@@ -5085,7 +5863,7 @@
           offeringsSort.dir = offeringsSort.dir === 'asc' ? 'desc' : 'asc';
         } else {
           offeringsSort.col = col;
-          offeringsSort.dir = (col === 'rate' || col === 'maturity') ? 'desc' : 'asc';
+          offeringsSort.dir = (col === 'rate' || col === 'maturity' || col === 'cost' || col === 'commission') ? 'desc' : 'asc';
         }
         document.querySelectorAll('#p-explorer th').forEach(h => {
           h.classList.remove('sort-asc', 'sort-desc');
@@ -5102,10 +5880,12 @@
     sortOfferingsInPlace(filtered);
     if (filtered.length === 0) return showToast('No offerings match filters', true);
 
-    const header = ['Term','Issuer','Rate','Maturity','CUSIP','Settle','IssuerState','Restrictions','CouponFreq'];
+    const header = ['Term','Issuer','Rate','Maturity','CUSIP','Settle','IssuerState','Restrictions','CouponFreq','Price','Commission'];
     const rows = filtered.map(o => [
       o.term, o.name, o.rate.toFixed(2), o.maturity, o.cusip, o.settle,
-      o.issuerState, o.restrictions.join('|'), o.couponFrequency || ''
+      o.issuerState, o.restrictions.join('|'), o.couponFrequency || '',
+      o.cost != null ? Number(o.cost).toFixed(3) : '',
+      o.commission != null ? Number(o.commission).toFixed(2) : ''
     ]);
     const csv = [header, ...rows]
       .map(r => r.map(cell => {
@@ -5145,7 +5925,7 @@
       const res = await fetch('/api/muni-offerings', { cache: 'no-store' });
       if (res.status === 404) {
         muniData = null;
-        body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
           No muni offerings yet. Upload the Muni Offerings PDF on the Upload page and offerings will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No muni offerings data';
@@ -5163,7 +5943,7 @@
       muniData = await res.json();
     } catch (e) {
       console.error('Failed to load muni offerings:', e);
-      body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load muni offerings: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading offerings';
@@ -5194,23 +5974,44 @@
       muniData.asOfDate ? formatNumericDate(muniData.asOfDate) : 'Current package';
   }
 
+  function muniTey(ytw, rate = muniTaxSettings.rate) {
+    const y = Number(ytw);
+    const r = Number(rate);
+    if (!Number.isFinite(y) || !Number.isFinite(r) || r >= 100) return null;
+    return y / (1 - (r / 100));
+  }
+
+  function muniAudienceLabel() {
+    const aud = MUNI_TAX_AUDIENCES[muniTaxSettings.audience];
+    return aud ? `${aud.label} ${Number(muniTaxSettings.rate).toFixed(1)}%` : `Custom ${Number(muniTaxSettings.rate).toFixed(1)}%`;
+  }
+
+  function bestMuniTey(rows) {
+    return rows
+      .map(row => ({ row, tey: muniTey(row.ytw) }))
+      .filter(item => Number.isFinite(item.tey))
+      .sort((a, b) => b.tey - a.tey)[0] || null;
+  }
+
   function renderMuniOfferings() {
     const body = document.getElementById('muniExplorerBody');
     if (!muniData) return;
 
     const filtered = applyMuniFilters(muniData.offerings);
     sortMuniInPlace(filtered);
+    const topTey = bestMuniTey(filtered);
 
     document.getElementById('muniExplorerStat').textContent = filtered.length;
     renderStatTiles('muniStatTiles', [
       { label: 'Shown', value: formatNumber(filtered.length) },
       { label: 'Average YTW', value: formatPercentTile(average(filtered.map(o => o.ytw)), 3) },
-      { label: 'Callable', value: formatNumber(filtered.filter(o => o.callDate).length) },
+      { label: 'Top TEY', value: topTey ? formatPercentTile(topTey.tey, 3) : '—' },
+      { label: 'TEY Setting', value: muniAudienceLabel() },
       { label: 'Taxable', value: formatNumber(filtered.filter(o => o.section === 'Taxable').length) }
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
         No offerings match the current filters.
       </td></tr>`;
       return;
@@ -5231,6 +6032,10 @@
       } else {
         yieldCell = '<span class="no-restrict">&mdash;</span>';
       }
+      const tey = muniTey(o.ytw);
+      const teyCell = tey == null
+        ? '<span class="no-restrict">&mdash;</span>'
+        : `<span class="rate-cell tey-cell ${tey >= 4 ? 'beats' : ''}">${tey.toFixed(3)}</span>`;
 
       const priceCell = o.price != null
         ? `<span class="rate-cell">${o.price.toFixed(3)}</span>`
@@ -5256,6 +6061,7 @@
           <td>${formatNumericDate(o.maturity)}</td>
           <td>${callCell}</td>
           <td style="text-align:right">${yieldCell}</td>
+          <td style="text-align:right">${teyCell}</td>
           <td style="text-align:right">${priceCell}</td>
           <td class="cusip-cell">${escapeHtml(o.cusip)}</td>
           <td>${creditCell}</td>
@@ -5288,7 +6094,8 @@
     const { col, dir } = muniSort;
     const mult = dir === 'asc' ? 1 : -1;
     arr.sort((a, b) => {
-      let av = a[col], bv = b[col];
+      let av = col === 'tey' ? muniTey(a.ytw) : a[col];
+      let bv = col === 'tey' ? muniTey(b.ytw) : b[col];
       if (av == null) return 1;
       if (bv == null) return -1;
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult;
@@ -5306,6 +6113,34 @@
     const rated     = document.getElementById('mf-rated');
 
     if (!search) return; // page not in DOM yet; shouldn't happen but defensive
+
+    document.querySelectorAll('[data-muni-tax-audience]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const audience = btn.dataset.muniTaxAudience;
+        const config = MUNI_TAX_AUDIENCES[audience];
+        if (!config) return;
+        muniTaxSettings = { audience, rate: config.rate };
+        const custom = document.getElementById('muniCustomTaxRate');
+        if (custom) custom.value = String(config.rate);
+        document.querySelectorAll('[data-muni-tax-audience]').forEach(item => {
+          item.classList.toggle('active', item === btn);
+        });
+        if (muniData) renderMuniOfferings();
+        renderRelativeValueNative();
+      });
+    });
+
+    const customRate = document.getElementById('muniCustomTaxRate');
+    if (customRate) {
+      customRate.addEventListener('input', () => {
+        const rate = parseFloat(customRate.value);
+        if (!Number.isFinite(rate) || rate < 0 || rate >= 100) return;
+        muniTaxSettings = { audience: 'custom', rate };
+        document.querySelectorAll('[data-muni-tax-audience]').forEach(item => item.classList.remove('active'));
+        if (muniData) renderMuniOfferings();
+        renderRelativeValueNative();
+      });
+    }
 
     search.addEventListener('input', () => {
       muniFilters.search = search.value.trim();
@@ -5360,7 +6195,7 @@
         } else {
           muniSort.col = col;
           // Sensible default direction per column
-          muniSort.dir = (col === 'coupon' || col === 'ytw' || col === 'price' || col === 'quantity' || col === 'maturity')
+          muniSort.dir = (col === 'coupon' || col === 'ytw' || col === 'tey' || col === 'price' || col === 'quantity' || col === 'maturity')
             ? 'desc' : 'asc';
         }
         document.querySelectorAll('#p-muni-explorer th').forEach(h => {
@@ -5379,7 +6214,7 @@
     if (filtered.length === 0) return showToast('No offerings match filters', true);
 
     const header = ['Section','Moodys','SP','Quantity','State','Issuer','IssueType',
-                    'Coupon','Maturity','CallDate','YTW','YTM','Price','Spread',
+                    'Coupon','Maturity','CallDate','YTW','TEY','TEY Rate','YTM','Price','Spread',
                     'Settle','CouponDate','CUSIP','CreditEnhancement'];
     const rows = filtered.map(o => [
       o.section, o.moodysRating || '', o.spRating || '', o.quantity,
@@ -5387,6 +6222,8 @@
       o.coupon.toFixed(3), o.maturity,
       o.callDate || '',
       o.ytw != null ? o.ytw.toFixed(3) : '',
+      muniTey(o.ytw) != null ? muniTey(o.ytw).toFixed(3) : '',
+      Number(muniTaxSettings.rate).toFixed(1),
       o.ytm != null ? o.ytm.toFixed(3) : '',
       o.price != null ? o.price.toFixed(3) : '',
       o.spread || '',
@@ -6688,7 +7525,7 @@
     if (metaEl) {
       const parts = [];
       if (pkg.date) parts.push(`<span><strong>Date</strong>${escapeHtml(formatShortDate(pkg.date))}</span>`);
-      const filled = SLOTS.filter(slot => pkg[slot]).length;
+      const filled = packageUploadedCount(pkg);
       if (filled) parts.push(`<span><strong>Slots</strong>${filled} of ${TOTAL_SLOTS}</span>`);
       if (pkg.publishedAt) parts.push(`<span><strong>Published</strong>${escapeHtml(formatImportedDate(pkg.publishedAt))}</span>`);
       if (parts.length) {
@@ -6744,13 +7581,13 @@
     const avgAgencyYtm = average(agencies.map(o => o.ytm));
     const avgCorpYtm = average(corporates.map(o => o.ytm));
     const curveSlope = two && ten ? ten.yield - two.yield : null;
-    const filled = SLOTS.filter(slot => pkg[slot]).length;
+    const filled = packageUploadedCount(pkg);
     const nextRelease = (econ.releases || [])[0];
 
     const primaryValue = ten ? formatPercentTile(ten.yield, 3)
       : (highestCdRate != null ? formatPercentTile(highestCdRate, 2)
         : (totalOfferings > 0 ? formatNumber(totalOfferings) : '—'));
-    const primaryLabel = ten ? '10Y Treasury anchors the day.'
+    const primaryLabel = ten ? '10Y Treasury sets the tone.'
       : (highestCdRate != null ? 'Top CD offering in the package.' : 'Daily market read.');
 
     const metrics = [
@@ -6900,6 +7737,7 @@
     setupCorpFilters();
     setupMbsCmo();
     setupBankSearch();
+    setupReports();
     setupStrategies();
     setupCommissionControls();
     setupSidebar();

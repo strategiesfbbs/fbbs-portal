@@ -33,6 +33,9 @@
         <span class="nav-caret">&#8250;</span>
       </button>
       <div class="nav-sub">
+        <a class="nav-link nav-minor" data-page="daily-intelligence" href="#daily-intelligence">
+          <span class="nav-label">Daily Intelligence</span>
+        </a>
         <a class="nav-link nav-minor" data-page="dashboard" href="#dashboard">
           <span class="nav-label">Sales Dashboard</span>
         </a>
@@ -99,6 +102,9 @@
         <a class="nav-link nav-minor" data-page="banks" href="#banks">
           <span class="nav-label">Bank Tear Sheets</span>
         </a>
+        <a class="nav-link nav-minor" data-page="reports" href="#reports">
+          <span class="nav-label">Reports</span>
+        </a>
       </div>
     </div>
 
@@ -156,6 +162,7 @@
     <a class="top-primary-link" href="#home" data-page="home">Home</a>
     <a class="top-primary-link" href="#banks" data-page="banks">Banks</a>
     <a class="top-primary-link" href="#maps" data-page="maps">Map</a>
+    <a class="top-primary-link" href="#reports" data-page="reports">Reports</a>
     <a class="top-primary-link" href="#strategies" data-page="strategies">Strategies</a>
     <div class="top-link-menu">
       <button class="top-link-trigger" type="button">
@@ -454,6 +461,12 @@
                 <option value="updated">Recently updated</option>
               </select>
             </div>
+            <div class="bank-queue-shortcuts" aria-label="Coverage queues">
+              <button type="button" data-account-queue="Prospect">Prospects</button>
+              <button type="button" data-account-queue="Watchlist">Watchlist</button>
+              <button type="button" data-account-queue="Dormant">Dormant</button>
+              <button type="button" data-account-queue="Open">Open</button>
+            </div>
             <div class="bank-account-coverage-list" id="bankAccountCoverageList">
               <div class="bank-search-empty">Loading account coverage matches...</div>
             </div>
@@ -468,6 +481,117 @@
           </div>
         </section>
       </div>
+    </section>
+  </div>
+</div>
+
+<!-- ========== REPORTS PAGE ========== -->
+<div class="page" id="p-reports">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Reports <strong>Workspace</strong></h2>
+        <p class="hero-sub">Generate bank, peer, portfolio, coverage, and billing reports from portal data.</p>
+      </div>
+      <div class="hero-stat">
+        <span>4</span>
+        <small>Planned</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <section class="reports-shell">
+      <div class="reports-shell-head">
+        <div>
+          <h3>Report Builder</h3>
+          <p>Select a report type to stage the inputs. Peer and portfolio exports use the imported bank, averaged-series, and bond-accounting files.</p>
+        </div>
+        <button type="button" class="small-btn" disabled>Generate</button>
+      </div>
+
+      <div class="reports-grid" aria-label="Available report templates">
+        <article class="report-card report-card-ready">
+          <span class="report-card-kicker">SNL + Averaged Series</span>
+          <h4>Bank Peer Analysis</h4>
+          <p>Compare a selected bank against peer averages for liquidity, securities, profitability, capital, and asset quality.</p>
+          <div class="report-card-foot">
+            <span>Inputs: bank, period, peer group</span>
+            <button type="button" class="text-btn">Stage</button>
+          </div>
+        </article>
+
+        <article class="report-card" id="reportsBondAccountingCard">
+          <span class="report-card-kicker">Bond Accounting</span>
+          <h4>Portfolio Peer Review</h4>
+          <p>Blend matched portfolio reports with call-report context to review yield, mix, duration, unrealized loss, and concentrations.</p>
+          <div class="report-card-foot">
+            <span id="reportsBondAccountingCardStatus">Import portfolio files</span>
+            <button type="button" class="text-btn" id="reportsBondAccountingStageBtn" disabled>Stage</button>
+          </div>
+        </article>
+
+        <article class="report-card">
+          <span class="report-card-kicker">Sales Strategy</span>
+          <h4>Opportunity Report</h4>
+          <p>Surface banks with peer gaps that suggest funding, liquidity, bond swap, muni, or CECL conversations.</p>
+          <div class="report-card-foot">
+            <span>Feeds Strategies Queue</span>
+            <button type="button" class="text-btn" disabled>Stage</button>
+          </div>
+        </article>
+
+        <article class="report-card">
+          <span class="report-card-kicker">Coverage</span>
+          <h4>Coverage Book</h4>
+          <p>Summarize saved banks, statuses, notes, strategy requests, latest call-report period, and report availability.</p>
+          <div class="report-card-foot">
+            <span>Uses coverage workspace</span>
+            <button type="button" class="text-btn" disabled>Stage</button>
+          </div>
+        </article>
+      </div>
+
+      <aside class="reports-readiness">
+        <div>
+          <strong>Ready now</strong>
+          <span>Q1 SNL tear sheet import and bank search data.</span>
+        </div>
+        <div>
+          <strong>Next import</strong>
+          <span id="reportsAveragedSeriesStatus">Averaged-series peer workbook not imported yet.</span>
+        </div>
+        <div>
+          <strong>Later</strong>
+          <span id="reportsBondAccountingStatus">Bond accounting portfolios have not been imported yet.</span>
+        </div>
+      </aside>
+
+      <section class="reports-import-panel" id="bondAccountingImportPanel">
+        <div class="reports-import-head">
+          <div>
+            <h3>Bond Accounting Import</h3>
+            <p>Upload the bank-list workbook, then choose the portfolio export folder. Files are matched by P-code and FDIC certificate to the imported bank tear sheet data.</p>
+          </div>
+          <button type="button" class="small-btn" id="bondAccountingImportBtn">Import Portfolios</button>
+        </div>
+        <div class="reports-import-grid">
+          <label class="reports-picker" for="bondAccountingBankListInput" id="bondAccountingBankListPicker">
+            <span>Bank List Workbook</span>
+            <strong id="bondAccountingBankListName">No workbook selected</strong>
+            <small>.xls, .xlsx, or .xlsm</small>
+            <input type="file" id="bondAccountingBankListInput" accept=".xlsm,.xlsx,.xls" hidden>
+          </label>
+          <label class="reports-picker" for="bondAccountingPortfolioInput" id="bondAccountingPortfolioPicker">
+            <span>Portfolio Folder</span>
+            <strong id="bondAccountingPortfolioName">No folder selected</strong>
+            <small>Select the folder containing account portfolio workbooks.</small>
+            <input type="file" id="bondAccountingPortfolioInput" accept=".xlsm,.xlsx,.xls" multiple webkitdirectory directory hidden>
+          </label>
+        </div>
+        <div class="reports-import-status" id="bondAccountingImportStatus">Ready for the bank list and portfolio folder.</div>
+        <div class="reports-match-list" id="bondAccountingMatchList"></div>
+      </section>
     </section>
   </div>
 </div>
@@ -537,6 +661,67 @@
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ========== DAILY INTELLIGENCE PAGE ========== -->
+<div class="page" id="p-daily-intelligence">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Daily <strong>Intelligence</strong></h2>
+        <p class="hero-sub" id="dailyIntelSub">Building today&apos;s market read from the uploaded package&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="dailyIntelStat">&mdash;</div>
+        <div class="lbl">Rule Picks</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <section class="daily-intel-shell">
+      <div class="section-title-bar">
+        <h3>Market Snapshot</h3>
+        <div class="kicker" id="dailyIntelKicker">&mdash;</div>
+      </div>
+      <div class="daily-intel-status" id="dailyIntelStatus"></div>
+      <div class="market-summary-grid daily-intel-summary" id="dailyIntelSummary"></div>
+
+      <div class="daily-intel-layout">
+        <section class="market-panel daily-intel-curve-panel">
+          <div class="market-panel-head">
+            <span>U.S. Treasury Curve</span>
+            <strong id="dailyIntelCurveSlope">2s/10s &mdash;</strong>
+          </div>
+          <div class="curve-chart" id="dailyIntelCurveChart"></div>
+        </section>
+
+        <section class="market-panel">
+          <div class="market-panel-head">
+            <span>Sales Cues</span>
+            <strong id="dailyIntelCueCount">&mdash;</strong>
+          </div>
+          <div class="sales-cue-list" id="dailyIntelSalesCues"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="daily-intel-shell">
+      <div class="section-title-bar">
+        <h3>Today&apos;s Rule-Based Picks</h3>
+        <div class="kicker">Transparent screens from parsed inventory</div>
+      </div>
+      <div class="daily-picks-grid" id="dailyIntelPicks"></div>
+    </section>
+
+    <section class="daily-intel-shell">
+      <div class="section-title-bar">
+        <h3>Automation Coverage</h3>
+        <div class="kicker">What still needs desk input</div>
+      </div>
+      <div class="daily-intel-gaps" id="dailyIntelGaps"></div>
+    </section>
   </div>
 </div>
 
@@ -616,6 +801,47 @@
     </div>
   </section>
   <div class="container">
+    <section class="relative-value-tool" id="relativeValueTool">
+      <div class="section-title-bar">
+        <h3>Rate Snapshot</h3>
+        <div class="kicker" id="relativeValueNativeKicker">&mdash;</div>
+      </div>
+      <div class="explorer-stats" id="relativeValueStatTiles"></div>
+      <div class="relative-value-grid">
+        <section class="market-panel rv-chart-panel">
+          <div class="market-panel-head">
+            <span>Rate snapshot curve</span>
+            <strong id="rvRateChartLabel">&mdash;</strong>
+          </div>
+          <div class="rv-line-chart" id="rvRateSnapshotChart"></div>
+        </section>
+        <section class="market-panel rv-table-panel">
+          <div class="market-panel-head">
+            <span>Relative value table</span>
+            <strong>CD column removed</strong>
+          </div>
+          <div class="rv-table-wrap">
+            <table class="rate-comparison-table">
+              <thead>
+                <tr>
+                  <th>Term</th>
+                  <th>UST</th>
+                  <th>US AGY</th>
+                  <th>vs UST</th>
+                  <th>Muni AA GO</th>
+                  <th>TEY 29.6%</th>
+                  <th>TEY 21%</th>
+                  <th>AA Corp</th>
+                  <th>vs UST</th>
+                </tr>
+              </thead>
+              <tbody id="rvRateSnapshotTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+
     <div class="viewer-wrap document-only-view">
       <div class="viewer-frame" id="relativeValueFrame">
         <div class="viewer-empty">
@@ -824,18 +1050,18 @@
     <div class="page-hero-inner">
       <div>
         <h2>Upload <strong>Today's Package</strong></h2>
-        <p class="hero-sub">Drop all ten items below &middot; Portal auto-detects file types</p>
+        <p class="hero-sub">Drop the daily package below &middot; CD PDF and cost workbook flow into one Explorer</p>
       </div>
       <div class="hero-stat">
         <div class="num" id="uploadStat">0 / 10</div>
-        <div class="lbl">Files Selected</div>
+        <div class="lbl">Current Files</div>
       </div>
     </div>
   </section>
 
   <div class="container">
     <div class="section-title-bar">
-      <h3>Daily Upload &middot; Eight Items</h3>
+      <h3>Daily Upload</h3>
       <div class="kicker" id="uploadDate">&mdash;</div>
     </div>
 
@@ -846,11 +1072,23 @@
       <div class="quality-item"><span class="q-label">Warnings</span><strong id="uploadQualityWarnings">—</strong></div>
     </div>
 
+    <section class="upload-qa-panel" id="uploadQaPanel" hidden>
+      <div class="upload-qa-head">
+        <div>
+          <h3>Selected File Check</h3>
+          <p>Quick check before publishing: slot, file type, filename date, and CD PDF/workbook pairing.</p>
+        </div>
+        <strong id="uploadQaSummary">0 selected</strong>
+      </div>
+      <div class="upload-qa-body" id="uploadQaBody"></div>
+    </section>
+
     <section class="bank-upload-panel">
       <div>
         <h3>Bank call report workbook</h3>
         <p id="bankImportStatus">Checking imported bank data&hellip;</p>
         <p id="bankStatusImportStatus">Account statuses default to Open until imported or edited.</p>
+        <p id="averagedSeriesImportStatus">Averaged-series peer data has not been imported yet.</p>
       </div>
       <label class="small-btn bank-upload-btn">
         Upload Call Reports
@@ -859,6 +1097,10 @@
       <label class="small-btn bank-upload-btn">
         Upload Statuses
         <input type="file" id="bankStatusWorkbookInput" accept=".xlsb,.xlsm,.xlsx,.xls" hidden>
+      </label>
+      <label class="small-btn bank-upload-btn">
+        Upload Peer Averages
+        <input type="file" id="averagedSeriesWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
       </label>
     </section>
 
@@ -968,7 +1210,7 @@
         <div class="upload-section-head">
           <div>
             <h4>Offering Files</h4>
-            <p>Daily CD Excel/PDF and muni PDFs parsed into searchable explorer data.</p>
+            <p>Daily CD PDF plus optional cost workbook flow into one searchable CD Explorer.</p>
           </div>
           <span>Structured uploads</span>
         </div>
@@ -976,23 +1218,45 @@
 
         <div class="upload-card">
           <div class="upload-card-head">
-            <span>Daily CD Offerings</span>
-            <span class="ft">.PDF .XLSX</span>
+            <span>Daily CD Offerings PDF</span>
+            <span class="ft">.PDF</span>
           </div>
           <label class="drop-zone" data-slot="cdoffers">
-            <input type="file" accept=".pdf,.xlsx,.xlsm,.xls" hidden>
+            <input type="file" accept=".pdf" hidden>
             <div class="drop-icon-sm">
               <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
                 <path d="M9 12V3M5 7l4-4 4 4"/>
                 <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
               </svg>
             </div>
-            <h5 data-default="Drop PDF or Excel File">Drop PDF or Excel File</h5>
+            <h5 data-default="Drop PDF File">Drop PDF File</h5>
             <p data-default="or click to browse">or click to browse</p>
           </label>
           <div class="upload-status" id="status-cdoffers">
-            <span>Accepts: .pdf, .xlsx, .xlsm, .xls</span>
+            <span>Accepts: .pdf</span>
             <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>CD Cost Workbook</span>
+            <span class="ft">.XLSX</span>
+          </div>
+          <label class="drop-zone" data-slot="cdoffersCost">
+            <input type="file" accept=".xlsx,.xlsm,.xls" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop Cost Workbook">Drop Cost Workbook</h5>
+            <p data-default="optional price/commission source">optional price/commission source</p>
+          </label>
+          <div class="upload-status" id="status-cdoffersCost">
+            <span>Accepts: .xlsx, .xlsm, .xls</span>
+            <span class="pending">Optional</span>
           </div>
         </div>
 
@@ -1274,12 +1538,11 @@
             <th data-sort="yield" style="width:80px;text-align:right">Yield %</th>
             <th data-sort="price" style="width:85px;text-align:right">Price</th>
             <th data-sort="spread" style="width:80px;text-align:right">Spread</th>
-            <th data-sort="quantity" style="width:95px;text-align:right">Size</th>
             <th data-sort="benchmark" style="width:120px">Benchmark</th>
           </tr>
         </thead>
         <tbody id="treasuryExplorerBody">
-          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">Loading treasury notes&hellip;</td></tr>
+          <tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3)">Loading treasury notes&hellip;</td></tr>
         </tbody>
       </table>
     </div>
@@ -1330,6 +1593,14 @@
         <input type="number" id="ef-minrate" step="0.01" min="0" max="20" placeholder="e.g. 3.8">
       </label>
       <label class="ef-field">
+        <span>Min price</span>
+        <input type="number" id="ef-minprice" step="0.001" min="0" max="200" placeholder="e.g. 99.5">
+      </label>
+      <label class="ef-field">
+        <span>Max commission</span>
+        <input type="number" id="ef-maxcommission" step="0.01" min="0" max="1000" placeholder="e.g. 12">
+      </label>
+      <label class="ef-field">
         <span>Issuer state</span>
         <select id="ef-state">
           <option value="">All states</option>
@@ -1350,6 +1621,10 @@
         <input type="checkbox" id="ef-noRestrictions">
         <span>Hide CDs with restrictions</span>
       </label>
+      <label class="ef-field ef-check">
+        <input type="checkbox" id="ef-pricedOnly">
+        <span>Only CDs matched to cost workbook</span>
+      </label>
       <div class="ef-actions">
         <button type="button" class="small-btn" id="ef-reset">Reset</button>
         <button type="button" class="small-btn" id="ef-export">Export CSV</button>
@@ -1369,10 +1644,12 @@
             <th data-sort="issuerState" style="width:60px">State</th>
             <th style="width:140px">Restrictions</th>
             <th data-sort="couponFrequency" style="width:120px">Coupon</th>
+            <th data-sort="cost" style="width:85px;text-align:right">Price</th>
+            <th data-sort="commission" style="width:105px;text-align:right">Commission</th>
           </tr>
         </thead>
         <tbody id="explorerBody">
-          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
+          <tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
         </tbody>
       </table>
     </div>
@@ -1407,6 +1684,23 @@
     </div>
 
     <div class="explorer-stats" id="muniStatTiles"></div>
+
+    <section class="muni-tey-control" aria-label="Muni tax-equivalent yield settings">
+      <div>
+        <span class="tool-eyebrow">TEY Settings</span>
+        <h3>Tax-equivalent yield audience</h3>
+        <p>TEY = YTW / (1 - tax rate). Excludes TEFRA haircut, disallowance, and state/local treatment.</p>
+      </div>
+      <div class="muni-tey-actions">
+        <button type="button" class="active" data-muni-tax-audience="ccorp">C-Corp 21%</button>
+        <button type="button" data-muni-tax-audience="scorp">S-Corp 29.6%</button>
+        <button type="button" data-muni-tax-audience="ria">RIA/Money Manager 35%</button>
+        <label>
+          <span>Custom</span>
+          <input type="number" id="muniCustomTaxRate" min="0" max="60" step="0.1" value="21">
+        </label>
+      </div>
+    </section>
 
     <div class="explorer-filters muni-filters">
       <label class="ef-field">
@@ -1474,13 +1768,14 @@
             <th data-sort="maturity" style="width:120px">Maturity</th>
             <th data-sort="callDate" style="width:120px">Call Date</th>
             <th data-sort="ytw" style="width:90px;text-align:right">YTW / Sprd</th>
+            <th data-sort="tey" style="width:90px;text-align:right">TEY</th>
             <th data-sort="price" style="width:85px;text-align:right">Price</th>
             <th data-sort="cusip" style="width:100px">CUSIP</th>
             <th style="width:140px">Credit Enh.</th>
           </tr>
         </thead>
         <tbody id="muniExplorerBody">
-          <tr><td colspan="13" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
+          <tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
         </tbody>
       </table>
     </div>
@@ -1488,7 +1783,7 @@
     <div class="legend-box">
       <strong>Tip:</strong>
       Click a column header to sort. Taxable munis may show a spread (e.g. +40/5YR) in the YTW column instead of a yield.
-      "Section" reflects the PDF's grouping: BQ (bank-qualified), Municipals (standard tax-exempt), Taxable Munis.
+      "Section" reflects the PDF's grouping: BQ (bank-qualified), Municipals (standard tax-exempt), Taxable Munis. TEY uses the active audience rate above.
     </div>
   </div>
 </div>

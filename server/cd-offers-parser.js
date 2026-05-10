@@ -49,14 +49,15 @@ const STATE_RE = /^[A-Z]{2}$/;
 
 const EXCEL_COL_ALIASES = {
   term:            ['TERM', 'Term'],
-  name:            ['NAME', 'Name', 'Issuer', 'Bank', 'Institution'],
-  rate:            ['RATE', 'Rate', 'APY', 'Yield'],
-  maturity:        ['MATURITY', 'Maturity', 'Mty'],
-  cusip:           ['CUSIP', 'Cusip', 'Security'],
-  settle:          ['SETTLE', 'Settle', 'Settlement', 'Settlement Date'],
+  name:            ['NAME', 'Name', 'Issuer', 'Issuer(s)', 'Bank', 'Institution'],
+  rate:            ['RATE', 'Rate', 'APY', 'Yield', 'Coupon', 'COUPON(s)'],
+  maturity:        ['MATURITY', 'Maturity', 'Maturity(s)', 'Mty'],
+  cusip:           ['CUSIP', 'Cusip', 'CUSIP(s)', 'Security'],
+  settle:          ['SETTLE', 'Settle', 'Settlement', 'Settlement Date', 'First Sett Dt', 'First Sett Dt(s)'],
   issuerState:     ['STATE', 'State', 'Issuer State', 'St'],
   restrictions:    ['RESTRICTIONS', 'Restrictions', 'Restricted States', 'Restriction', 'Not Available In'],
-  couponFrequency: ['CPN_FREQ', 'Cpn Freq', 'Coupon Frequency', 'Frequency', 'Payment Frequency', 'Interest Frequency'],
+  couponFrequency: ['CPN_FREQ', 'Cpn Freq', 'Cpn Freq(s)', 'Coupon Frequency', 'Frequency', 'Payment Frequency', 'Interest Frequency'],
+  cost:            ['COST', 'Cost', 'Cost Basis', 'Dealer Cost', 'FBBS Cost', 'Inside/Trader Cost'],
   asOfDate:        ['As Of Date', 'Offer Date']
 };
 
@@ -286,11 +287,13 @@ function parseWorkbookRows(rows, map, result, sheetName) {
     }
 
     const restrictions = parseRestrictions(get('restrictions'));
-    const couponFrequency = normalizeCpnFreq(cleanString(get('couponFrequency'))) || null;
+    const couponFrequency = normalizeCpnFreq(get('couponFrequency')) || null;
+    const cost = toPriceNumber(get('cost'));
+    const commission = cost == null ? null : roundMoney((100 - cost) * 10);
     const rowAsOfDate = toIsoDate(get('asOfDate'));
     if (!result.asOfDate && rowAsOfDate) result.asOfDate = rowAsOfDate;
 
-    result.offerings.push({
+    const offering = {
       term,
       termMonths,
       name,
@@ -301,7 +304,12 @@ function parseWorkbookRows(rows, map, result, sheetName) {
       issuerState: STATE_RE.test(issuerState) ? issuerState : '',
       restrictions,
       couponFrequency
-    });
+    };
+    if (cost != null) {
+      offering.cost = cost;
+      offering.commission = commission;
+    }
+    result.offerings.push(offering);
   }
 }
 
@@ -327,8 +335,18 @@ function toIsoDate(mdy) {
 }
 
 function normalizeCpnFreq(s) {
-  if (!s) return null;
-  const lower = s.toLowerCase();
+  if (s == null || s === '') return null;
+  if (typeof s === 'number' && isFinite(s)) {
+    if (s === 0) return 'at maturity';
+    if (s === 1) return 'annually';
+    if (s === 2) return 'semiannually';
+    if (s === 4) return 'quarterly';
+    if (s === 12) return 'monthly';
+  }
+  const lower = String(s).trim().toLowerCase();
+  if (/^\d+(\.0+)?$/.test(lower)) {
+    return normalizeCpnFreq(Number(lower));
+  }
   if (lower === 'semi-annually') return 'semiannually';
   return lower;
 }
@@ -423,8 +441,25 @@ function toPercentNumber(value) {
   return n > 0 && n <= 1 ? roundRate(n * 100) : roundRate(n);
 }
 
+function toPriceNumber(value) {
+  if (value == null || value === '') return null;
+  const n = typeof value === 'number'
+    ? value
+    : parseFloat(String(value).replace(/[%,$]/g, '').replace(/,/g, ''));
+  if (!isFinite(n)) return null;
+  return roundPrice(n > 0 && n <= 1 ? n * 100 : n);
+}
+
 function roundRate(value) {
   return Math.round(value * 1000) / 1000;
+}
+
+function roundPrice(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+function roundMoney(value) {
+  return Math.round(value * 100) / 100;
 }
 
 function parseTerm(value) {
