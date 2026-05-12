@@ -1131,6 +1131,58 @@ FRIDAY  5/8/2026
   assert.strictEqual(spaced.curve[1].aaa, 2.87);
 }
 
+function assertReferenceIntakeParsers() {
+  const { parseStructuredNotesEmail } = require('../server/structured-notes-store');
+  const { parseCdInternalWorkbook } = require('../server/cd-internal-store');
+
+  const plain = [
+    'Issuer: JPM Chase & Co.        Goldman Sachs Group, Inc.',
+    'Ratings: A1/A        A2/BBB+',
+    'Term: 10Y/2Y        15Y/3Y',
+    'Settlement: 05/15/2026        05/26/2026',
+    'Maturity: 05/15/2036        05/26/2041',
+    'Coupon:',
+    '5.25%',
+    '6.00% Compounded',
+    'First Pay: 05/15/2027, Annual        Zero Coupon',
+    'First Call: 05/15/2028, Semi        05/26/2029, Annual',
+    'Pricing Date: 05/13, P1 4PM        05/21, P1 4PM',
+    'CUSIP: 48130KVE4        38151V2Q0',
+    'Price: 99.50        $41.10 (~98.50% of issue price)'
+  ].join('\r\n');
+  const encoded = Buffer.from(plain, 'utf8').toString('base64');
+  const email = [
+    'Subject: *FBBS STRUCTURED NOTES* TEST',
+    'From: Test <test@example.com>',
+    'Date: Tue, 12 May 2026 12:00:00 +0000',
+    'Content-Type: multipart/mixed; boundary="x"',
+    '',
+    '--x',
+    'Content-Type: text/plain; charset="utf-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encoded,
+    '--x--'
+  ].join('\r\n');
+  const notes = parseStructuredNotesEmail(email, { id: 'source1', filename: 'note.eml', extension: 'eml', uploadedAt: '2026-05-12T12:00:00Z' });
+  assert.strictEqual(notes.length, 2);
+  assert.strictEqual(notes[0].cusip, '48130KVE4');
+  assert.strictEqual(notes[1].price, 41.1);
+  assert.strictEqual(notes[1].structure, 'Zero Coupon');
+
+  const wb = XLSX.utils.book_new();
+  const rows = [
+    ['TERM', 'MATURITY', 'UNDERWRITER', 'NAME', 'DESCRIPTION', 'RATE', 'CUSIP', 'SETTLE', 'FDIC NUMBER', 'DOMICILED', 'RESTRICTIONS'],
+    ['3m', '08/15/2026', 'TEST UW', 'A BANK', 'A BANK CD', 4.1, '123456789', '05/15/2026', '1001', 'MO', 'TX, CA']
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Sheet1');
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  const parsed = parseCdInternalWorkbook(buffer, { id: 'cd1', filename: 'MASTER.xls', uploadedAt: '2026-05-12T12:00:00Z' });
+  assert.strictEqual(parsed.length, 1);
+  assert.strictEqual(parsed[0].fdicNumber, '1001');
+  assert.deepStrictEqual(parsed[0].restrictions, ['TX', 'CA']);
+}
+
 (async function run() {
   assertDateSniffing();
   assertClassification();
@@ -1141,6 +1193,7 @@ FRIDAY  5/8/2026
   await assertMuniParser();
   await assertEconomicUpdateParser();
   assertMmdParser();
+  assertReferenceIntakeParsers();
   assertTreasuryNotesParser();
   assertAgenciesParser();
   assertCorporatesParser();

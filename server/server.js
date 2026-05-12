@@ -41,6 +41,21 @@ const {
   saveMbsCmoUpload
 } = require('./mbs-cmo-store');
 const {
+  getStructuredNoteSourceFile,
+  loadStructuredNotesInventory,
+  saveStructuredNotesUpload
+} = require('./structured-notes-store');
+const {
+  getMarketColorSourceFile,
+  loadMarketColorInbox,
+  saveMarketColorUpload
+} = require('./market-color-store');
+const {
+  loadCdInternalInventory,
+  saveCdInternalUpload
+} = require('./cd-internal-store');
+const { emailSummary } = require('./email-source-utils');
+const {
   getBankDatabaseStatus,
   getBankFromDatabase,
   importBankWorkbook,
@@ -60,6 +75,7 @@ const {
   loadBondAccountingManifest,
   resolveBondAccountingStoredFile
 } = require('./bond-accounting-store');
+const { loadParsedPortfolio } = require('./portfolio-parser');
 const {
   getWirpStatus,
   loadWirpAnalysis,
@@ -111,6 +127,9 @@ const DROPBOX_DIR = path.join(DATA_DIR, 'dropbox');
 const CD_HISTORY_DIR = path.join(DATA_DIR, 'cd-history');
 const BANK_REPORTS_DIR = path.join(DATA_DIR, 'bank-reports');
 const MBS_CMO_DIR = path.join(DATA_DIR, 'mbs-cmo');
+const STRUCTURED_NOTES_DIR = path.join(DATA_DIR, 'structured-notes');
+const MARKET_COLOR_DIR = path.join(DATA_DIR, 'market-color');
+const CD_INTERNAL_DIR = path.join(DATA_DIR, 'cd-internal');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
 const BANK_UPLOAD_MAX_BYTES = (parseInt(process.env.BANK_UPLOAD_MAX_MB, 10) || 300) * 1024 * 1024;
@@ -131,7 +150,7 @@ function log(level, ...args) {
 
 // ---------- Setup ----------
 
-[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, DROPBOX_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR].forEach(dir => {
+[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, DROPBOX_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR, STRUCTURED_NOTES_DIR, MARKET_COLOR_DIR, CD_INTERNAL_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('info', 'Created data directory:', dir);
@@ -2120,20 +2139,21 @@ function strongestOfferings(rows, scoreKeys, limit = 3) {
 
 function offeringLabel(row, type) {
   if (!row) return '';
+  const cusipTag = row.cusip ? ` (${row.cusip})` : '';
   if (type === 'cd') {
-    return `${row.term || ''} ${row.name || 'CD'}${numericValue(row.rate) !== null ? ` at ${Number(row.rate).toFixed(2)}%` : ''}${row.cusip ? ` (${row.cusip})` : ''}`.trim();
+    return `${row.term || ''} ${row.name || 'CD'}${numericValue(row.rate) !== null ? ` at ${Number(row.rate).toFixed(2)}%` : ''}${cusipTag}`.trim();
   }
   if (type === 'muni') {
-    return `${row.issuerState || ''} ${row.issuerName || 'muni'} ${row.maturity || ''}${numericValue(row.ytw) !== null ? ` YTW ${Number(row.ytw).toFixed(3)}%` : ''}`.trim();
+    return `${row.issuerState || ''} ${row.issuerName || 'muni'} ${row.maturity || ''}${numericValue(row.ytw) !== null ? ` YTW ${Number(row.ytw).toFixed(3)}%` : ''}${cusipTag}`.trim();
   }
   if (type === 'agency') {
-    return `${row.ticker || 'Agency'} ${row.structure || ''} ${row.maturity || ''}${numericValue(row.ytm) !== null ? ` YTM ${Number(row.ytm).toFixed(3)}%` : ''}`.trim();
+    return `${row.ticker || 'Agency'} ${row.structure || ''} ${row.maturity || ''}${numericValue(row.ytm) !== null ? ` YTM ${Number(row.ytm).toFixed(3)}%` : ''}${cusipTag}`.trim();
   }
   if (type === 'corporate') {
-    return `${row.issuerName || row.ticker || 'Corporate'} ${row.maturity || ''}${numericValue(row.ytm) !== null ? ` YTM ${Number(row.ytm).toFixed(3)}%` : ''}`.trim();
+    return `${row.issuerName || row.ticker || 'Corporate'} ${row.maturity || ''}${numericValue(row.ytm) !== null ? ` YTM ${Number(row.ytm).toFixed(3)}%` : ''}${cusipTag}`.trim();
   }
   if (type === 'treasury') {
-    return `${row.description || 'Treasury'}${numericValue(row.yield) !== null ? ` yield ${Number(row.yield).toFixed(3)}%` : ''}`.trim();
+    return `${row.description || 'Treasury'}${numericValue(row.yield) !== null ? ` yield ${Number(row.yield).toFixed(3)}%` : ''}${cusipTag}`.trim();
   }
   return row.name || row.issuerName || row.description || '';
 }
@@ -2176,7 +2196,16 @@ function currentInventorySnapshot(bankState) {
   };
 }
 
-function buildAssistantSignals(bank, inventory, strategies) {
+function formatSectorBreakdown(sectorCounts) {
+  if (!sectorCounts) return '';
+  return Object.entries(sectorCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => `${count} ${name}`)
+    .join(', ');
+}
+
+function buildAssistantSignals(bank, inventory, strategies, holdings) {
   const { latest, values, prior } = latestBankValues(bank);
   const priorValues = (prior && prior.values) || {};
   const status = (bank.summary && bank.summary.accountStatus) || {};
@@ -2282,15 +2311,23 @@ function buildAssistantSignals(bank, inventory, strategies) {
       text: `${peer.label || key} is ${delta > 0 ? 'above' : 'below'} peer average by ${Math.abs(delta).toFixed(2)} points.`
     });
   });
-  const holdings = bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
-  if (holdings) {
-    const reportDate = holdings.latestReportDate || 'recent';
-    const count = holdings.portfolioFileCount || 1;
-    signals.unshift({
-      type: 'Holdings on file',
-      strength: 'High',
-      text: `Portfolio file${count > 1 ? `s (${count})` : ''} on disk through ${reportDate} — pull holdings before pitching; frame as a swap, not an add.`
-    });
+  const bondAccountingPresent = bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
+  if (bondAccountingPresent) {
+    const reportDate = bondAccountingPresent.latestReportDate || 'recent';
+    let text;
+    if (holdings && holdings.aggregates && holdings.aggregates.totalPositions) {
+      const breakdown = formatSectorBreakdown(holdings.sectorCounts);
+      const book = holdings.totals && holdings.totals.bookYieldYtw != null ? holdings.totals.bookYieldYtw : null;
+      const mkt = holdings.totals && holdings.totals.marketYieldYtw != null ? holdings.totals.marketYieldYtw : null;
+      const yieldFragment = (book != null && mkt != null)
+        ? ` · book ${book.toFixed(2)}% vs market ${mkt.toFixed(2)}%`
+        : '';
+      text = `Holdings on file (${reportDate}): ${holdings.aggregates.totalPositions} positions — ${breakdown}${yieldFragment}.`;
+    } else {
+      const count = bondAccountingPresent.portfolioFileCount || 1;
+      text = `Portfolio file${count > 1 ? `s (${count})` : ''} on disk through ${reportDate} — pull holdings before pitching; frame as a swap, not an add.`;
+    }
+    signals.unshift({ type: 'Holdings on file', strength: 'High', text });
   }
   if (Array.isArray(strategies) && strategies.some(row => row.status === 'Open' || row.status === 'In Progress')) {
     signals.push({
@@ -2316,9 +2353,10 @@ function buildAssistantSignals(bank, inventory, strategies) {
   return signals.slice(0, 8);
 }
 
-function buildAssistantProductFits(bank, inventory, signals) {
+function buildAssistantProductFits(bank, inventory, signals, parsedHoldings) {
   const { values } = latestBankValues(bank);
   const holdings = bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
+  const filterExamples = (examples) => filterExamplesAgainstHoldings(examples, parsedHoldings);
   const ltd = numericValue(values.loansToDeposits);
   const liquid = numericValue(values.liquidAssetsToAssets);
   const securities = numericValue(values.securitiesToAssets);
@@ -2349,7 +2387,7 @@ function buildAssistantProductFits(bank, inventory, signals) {
       reason: holdings
         ? 'Holdings file on disk — open it first and frame as a swap from existing positions.'
         : 'Agency bullets/callables are the easy first screen — clean credit, fits most policies.',
-      examples: inventory.examples.agencies
+      examples: filterExamples(inventory.examples.agencies)
     });
   }
   if (inventory.counts.munis && (munis || inventory.counts.stateMunis)) {
@@ -2361,7 +2399,7 @@ function buildAssistantProductFits(bank, inventory, signals) {
       reason: inventory.counts.stateMunis
         ? `${inventory.counts.stateMunis} in-state munis on today's list — screen for BQ and credit.`
         : 'Book already carries munis — BQ screen and credit review apply.',
-      examples: inventory.examples.munis
+      examples: filterExamples(inventory.examples.munis)
     });
   }
   if (inventory.counts.corporates && securities !== null && securities >= 15) {
@@ -2371,7 +2409,7 @@ function buildAssistantProductFits(bank, inventory, signals) {
       explorerLabel: 'Open Corporates Explorer',
       fit: 'Review',
       reason: 'IG names for yield pickup — only if their policy and credit limits allow.',
-      examples: inventory.examples.corporates
+      examples: filterExamples(inventory.examples.corporates)
     });
   }
   if (allMbs && totalSecurities && (allMbs / totalSecurities) >= 0.1 && inventory.counts.treasuries) {
@@ -2383,7 +2421,7 @@ function buildAssistantProductFits(bank, inventory, signals) {
       reason: holdings
         ? `Holdings on file (${holdings.latestReportDate || 'recent'}) — review the existing MBS book before pitching; this is a swap conversation, not an add.`
         : 'Existing MBS exposure — pull bond accounting first, then frame cash-flow or duration swap.',
-      examples: inventory.examples.treasuries
+      examples: filterExamples(inventory.examples.treasuries)
     });
   }
   if (!fits.length) {
@@ -2395,6 +2433,38 @@ function buildAssistantProductFits(bank, inventory, signals) {
     });
   }
   return fits.slice(0, 5);
+}
+
+function resolvePortfolioFilePath(bondAccounting) {
+  if (!bondAccounting || !Array.isArray(bondAccounting.portfolios) || !bondAccounting.portfolios.length) return '';
+  // Latest report wins ties; portfolios array is preserved from the manifest order.
+  const latest = bondAccounting.portfolios
+    .slice()
+    .sort((a, b) => String(b.reportDate || '').localeCompare(String(a.reportDate || '')))[0];
+  if (!latest || !latest.storedPath) return '';
+  return resolveBondAccountingStoredFile(BANK_REPORTS_DIR, latest.storedPath);
+}
+
+function loadHoldingsForBank(bank) {
+  if (!bank || !bank.bondAccounting || !bank.bondAccounting.available) return null;
+  const filePath = resolvePortfolioFilePath(bank.bondAccounting);
+  if (!filePath) return null;
+  try {
+    return loadParsedPortfolio(filePath);
+  } catch (err) {
+    log('warn', `Could not parse portfolio for ${bank.id || 'bank'}: ${err.message}`);
+    return null;
+  }
+}
+
+function filterExamplesAgainstHoldings(examples, holdings) {
+  if (!holdings || !holdings.cusipIndex || !Array.isArray(examples)) return examples;
+  return examples.filter(label => {
+    // Examples are short strings — look for CUSIP-shaped tokens (9 char alnum)
+    // and drop the row if any token is in the bank's holdings.
+    const tokens = String(label).match(/[A-Z0-9]{9}/g) || [];
+    return !tokens.some(t => holdings.cusipIndex[t.toUpperCase()]);
+  });
 }
 
 function assistantPeriodAgeMonths(period) {
@@ -2435,8 +2505,9 @@ function buildBankAssistantResponse(bankData, action) {
   const inventory = currentInventorySnapshot(values.state || summary.state);
   const strategyData = listStrategyRequests(BANK_REPORTS_DIR, { bankId: bank.id, archived: 'all' });
   const strategies = strategyData && Array.isArray(strategyData.requests) ? strategyData.requests.slice(0, 8) : [];
-  const signals = buildAssistantSignals(bank, inventory, strategies);
-  const fits = buildAssistantProductFits(bank, inventory, signals);
+  const parsedHoldings = loadHoldingsForBank(bank);
+  const signals = buildAssistantSignals(bank, inventory, strategies, parsedHoldings);
+  const fits = buildAssistantProductFits(bank, inventory, signals, parsedHoldings);
   const bankName = values.name || summary.displayName || summary.name || 'this bank';
   const location = [values.city || summary.city, values.state || summary.state].filter(Boolean).join(', ');
   const metricLines = [
@@ -2516,7 +2587,12 @@ function buildBankAssistantResponse(bankData, action) {
     holdings: holdings ? {
       reportDate: holdings.latestReportDate || '',
       fileCount: holdings.portfolioFileCount || 0,
-      latestStoredPath: (holdings.portfolios && holdings.portfolios[0] && holdings.portfolios[0].storedPath) || ''
+      latestStoredPath: (holdings.portfolios && holdings.portfolios[0] && holdings.portfolios[0].storedPath) || '',
+      totalPositions: parsedHoldings && parsedHoldings.aggregates ? parsedHoldings.aggregates.totalPositions : null,
+      sectorCounts: parsedHoldings ? parsedHoldings.sectorCounts : null,
+      bookYieldYtw: parsedHoldings && parsedHoldings.totals ? parsedHoldings.totals.bookYieldYtw : null,
+      marketYieldYtw: parsedHoldings && parsedHoldings.totals ? parsedHoldings.totals.marketYieldYtw : null,
+      unrealizedGainLoss: parsedHoldings && parsedHoldings.totals ? parsedHoldings.totals.unrealizedGainLoss : null
     } : null,
     notices,
     context: {
@@ -3507,6 +3583,51 @@ function folderDropFilesForPublish(scan) {
   });
 }
 
+function folderDropReferenceFiles(scan) {
+  const folderPath = dropboxDirForDate(scan.date);
+  return (scan.references || []).map(row => {
+    const sourcePath = safeJoin(folderPath, row.filename);
+    if (!sourcePath || !fs.existsSync(sourcePath)) return null;
+    return {
+      fieldName: 'reference',
+      filename: row.filename,
+      data: fs.readFileSync(sourcePath),
+      label: row.label || ''
+    };
+  }).filter(Boolean);
+}
+
+function looksLikeStructuredNotesEmail(file) {
+  if (!/\.eml$/i.test(file.filename || '')) return false;
+  const summary = emailSummary(file.data.toString('utf8'), file.filename);
+  return /structured|new issue|notes|\bJPM\b|\bGS\b|\bBMO\b|\bNBC\b|\bTD\b/i.test(summary.subject || '');
+}
+
+function ingestFolderDropReferences(scan) {
+  const files = folderDropReferenceFiles(scan);
+  const cdInternalFiles = files.filter(file => looksLikeInternalCdWorkbook(file.filename));
+  const emailFiles = files.filter(file => /\.eml$/i.test(file.filename || ''));
+  const structuredEmails = emailFiles.filter(looksLikeStructuredNotesEmail);
+  const marketEmails = emailFiles.filter(file => !structuredEmails.includes(file));
+
+  const result = {
+    cdInternal: null,
+    structuredNotes: null,
+    marketColor: null
+  };
+
+  if (cdInternalFiles.length) {
+    result.cdInternal = saveCdInternalUpload(CD_INTERNAL_DIR, cdInternalFiles);
+  }
+  if (structuredEmails.length) {
+    result.structuredNotes = saveStructuredNotesUpload(STRUCTURED_NOTES_DIR, structuredEmails);
+  }
+  if (marketEmails.length) {
+    result.marketColor = saveMarketColorUpload(MARKET_COLOR_DIR, marketEmails);
+  }
+  return result;
+}
+
 async function handleFolderDropScan(req, res, query) {
   try {
     return sendJSON(res, 200, scanFolderDrop(query.get('date')));
@@ -3524,7 +3645,8 @@ async function handleFolderDropPublish(req, res) {
     return await publishPackageFiles(files, res, {
       auditEvent: 'folder-publish',
       publishedBy: 'Folder Drop',
-      sourceFolder: scan.folderPath
+      sourceFolder: scan.folderPath,
+      afterPublish: () => ingestFolderDropReferences(scan)
     });
   } catch (err) {
     log('error', 'Folder drop publish failed:', err.message);
@@ -4095,10 +4217,20 @@ async function publishPackageFiles(files, res, options = {}) {
   });
 
   log('info', 'Published package:', saved.map(s => `${s.type}=${s.filename}`).join(', '));
+  let referenceIngest = null;
+  if (typeof options.afterPublish === 'function') {
+    try {
+      referenceIngest = options.afterPublish();
+    } catch (err) {
+      log('warn', 'Reference ingest failed:', err.message);
+      referenceIngest = { error: err.message };
+    }
+  }
   sendJSON(res, 200, {
     success: true,
     saved,
     meta,
+    referenceIngest,
     economicUpdateWarnings,
     offeringsCount,
     offeringsWarnings,
@@ -4304,6 +4436,36 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/mbs-cmo/upload' && req.method === 'POST') {
       return await handleMbsCmoUpload(req, res);
+    }
+
+    if (pathname === '/api/structured-notes' && req.method === 'GET') {
+      return sendJSON(res, 200, loadStructuredNotesInventory(STRUCTURED_NOTES_DIR));
+    }
+
+    const structuredNoteFileMatch = pathname.match(/^\/api\/structured-notes\/files\/([^/]+)$/);
+    if (structuredNoteFileMatch && req.method === 'GET') {
+      const fileId = safeDecodeURIComponent(structuredNoteFileMatch[1]);
+      if (!fileId) return sendText(res, 400, 'Invalid structured note file ID');
+      const file = getStructuredNoteSourceFile(STRUCTURED_NOTES_DIR, fileId);
+      if (!file || !fs.existsSync(file.path)) return sendText(res, 404, 'Not found');
+      return sendFile(res, file.path, { download: true, filename: file.filename });
+    }
+
+    if (pathname === '/api/market-color' && req.method === 'GET') {
+      return sendJSON(res, 200, loadMarketColorInbox(MARKET_COLOR_DIR));
+    }
+
+    const marketColorFileMatch = pathname.match(/^\/api\/market-color\/files\/([^/]+)$/);
+    if (marketColorFileMatch && req.method === 'GET') {
+      const fileId = safeDecodeURIComponent(marketColorFileMatch[1]);
+      if (!fileId) return sendText(res, 400, 'Invalid market color file ID');
+      const file = getMarketColorSourceFile(MARKET_COLOR_DIR, fileId);
+      if (!file || !fs.existsSync(file.path)) return sendText(res, 404, 'Not found');
+      return sendFile(res, file.path, { download: true, filename: file.filename });
+    }
+
+    if (pathname === '/api/cd-internal' && req.method === 'GET') {
+      return sendJSON(res, 200, loadCdInternalInventory(CD_INTERNAL_DIR));
     }
 
     const mbsCmoFileMatch = pathname.match(/^\/api\/mbs-cmo\/files\/([^/]+)$/);

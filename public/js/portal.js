@@ -48,6 +48,10 @@
   let strategyNotifications = { requests: [], counts: {} };
   let selectedBankStrategyHistory = [];
   let mbsCmoData = null;
+  let structuredNotesData = null;
+  let structuredNotesFilters = { search: '', structure: '' };
+  let marketColorData = null;
+  let cdInternalData = null;
   let bondAccountingManifest = null;
   let bondAccountingFilters = { search: '', status: '' };
   let peerAnalysisState = { bankData: null, peerData: null, rows: [], flags: [], period: '', peerGroup: null };
@@ -77,8 +81,8 @@
 
   const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
-                       'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'banks', 'maps', 'reports', 'strategies', 'archive', 'upload', 'admin'];
+                       'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'strategies', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -86,10 +90,12 @@
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
+    { page: 'market-color', group: 'FBBS', label: 'Market Color', description: 'Reference market emails from the daily folder', aliases: 'morning iq market color email news s&p macro' },
     { page: 'mmd', group: 'FBBS', label: 'MMD Curve', description: 'View the Bloomberg FTAX MMD curve, Treasury ratios, and sales talking points', aliases: 'mmd curve ftax bloomberg muni municipal market data aaa ratios' },
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
+    { page: 'cd-internal', group: 'CDs', label: 'CD Internal', description: 'Private CD workbook enrichment fields', aliases: 'cd master fdic internal restrictions domicile underwriter' },
     { page: 'treasury-explorer', group: 'Offerings', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
     { page: 'explorer', group: 'Offerings', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates offerings' },
     { page: 'munioffers', group: 'Documents', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
@@ -97,6 +103,7 @@
     { page: 'agencies', group: 'Offerings', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
     { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
     { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
+    { page: 'structured-notes', group: 'Offerings', label: 'Structured Notes', description: 'New issue and structured note inventory parsed from trader emails', aliases: 'structured notes new issue jpm gs bmo td callable zero steepener cusip' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
     { page: 'maps', group: 'Banks', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' },
     { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
@@ -111,15 +118,18 @@
     dashboard: 'fbbs',
     econ: 'fbbs',
     relativeValue: 'fbbs',
+    'market-color': 'fbbs',
     mmd: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
+    'cd-internal': 'cds',
     'treasury-explorer': 'offerings',
     explorer: 'offerings',
     'muni-explorer': 'offerings',
     agencies: 'offerings',
     corporates: 'offerings',
     'mbs-cmo': 'offerings',
+    'structured-notes': 'offerings',
     banks: 'banks',
     maps: 'banks',
     reports: 'banks'
@@ -1024,12 +1034,15 @@
     }
     if (pageName === 'archive') loadArchive();
     if (pageName === 'cd-recap') loadCdRecap();
+    if (pageName === 'cd-internal') loadCdInternal();
     if (pageName === 'treasury-explorer') loadTreasuryNotes();
     if (pageName === 'explorer') loadOfferings();
     if (pageName === 'muni-explorer') loadMuniOfferings();
     if (pageName === 'agencies') loadAgencies();
     if (pageName === 'corporates') loadCorporates();
     if (pageName === 'mbs-cmo') loadMbsCmo();
+    if (pageName === 'structured-notes') loadStructuredNotes();
+    if (pageName === 'market-color') loadMarketColor();
     if (pageName === 'banks') {
       loadBankStatus();
       loadSavedBanks();
@@ -5563,7 +5576,7 @@
         <div class="bank-assistant-actions">
           <button type="button" class="small-btn" id="bankAssistantStrategyBtn">Open as strategy request</button>
           ${data.holdings && data.holdings.latestStoredPath
-            ? `<a class="small-btn" href="/api/banks/bond-accounting/files/${encodeURIComponent(data.holdings.latestStoredPath)}" target="_blank" rel="noopener">View holdings (${escapeHtml(data.holdings.reportDate || 'on file')})</a>`
+            ? `<a class="small-btn" href="/api/banks/bond-accounting/files/${encodeURIComponent(data.holdings.latestStoredPath)}" target="_blank" rel="noopener">View holdings${data.holdings.totalPositions ? ` (${escapeHtml(data.holdings.totalPositions)} positions · ${escapeHtml(data.holdings.reportDate || 'on file')})` : ` (${escapeHtml(data.holdings.reportDate || 'on file')})`}</a>`
             : ''}
           ${data.disclaimer ? `<span>${escapeHtml(data.disclaimer)}</span>` : ''}
         </div>
@@ -6772,6 +6785,16 @@
     if (typeof data.corporatesCount === 'number') parts.push(`${data.corporatesCount} corporates`);
     const extract = parts.length ? ` · ${parts.join(', ')} extracted` : '';
     showToast(`Published ${data.saved.length} file${data.saved.length === 1 ? '' : 's'}${extract}`);
+    if (data.referenceIngest && !data.referenceIngest.error) {
+      const refParts = [];
+      const cdRows = data.referenceIngest.cdInternal && data.referenceIngest.cdInternal.uploadedOfferings;
+      const snRows = data.referenceIngest.structuredNotes && data.referenceIngest.structuredNotes.uploadedNotes;
+      const mcRows = data.referenceIngest.marketColor && data.referenceIngest.marketColor.uploadedItems;
+      if (Array.isArray(cdRows) && cdRows.length) refParts.push(`${formatNumber(cdRows.length)} internal CDs`);
+      if (Array.isArray(snRows) && snRows.length) refParts.push(`${formatNumber(snRows.length)} structured notes`);
+      if (Array.isArray(mcRows) && mcRows.length) refParts.push(`${formatNumber(mcRows.length)} market emails`);
+      if (refParts.length) setTimeout(() => showToast(`Reference files ingested · ${refParts.join(', ')}`), 500);
+    }
     if (Array.isArray(data.dateWarnings) && data.dateWarnings.length) {
       setTimeout(() => showToast(data.dateWarnings[0], true), 600);
     }
@@ -9283,6 +9306,196 @@
     }).join('');
   }
 
+  async function loadCdInternal() {
+    const body = document.getElementById('cdInternalBody');
+    if (!body) return;
+    try {
+      const res = await fetch('/api/cd-internal', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      cdInternalData = await res.json();
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">Failed to load internal CD workbook: ${escapeHtml(e.message)}</td></tr>`;
+      return;
+    }
+    renderCdInternal();
+  }
+
+  function renderCdInternal() {
+    const body = document.getElementById('cdInternalBody');
+    if (!body || !cdInternalData) return;
+    const rows = Array.isArray(cdInternalData.offerings) ? cdInternalData.offerings : [];
+    setText('cdInternalStat', formatNumber(rows.length));
+    setText('cdInternalKicker', cdInternalData.uploadedAt ? `Updated ${formatFullTimestamp(cdInternalData.uploadedAt)}` : 'No internal workbook yet');
+    setText('cdInternalSub', `${formatNumber(rows.length)} private CD rows from ${formatNumber((cdInternalData.sources || []).length)} workbook source${(cdInternalData.sources || []).length === 1 ? '' : 's'}`);
+    renderStatTiles('cdInternalStatTiles', [
+      { label: 'Rows', value: formatNumber(rows.length) },
+      { label: 'FDIC Certs', value: formatNumber(new Set(rows.map(r => r.fdicNumber).filter(Boolean)).size) },
+      { label: 'Restricted', value: formatNumber(rows.filter(r => (r.restrictions || []).length).length) },
+      { label: 'States', value: formatNumber(new Set(rows.map(r => r.domiciled).filter(Boolean)).size) },
+      { label: 'Sources', value: formatNumber((cdInternalData.sources || []).length) }
+    ]);
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">No internal CD workbook has been ingested yet.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.slice(0, 600).map(row => `
+      <tr>
+        <td class="issuer-cell"><strong>${escapeHtml(row.name || '')}</strong><div class="mbs-note">${escapeHtml(row.underwriter || '')}</div></td>
+        <td>${escapeHtml(row.fdicNumber || '')}</td>
+        <td><span class="term-pill">${escapeHtml(row.term || '')}</span></td>
+        <td style="text-align:right">${row.rate == null ? '<span class="no-restrict">&mdash;</span>' : Number(row.rate).toFixed(2)}</td>
+        <td>${row.maturity ? escapeHtml(formatNumericDate(row.maturity)) : '<span class="no-restrict">&mdash;</span>'}</td>
+        <td>${row.settle ? escapeHtml(formatNumericDate(row.settle)) : '<span class="no-restrict">&mdash;</span>'}</td>
+        <td>${escapeHtml(row.domiciled || '')}</td>
+        <td>${(row.restrictions || []).length ? `<span class="restrict-chip">${escapeHtml(row.restrictions.join(', '))}</span>` : '<span class="no-restrict">&mdash;</span>'}</td>
+        <td class="cusip-cell">${escapeHtml(row.cusip || '')}</td>
+      </tr>
+    `).join('');
+  }
+
+  async function loadStructuredNotes() {
+    const body = document.getElementById('structuredNotesBody');
+    if (!body) return;
+    try {
+      const res = await fetch('/api/structured-notes', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      structuredNotesData = await res.json();
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--danger)">Failed to load structured notes: ${escapeHtml(e.message)}</td></tr>`;
+      return;
+    }
+    renderStructuredNotes();
+  }
+
+  function applyStructuredNotesFilters(notes) {
+    const q = structuredNotesFilters.search.toLowerCase();
+    return (notes || []).filter(note => {
+      if (structuredNotesFilters.structure && note.structure !== structuredNotesFilters.structure) return false;
+      if (!q) return true;
+      const haystack = [
+        note.issuer, note.rating, note.term, note.structure, note.coupon, note.cusip,
+        note.pricing, note.emailSubject, note.emailFrom, note.attachment
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+  }
+
+  function renderStructuredNotes() {
+    const body = document.getElementById('structuredNotesBody');
+    if (!body || !structuredNotesData) return;
+    const notes = Array.isArray(structuredNotesData.notes) ? structuredNotesData.notes : [];
+    const structures = [...new Set(notes.map(n => n.structure).filter(Boolean))].sort();
+    const select = document.getElementById('sn-structure');
+    if (select) {
+      const keep = select.value;
+      select.innerHTML = '<option value="">All structures</option>' + structures.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+      select.value = keep;
+    }
+
+    const filtered = applyStructuredNotesFilters(notes);
+    filtered.sort((a, b) => String(a.pricing || '').localeCompare(String(b.pricing || '')) || String(a.issuer || '').localeCompare(String(b.issuer || '')));
+    setText('structuredNotesStat', formatNumber(filtered.length));
+    setText('structuredNotesKicker', structuredNotesData.uploadedAt ? `Updated ${formatFullTimestamp(structuredNotesData.uploadedAt)}` : 'No notes parsed yet');
+    setText('structuredNotesSub', `${formatNumber(notes.length)} notes from ${formatNumber((structuredNotesData.sources || []).length)} source emails`);
+    renderStatTiles('structuredNotesStatTiles', [
+      { label: 'Shown', value: formatNumber(filtered.length) },
+      { label: 'Issuers', value: formatNumber(new Set(filtered.map(n => n.issuer).filter(Boolean)).size) },
+      { label: 'Callable', value: formatNumber(filtered.filter(n => /call/i.test(n.structure || '')).length) },
+      { label: 'Zeros', value: formatNumber(filtered.filter(n => /zero/i.test(n.structure || '')).length) },
+      { label: 'Avg Price', value: average(filtered.map(n => n.price)) == null ? '—' : average(filtered.map(n => n.price)).toFixed(2) }
+    ]);
+
+    if (!notes.length) {
+      body.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text3)">No structured-note emails have been ingested yet. Drop Bloomberg note emails into the daily folder, then publish the folder.</td></tr>`;
+      return;
+    }
+    if (!filtered.length) {
+      body.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text3)">No notes match the current filters.</td></tr>`;
+      return;
+    }
+    body.innerHTML = filtered.map(note => {
+      const source = (note.sourceFiles || [])[0];
+      const sourceLink = source ? `<a class="source-chip" href="/api/structured-notes/files/${encodeURIComponent(source.id)}" target="_blank" rel="noopener">eml</a>` : '<span class="no-restrict">&mdash;</span>';
+      return `
+        <tr>
+          <td class="issuer-cell"><strong>${escapeHtml(note.issuer || 'Issuer')}</strong><div class="mbs-note">${escapeHtml(note.emailSubject || '')}</div></td>
+          <td>${escapeHtml(note.rating || '')}</td>
+          <td><span class="term-pill">${escapeHtml(note.term || '')}</span></td>
+          <td>${escapeHtml(note.coupon || note.structure || '')}<div class="mbs-note">${escapeHtml(note.structure || '')}</div></td>
+          <td>${note.maturityDate ? escapeHtml(formatNumericDate(note.maturityDate)) : '<span class="no-restrict">&mdash;</span>'}</td>
+          <td>${escapeHtml(note.firstCall || '')}</td>
+          <td style="text-align:right">${note.price == null ? '<span class="no-restrict">&mdash;</span>' : Number(note.price).toFixed(2)}</td>
+          <td class="cusip-cell">${escapeHtml(note.cusip || '')}</td>
+          <td>${escapeHtml(note.pricing || '')}</td>
+          <td>${sourceLink}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  async function loadMarketColor() {
+    const body = document.getElementById('marketColorBody');
+    if (!body) return;
+    try {
+      const res = await fetch('/api/market-color', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      marketColorData = await res.json();
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--danger)">Failed to load market color: ${escapeHtml(e.message)}</td></tr>`;
+      return;
+    }
+    renderMarketColor();
+  }
+
+  function renderMarketColor() {
+    const body = document.getElementById('marketColorBody');
+    if (!body || !marketColorData) return;
+    const items = Array.isArray(marketColorData.items) ? marketColorData.items : [];
+    setText('marketColorStat', formatNumber(items.length));
+    setText('marketColorKicker', marketColorData.updatedAt ? `Updated ${formatFullTimestamp(marketColorData.updatedAt)}` : 'No market color yet');
+    setText('marketColorSub', `${formatNumber(items.length)} reference emails from the daily folder`);
+    renderStatTiles('marketColorStatTiles', [
+      { label: 'Items', value: formatNumber(items.length) },
+      { label: 'Rates', value: formatNumber(items.filter(i => (i.tags || []).includes('rates')).length) },
+      { label: 'Credit', value: formatNumber(items.filter(i => (i.tags || []).includes('credit')).length) },
+      { label: 'Macro', value: formatNumber(items.filter(i => (i.tags || []).includes('macro')).length) }
+    ]);
+    if (!items.length) {
+      body.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text3)">No market color emails have been ingested yet.</td></tr>`;
+      return;
+    }
+    body.innerHTML = items.map(item => {
+      const source = item.sourceFile;
+      const link = source ? `<a class="source-chip" href="/api/market-color/files/${encodeURIComponent(source.id)}" target="_blank" rel="noopener">eml</a>` : '<span class="no-restrict">&mdash;</span>';
+      return `
+        <tr>
+          <td class="issuer-cell"><strong>${escapeHtml(item.subject || 'Market color')}</strong><div class="mbs-note">${escapeHtml(item.preview || '')}</div></td>
+          <td>${escapeHtml(item.from || '')}</td>
+          <td>${(item.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ')}</td>
+          <td>${escapeHtml(item.emailDate || '')}</td>
+          <td>${link}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function setupStructuredNotes() {
+    const search = document.getElementById('sn-search');
+    const structure = document.getElementById('sn-structure');
+    if (search) {
+      search.addEventListener('input', () => {
+        structuredNotesFilters.search = search.value.trim();
+        if (structuredNotesData) renderStructuredNotes();
+      });
+    }
+    if (structure) {
+      structure.addEventListener('change', () => {
+        structuredNotesFilters.structure = structure.value;
+        if (structuredNotesData) renderStructuredNotes();
+      });
+    }
+  }
+
   function setupMbsCmo() {
     const byId = id => document.getElementById(id);
     const search = byId('mf-search');
@@ -9773,6 +9986,7 @@
     setupAgencyFilters();
     setupCorpFilters();
     setupMbsCmo();
+    setupStructuredNotes();
     setupBankSearch();
     setupReports();
     setupStrategies();

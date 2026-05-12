@@ -45,6 +45,9 @@
         <a class="nav-link nav-minor" data-page="relativeValue" href="#relativeValue">
           <span class="nav-label">Relative Value</span>
         </a>
+        <a class="nav-link nav-minor" data-page="market-color" href="#market-color">
+          <span class="nav-label">Market Color</span>
+        </a>
         <a class="nav-link nav-minor" data-page="mmd" href="#mmd">
           <span class="nav-label">MMD Curve</span>
         </a>
@@ -76,6 +79,9 @@
         <a class="nav-link nav-minor" data-page="mbs-cmo" href="#mbs-cmo">
           <span class="nav-label">MBS/CMO Explorer</span>
         </a>
+        <a class="nav-link nav-minor" data-page="structured-notes" href="#structured-notes">
+          <span class="nav-label">Structured Notes</span>
+        </a>
       </div>
     </div>
 
@@ -91,6 +97,9 @@
         </a>
         <a class="nav-link nav-minor" data-page="cd" href="#cd">
           <span class="nav-label">Brokered CD Sheet</span>
+        </a>
+        <a class="nav-link nav-minor" data-page="cd-internal" href="#cd-internal">
+          <span class="nav-label">CD Internal</span>
         </a>
       </div>
     </div>
@@ -178,7 +187,9 @@
         <a href="#agencies" data-page="agencies">Agency Explorer</a>
         <a href="#corporates" data-page="corporates">Corporate Explorer</a>
         <a href="#mbs-cmo" data-page="mbs-cmo">MBS/CMO Explorer</a>
+        <a href="#structured-notes" data-page="structured-notes">Structured Notes</a>
         <a href="#cd-recap" data-page="cd-recap">Weekly CD Recap</a>
+        <a href="#cd-internal" data-page="cd-internal">CD Internal</a>
         <a href="#mmd" data-page="mmd">MMD Curve</a>
       </div>
     </div>
@@ -1695,6 +1706,54 @@
   </div>
 </div>
 
+<!-- ========== CD INTERNAL PAGE ========== -->
+<div class="page" id="p-cd-internal">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>CD <strong>Internal</strong></h2>
+        <p class="hero-sub" id="cdInternalSub">Private CD workbook enrichment from the daily folder.</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="cdInternalStat">&mdash;</div>
+        <div class="lbl">Rows</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Private CD Reference</h3>
+      <div class="kicker" id="cdInternalKicker">&mdash;</div>
+    </div>
+    <div class="explorer-stats" id="cdInternalStatTiles"></div>
+    <div class="explorer-table-wrap">
+      <table class="explorer-table">
+        <thead>
+          <tr>
+            <th>Issuer</th>
+            <th style="width:110px">FDIC Cert</th>
+            <th style="width:90px">Term</th>
+            <th style="width:85px;text-align:right">Rate</th>
+            <th style="width:110px">Maturity</th>
+            <th style="width:110px">Settle</th>
+            <th style="width:90px">Domicile</th>
+            <th>Restrictions</th>
+            <th style="width:110px">CUSIP</th>
+          </tr>
+        </thead>
+        <tbody id="cdInternalBody">
+          <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">Loading internal CD workbook&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend-box">
+      <strong>Internal:</strong>
+      This page is for private enrichment fields such as FDIC cert, domicile, restrictions, underwriter, settlement, and CUSIP. Cost display remains intentionally out of this first view.
+    </div>
+  </div>
+</div>
+
 <!-- ========== TREASURY NOTES EXPLORER PAGE ========== -->
 <div class="page" id="p-treasury-explorer">
   <section class="page-hero">
@@ -2423,6 +2482,105 @@
     <div class="legend-box">
       <strong>Note:</strong>
       Bloomberg workbooks use cached cell values, so refresh and save from Bloomberg before uploading. Screen snips are retained as sources; Excel, PDF, and email files are parsed into rows.
+    </div>
+  </div>
+</div>
+
+<!-- ========== STRUCTURED NOTES PAGE ========== -->
+<div class="page" id="p-structured-notes">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Structured <strong>Notes</strong></h2>
+        <p class="hero-sub" id="structuredNotesSub">New issue and callable note inventory parsed from trader emails.</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="structuredNotesStat">&mdash;</div>
+        <div class="lbl">Notes Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Filter New Issues</h3>
+      <div class="kicker" id="structuredNotesKicker">&mdash;</div>
+    </div>
+    <div class="explorer-stats" id="structuredNotesStatTiles"></div>
+    <div class="agency-filters">
+      <div class="af-row corp-search-row">
+        <label class="ef-field af-search-field">
+          <span>Search issuer, CUSIP, coupon, pricing, or source</span>
+          <input type="text" id="sn-search" placeholder="JPM, zero, 48130..." autocomplete="off">
+        </label>
+        <label class="ef-field">
+          <span>Structure</span>
+          <select id="sn-structure">
+            <option value="">All structures</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="explorer-table-wrap">
+      <table class="explorer-table">
+        <thead>
+          <tr>
+            <th>Issuer</th>
+            <th style="width:90px">Rating</th>
+            <th style="width:90px">Term</th>
+            <th>Coupon / Structure</th>
+            <th style="width:105px">Maturity</th>
+            <th style="width:105px">First Call</th>
+            <th style="width:90px;text-align:right">Price</th>
+            <th style="width:105px">CUSIP</th>
+            <th style="width:115px">Pricing</th>
+            <th style="width:90px">Source</th>
+          </tr>
+        </thead>
+        <tbody id="structuredNotesBody">
+          <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text3)">Loading structured notes&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ========== MARKET COLOR PAGE ========== -->
+<div class="page" id="p-market-color">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Market <strong>Color</strong></h2>
+        <p class="hero-sub" id="marketColorSub">Reference emails retained from the daily folder.</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="marketColorStat">&mdash;</div>
+        <div class="lbl">Items</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Inbox</h3>
+      <div class="kicker" id="marketColorKicker">&mdash;</div>
+    </div>
+    <div class="explorer-stats" id="marketColorStatTiles"></div>
+    <div class="explorer-table-wrap">
+      <table class="explorer-table">
+        <thead>
+          <tr>
+            <th>Subject</th>
+            <th style="width:190px">From</th>
+            <th style="width:150px">Tags</th>
+            <th style="width:170px">Email Date</th>
+            <th style="width:90px">Source</th>
+          </tr>
+        </thead>
+        <tbody id="marketColorBody">
+          <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text3)">Loading market color&hellip;</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 </div>
