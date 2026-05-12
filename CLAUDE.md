@@ -35,7 +35,10 @@ Filename auto-classification lives in `classifyFile()` in `server/server.js`. Sa
 - `public/css/portal.css` — single stylesheet, ~4000 lines.
 - `web.config` — IIS deployment via iisnode. Hides `data/`, `server/`, `node_modules/`, `iisnode/` segments. Cap is 100 MB at the IIS layer; app enforces tighter `MAX_UPLOAD_MB`.
 - `tests/parser-regression.test.js` — single-file regression suite, run via plain `node`. No test framework.
-- `scripts/import-weekly-cd-worksheet.js`, `scripts/import-bank-workbook.js` — one-off CLI importers.
+- `server/averaged-series-store.js` — parses the FedFis "AVERAGED_SERIES" peer-group workbook into `{ peerGroups, metrics, series }` JSON. Pure fs + xlsx; output lands in `data/bank-reports/averaged-series/`.
+- `server/bond-accounting-store.js` — ingests the bond-accounting bank list workbook + a folder of portfolio workbooks, joins each portfolio file to a bank by `P####` code → FDIC cert, copies the files into `data/bank-reports/bond-accounting/{matched,unmatched}/...`, and writes `manifest.json`. Tear sheets read this via `getBondAccountingForBank()`.
+- `server/mbs-cmo-store.js` — stores MBS/CMO source uploads and parsed offer inventory under `data/mbs-cmo/`.
+- `scripts/import-weekly-cd-worksheet.js`, `scripts/import-bank-workbook.js`, `scripts/import-bond-accounting-folder.js` — one-off CLI importers.
 
 ## Data layout
 
@@ -48,7 +51,10 @@ data/
 │   ├── current-bank-call-reports.xlsm  (~153 MB source workbook)
 │   ├── bank-data.sqlite                (~136 MB derived DB)
 │   ├── bank-coverage.sqlite            (notes + saved-coverage workspace)
-│   └── bank-strategies.sqlite          (Strategies Queue requests)
+│   ├── bank-strategies.sqlite          (Strategies Queue requests)
+│   ├── averaged-series/                (FedFis peer-group workbook + parsed JSON)
+│   └── bond-accounting/                (manifest.json + matched/unmatched portfolio copies)
+├── mbs-cmo/             ← MBS/CMO source uploads + parsed inventory
 └── audit.log             ← append-only JSON-lines, one record per publish
 ```
 

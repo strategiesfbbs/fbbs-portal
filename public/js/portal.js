@@ -21,9 +21,13 @@
   };
   let dailyIntelData = null;
   let relativeValueData = null;
+  let mmdData = null;
   let economicUpdateData = null;
   let selectedMarketSection = 'rates';
   let selectedCdCalcTerm = 3;
+  let wirpStatusData = null;
+  let cdOpportunityAnalysis = null;
+  let cdOpportunitySearchTimer = null;
   let selectedCdRecapPeriod = 'previousWeek';
   let cdRecapData = null;
   let bankDataStatus = null;
@@ -37,25 +41,30 @@
   let selectedBankNotes = [];
   let activeCoverageBankId = null;
   let activeBankWorkspaceView = 'tear-sheet';
+  let bankAssistantLastResponse = null;
+  const bankAssistantCache = new Map();
   let strategyRequests = [];
   let strategyCounts = {};
   let strategyNotifications = { requests: [], counts: {} };
   let selectedBankStrategyHistory = [];
   let mbsCmoData = null;
   let bondAccountingManifest = null;
+  let bondAccountingFilters = { search: '', status: '' };
+  let peerAnalysisState = { bankData: null, peerData: null, rows: [], flags: [], period: '', peerGroup: null };
   let selectedFiles = {
-    dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
+    dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
   };
 
   const SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
   const TOTAL_SLOTS = SLOTS.length;
-  const UPLOAD_SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+  const UPLOAD_SLOTS = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 
   const DOC_TYPES = {
     dashboard:         { label: 'FBBS Sales Dashboard', ext: 'HTML', viewer: 'dashboard' },
     econ:              { label: 'Economic Update', ext: 'PDF',  viewer: 'econ' },
     relativeValue:     { label: 'Relative Value', ext: 'PDF', viewer: 'relativeValue' },
+    mmd:               { label: 'MMD Curve', ext: 'PDF', viewer: 'mmd' },
     treasuryNotes:     { label: 'Treasury Notes', ext: 'XLSX', viewer: 'treasuryNotes' },
     cd:                { label: 'Brokered CD Sheet', ext: 'PDF', viewer: 'cd' },
     cdoffers:          { label: 'Daily CD Offerings PDF', ext: 'PDF', viewer: 'cdoffers' },
@@ -66,7 +75,7 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'banks', 'maps', 'reports', 'strategies', 'archive', 'upload', 'admin'];
@@ -77,6 +86,7 @@
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
+    { page: 'mmd', group: 'FBBS', label: 'MMD Curve', description: 'View the Bloomberg FTAX MMD curve, Treasury ratios, and sales talking points', aliases: 'mmd curve ftax bloomberg muni municipal market data aaa ratios' },
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
@@ -101,6 +111,7 @@
     dashboard: 'fbbs',
     econ: 'fbbs',
     relativeValue: 'fbbs',
+    mmd: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
     'treasury-explorer': 'offerings',
@@ -151,6 +162,20 @@
     'Stockholder',
     'Wire Transfer'
   ];
+  const PEER_ANALYSIS_METRICS = [
+    { key: 'loansToDeposits', label: 'Loans / Deposits', type: 'percent', section: 'Funding', higherIsBetter: null, peerLabels: [/loans?\s*\/\s*deposits?/i, /loans?.*deposits?/i] },
+    { key: 'liquidAssetsToAssets', label: 'Liquid Assets / Assets', type: 'percent', section: 'Liquidity', higherIsBetter: true, peerLabels: [/liquid assets?.*assets/i] },
+    { key: 'wholesaleFundingReliance', label: 'Reliance on Wholesale Funding', type: 'percent', section: 'Funding', higherIsBetter: false, peerLabels: [/wholesale funding/i] },
+    { key: 'securitiesToAssets', label: 'Securities / Assets', type: 'percent', section: 'Portfolio', higherIsBetter: true, peerLabels: [/securities.*assets/i, /total securities.*\/.*assets/i] },
+    { key: 'yieldOnSecurities', label: 'Yield on Securities', type: 'percent', section: 'Portfolio', higherIsBetter: true, peerLabels: [/yield on securities/i] },
+    { key: 'netInterestMargin', label: 'Net Interest Margin', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/net interest margin/i] },
+    { key: 'roa', label: 'ROA', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/^roa\b/i, /return on assets/i, /return on avg/i] },
+    { key: 'efficiencyRatio', label: 'Efficiency Ratio', type: 'percent', section: 'Profitability', higherIsBetter: false, peerLabels: [/efficiency ratio/i] },
+    { key: 'tier1RiskBasedRatio', label: 'Tier 1 Risk-Based Ratio', type: 'percent', section: 'Capital', higherIsBetter: true, peerLabels: [/tier 1.*risk/i] },
+    { key: 'texasRatio', label: 'Texas Ratio', type: 'percent', section: 'Credit', higherIsBetter: false, peerLabels: [/texas ratio/i] },
+    { key: 'nplsToLoans', label: 'NPLs / Loans', type: 'percent', section: 'Credit', higherIsBetter: false, peerLabels: [/npls?.*loans/i, /nonperforming.*loans/i] },
+    { key: 'longTermAssetsToAssets', label: 'Long-Term Assets / Assets', type: 'percent', section: 'ALM', higherIsBetter: false, peerLabels: [/long.?term assets?.*assets/i] }
+  ];
   const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'THO Report', 'CECL Analysis', 'Miscellaneous'];
   const STRATEGY_STATUSES = ['Open', 'In Progress', 'Needs Billed', 'Completed'];
   const STRATEGY_PRIORITIES = ['1', '2', '3', '4', '5'];
@@ -163,11 +188,35 @@
     corporates: { enabled: false, method: 'dollars', dollarMarkup: 5, bpMarkup: 50 }
   };
   const MUNI_TAX_AUDIENCES = {
-    ccorp: { label: 'C-Corp', rate: 21 },
-    scorp: { label: 'S-Corp', rate: 29.6 },
-    ria: { label: 'RIA/Money Manager', rate: 35 }
+    ccorp: {
+      label: 'Bank C-Corp',
+      rate: 21,
+      capitalGainsRate: 21,
+      costOfFunds: 2,
+      bqDisallowance: 20,
+      generalDisallowance: 100,
+      applyTefra: true
+    },
+    scorp: {
+      label: 'S-Corp',
+      rate: 29.6,
+      capitalGainsRate: 29.6,
+      costOfFunds: 2,
+      bqDisallowance: 0,
+      generalDisallowance: 100,
+      applyTefra: true
+    },
+    individual: {
+      label: 'Individual',
+      rate: 35,
+      capitalGainsRate: 15,
+      costOfFunds: 0,
+      bqDisallowance: 0,
+      generalDisallowance: 0,
+      applyTefra: false
+    }
   };
-  let muniTaxSettings = { audience: 'ccorp', rate: 21 };
+  let muniTaxSettings = { audience: 'ccorp', ...MUNI_TAX_AUDIENCES.ccorp };
   let commissionSettings = loadCommissionSettings();
 
   // ============ Utilities ============
@@ -917,8 +966,9 @@
       return 'agenciesBullets';  // ambiguous → default; user can drop into the right slot
     }
     if (lower.endsWith('.pdf')) {
+      if (lower.includes('mmd') || lower.includes('municipal market data')) return 'mmd';
       if (lower.includes('relative_value') || lower.includes('relative value') ||
-          lower.includes('relativevalue')) return 'relativeValue';
+          lower.includes('relative_val') || lower.includes('relativevalue')) return 'relativeValue';
       const isMuni =
         (lower.includes('fbbs_offering') || lower.includes('fbbs offering') ||
          lower.includes('muni_offering')  || lower.includes('muni offering')  ||
@@ -966,7 +1016,12 @@
 
     if (pageName === 'home') renderHomeRecents();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
-    if (pageName === 'relativeValue') loadRelativeValueSnapshot();
+    if (pageName === 'relativeValue') {
+      loadRelativeValueSnapshot();
+    }
+    if (pageName === 'mmd') {
+      loadMmdCurve();
+    }
     if (pageName === 'archive') loadArchive();
     if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'treasury-explorer') loadTreasuryNotes();
@@ -1137,6 +1192,9 @@
     renderCdCostCalculator();
     if (document.getElementById('p-relativeValue')?.classList.contains('active')) {
       loadRelativeValueSnapshot();
+    }
+    if (document.getElementById('p-mmd')?.classList.contains('active')) {
+      loadMmdCurve();
     }
     if (document.getElementById('p-daily-intelligence')?.classList.contains('active')) {
       loadDailyIntelligence();
@@ -2010,6 +2068,20 @@
     renderRelativeValueNative();
   }
 
+  async function loadMmdCurve() {
+    const chart = document.getElementById('mmdCurveChart');
+    if (chart) chart.innerHTML = '<div class="market-empty small">Loading MMD curve&hellip;</div>';
+    try {
+      const res = await fetch('/api/mmd', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      mmdData = await res.json();
+    } catch (e) {
+      console.error('Failed to load MMD curve:', e);
+      mmdData = null;
+    }
+    renderMmdCurve();
+  }
+
   function rvRateValue(value) {
     const n = Number(value);
     return Number.isFinite(n) ? `${n.toFixed(2)}%` : '—';
@@ -2020,10 +2092,234 @@
     return Number.isFinite(n) ? `${n > 0 ? '+' : ''}${n.toFixed(0)}` : '—';
   }
 
+  function bpValue(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${n > 0 ? '+' : ''}${Math.round(n)} bp` : '—';
+  }
+
   function rvBestBy(rows, key) {
     return rows
       .filter(row => Number.isFinite(Number(row[key])))
       .sort((a, b) => Number(b[key]) - Number(a[key]))[0] || null;
+  }
+
+  function mmdRow(term) {
+    const rows = mmdData && Array.isArray(mmdData.curve) ? mmdData.curve : [];
+    return rows.find(row => Number(row.term) === Number(term)) || null;
+  }
+
+  function mmdRatio(term) {
+    const ratios = mmdData && Array.isArray(mmdData.treasuryRatios) ? mmdData.treasuryRatios : [];
+    return ratios.find(row => Number(row.term) === Number(term)) || null;
+  }
+
+  function buildMmdSalesCues(rows) {
+    if (!rows.length) return [];
+    const row1 = mmdRow(1);
+    const row2 = mmdRow(2);
+    const row5 = mmdRow(5);
+    const row10 = mmdRow(10);
+    const row30 = mmdRow(30);
+    const ratio10 = mmdRatio(10);
+    const ratio30 = mmdRatio(30);
+    const cues = [];
+    if (row10) {
+      cues.push({
+        title: '10Y benchmark',
+        detail: `10Y AAA MMD is ${rvRateValue(row10.aaa)}${ratio10 ? `, ${ratio10.ratioPct}% of the ${rvRateValue(ratio10.treasuryYield)} 10Y UST.` : '.'}`
+      });
+    }
+    if (row30) {
+      cues.push({
+        title: 'Long end read',
+        detail: `30Y AAA MMD is ${rvRateValue(row30.aaa)}${ratio30 ? ` with an ${ratio30.ratioPct}% Treasury ratio.` : '.'}`
+      });
+    }
+    if (row2 && row10) {
+      cues.push({
+        title: '2s/10s slope',
+        detail: `AAA MMD 2s/10s slope is ${bpValue((Number(row10.aaa) - Number(row2.aaa)) * 100)}.`
+      });
+    }
+    if (row10 && row30) {
+      cues.push({
+        title: '10s/30s slope',
+        detail: `AAA MMD 10s/30s slope is ${bpValue((Number(row30.aaa) - Number(row10.aaa)) * 100)}.`
+      });
+    }
+    if (row1 && row5) {
+      cues.push({
+        title: 'Front-end context',
+        detail: `1Y AAA is ${rvRateValue(row1.aaa)} and 5Y AAA is ${rvRateValue(row5.aaa)}.`
+      });
+    }
+    (Array.isArray(mmdData.notes) ? mmdData.notes : []).forEach(note => {
+      cues.push({ title: 'Bloomberg note', detail: note });
+    });
+    return cues.slice(0, 6);
+  }
+
+  function renderMmdSalesInfo(rows) {
+    const data = mmdData;
+    const loadFailed = data === null;
+    const row2 = mmdRow(2);
+    const row10 = mmdRow(10);
+    const row30 = mmdRow(30);
+    const ratio10 = mmdRatio(10);
+    const ratio30 = mmdRatio(30);
+    const slope = row2 && row10 ? (Number(row10.aaa) - Number(row2.aaa)) * 100 : null;
+    const cues = buildMmdSalesCues(rows);
+
+    setText('mmdNativeKicker', data && data.sourceFile ? data.sourceFile : (loadFailed ? 'Not loaded' : 'Bloomberg FTAX'));
+    setText('mmdSalesCueCount', cues.length ? `${cues.length} cues` : '—');
+    setText('mmdRatioCount', data && Array.isArray(data.treasuryRatios) ? `${data.treasuryRatios.length} points` : '—');
+    setText('mmdCurveCount', rows.length ? `${rows.length} years` : '—');
+
+    renderStatTiles('mmdStatTiles', [
+      { label: 'As Of', value: data && data.asOfDate ? formatShortDate(data.asOfDate) : '—' },
+      { label: 'Coupon', value: data && data.coupon ? `${Number(data.coupon).toFixed(0)}%` : '—' },
+      { label: '10Y AAA', value: row10 ? rvRateValue(row10.aaa) : '—' },
+      { label: '30Y AAA', value: row30 ? rvRateValue(row30.aaa) : '—' },
+      { label: '2s/10s', value: slope != null ? bpValue(slope) : '—' },
+      { label: '10Y Ratio', value: ratio10 ? `${ratio10.ratioPct}%` : '—' }
+    ]);
+
+    const sales = document.getElementById('mmdSalesCues');
+    if (sales) {
+      sales.innerHTML = cues.length ? cues.map(cue => `
+        <article class="mmd-sales-cue">
+          <strong>${escapeHtml(cue.title)}</strong>
+          <p>${escapeHtml(cue.detail)}</p>
+        </article>
+      `).join('') : `<div class="market-empty small">${loadFailed ? 'MMD curve data could not be loaded.' : 'Upload today&apos;s MMD PDF to generate sales cues.'}</div>`;
+    }
+
+    const ratios = document.getElementById('mmdRatioGrid');
+    if (ratios) {
+      const ratioRows = data && Array.isArray(data.treasuryRatios) ? data.treasuryRatios : [];
+      ratios.innerHTML = ratioRows.length ? ratioRows.map(ratio => `
+        <article class="mmd-ratio-card">
+          <span>${escapeHtml(`${ratio.term}Y`)}</span>
+          <strong>${escapeHtml(`${ratio.ratioPct}%`)}</strong>
+          <small>UST ${escapeHtml(rvRateValue(ratio.treasuryYield))}</small>
+        </article>
+      `).join('') : `<div class="market-empty small">Treasury ratios unavailable.</div>`;
+    }
+
+    const body = document.getElementById('mmdCurveTableBody');
+    if (body) {
+      const ratioMap = new Map((data && data.treasuryRatios || []).map(row => [Number(row.term), row]));
+      body.innerHTML = rows.length ? rows.map(row => {
+        const ratio = ratioMap.get(Number(row.term));
+        return `
+          <tr>
+            <td><strong>${escapeHtml(row.label || `${row.term}Y`)}</strong></td>
+            <td>${escapeHtml(row.maturityYear || '—')}</td>
+            <td>${escapeHtml(rvRateValue(row.aaa))}</td>
+            <td>${escapeHtml(rvRateValue(row.aa))}</td>
+            <td>${escapeHtml(rvRateValue(row.a))}</td>
+            <td>${escapeHtml(rvRateValue(row.baa))}</td>
+            <td>${ratio ? escapeHtml(`${ratio.ratioPct}%`) : '—'}</td>
+          </tr>
+        `;
+      }).join('') : `<tr><td colspan="7">${loadFailed ? 'Could not load /api/mmd. Restart the portal server after this update.' : 'MMD curve table unavailable.'}</td></tr>`;
+    }
+  }
+
+  function renderMmdCurve() {
+    const el = document.getElementById('mmdCurveChart');
+    if (!el) return;
+    const data = mmdData;
+    const mmdFile = currentPackage && currentPackage.mmd;
+    const downloadBtn = document.getElementById('mmdDownloadBtn');
+    if (downloadBtn) {
+      if (mmdFile) {
+        const src = '/current/' + encodeURIComponent(mmdFile);
+        downloadBtn.style.display = '';
+        downloadBtn.onclick = () => { window.location.href = src + '?download=1'; };
+      } else {
+        downloadBtn.style.display = 'none';
+        downloadBtn.onclick = null;
+      }
+    }
+    const rows = data && Array.isArray(data.curve) ? data.curve.filter(row => Number.isFinite(Number(row.aaa))) : [];
+    setText('mmdCurveLabel', data && data.asOfDate ? formatShortDate(data.asOfDate) : (data === null ? 'MMD unavailable' : 'MMD PDF'));
+    setText('mmdSub', data && data.asOfDate
+      ? `AAA municipal curve from the uploaded MMD PDF · ${formatShortDate(data.asOfDate)}`
+      : (data === null ? 'No MMD curve data loaded.' : 'Upload the daily MMD PDF to populate this page.'));
+    renderMmdSalesInfo(rows);
+    if (!rows.length) {
+      el.innerHTML = '<div class="market-empty small">Upload today&apos;s MMD PDF to draw the AAA curve.</div>';
+      return;
+    }
+
+    const width = 1280;
+    const height = 500;
+    const left = 44;
+    const right = 14;
+    const top = 14;
+    const bottom = 34;
+    const plotWidth = width - left - right;
+    const plotHeight = height - top - bottom;
+    const values = rows.map(row => Number(row.aaa));
+    const rawMin = Math.min(...values);
+    const rawMax = Math.max(...values);
+    const min = Math.floor((rawMin - 0.12) * 4) / 4;
+    const max = Math.ceil((rawMax + 0.12) * 4) / 4;
+    const range = Math.max(max - min, 0.25);
+    const xFor = index => left + (rows.length <= 1 ? 0 : (index / (rows.length - 1)) * plotWidth);
+    const yFor = value => top + ((max - value) / range) * plotHeight;
+    const ticks = [];
+    for (let v = min; v <= max + 0.001; v += 0.25) ticks.push(Number(v.toFixed(2)));
+
+    const grid = ticks.map(tick => {
+      const y = yFor(tick);
+      return `
+        <line x1="${left}" y1="${y.toFixed(1)}" x2="${width - right}" y2="${y.toFixed(1)}" class="rv-grid-line"></line>
+        <text x="${left - 8}" y="${(y + 4).toFixed(1)}" class="rv-axis-label" text-anchor="end">${tick.toFixed(2)}</text>
+      `;
+    }).join('');
+
+    const points = rows.map((row, index) => `${xFor(index).toFixed(1)},${yFor(Number(row.aaa)).toFixed(1)}`);
+    const ratioMap = new Map((data.treasuryRatios || []).map(row => [Number(row.term), row]));
+    const dots = rows.map((row, index) => {
+      const ratio = ratioMap.get(Number(row.term));
+      const title = `MMD AAA ${row.label} ${rvRateValue(row.aaa)}${ratio ? ` | UST ${rvRateValue(ratio.treasuryYield)} | ${ratio.ratioPct}%` : ''}`;
+      const ratioText = ratio ? `<text x="${xFor(index).toFixed(1)}" y="${(yFor(Number(row.aaa)) - 10).toFixed(1)}" class="rv-axis-label mmd-ratio-label" text-anchor="middle">${ratio.ratioPct}%</text>` : '';
+      return `
+        <circle cx="${xFor(index).toFixed(1)}" cy="${yFor(Number(row.aaa)).toFixed(1)}" r="${ratio ? 4.5 : 3.2}" fill="#18735A"><title>${escapeHtml(title)}</title></circle>
+        ${ratioText}
+      `;
+    }).join('');
+
+    const xLabels = rows
+      .filter(row => row.term === 1 || row.term % 5 === 0 || row.term === 30)
+      .map(row => {
+        const index = rows.indexOf(row);
+        return `<text x="${xFor(index).toFixed(1)}" y="${height - 18}" class="rv-axis-label" text-anchor="middle">${escapeHtml(row.label)}</text>`;
+      }).join('');
+
+    const notes = [
+      data.coupon ? `${Number(data.coupon).toFixed(0)}% coupon` : '',
+      ...(Array.isArray(data.notes) ? data.notes : [])
+    ].filter(Boolean).join(' · ');
+
+    el.innerHTML = `
+      <div class="rv-line-legend">
+        <span><i style="background:#18735A"></i>MMD AAA</span>
+        <span><i style="background:#8c9a92"></i>Treasury ratio labels</span>
+        ${notes ? `<span>${escapeHtml(notes)}</span>` : ''}
+      </div>
+      <svg class="mmd-curve-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="MMD AAA curve">
+        <rect x="${left}" y="${top}" width="${plotWidth}" height="${plotHeight}" class="rv-plot-bg"></rect>
+        ${grid}
+        <line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}" class="rv-axis-line"></line>
+        <line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}" class="rv-axis-line"></line>
+        <polyline points="${points.join(' ')}" fill="none" stroke="#18735A" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        ${dots}
+        ${xLabels}
+      </svg>
+    `;
   }
 
   function renderRelativeValueChart(rows) {
@@ -2253,13 +2549,278 @@
     });
   }
 
+  // ============ Brokered CD Opportunity Screen ============
+
+  function setupCdOpportunityTool() {
+    const input = document.getElementById('cdOpportunityBankInput');
+    const btn = document.getElementById('cdOpportunityBankBtn');
+    const upload = document.getElementById('wirpWorkbookInput');
+    const results = document.getElementById('cdOpportunityBankResults');
+    if (input) {
+      input.addEventListener('input', () => {
+        clearTimeout(cdOpportunitySearchTimer);
+        cdOpportunitySearchTimer = setTimeout(() => searchCdOpportunityBanks(input.value), 180);
+      });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          clearTimeout(cdOpportunitySearchTimer);
+          searchCdOpportunityBanks(input.value, { openFirst: true });
+        }
+      });
+    }
+    if (btn) {
+      btn.addEventListener('click', () => searchCdOpportunityBanks(input ? input.value : '', { openFirst: true }));
+    }
+    if (upload) {
+      upload.addEventListener('change', e => {
+        const file = e.target.files && e.target.files[0];
+        if (file) uploadWirpWorkbook(file);
+      });
+    }
+    if (results) {
+      results.addEventListener('click', e => {
+        const btnEl = e.target.closest('[data-cd-opportunity-bank]');
+        if (!btnEl) return;
+        e.preventDefault();
+        clearTimeout(cdOpportunitySearchTimer);
+        const bankId = btnEl.getAttribute('data-cd-opportunity-bank');
+        const label = btnEl.querySelector('strong')?.textContent || '';
+        if (input && label) input.value = label;
+        results.innerHTML = '';
+        loadCdOpportunityBank(bankId);
+      });
+    }
+    loadWirpStatus();
+  }
+
+  async function loadWirpStatus() {
+    const el = document.getElementById('wirpStatus');
+    try {
+      const res = await fetch('/api/brokered-cd/wirp', { cache: 'no-store' });
+      wirpStatusData = await readBankJson(res);
+      renderWirpStatus();
+    } catch (e) {
+      if (el) el.textContent = brokeredCdApiMessage(e);
+    }
+  }
+
+  function brokeredCdApiMessage(error) {
+    const message = error && error.message ? error.message : String(error || 'Request failed');
+    if (/api endpoint not found/i.test(message)) {
+      return 'Brokered CD API is not active in the running portal process. Restart the portal, then refresh this page.';
+    }
+    return message;
+  }
+
+  function renderWirpStatus() {
+    const el = document.getElementById('wirpStatus');
+    if (!el) return;
+    const data = wirpStatusData || {};
+    if (!data.available) {
+      el.innerHTML = '<strong>WIRP not loaded.</strong> Upload a Bloomberg WIRP export to add forward-rate term guidance.';
+      return;
+    }
+    const summary = data.summary || {};
+    const warning = Array.isArray(data.warnings) && data.warnings.length ? ` · ${data.warnings[0]}` : '';
+    el.innerHTML = `
+      <strong>${escapeHtml(summary.biasLabel || 'WIRP loaded')}</strong>
+      <span>${escapeHtml(data.sourceFile || 'WIRP export')} · ${escapeHtml(formatFullTimestamp(data.uploadedAt))} · ${escapeHtml(formatNumber(data.recordCount || 0))} rows${escapeHtml(warning)}</span>
+    `;
+  }
+
+  function uploadWirpWorkbook(file) {
+    const status = document.getElementById('wirpStatus');
+    const input = document.getElementById('wirpWorkbookInput');
+    const formData = new FormData();
+    formData.append('wirpWorkbook', file, file.name);
+    if (status) status.textContent = `Importing WIRP from ${file.name}...`;
+    fetch('/api/brokered-cd/wirp/upload', { method: 'POST', body: formData })
+      .then(async res => {
+        const data = await readBankJson(res);
+        wirpStatusData = {
+          available: true,
+          sourceFile: data.wirp && data.wirp.sourceFile,
+          uploadedAt: data.wirp && data.wirp.uploadedAt,
+          sheetName: data.wirp && data.wirp.sheetName,
+          recordCount: data.wirp && Array.isArray(data.wirp.records) ? data.wirp.records.length : 0,
+          summary: data.wirp && data.wirp.summary,
+          warnings: data.wirp && data.wirp.warnings || []
+        };
+        renderWirpStatus();
+        showToast(`Imported WIRP · ${wirpStatusData.summary && wirpStatusData.summary.biasLabel || 'forward path loaded'}`);
+        if (cdOpportunityAnalysis && cdOpportunityAnalysis.bank && cdOpportunityAnalysis.bank.id) {
+          return loadCdOpportunityBank(cdOpportunityAnalysis.bank.id);
+        }
+        return null;
+      })
+      .catch(err => {
+        const message = brokeredCdApiMessage(err);
+        showToast(message, true);
+        if (status) status.textContent = message;
+      })
+      .finally(() => {
+        if (input) input.value = '';
+      });
+  }
+
+  async function searchCdOpportunityBanks(query, options = {}) {
+    const results = document.getElementById('cdOpportunityBankResults');
+    const q = String(query || '').trim();
+    if (!results) return;
+    if (q.length < 2) {
+      results.innerHTML = '';
+      return;
+    }
+    results.innerHTML = '<div class="bank-search-empty">Searching banks...</div>';
+    try {
+      const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=8`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      const rows = data.results || [];
+      if (options.openFirst && rows[0]) {
+        await loadCdOpportunityBank(rows[0].id);
+        results.innerHTML = '';
+        return;
+      }
+      renderCdOpportunityBankResults(rows);
+    } catch (e) {
+      results.innerHTML = `<div class="bank-search-empty">${escapeHtml(brokeredCdApiMessage(e))}</div>`;
+    }
+  }
+
+  function renderCdOpportunityBankResults(rows) {
+    const results = document.getElementById('cdOpportunityBankResults');
+    if (!results) return;
+    if (!rows.length) {
+      results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
+      return;
+    }
+    results.innerHTML = rows.map(row => `
+      <button type="button" class="reports-peer-result" data-cd-opportunity-bank="${escapeHtml(row.id)}">
+        <span>
+          <strong>${escapeHtml(bankDisplayName(row))}</strong>
+          <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.period].filter(Boolean).join(' · '))}</span>
+        </span>
+        <span class="text-btn">Analyze</span>
+      </button>
+    `).join('');
+  }
+
+  async function loadCdOpportunityBank(bankId) {
+    const output = document.getElementById('cdOpportunityOutput');
+    if (output) output.innerHTML = '<div class="bank-search-empty">Analyzing funding fit...</div>';
+    try {
+      const res = await fetch(`/api/brokered-cd/opportunity?bankId=${encodeURIComponent(bankId)}`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      cdOpportunityAnalysis = data.analysis;
+      renderCdOpportunityAnalysis(cdOpportunityAnalysis);
+    } catch (e) {
+      if (output) output.innerHTML = `<div class="bank-search-empty">${escapeHtml(brokeredCdApiMessage(e))}</div>`;
+    }
+  }
+
+  function formatOpportunityMetric(metric) {
+    if (!metric) return '—';
+    if (metric.type === 'money') return metric.current == null ? '—' : `$${formatNumber(Math.round(metric.current))}`;
+    return metric.current == null ? '—' : formatPercentTile(metric.current, 2);
+  }
+
+  function formatOpportunityDelta(value, type) {
+    if (value == null) return '—';
+    const sign = value > 0 ? '+' : '';
+    if (type === 'money') return `${sign}$${formatNumber(Math.round(value))}`;
+    return `${sign}${Number(value).toFixed(2)} pts`;
+  }
+
+  function cdOpportunityTone(recommendation) {
+    if (recommendation === 'Likely candidate') return 'likely';
+    if (recommendation === 'Possible candidate') return 'possible';
+    return 'low';
+  }
+
+  function renderCdOpportunityAnalysis(analysis) {
+    const output = document.getElementById('cdOpportunityOutput');
+    if (!output || !analysis) return;
+    const bank = analysis.bank || {};
+    const term = analysis.termRecommendation || {};
+    const wirp = analysis.wirp || {};
+    const tone = cdOpportunityTone(analysis.recommendation);
+    output.innerHTML = `
+      <div class="cd-opportunity-card ${tone}">
+        <div class="cd-opportunity-head">
+          <div>
+            <span class="tool-eyebrow">${escapeHtml(bank.period || '')}</span>
+            <h3>${escapeHtml(bank.displayName || 'Selected bank')}</h3>
+            <p>${escapeHtml([bank.city, bank.state, bank.certNumber ? `Cert ${bank.certNumber}` : ''].filter(Boolean).join(' · '))}</p>
+          </div>
+          <div class="cd-opportunity-verdict">
+            <span>${escapeHtml(analysis.recommendation || 'Review')}</span>
+            <strong>${escapeHtml(String(analysis.score || 0))}</strong>
+          </div>
+        </div>
+        <div class="cd-opportunity-summary-grid">
+          <div>
+            <span>Suggested Size</span>
+            <strong>${escapeHtml(analysis.amount && analysis.amount.label || 'Sizing pending')}</strong>
+            <p>${escapeHtml(analysis.amount && analysis.amount.detail || '')}</p>
+          </div>
+          <div>
+            <span>Suggested Term</span>
+            <strong>${escapeHtml(term.summary || 'Term pending')}</strong>
+            <p>${escapeHtml((term.rationale || [])[0] || '')}</p>
+          </div>
+          <div>
+            <span>Forward Path</span>
+            <strong>${escapeHtml(wirp.summary && wirp.summary.biasLabel || 'WIRP pending')}</strong>
+            <p>${escapeHtml(wirp.summary && wirp.summary.explanation || 'Upload WIRP to add forward-rate analysis.')}</p>
+          </div>
+        </div>
+        <div class="cd-opportunity-metrics">
+          ${(analysis.metrics || []).map(metric => `
+            <div>
+              <span>${escapeHtml(metric.label)}</span>
+              <strong>${escapeHtml(formatOpportunityMetric(metric))}</strong>
+              <em>QoQ ${escapeHtml(formatOpportunityDelta(metric.qoq, metric.type))}${metric.peerDelta != null ? ` · Peer ${escapeHtml(formatOpportunityDelta(metric.peerDelta, metric.type))}` : ''}</em>
+            </div>
+          `).join('')}
+        </div>
+        <div class="cd-opportunity-columns">
+          <section>
+            <h4>Signals</h4>
+            ${(analysis.signals || []).length ? analysis.signals.map(signal => `
+              <article class="cd-signal ${escapeHtml(signal.tone || '')}">
+                <strong>${escapeHtml(signal.title)}</strong>
+                <span>${escapeHtml(signal.detail)}</span>
+                <em>${signal.points > 0 ? '+' : ''}${escapeHtml(String(signal.points))}</em>
+              </article>
+            `).join('') : '<div class="bank-search-empty">No strong funding pressure signals yet.</div>'}
+          </section>
+          <section>
+            <h4>Term Stack</h4>
+            ${(term.terms || []).length ? term.terms.map(row => `
+              <article class="cd-term-row">
+                <strong>${escapeHtml(row.label)}</strong>
+                <span>${escapeHtml(formatPercentTile(row.mid, 3))} midpoint</span>
+                <em>${row.low != null && row.high != null ? `${escapeHtml(formatPercentTile(row.low, 3))} - ${escapeHtml(formatPercentTile(row.high, 3))}` : ''}</em>
+              </article>
+            `).join('') : '<div class="bank-search-empty">Upload the Brokered CD Sheet to rank terms.</div>'}
+          </section>
+        </div>
+        <section class="cd-talking-points">
+          <h4>Talking Points</h4>
+          ${(analysis.talkingPoints || []).map(point => `<p>${escapeHtml(point)}</p>`).join('')}
+        </section>
+      </div>
+    `;
+  }
+
   // ============ Archive ============
 
   function renderArchive() {
     const tbody = document.getElementById('archiveBody');
     const countEl = document.getElementById('archiveCount');
 
-    const hasCurrent = currentPackage && (SLOTS.some(s => currentPackage[s]) || currentPackage.cdoffersCost);
+    const hasCurrent = currentPackage && (SLOTS.some(s => currentPackage[s]) || currentPackage.cdoffersCost || currentPackage.mmd);
     const total = archiveData.length + (hasCurrent ? 1 : 0);
     countEl.textContent = total;
 
@@ -2291,7 +2852,7 @@
       ? `${escapeHtml(day.publishedBy || 'Portal User')} · ${formatTime(day.publishedAt)}`
       : '—';
 
-    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.treasuryNotes || day.cd || day.cdoffers || day.cdoffersCost || day.munioffers;
+    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.mmd || day.treasuryNotes || day.cd || day.cdoffers || day.cdoffersCost || day.munioffers;
     const viewLink = viewFirst ? `${basePath}${encodeURIComponent(viewFirst)}` : '#';
     const rowClass = isCurrent ? 'current-row' : '';
     const cdOfferIsWorkbook = day.cdoffers && /\.(xlsx|xlsm|xls)$/i.test(day.cdoffers);
@@ -2307,6 +2868,7 @@
           ${chip(day.dashboard, 'Dashboard.html')}
           ${chip(day.econ, 'Econ_Update.pdf')}
           ${chip(day.relativeValue, 'Relative_Value.pdf')}
+          ${chip(day.mmd, 'MMD.pdf')}
           ${chip(day.treasuryNotes, 'Treasury_Notes.xlsx')}
           ${chip(day.cd, 'CD_Rate_Sheet.pdf')}
           ${chip(cdOfferIsWorkbook ? null : day.cdoffers, 'CD_Offerings.pdf')}
@@ -2402,6 +2964,9 @@
     const accountStatus = document.getElementById('bankStatusImportStatus');
     const averagedSeriesStatus = document.getElementById('averagedSeriesImportStatus');
     const reportsAveragedSeriesStatus = document.getElementById('reportsAveragedSeriesStatus');
+    const reportsAveragedSeriesImportStatus = document.getElementById('reportsAveragedSeriesImportStatus');
+    const reportsPeerAnalysisCard = document.getElementById('reportsPeerAnalysisCard');
+    const reportsPeerAnalysisCardStatus = document.getElementById('reportsPeerAnalysisCardStatus');
     const reportsBondAccountingStatus = document.getElementById('reportsBondAccountingStatus');
     const reportsBondAccountingCardStatus = document.getElementById('reportsBondAccountingCardStatus');
     const reportsBondAccountingCard = document.getElementById('reportsBondAccountingCard');
@@ -2445,10 +3010,28 @@
       const text = `${averagedImportMeta.sourceFile || 'Averaged-series workbook'} imported ${formatImportedDate(averagedImportMeta.importedAt)} · latest ${averagedImportMeta.latestPeriod || '—'} · ${formatNumber(averagedDataset.metricCount || averagedImportMeta.metricCount || 0)} metrics · ${formatNumber(averagedDataset.seriesRowCount || averagedImportMeta.seriesRowCount || 0)} peer rows`;
       if (averagedSeriesStatus) averagedSeriesStatus.textContent = text;
       if (reportsAveragedSeriesStatus) reportsAveragedSeriesStatus.textContent = text;
+      if (reportsAveragedSeriesImportStatus) reportsAveragedSeriesImportStatus.textContent = text;
+      if (reportsPeerAnalysisCard) reportsPeerAnalysisCard.classList.add('report-card-ready');
+      if (reportsPeerAnalysisCardStatus) reportsPeerAnalysisCardStatus.textContent = `${formatNumber(averagedDataset.metricCount || averagedImportMeta.metricCount || 0)} metrics ready`;
+      const oppoCard = document.getElementById('reportsOpportunityCard');
+      const oppoBtn = document.getElementById('reportsOpportunityStageBtn');
+      const oppoStatus = document.getElementById('reportsOpportunityCardStatus');
+      if (oppoCard) oppoCard.classList.add('report-card-ready');
+      if (oppoBtn) oppoBtn.disabled = false;
+      if (oppoStatus) oppoStatus.textContent = 'Ready to scan';
     } else {
       const text = averagedMeta.error || 'Averaged-series peer data has not been imported yet.';
       if (averagedSeriesStatus) averagedSeriesStatus.textContent = text;
       if (reportsAveragedSeriesStatus) reportsAveragedSeriesStatus.textContent = text;
+      if (reportsAveragedSeriesImportStatus) reportsAveragedSeriesImportStatus.textContent = text;
+      if (reportsPeerAnalysisCard) reportsPeerAnalysisCard.classList.remove('report-card-ready');
+      if (reportsPeerAnalysisCardStatus) reportsPeerAnalysisCardStatus.textContent = 'Import peer averages';
+      const oppoCard = document.getElementById('reportsOpportunityCard');
+      const oppoBtn = document.getElementById('reportsOpportunityStageBtn');
+      const oppoStatus = document.getElementById('reportsOpportunityCardStatus');
+      if (oppoCard) oppoCard.classList.remove('report-card-ready');
+      if (oppoBtn) oppoBtn.disabled = true;
+      if (oppoStatus) oppoStatus.textContent = 'Needs peer averages';
     }
 
     const bondMeta = bankDataStatus && bankDataStatus.bondAccounting ? bankDataStatus.bondAccounting : {};
@@ -2495,16 +3078,65 @@
     return row.status || 'Unmatched';
   }
 
+  function bondAccountingSearchText(row) {
+    const bankList = row && row.bankList ? row.bankList : {};
+    return [
+      row.bankDisplayName,
+      row.portfolioClientName,
+      row.filename,
+      row.pCode,
+      row.reportDate,
+      row.certNumber,
+      row.account,
+      row.matchedBy,
+      bankList.clientName,
+      bankList.account,
+      bankList.city,
+      bankList.state,
+      bankList.salesRep
+    ].filter(Boolean).join(' ').toLowerCase();
+  }
+
+  function filteredBondAccountingRows() {
+    const rows = bondAccountingManifest && Array.isArray(bondAccountingManifest.matches)
+      ? bondAccountingManifest.matches
+      : [];
+    const search = String(bondAccountingFilters.search || '').trim().toLowerCase();
+    const status = bondAccountingFilters.status || '';
+    return rows.filter(row => {
+      if (status && row.status !== status) return false;
+      if (search && !bondAccountingSearchText(row).includes(search)) return false;
+      return true;
+    });
+  }
+
+  function renderBondAccountingStats(rows) {
+    const stats = document.getElementById('bondAccountingMatchStats');
+    if (!stats) return;
+    const sourceRows = Array.isArray(rows) ? rows : [];
+    renderStatTiles('bondAccountingMatchStats', [
+      { label: 'Shown', value: formatNumber(sourceRows.length) },
+      { label: 'Matched', value: formatNumber(sourceRows.filter(row => row.status === 'matched').length) },
+      { label: 'P-code only', value: formatNumber(sourceRows.filter(row => row.status === 'needs-bank-data-match').length) },
+      { label: 'Unmatched', value: formatNumber(sourceRows.filter(row => row.status === 'unmatched-pcode').length) }
+    ]);
+  }
+
   function renderBondAccountingMatches() {
     const list = document.getElementById('bondAccountingMatchList');
     const status = document.getElementById('bondAccountingImportStatus');
     if (!list || !bondAccountingManifest) return;
-    const rows = Array.isArray(bondAccountingManifest.matches) ? bondAccountingManifest.matches : [];
+    const allRows = Array.isArray(bondAccountingManifest.matches) ? bondAccountingManifest.matches : [];
+    const rows = filteredBondAccountingRows();
     if (status) {
-      status.textContent = `Last import: ${formatNumber(bondAccountingManifest.matchedCount || 0)} matched, ${formatNumber(bondAccountingManifest.pCodeMatchedCount || 0)} P-code only, ${formatNumber(bondAccountingManifest.unmatchedCount || 0)} unmatched.`;
+      const filteredText = rows.length === allRows.length ? '' : ` · showing ${formatNumber(rows.length)} filtered`;
+      status.textContent = `Last import: ${formatNumber(bondAccountingManifest.matchedCount || 0)} matched, ${formatNumber(bondAccountingManifest.pCodeMatchedCount || 0)} P-code only, ${formatNumber(bondAccountingManifest.unmatchedCount || 0)} unmatched${filteredText}.`;
     }
+    renderBondAccountingStats(rows);
     if (!rows.length) {
-      list.innerHTML = '<div class="bank-search-empty">The last bond-accounting import did not include any portfolio files.</div>';
+      list.innerHTML = allRows.length
+        ? '<div class="bank-search-empty">No portfolio files match the current filters.</div>'
+        : '<div class="bank-search-empty">The last bond-accounting import did not include any portfolio files.</div>';
       return;
     }
     list.innerHTML = rows.slice(0, 40).map(row => `
@@ -2520,6 +3152,501 @@
         ${row.storedPath ? `<a class="text-btn" href="${bondAccountingFileUrl(row)}" target="_blank" rel="noopener">Open</a>` : '<span></span>'}
       </div>
     `).join('') + (rows.length > 40 ? `<div class="bank-search-empty">Showing 40 of ${formatNumber(rows.length)} portfolio files.</div>` : '');
+  }
+
+  async function loadPeerAnalysisDataset() {
+    if (peerAnalysisState.peerData) return peerAnalysisState.peerData;
+    const res = await fetch('/api/banks/averaged-series', { cache: 'no-store' });
+    peerAnalysisState.peerData = await readBankJson(res);
+    return peerAnalysisState.peerData;
+  }
+
+  async function searchPeerAnalysisBanks(query, options = {}) {
+    const results = document.getElementById('peerAnalysisBankResults');
+    const q = String(query || '').trim();
+    if (!results) return;
+    if (q.length < 2) {
+      results.innerHTML = '';
+      return;
+    }
+    results.innerHTML = '<div class="bank-search-empty">Searching banks...</div>';
+    try {
+      const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=8`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      const rows = data.results || [];
+      if (options.openFirst && rows[0]) {
+        await loadPeerAnalysisBank(rows[0].id);
+        return;
+      }
+      renderPeerAnalysisBankResults(rows);
+    } catch (e) {
+      results.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  function renderPeerAnalysisBankResults(rows) {
+    const results = document.getElementById('peerAnalysisBankResults');
+    if (!results) return;
+    if (!rows.length) {
+      results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
+      return;
+    }
+    results.innerHTML = rows.map(row => `
+      <button type="button" class="reports-peer-result" data-peer-bank="${escapeHtml(row.id)}">
+        <span>
+          <strong>${escapeHtml(bankDisplayName(row))}</strong>
+          <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.period].filter(Boolean).join(' · '))}</span>
+        </span>
+        <span class="text-btn">Select</span>
+      </button>
+    `).join('');
+    results.querySelectorAll('[data-peer-bank]').forEach(btn => {
+      btn.addEventListener('click', () => loadPeerAnalysisBank(btn.dataset.peerBank));
+    });
+  }
+
+  async function loadPeerAnalysisBank(bankId) {
+    const output = document.getElementById('peerAnalysisOutput');
+    if (output) output.innerHTML = '<div class="bank-search-empty">Building peer comparison...</div>';
+    try {
+      const [bankData, peerData] = await Promise.all([
+        fetch(`/api/banks/${encodeURIComponent(bankId)}`, { cache: 'no-store' }).then(readBankJson),
+        loadPeerAnalysisDataset()
+      ]);
+      peerAnalysisState.bankData = bankData;
+      peerAnalysisState.peerData = peerData;
+      buildPeerAnalysis();
+      renderPeerAnalysis();
+    } catch (e) {
+      peerAnalysisState = { ...peerAnalysisState, bankData: null, rows: [], flags: [], period: '', peerGroup: null };
+      if (output) output.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+      const exportBtn = document.getElementById('peerAnalysisExportBtn');
+      if (exportBtn) exportBtn.disabled = true;
+    }
+  }
+
+  function peerMetricMatches(metric, config) {
+    if (!metric) return false;
+    const label = String(metric.label || '').replace(/^\s*\d+\.\s*/, '');
+    return (config.peerLabels || []).some(re => re.test(label));
+  }
+
+  function peerSeriesValue(seriesRow) {
+    if (!seriesRow) return null;
+    if (seriesRow.percent !== null && seriesRow.percent !== '' && Number.isFinite(Number(seriesRow.percent))) return Number(seriesRow.percent);
+    if (seriesRow.value !== null && seriesRow.value !== '' && Number.isFinite(Number(seriesRow.value))) return Number(seriesRow.value);
+    if (seriesRow.amount !== null && seriesRow.amount !== '' && Number.isFinite(Number(seriesRow.amount))) return Number(seriesRow.amount);
+    return null;
+  }
+
+  function buildPeerAnalysis() {
+    const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
+    const peerData = peerAnalysisState.peerData || {};
+    const latest = bank && Array.isArray(bank.periods) ? bank.periods[0] : null;
+    const bankPeriod = latest && latest.period;
+    const peerPeriods = Array.isArray(peerData.periods) ? peerData.periods : [];
+    const period = peerPeriods.includes(bankPeriod) ? bankPeriod : (peerPeriods[0] || bankPeriod || '');
+    const metrics = Array.isArray(peerData.metrics) ? peerData.metrics : [];
+    const series = Array.isArray(peerData.series) ? peerData.series : [];
+    const values = latest && latest.values ? latest.values : {};
+
+    const rows = PEER_ANALYSIS_METRICS.map(config => {
+      const metric = metrics.find(row => peerMetricMatches(row, config));
+      const seriesRow = metric ? series.find(row => row.metricKey === metric.key && row.period === period) : null;
+      const rawBankValue = values[config.key];
+      const bankValue = rawBankValue !== null && rawBankValue !== '' ? Number(rawBankValue) : NaN;
+      const peerValue = peerSeriesValue(seriesRow);
+      const delta = Number.isFinite(bankValue) && Number.isFinite(peerValue) ? bankValue - peerValue : null;
+      return {
+        ...config,
+        bankValue: Number.isFinite(bankValue) ? bankValue : null,
+        peerValue: Number.isFinite(peerValue) ? peerValue : null,
+        delta,
+        peerMetricLabel: metric ? metric.label : '',
+        peerMetricKey: metric ? metric.key : ''
+      };
+    }).filter(row => row.bankValue != null || row.peerValue != null);
+
+    peerAnalysisState.rows = rows;
+    peerAnalysisState.period = period;
+    peerAnalysisState.peerGroup = Array.isArray(peerData.peerGroups) ? peerData.peerGroups[0] : null;
+    peerAnalysisState.flags = buildPeerOpportunityFlags(rows, bank);
+  }
+
+  function peerRow(key) {
+    return (peerAnalysisState.rows || []).find(row => row.key === key) || {};
+  }
+
+  function peerDelta(key) {
+    const row = peerRow(key);
+    return Number.isFinite(row.delta) ? row.delta : null;
+  }
+
+  function buildPeerOpportunityFlags(rows, bank) {
+    const flags = [];
+    const add = (title, detail) => flags.push({ title, detail });
+    const ltd = peerDelta('loansToDeposits');
+    const liquid = peerDelta('liquidAssetsToAssets');
+    const securities = peerDelta('securitiesToAssets');
+    const yieldSec = peerDelta('yieldOnSecurities');
+    const nim = peerDelta('netInterestMargin');
+    const texas = peerDelta('texasRatio');
+    const longAssets = peerDelta('longTermAssetsToAssets');
+    const bondCount = bank && bank.bondAccounting && Array.isArray(bank.bondAccounting.portfolios)
+      ? bank.bondAccounting.portfolios.length
+      : 0;
+
+    if ((ltd != null && ltd > 5) || (liquid != null && liquid < -2)) {
+      add('Funding / liquidity call', 'Loans-to-deposits or liquid assets are away from peers; consider funding strategy, brokered CD laddering, or ALM liquidity review.');
+    }
+    if (securities != null && securities < -3) {
+      add('Securities deployment', 'Securities-to-assets is below peers; review cash deployment, agency/corporate inventory, or portfolio accounting needs.');
+    }
+    if (yieldSec != null && yieldSec < -0.15) {
+      add('Portfolio yield review', 'Yield on securities trails peers; use the bond accounting report and current offerings to frame a portfolio review.');
+    }
+    if (nim != null && nim < -0.15) {
+      add('Margin pressure', 'Net interest margin is below peer average; review funding costs, earning-asset mix, and strategy request opportunities.');
+    }
+    if (texas != null && texas > 2) {
+      add('Credit monitoring', 'Texas ratio is above peers; consider CECL analysis or credit-focused follow-up.');
+    }
+    if (longAssets != null && longAssets > 3) {
+      add('ALM / IRR angle', 'Long-term assets are above peers; consider ALM or interest-rate-risk review.');
+    }
+    if (bondCount) {
+      add('Bond accounting attached', `${formatNumber(bondCount)} monthly bond accounting report${bondCount === 1 ? '' : 's'} matched to this bank for portfolio review context.`);
+    }
+    return flags.slice(0, 6);
+  }
+
+  // Opportunity Report ---------------------------------------------------
+  // Each rule pulls from per-bank peerDelta_<key> fields produced by
+  // /api/banks/map. Weight drives severity ranking; requestType is the
+  // strategy queue type the flag tends to map to.
+  const OPPORTUNITY_RULES = [
+    { id: 'funding-liquidity', title: 'Funding / liquidity call', requestType: 'Bond Swap', weight: 2,
+      test: d => (d.loansToDeposits != null && d.loansToDeposits > 5) || (d.liquidAssetsToAssets != null && d.liquidAssetsToAssets < -2),
+      detail: 'Loans-to-deposits or liquid assets are away from peers.' },
+    { id: 'securities-deployment', title: 'Securities deployment', requestType: 'Bond Swap', weight: 2,
+      test: d => d.securitiesToAssets != null && d.securitiesToAssets < -3,
+      detail: 'Securities-to-assets is below peers; cash to deploy.' },
+    { id: 'portfolio-yield', title: 'Portfolio yield review', requestType: 'Bond Swap', weight: 2,
+      test: d => d.yieldOnSecurities != null && d.yieldOnSecurities < -0.15,
+      detail: 'Yield on securities trails peers.' },
+    { id: 'margin-pressure', title: 'Margin pressure', requestType: 'Bond Swap', weight: 3,
+      test: d => d.netInterestMargin != null && d.netInterestMargin < -0.15,
+      detail: 'NIM below peer average; funding-cost or asset-mix review.' },
+    { id: 'credit-monitoring', title: 'Credit monitoring', requestType: 'CECL Analysis', weight: 3,
+      test: d => d.texasRatio != null && d.texasRatio > 2,
+      detail: 'Texas ratio above peers.' },
+    { id: 'alm-irr', title: 'ALM / IRR angle', requestType: 'THO Report', weight: 2,
+      test: d => d.longTermAssetsToAssets != null && d.longTermAssetsToAssets > 3,
+      detail: 'Long-term assets above peers.' }
+  ];
+
+  const opportunityState = { loading: false, rows: [], generatedAt: null, peerComparison: null, error: null };
+
+  function bankPeerDeltas(bank) {
+    return {
+      loansToDeposits: bank.peerDelta_loansToDeposits,
+      liquidAssetsToAssets: bank.peerDelta_liquidAssetsToAssets,
+      securitiesToAssets: bank.peerDelta_securitiesToAssets,
+      yieldOnSecurities: bank.peerDelta_yieldOnSecurities,
+      netInterestMargin: bank.peerDelta_netInterestMargin,
+      texasRatio: bank.peerDelta_texasRatio,
+      longTermAssetsToAssets: bank.peerDelta_longTermAssetsToAssets,
+      wholesaleFundingReliance: bank.peerDelta_wholesaleFundingReliance,
+      efficiencyRatio: bank.peerDelta_efficiencyRatio,
+      tier1RiskBasedRatio: bank.peerDelta_tier1RiskBasedRatio,
+      nplsToLoans: bank.peerDelta_nplsToLoans
+    };
+  }
+
+  function evaluateBankOpportunity(bank) {
+    const deltas = bankPeerDeltas(bank);
+    const flags = [];
+    let severity = 0;
+    for (const rule of OPPORTUNITY_RULES) {
+      if (rule.test(deltas)) {
+        flags.push({ id: rule.id, title: rule.title, detail: rule.detail, requestType: rule.requestType, weight: rule.weight });
+        severity += rule.weight;
+      }
+    }
+    const topFlag = flags.slice().sort((a, b) => b.weight - a.weight)[0];
+    return {
+      bankId: bank.id,
+      name: bank.displayName || bank.name || '',
+      state: bank.state || '',
+      city: bank.city || '',
+      certNumber: bank.certNumber || '',
+      accountStatusLabel: bank.accountStatusLabel || (bank.accountStatus && bank.accountStatus.status) || 'Open',
+      isCoverageSaved: Boolean(bank.accountStatus && bank.accountStatus.isCoverageSaved),
+      totalAssets: bank.totalAssets,
+      deltas,
+      flags,
+      severity,
+      suggestedRequestType: topFlag ? topFlag.requestType : 'Miscellaneous'
+    };
+  }
+
+  async function runOpportunityScan() {
+    if (opportunityState.loading) return;
+    const summary = document.getElementById('opportunitySummary');
+    const runBtn = document.getElementById('opportunityRunBtn');
+    const exportBtn = document.getElementById('opportunityExportBtn');
+    const results = document.getElementById('opportunityResults');
+    opportunityState.loading = true;
+    opportunityState.error = null;
+    if (summary) summary.textContent = 'Scanning every bank against peer averages — this can take a few seconds on first run...';
+    if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Scanning...'; }
+    if (exportBtn) exportBtn.disabled = true;
+    if (results) results.innerHTML = '<div class="bank-search-empty opp-loading">Pulling map dataset and applying peer-gap rules across every bank...</div>';
+    try {
+      const data = await fetch('/api/banks/map', { cache: 'no-store' }).then(r => r.json());
+      if (!data || !Array.isArray(data.banks)) throw new Error('Map dataset unavailable');
+      if (!data.peerComparison) {
+        // Distinguish "really not imported" from "imported but cache is stale".
+        const status = await fetch('/api/banks/status', { cache: 'no-store' }).then(r => r.json()).catch(() => null);
+        if (status && status.averagedSeries && status.averagedSeries.available) {
+          throw new Error('Peer averages are imported but the map dataset cache is stale. Restart the portal or re-import the averaged-series workbook to refresh.');
+        }
+        throw new Error('Peer averages not imported yet — load the averaged-series workbook from the Reports workspace first.');
+      }
+      opportunityState.peerComparison = data.peerComparison;
+      opportunityState.generatedAt = new Date().toISOString();
+      opportunityState.rows = data.banks
+        .map(evaluateBankOpportunity)
+        .filter(row => row.flags.length > 0)
+        .sort((a, b) => b.severity - a.severity || Number(b.totalAssets || 0) - Number(a.totalAssets || 0));
+      renderOpportunityResults();
+    } catch (err) {
+      opportunityState.error = err.message;
+      if (results) results.innerHTML = `<div class="bank-search-empty">${escapeHtml(err.message)}</div>`;
+      if (summary) summary.textContent = err.message;
+    } finally {
+      opportunityState.loading = false;
+      if (runBtn) { runBtn.disabled = false; runBtn.textContent = opportunityState.rows.length ? 'Re-run scan' : 'Run scan'; }
+    }
+  }
+
+  function filteredOpportunityRows() {
+    const minFlags = Number((document.getElementById('opportunityMinFlags') || {}).value || 2);
+    const stateFilterRaw = ((document.getElementById('opportunityStateFilter') || {}).value || '').toUpperCase();
+    const stateSet = new Set(stateFilterRaw.split(/[\s,]+/).filter(Boolean));
+    const savedOnly = Boolean((document.getElementById('opportunitySavedOnly') || {}).checked);
+    return opportunityState.rows.filter(row => {
+      if (row.flags.length < minFlags) return false;
+      if (stateSet.size && !stateSet.has(row.state)) return false;
+      if (savedOnly && !row.isCoverageSaved) return false;
+      return true;
+    });
+  }
+
+  function formatOpportunityAssets(value) {
+    if (value == null || value === '') return '—';
+    const mm = Number(value) / 1000;
+    if (!Number.isFinite(mm)) return '—';
+    if (Math.abs(mm) >= 1000) return mm.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return mm.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  }
+
+  function renderOpportunityResults() {
+    const results = document.getElementById('opportunityResults');
+    const summary = document.getElementById('opportunitySummary');
+    const exportBtn = document.getElementById('opportunityExportBtn');
+    if (!results) return;
+    if (!opportunityState.rows.length) {
+      results.innerHTML = '<div class="bank-search-empty">No banks crossed any opportunity thresholds.</div>';
+      if (summary) summary.textContent = 'No flagged banks.';
+      if (exportBtn) exportBtn.disabled = true;
+      return;
+    }
+    const visible = filteredOpportunityRows();
+    const peer = opportunityState.peerComparison || {};
+    const peerLabel = peer.peerGroup ? peer.peerGroup.label : '';
+    const peerPeriod = peer.period || '';
+    if (summary) {
+      summary.textContent = `${formatNumber(visible.length)} of ${formatNumber(opportunityState.rows.length)} flagged · peer ${peerPeriod}${peerLabel ? ` · ${peerLabel.slice(0, 80)}` : ''}`;
+    }
+    if (exportBtn) exportBtn.disabled = visible.length === 0;
+    if (!visible.length) {
+      results.innerHTML = '<div class="bank-search-empty">No banks match the current filters.</div>';
+      return;
+    }
+    const top = visible.slice(0, 200);
+    results.innerHTML = `
+      <table class="opportunity-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Bank</th>
+            <th>State</th>
+            <th>Status</th>
+            <th>Assets ($MM)</th>
+            <th>Severity</th>
+            <th>Flags</th>
+            <th>Suggested</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${top.map((row, idx) => `
+            <tr>
+              <td>${idx + 1}</td>
+              <td><strong>${escapeHtml(row.name)}</strong><br><small>${escapeHtml([row.city, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</small></td>
+              <td>${escapeHtml(row.state)}</td>
+              <td>${escapeHtml(row.accountStatusLabel)}</td>
+              <td class="num">${escapeHtml(formatOpportunityAssets(row.totalAssets))}</td>
+              <td><span class="opp-severity opp-sev-${row.severity >= 6 ? 'high' : row.severity >= 4 ? 'med' : 'low'}">${row.severity}</span></td>
+              <td>
+                <div class="opp-flag-list">
+                  ${row.flags.map(f => `<span class="opp-flag" title="${escapeHtml(f.detail)}">${escapeHtml(f.title)}</span>`).join('')}
+                </div>
+              </td>
+              <td>${escapeHtml(row.suggestedRequestType)}</td>
+              <td class="opp-actions">
+                <button type="button" class="text-btn" data-opp-open="${escapeHtml(row.bankId)}">Open tear sheet</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      ${visible.length > top.length ? `<div class="opp-more">Showing top 200 of ${formatNumber(visible.length)}. Tighten filters to see more.</div>` : ''}
+    `;
+    results.querySelectorAll('[data-opp-open]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-opp-open');
+        goTo('banks');
+        if (typeof loadBank === 'function') loadBank(id, { collapseResults: true });
+      });
+    });
+  }
+
+  function exportOpportunityReportCsv() {
+    const visible = filteredOpportunityRows();
+    if (!visible.length) return;
+    const peer = opportunityState.peerComparison || {};
+    const rows = [
+      ['Rank', 'Bank', 'City', 'State', 'Cert', 'Status', 'Assets ($MM)', 'Severity', 'Flag count', 'Flags', 'Suggested request type']
+    ];
+    visible.forEach((row, idx) => {
+      rows.push([
+        idx + 1,
+        row.name,
+        row.city,
+        row.state,
+        row.certNumber,
+        row.accountStatusLabel,
+        formatOpportunityAssets(row.totalAssets),
+        row.severity,
+        row.flags.length,
+        row.flags.map(f => f.title).join(' | '),
+        row.suggestedRequestType
+      ]);
+    });
+    const periodTag = peer.period ? `_${peer.period}` : '';
+    downloadCsv(`opportunity-report${periodTag}.csv`, rows);
+  }
+  // ----------------------------------------------------------------------
+
+  function formatPeerValue(value, type) {
+    if (value == null) return '—';
+    if (type === 'money') return formatCallReportValue(value, 'money');
+    if (type === 'percent') return `${formatCallReportValue(value, 'percent')}%`;
+    return formatNumber(value);
+  }
+
+  function formatPeerDelta(delta, type) {
+    if (delta == null) return '—';
+    const prefix = delta > 0 ? '+' : '';
+    if (type === 'percent') return `${prefix}${delta.toFixed(2)} pts`;
+    return `${prefix}${formatNumber(delta)}`;
+  }
+
+  function peerSignal(row) {
+    if (!row || row.delta == null || row.higherIsBetter == null) return 'Neutral';
+    if (Math.abs(row.delta) < 0.01) return 'In line';
+    const favorable = row.higherIsBetter ? row.delta > 0 : row.delta < 0;
+    return favorable ? 'Favorable' : 'Watch';
+  }
+
+  function peerSignalClass(row) {
+    const signal = peerSignal(row);
+    if (signal === 'Favorable') return 'reports-peer-delta-positive';
+    if (signal === 'Watch') return 'reports-peer-delta-negative';
+    return '';
+  }
+
+  function openPeerAnalysisTearSheet(openStrategyRequest = false) {
+    const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
+    if (!bank || !bank.id) return;
+    goTo('banks');
+    loadBank(bank.id, { collapseResults: true, openStrategyRequest });
+  }
+
+  function renderPeerAnalysis() {
+    const output = document.getElementById('peerAnalysisOutput');
+    const exportBtn = document.getElementById('peerAnalysisExportBtn');
+    const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
+    if (!output || !bank) return;
+    const latest = bank.periods && bank.periods[0] ? bank.periods[0] : {};
+    const values = latest.values || {};
+    const peerGroup = peerAnalysisState.peerGroup || {};
+    const rows = peerAnalysisState.rows || [];
+    const flags = peerAnalysisState.flags || [];
+    if (exportBtn) exportBtn.disabled = !rows.length;
+    output.innerHTML = `
+      <div class="reports-peer-summary">
+        <div>
+          <strong>${escapeHtml(values.name || bank.summary.displayName || bank.summary.name || 'Selected bank')}</strong>
+          <span>${escapeHtml([values.city, values.state, values.certNumber ? `Cert ${values.certNumber}` : '', `Bank period ${latest.period || '—'}`, `Peer period ${peerAnalysisState.period || '—'}`].filter(Boolean).join(' · '))}</span>
+          <span>${escapeHtml(peerGroup.label || 'Current averaged-series peer group')}</span>
+        </div>
+        <div class="reports-peer-actions">
+          <button type="button" class="small-btn" data-peer-open-tearsheet>Open Tear Sheet</button>
+          <button type="button" class="small-btn" data-peer-start-strategy>Start Strategy</button>
+        </div>
+      </div>
+      ${flags.length ? `
+        <div class="reports-peer-flags">
+          ${flags.map(flag => `
+            <article class="reports-peer-flag">
+              <strong>${escapeHtml(flag.title)}</strong>
+              <span>${escapeHtml(flag.detail)}</span>
+            </article>
+          `).join('')}
+        </div>
+      ` : '<div class="bank-search-empty">No opportunity flags from the current metric set.</div>'}
+      ${rows.length ? `<div class="reports-peer-table-wrap">
+        <table class="reports-peer-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>Bank</th>
+              <th>Peer</th>
+              <th>Delta</th>
+              <th>Signal</th>
+              <th>Section</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td>${escapeHtml(row.label)}</td>
+                <td>${escapeHtml(formatPeerValue(row.bankValue, row.type))}</td>
+                <td>${escapeHtml(formatPeerValue(row.peerValue, row.type))}</td>
+                <td class="${peerSignalClass(row)}">${escapeHtml(formatPeerDelta(row.delta, row.type))}</td>
+                <td>${escapeHtml(peerSignal(row))}</td>
+                <td>${escapeHtml(row.section)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>` : '<div class="bank-search-empty">No shared metrics were found between this bank and the imported peer workbook.</div>'}
+    `;
+    output.querySelector('[data-peer-open-tearsheet]')?.addEventListener('click', () => openPeerAnalysisTearSheet(false));
+    output.querySelector('[data-peer-start-strategy]')?.addEventListener('click', () => openPeerAnalysisTearSheet(true));
   }
 
   function formatImportedDate(iso) {
@@ -2691,10 +3818,25 @@
   }
 
   function setupReports() {
+    const averagedInput = document.getElementById('reportsAveragedSeriesWorkbookInput');
+    const averagedImportBtn = document.getElementById('reportsAveragedSeriesImportBtn');
     const bankListInput = document.getElementById('bondAccountingBankListInput');
     const portfolioInput = document.getElementById('bondAccountingPortfolioInput');
+    const bondSearch = document.getElementById('bondAccountingSearchInput');
+    const bondStatus = document.getElementById('bondAccountingStatusFilter');
+    const bondExport = document.getElementById('bondAccountingExportBtn');
+    const peerSearch = document.getElementById('peerAnalysisBankSearchInput');
+    const peerSearchBtn = document.getElementById('peerAnalysisBankSearchBtn');
+    const peerExport = document.getElementById('peerAnalysisExportBtn');
     const importBtn = document.getElementById('bondAccountingImportBtn');
+    const peerStageBtn = document.getElementById('reportsPeerAnalysisStageBtn');
     const stageBtn = document.getElementById('reportsBondAccountingStageBtn');
+    if (averagedInput) {
+      averagedInput.addEventListener('change', () => {
+        const file = averagedInput.files && averagedInput.files[0];
+        setText('reportsAveragedSeriesWorkbookName', file ? file.name : 'No workbook selected');
+      });
+    }
     if (bankListInput) {
       bankListInput.addEventListener('change', () => {
         const file = bankListInput.files && bankListInput.files[0];
@@ -2703,6 +3845,31 @@
     }
     if (portfolioInput) {
       portfolioInput.addEventListener('change', () => updateBondAccountingPortfolioPicker());
+    }
+    if (bondSearch) {
+      bondSearch.addEventListener('input', () => {
+        bondAccountingFilters.search = bondSearch.value || '';
+        renderBondAccountingMatches();
+      });
+    }
+    if (bondStatus) {
+      bondStatus.addEventListener('change', () => {
+        bondAccountingFilters.status = bondStatus.value || '';
+        renderBondAccountingMatches();
+      });
+    }
+    if (peerSearch) {
+      let t = null;
+      peerSearch.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(() => searchPeerAnalysisBanks(peerSearch.value), 180);
+      });
+      peerSearch.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          searchPeerAnalysisBanks(peerSearch.value, { openFirst: true });
+        }
+      });
     }
     document.querySelectorAll('.reports-picker').forEach(picker => {
       ['dragenter', 'dragover'].forEach(type => picker.addEventListener(type, event => {
@@ -2715,6 +3882,17 @@
       }));
     });
     const bankPicker = document.getElementById('bondAccountingBankListPicker');
+    const averagedPicker = document.getElementById('reportsAveragedSeriesPicker');
+    if (averagedPicker && averagedInput) {
+      averagedPicker.addEventListener('drop', event => {
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (!file) return;
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        averagedInput.files = transfer.files;
+        setText('reportsAveragedSeriesWorkbookName', file.name);
+      });
+    }
     if (bankPicker && bankListInput) {
       bankPicker.addEventListener('drop', event => {
         const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
@@ -2736,9 +3914,52 @@
         updateBondAccountingPortfolioPicker();
       });
     }
+    if (averagedImportBtn) averagedImportBtn.addEventListener('click', uploadReportsAveragedSeriesImport);
     if (importBtn) importBtn.addEventListener('click', uploadBondAccountingImport);
+    if (bondExport) bondExport.addEventListener('click', exportBondAccountingCsv);
+    if (peerSearchBtn) peerSearchBtn.addEventListener('click', () => searchPeerAnalysisBanks(peerSearch ? peerSearch.value : '', { openFirst: true }));
+    if (peerExport) peerExport.addEventListener('click', exportPeerAnalysisCsv);
+    if (peerStageBtn) peerStageBtn.addEventListener('click', () => {
+      const hasPeerData = peerAnalysisState.peerData || (bankDataStatus && bankDataStatus.averagedSeries && bankDataStatus.averagedSeries.available);
+      const target = hasPeerData ? 'peerAnalysisBuilderPanel' : 'averagedSeriesImportPanel';
+      document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
     if (stageBtn) stageBtn.addEventListener('click', () => {
       document.getElementById('bondAccountingImportPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    const oppoStageBtn = document.getElementById('reportsOpportunityStageBtn');
+    const oppoRunBtn = document.getElementById('opportunityRunBtn');
+    const oppoExportBtn = document.getElementById('opportunityExportBtn');
+    const oppoMinFlags = document.getElementById('opportunityMinFlags');
+    const oppoStateFilter = document.getElementById('opportunityStateFilter');
+    const oppoSavedOnly = document.getElementById('opportunitySavedOnly');
+    if (oppoStageBtn) oppoStageBtn.addEventListener('click', () => {
+      const panel = document.getElementById('opportunityReportPanel');
+      if (panel) {
+        panel.hidden = false;
+        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      // Auto-run if no scan yet — the card button is the obvious "Run" affordance.
+      if (!opportunityState.rows.length && !opportunityState.loading) {
+        runOpportunityScan();
+      }
+    });
+    if (oppoRunBtn) oppoRunBtn.addEventListener('click', runOpportunityScan);
+    if (oppoExportBtn) oppoExportBtn.addEventListener('click', exportOpportunityReportCsv);
+    if (oppoMinFlags) oppoMinFlags.addEventListener('change', renderOpportunityResults);
+    if (oppoStateFilter) oppoStateFilter.addEventListener('input', renderOpportunityResults);
+    if (oppoSavedOnly) oppoSavedOnly.addEventListener('change', renderOpportunityResults);
+  }
+
+  function uploadReportsAveragedSeriesImport() {
+    const input = document.getElementById('reportsAveragedSeriesWorkbookInput');
+    const file = input && input.files ? input.files[0] : null;
+    if (!file) return showToast('Choose the averaged-series workbook', true);
+    uploadAveragedSeriesWorkbook(file, {
+      statusId: 'reportsAveragedSeriesImportStatus',
+      inputId: 'reportsAveragedSeriesWorkbookInput',
+      labelId: 'reportsAveragedSeriesWorkbookName'
     });
   }
 
@@ -2785,6 +4006,69 @@
         setText('bondAccountingBankListName', 'No workbook selected');
         setText('bondAccountingPortfolioName', 'No folder selected');
       });
+  }
+
+  function exportBondAccountingCsv() {
+    if (!bondAccountingManifest) return showToast('No bond-accounting import to export', true);
+    const rows = filteredBondAccountingRows();
+    if (!rows.length) return showToast('No portfolio files match filters', true);
+    const header = [
+      'Status', 'Bank', 'PortfolioClient', 'PCode', 'FDICCert', 'ReportDate',
+      'Account', 'Filename', 'MatchedBy', 'BankListClient', 'BankListAccount',
+      'City', 'State', 'SalesRep', 'StoredPath'
+    ];
+    const csvRows = rows.map(row => {
+      const bankList = row.bankList || {};
+      return [
+        bondAccountingStatusLabel(row),
+        row.bankDisplayName || '',
+        row.portfolioClientName || '',
+        row.pCode || '',
+        row.certNumber || '',
+        row.reportDate || '',
+        row.account || '',
+        row.filename || '',
+        row.matchedBy || '',
+        bankList.clientName || '',
+        bankList.account || '',
+        bankList.city || '',
+        bankList.state || '',
+        bankList.salesRep || '',
+        row.storedPath || ''
+      ];
+    });
+    const fallbackStamp = new Date().toISOString().slice(0, 10);
+    const stamp = (bondAccountingManifest.importedAt || fallbackStamp).slice(0, 10).replace(/[^0-9-]/g, '') || fallbackStamp;
+    downloadCsv(`fbbs_bond_accounting_manifest_${stamp}.csv`, [header, ...csvRows]);
+    showToast(`Exported ${formatNumber(rows.length)} bond-accounting rows`);
+  }
+
+  function exportPeerAnalysisCsv() {
+    const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
+    const rows = peerAnalysisState.rows || [];
+    if (!bank || !rows.length) return showToast('Build a peer analysis first', true);
+    const latest = bank.periods && bank.periods[0] ? bank.periods[0] : {};
+    const values = latest.values || {};
+    const peerGroup = peerAnalysisState.peerGroup || {};
+    const header = ['Bank', 'Cert', 'BankPeriod', 'PeerPeriod', 'PeerGroup', 'Metric', 'Section', 'BankValue', 'PeerValue', 'Delta', 'Signal', 'TalkingPoints'];
+    const flagText = (peerAnalysisState.flags || []).map(flag => `${flag.title}: ${flag.detail}`).join(' | ');
+    const csvRows = rows.map(row => [
+      values.name || bank.summary.displayName || bank.summary.name || '',
+      values.certNumber || bank.summary.certNumber || '',
+      latest.period || '',
+      peerAnalysisState.period || '',
+      peerGroup.label || '',
+      row.label,
+      row.section,
+      row.bankValue == null ? '' : row.bankValue,
+      row.peerValue == null ? '' : row.peerValue,
+      row.delta == null ? '' : row.delta,
+      peerSignal(row),
+      flagText
+    ]);
+    const filename = `fbbs_peer_analysis_${slugifyFilename(values.name || bank.summary.displayName || bank.id)}_${peerAnalysisState.period || latest.period || 'latest'}.csv`;
+    downloadCsv(filename, [header, ...csvRows]);
+    showToast('Exported peer analysis CSV');
   }
 
   async function loadStrategies() {
@@ -3781,7 +5065,9 @@
       selectedTearSheetCoverage = getSavedBankById(selectedBank.bank.id);
       selectedBankNotes = [];
       selectedBankStrategyHistory = [];
+      bankAssistantLastResponse = bankAssistantCache.get(selectedBank.bank.id) || null;
       renderBankProfile();
+      if (bankAssistantLastResponse) renderAssistantResponse(bankAssistantLastResponse);
       if (options.openStrategyRequest) openBankStrategyRequestPanel();
       rememberRecentBank(selectedBank.bank);
       loadTearSheetCoverage(selectedBank.bank.id);
@@ -3847,9 +5133,9 @@
       });
   }
 
-  function uploadAveragedSeriesWorkbook(file) {
-    const status = document.getElementById('averagedSeriesImportStatus');
-    const input = document.getElementById('averagedSeriesWorkbookInput');
+  function uploadAveragedSeriesWorkbook(file, options = {}) {
+    const status = document.getElementById(options.statusId || 'averagedSeriesImportStatus');
+    const input = document.getElementById(options.inputId || 'averagedSeriesWorkbookInput');
     const formData = new FormData();
     formData.append('averagedSeriesWorkbook', file, file.name);
     if (status) status.textContent = `Importing peer averages from ${file.name}...`;
@@ -3857,6 +5143,7 @@
       .then(async res => {
         const data = await readBankJson(res);
         const meta = data.metadata || {};
+        peerAnalysisState.peerData = null;
         showToast(`Stored peer averages · latest ${meta.latestPeriod || '—'} · ${formatNumber(meta.metricCount || 0)} metrics`);
         return loadBankStatus();
       })
@@ -3866,6 +5153,7 @@
       })
       .finally(() => {
         if (input) input.value = '';
+        if (options.labelId) setText(options.labelId, 'No workbook selected');
       });
   }
 
@@ -3921,19 +5209,21 @@
         </div>
       </div>
       ${renderAccountDetailsSummary(values, accountStatus)}
+      ${renderBankAssistantPanel()}
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
-      ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1)}
-      ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13)}
-      ${renderBankCallReportSection('Loan Composition', bankLoanCompositionRows(), recentPeriods, 26)}
-      ${renderBankCallReportSection('Capital', bankCapitalRows(), recentPeriods, 31)}
-      ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38)}
-      ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57)}
-      ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63)}
-      ${renderBankBondAccountingPanel(bank.bondAccounting)}
+      ${renderBankPeerBanner(bank.peerComparison)}
+      ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
+      ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13, bank.peerComparison)}
+      ${renderBankCallReportSection('Loan Composition', bankLoanCompositionRows(), recentPeriods, 26, bank.peerComparison)}
+      ${renderBankCallReportSection('Capital', bankCapitalRows(), recentPeriods, 31, bank.peerComparison)}
+      ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38, bank.peerComparison)}
+      ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
+      ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
       ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
       ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
       ${renderBankStrategyHistoryPanel()}
+      ${renderBankUploadedFilesPanel(bank)}
     `;
     updateBankSaveButton();
     const saveBtn = document.getElementById('bankSaveBtn');
@@ -3952,33 +5242,53 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
+    profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
+      btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
+    });
     wireStrategyDropZones(profile);
   }
 
-  function renderBankBondAccountingPanel(bondAccounting) {
+  function renderBankUploadedFilesPanel(bank) {
+    const bondAccounting = bank && bank.bondAccounting;
     const portfolios = bondAccounting && Array.isArray(bondAccounting.portfolios) ? bondAccounting.portfolios : [];
-    const title = `Bond Accounting Portfolios${bondAccounting && bondAccounting.latestReportDate ? ` · ${formatShortDate(bondAccounting.latestReportDate)}` : ''}`;
+    const title = `Uploaded Files${bondAccounting && bondAccounting.latestReportDate ? ` · latest bond report ${formatShortDate(bondAccounting.latestReportDate)}` : ''}`;
     if (!portfolios.length) {
       return `
-        <section class="bank-section">
+        <section class="bank-section bank-uploaded-files-section">
           <div class="bank-section-title">${escapeHtml(title)}</div>
-          <div class="bank-search-empty">No matched bond-accounting portfolio file for this bank yet.</div>
+          <div class="bank-uploaded-file-group">
+            <div class="bank-uploaded-file-head">
+              <strong>Bond Accounting Reports</strong>
+              <span>Matched from the Reports workspace import.</span>
+            </div>
+            <div class="bank-search-empty">
+              No monthly bond accounting report has been matched to this bank yet.
+              <button type="button" class="text-btn" data-goto="reports">Import bond accounting files</button>
+            </div>
+          </div>
         </section>
       `;
     }
     return `
-      <section class="bank-section">
+      <section class="bank-section bank-uploaded-files-section">
         <div class="bank-section-title">${escapeHtml(title)}</div>
-        <div class="bank-bond-list">
-          ${portfolios.map(row => `
-            <div class="bank-bond-item">
-              <div>
-                <strong>${escapeHtml(row.filename || 'Portfolio workbook')}</strong>
-                <span>${escapeHtml([row.pCode, row.reportDate, row.account ? `Account ${row.account}` : '', row.matchedBy].filter(Boolean).join(' · '))}</span>
+        <div class="bank-uploaded-file-group">
+          <div class="bank-uploaded-file-head">
+            <strong>Bond Accounting Reports</strong>
+            <span>${escapeHtml(formatNumber(portfolios.length))} matched monthly report${portfolios.length === 1 ? '' : 's'}</span>
+          </div>
+          <div class="bank-bond-list">
+            ${portfolios.map(row => `
+              <div class="bank-bond-item">
+                <div>
+                  <small class="bank-uploaded-file-kind">Monthly Bond Accounting Report</small>
+                  <strong>${escapeHtml(row.filename || 'Portfolio workbook')}</strong>
+                  <span>${escapeHtml([row.pCode, row.reportDate ? formatShortDate(row.reportDate) : '', row.account ? `Account ${row.account}` : '', row.matchedBy].filter(Boolean).join(' · '))}</span>
+                </div>
+                <a class="text-btn" href="${bondAccountingFileUrl(row)}" target="_blank" rel="noopener">Open</a>
               </div>
-              <a class="text-btn" href="${bondAccountingFileUrl(row)}" target="_blank" rel="noopener">Open</a>
-            </div>
-          `).join('')}
+            `).join('')}
+          </div>
         </div>
       </section>
     `;
@@ -4154,6 +5464,196 @@
         </div>
       </section>
     `;
+  }
+
+  function assistantActionLabel(action) {
+    if (action === 'summary') return 'Snapshot';
+    if (action === 'call') return 'Call prep';
+    if (action === 'note') return 'Draft note';
+    return 'What fits today';
+  }
+
+  function renderBankAssistantPanel() {
+    return `
+      <section class="bank-section bank-assistant-section" id="bankAssistantPanel">
+        <div class="bank-assistant-head">
+          <div>
+            <div class="bank-section-title">Sales Assistant</div>
+            <p>Reads this bank's latest call report, coverage status, strategy history, and today's offering inventory — and tells you who to call, what to pitch, and why.</p>
+          </div>
+          <span class="bank-assistant-badge">Internal</span>
+        </div>
+        <div class="bank-assistant-prompts">
+          <button type="button" class="small-btn bank-assistant-prompt primary" data-bank-assistant-action="fit">${assistantActionLabel('fit')}</button>
+          <button type="button" class="small-btn bank-assistant-prompt" data-bank-assistant-action="summary">${assistantActionLabel('summary')}</button>
+          <button type="button" class="small-btn bank-assistant-prompt" data-bank-assistant-action="call">${assistantActionLabel('call')}</button>
+          <button type="button" class="small-btn bank-assistant-prompt" data-bank-assistant-action="note">${assistantActionLabel('note')}</button>
+        </div>
+        <div class="bank-assistant-output" id="bankAssistantOutput">
+          <div class="bank-assistant-empty">
+            <strong>Pick a prompt to get a readout.</strong>
+            <span>Short, internal — built from this bank's latest filings and today's parsed inventory. Not for client use.</span>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderAssistantItem(item) {
+    if (item && typeof item === 'object') {
+      const text = escapeHtml(item.text || '');
+      const link = item.explorerPage
+        ? ` <a href="#" class="bank-assistant-fit-link" data-assistant-explorer="${escapeHtml(item.explorerPage)}">${escapeHtml(item.explorerLabel || 'Open explorer')} ›</a>`
+        : '';
+      return `<li>${text}${link}</li>`;
+    }
+    return `<li>${escapeHtml(String(item || ''))}</li>`;
+  }
+
+  function renderAssistantResponse(data) {
+    const output = document.getElementById('bankAssistantOutput');
+    if (!output) return;
+    if (!data) {
+      output.innerHTML = '<div class="bank-search-empty">No assistant response yet.</div>';
+      return;
+    }
+    output.classList.remove('is-loading');
+    const sections = Array.isArray(data.sections) ? data.sections : [];
+    const pill = data.statusPill;
+    const pillHtml = pill && pill.status
+      ? `<span class="bank-assistant-status-pill maps-status-pill maps-status-${escapeHtml(pill.slug || 'open')}" title="${escapeHtml(pill.owner ? 'Owner: ' + pill.owner : '')}">${escapeHtml(pill.status)}</span>`
+      : '';
+    const notices = Array.isArray(data.notices) ? data.notices : [];
+    const noticesHtml = notices.length
+      ? notices.map(n => `<div class="bank-assistant-notice bank-assistant-notice-${escapeHtml(n.tone || 'info')}">${escapeHtml(n.text)}</div>`).join('')
+      : '';
+    output.innerHTML = `
+      <article class="bank-assistant-card">
+        <div class="bank-assistant-card-head">
+          <div>
+            <strong>${escapeHtml(data.title || 'Sales readout')} ${pillHtml}</strong>
+            ${data.subtitle ? `<span>${escapeHtml(data.subtitle)}</span>` : ''}
+          </div>
+          ${data.context && data.context.asOfDate ? `<em>${escapeHtml(data.context.asOfDate)}</em>` : ''}
+        </div>
+        ${noticesHtml}
+        ${data.summary ? `<p class="bank-assistant-summary">${escapeHtml(data.summary)}</p>` : ''}
+        ${sections.map(section => `
+          <div class="bank-assistant-block">
+            <h4>${escapeHtml(section.title || 'Notes')}</h4>
+            <ul>
+              ${(Array.isArray(section.items) ? section.items : []).filter(Boolean).map(renderAssistantItem).join('')}
+            </ul>
+          </div>
+        `).join('')}
+        ${data.callNote ? `
+          <div class="bank-assistant-note">
+            <div class="bank-assistant-note-head">
+              <strong>Call note</strong>
+              <button type="button" class="text-btn" id="bankAssistantCopyBtn">Copy</button>
+            </div>
+            <pre>${escapeHtml(data.callNote)}</pre>
+          </div>
+        ` : ''}
+        <div class="bank-assistant-actions">
+          <button type="button" class="small-btn" id="bankAssistantStrategyBtn">Open as strategy request</button>
+          ${data.disclaimer ? `<span>${escapeHtml(data.disclaimer)}</span>` : ''}
+        </div>
+      </article>
+    `;
+    document.getElementById('bankAssistantCopyBtn')?.addEventListener('click', copyBankAssistantNote);
+    document.getElementById('bankAssistantStrategyBtn')?.addEventListener('click', useAssistantInStrategyRequest);
+    output.querySelectorAll('[data-assistant-explorer]').forEach(link => {
+      link.addEventListener('click', evt => {
+        evt.preventDefault();
+        const page = link.getAttribute('data-assistant-explorer');
+        if (page) goTo(page);
+      });
+    });
+  }
+
+  async function runBankAssistant(action = 'fit') {
+    const bankId = selectedBankId();
+    const output = document.getElementById('bankAssistantOutput');
+    if (!bankId) return showToast('No bank selected', true);
+    const hasContent = output && output.querySelector('.bank-assistant-card');
+    if (output) {
+      output.classList.add('is-loading');
+      if (!hasContent) {
+        output.innerHTML = `<div class="bank-search-empty">Building ${escapeHtml(assistantActionLabel(action).toLowerCase())}…</div>`;
+      }
+    }
+    document.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
+      const isActive = btn.dataset.bankAssistantAction === action;
+      btn.classList.toggle('active', isActive);
+      btn.disabled = true;
+      if (isActive) {
+        if (!btn.dataset.originalLabel) btn.dataset.originalLabel = btn.textContent;
+        btn.textContent = 'Working…';
+      }
+    });
+    try {
+      const res = await fetch('/api/assistant/bank', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bankId, action })
+      });
+      bankAssistantLastResponse = await readBankJson(res);
+      bankAssistantCache.set(bankId, bankAssistantLastResponse);
+      renderAssistantResponse(bankAssistantLastResponse);
+    } catch (e) {
+      if (output) {
+        output.classList.remove('is-loading');
+        if (!hasContent) output.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+      }
+      showToast(e.message, true);
+    } finally {
+      document.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
+        btn.disabled = false;
+        if (btn.dataset.originalLabel) {
+          btn.textContent = btn.dataset.originalLabel;
+          delete btn.dataset.originalLabel;
+        }
+      });
+      if (output) output.classList.remove('is-loading');
+    }
+  }
+
+  async function copyBankAssistantNote() {
+    const note = bankAssistantLastResponse && bankAssistantLastResponse.callNote;
+    const btn = document.getElementById('bankAssistantCopyBtn');
+    if (!note) return showToast('No assistant note to copy', true);
+    try {
+      await navigator.clipboard.writeText(note);
+      if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = 'Copied ✓';
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1400);
+      }
+    } catch (_) {
+      showToast('Copy failed; select the note text instead', true);
+    }
+  }
+
+  function useAssistantInStrategyRequest() {
+    const data = bankAssistantLastResponse;
+    if (!data || !data.callNote) return showToast('Run the assistant first', true);
+    openBankStrategyRequestPanel();
+    const summary = document.getElementById('bankStrategySummary');
+    const comments = document.getElementById('bankStrategyComments');
+    const type = document.getElementById('bankStrategyType');
+    if (summary && !summary.value.trim()) summary.value = data.summary || 'Assistant follow-up';
+    if (comments) {
+      const existing = comments.value.trim();
+      comments.value = [existing, data.callNote].filter(Boolean).join(existing ? '\n\n' : '');
+    }
+    if (type) {
+      const topProduct = String(data.topProduct || '').toLowerCase();
+      if (/muni|bcis/.test(topProduct)) type.value = 'Muni BCIS';
+      else if (/swap/.test(topProduct)) type.value = 'Bond Swap';
+    }
+    showToast('Added assistant context to strategy request');
   }
 
   function toggleBankStrategyRequestPanel() {
@@ -4623,11 +6123,11 @@
       { label: 'Total Assets ($000)', value: values => formatCallReportValue(values.totalAssets, 'money') },
       { label: 'Total Securities (AFS-FV) ($000/ %)', value: values => formatCallReportMoneyShare(values.afsTotal, values.afsTotal) },
       { label: 'Total Securities (HTM-FV) ($000/ %)', value: values => formatCallReportMoneyShare(values.htmTotal, values.htmTotal) },
-      { label: 'Total Securities / Total Assets (%)', value: values => formatCallReportValue(values.securitiesToAssets, 'percent') },
+      { label: 'Total Securities / Total Assets (%)', key: 'securitiesToAssets', value: values => formatCallReportValue(values.securitiesToAssets, 'percent') },
       { label: 'Total Loans & Leases (HFI, HFS) ($000)', value: values => formatCallReportValue(values.totalLoans, 'money') },
       { label: 'Total Loans / Assets (%)', value: values => formatCallReportValue(values.loansToAssets, 'percent') },
       { label: 'Total Deposits ($000)', value: values => formatCallReportValue(values.totalDeposits, 'money') },
-      { label: 'Loans / Deposits (%)', value: values => formatCallReportValue(values.loansToDeposits, 'percent') },
+      { label: 'Loans / Deposits (%)', key: 'loansToDeposits', value: values => formatCallReportValue(values.loansToDeposits, 'percent') },
       { label: 'Have Fiduciary Assets? (Yes/No)', value: values => Number(values.fiduciaryAssets || 0) > 0 ? 'Yes' : 'No' },
       { label: 'Total Borrowings ($000)', value: values => formatCallReportValue(values.totalBorrowings, 'money') }
     ];
@@ -4738,22 +6238,59 @@
     return {
       number: row.number,
       label: row.label,
+      key: row.key,
       value: values => formatCallReportValue(values[row.key], row.type)
     };
   }
 
-  function renderBankCallReportSection(title, rows, periods, startNumber) {
+  function renderBankPeerBanner(peerComparison) {
+    if (!peerComparison || !peerComparison.peerGroup) {
+      return `
+        <div class="bank-peer-banner bank-peer-banner-empty">
+          <strong>Peer comparison</strong>
+          <span>Import an Averaged-Series workbook to show peer averages in the call-report sections.</span>
+          <button type="button" class="text-btn" data-goto="reports">Open Reports workspace</button>
+        </div>
+      `;
+    }
+    const group = peerComparison.peerGroup;
+    const criteria = group.criteria || {};
+    const bits = [
+      criteria.assetRange,
+      criteria.agLoanRange ? `Ag ${criteria.agLoanRange}` : '',
+      criteria.subchapterS ? `Sub-S ${criteria.subchapterS}` : '',
+      criteria.region
+    ].filter(Boolean).join(' · ');
+    const populationText = group.populationCount ? `${formatNumber(group.populationCount)} banks` : '';
+    const periodText = peerComparison.period || group.latestPeriod || '';
+    const mismatch = peerComparison.bankPeriod && peerComparison.period && peerComparison.bankPeriod !== peerComparison.period
+      ? ` <em class="bank-peer-mismatch">Bank latest ${escapeHtml(peerComparison.bankPeriod)} · peer ${escapeHtml(periodText)}</em>`
+      : '';
+    return `
+      <div class="bank-peer-banner">
+        <strong>Peer cohort:</strong>
+        <span>${escapeHtml(group.label || 'Averaged Series Peer Group')}${bits ? ` — ${escapeHtml(bits)}` : ''}</span>
+        <span class="bank-peer-banner-meta">${escapeHtml([populationText, periodText].filter(Boolean).join(' · '))}${mismatch}</span>
+      </div>
+    `;
+  }
+
+  function renderBankCallReportSection(title, rows, periods, startNumber, peerComparison) {
     const visiblePeriods = (periods || []).slice(0, 8);
     if (!visiblePeriods.length) return '';
+    const peerByKey = (peerComparison && peerComparison.byKey) || {};
+    const hasPeer = Object.keys(peerByKey).length > 0;
+    const sectionHasPeerRow = hasPeer && rows.some(row => row.key && peerByKey[row.key]);
     return `
       <section class="bank-section bank-call-report-section">
         <div class="bank-section-title">${escapeHtml(title)}</div>
         <div class="bank-call-report-wrap">
-          <table class="bank-call-report-table">
+          <table class="bank-call-report-table${sectionHasPeerRow ? ' has-peer-column' : ''}">
             <thead>
               <tr>
                 <th>End of Period Date</th>
                 ${visiblePeriods.map(period => `<th>${escapeHtml(formatCallReportPeriod(period))}</th>`).join('')}
+                ${sectionHasPeerRow ? `<th class="bank-peer-col" title="${escapeHtml(peerColumnTooltip(peerComparison))}">Peer Avg</th>` : ''}
               </tr>
             </thead>
             <tbody>
@@ -4761,6 +6298,7 @@
                 <tr>
                   <td><span>${row.number != null ? row.number : (startNumber || 1) + index}.</span> ${escapeHtml(row.label)}</td>
                   ${visiblePeriods.map(period => `<td>${escapeHtml(row.value((period && period.values) || {}))}</td>`).join('')}
+                  ${sectionHasPeerRow ? renderPeerCell(row, peerByKey, visiblePeriods[0]) : ''}
                 </tr>
               `).join('')}
             </tbody>
@@ -4768,6 +6306,45 @@
         </div>
       </section>
     `;
+  }
+
+  function renderPeerCell(row, peerByKey, latestPeriod) {
+    const peer = row.key ? peerByKey[row.key] : null;
+    if (!peer || !Number.isFinite(Number(peer.peerValue))) {
+      return '<td class="bank-peer-col bank-peer-cell-empty">—</td>';
+    }
+    const peerValue = Number(peer.peerValue);
+    const peerDisplay = formatCallReportNumber(peerValue, 2);
+    const bankValueRaw = latestPeriod && latestPeriod.values ? latestPeriod.values[row.key] : null;
+    const bankValue = bankValueRaw == null || bankValueRaw === '' ? null : Number(bankValueRaw);
+    let signal = 'neutral';
+    let signalLabel = '';
+    if (Number.isFinite(bankValue) && peer.higherIsBetter !== null && peer.higherIsBetter !== undefined) {
+      const delta = bankValue - peerValue;
+      if (Math.abs(delta) >= 0.01) {
+        const favorable = peer.higherIsBetter ? delta > 0 : delta < 0;
+        signal = favorable ? 'favorable' : 'watch';
+        const arrow = delta > 0 ? '▲' : '▼';
+        const deltaText = `${arrow} ${formatCallReportNumber(Math.abs(delta), 2)}`;
+        signalLabel = `<span class="bank-peer-delta">${escapeHtml(deltaText)}</span>`;
+      }
+    }
+    const peerLabelAttr = peer.peerLabel ? ` title="${escapeHtml(peer.peerLabel)}"` : '';
+    return `<td class="bank-peer-col bank-peer-signal-${signal}"${peerLabelAttr}><span class="bank-peer-value">${escapeHtml(peerDisplay)}</span>${signalLabel}</td>`;
+  }
+
+  function peerColumnTooltip(peerComparison) {
+    if (!peerComparison) return '';
+    const group = peerComparison.peerGroup || {};
+    const criteria = group.criteria || {};
+    const parts = [
+      group.label,
+      criteria.assetRange,
+      criteria.region,
+      group.populationCount ? `${formatNumber(group.populationCount)} banks` : '',
+      peerComparison.period ? `Peer period: ${peerComparison.period}` : ''
+    ].filter(Boolean);
+    return parts.join(' · ');
   }
 
   function formatCallReportPeriod(period) {
@@ -5025,6 +6602,7 @@
         const parts = [];
         if (typeof data.offeringsCount === 'number') parts.push(`${data.offeringsCount} CDs`);
         if (typeof data.treasuryNotesCount === 'number') parts.push(`${data.treasuryNotesCount} treasuries`);
+        if (typeof data.mmdCurveCount === 'number') parts.push(`${data.mmdCurveCount} MMD points`);
         if (typeof data.muniOfferingsCount === 'number') parts.push(`${data.muniOfferingsCount} munis`);
         if (typeof data.agencyCount === 'number') parts.push(`${data.agencyCount} agencies`);
         if (typeof data.corporatesCount === 'number') parts.push(`${data.corporatesCount} corporates`);
@@ -5036,7 +6614,7 @@
         }
 
         selectedFiles = {
-          dashboard: null, econ: null, relativeValue: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
+          dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
           agenciesBullets: null, agenciesCallables: null, corporates: null
         };
         UPLOAD_SLOTS.forEach(resetDropZone);
@@ -5925,7 +7503,7 @@
       const res = await fetch('/api/muni-offerings', { cache: 'no-store' });
       if (res.status === 404) {
         muniData = null;
-        body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="16" style="text-align:center;padding:40px;color:var(--text3)">
           No muni offerings yet. Upload the Muni Offerings PDF on the Upload page and offerings will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No muni offerings data';
@@ -5943,7 +7521,7 @@
       muniData = await res.json();
     } catch (e) {
       console.error('Failed to load muni offerings:', e);
-      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="16" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load muni offerings: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading offerings';
@@ -5974,23 +7552,160 @@
       muniData.asOfDate ? formatNumericDate(muniData.asOfDate) : 'Current package';
   }
 
-  function muniTey(ytw, rate = muniTaxSettings.rate) {
-    const y = Number(ytw);
+  function clampMuniPercent(value, fallback, max = 100) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(max, n));
+  }
+
+  function muniDisallowancePct(row) {
+    if (!row || row.section === 'Taxable' || !muniTaxSettings.applyTefra) return 0;
+    return row.section === 'BQ'
+      ? clampMuniPercent(muniTaxSettings.bqDisallowance, 0)
+      : clampMuniPercent(muniTaxSettings.generalDisallowance, 0);
+  }
+
+  function muniTefraHaircutBps(row) {
+    const cof = clampMuniPercent(muniTaxSettings.costOfFunds, 0, 20);
+    const taxRate = clampMuniPercent(muniTaxSettings.rate, 0, 99.9);
+    const disallowance = muniDisallowancePct(row);
+    if (!cof || !taxRate || !disallowance) return 0;
+    return cof * (disallowance / 100) * taxRate;
+  }
+
+  function muniTey(rowOrYield, rate = muniTaxSettings.rate) {
+    const row = typeof rowOrYield === 'object' ? rowOrYield : null;
+    const y = Number(row ? row.ytw : rowOrYield);
     const r = Number(rate);
     if (!Number.isFinite(y) || !Number.isFinite(r) || r >= 100) return null;
-    return y / (1 - (r / 100));
+    const adjustedYield = y - (row ? muniTefraHaircutBps(row) / 100 : 0);
+    return adjustedYield / (1 - (r / 100));
+  }
+
+  function yearsToMaturity(row) {
+    if (!row || !row.maturity) return null;
+    const settle = parseIsoDate(row.settle) || new Date();
+    const maturity = parseIsoDate(row.maturity);
+    if (!maturity || maturity <= settle) return null;
+    return (maturity - settle) / (365.25 * 24 * 60 * 60 * 1000);
+  }
+
+  function muniDeMinimis(row) {
+    if (!row || row.price == null || row.section === 'Taxable') return null;
+    const exactYears = yearsToMaturity(row);
+    if (!Number.isFinite(exactYears) || exactYears <= 0) return null;
+    const fullYears = fullYearsToMaturity(row);
+    if (!Number.isFinite(fullYears) || fullYears <= 0) return null;
+    const threshold = 100 - (0.25 * fullYears);
+    const cushion = Number(row.price) - threshold;
+    return {
+      years: exactYears,
+      fullYears,
+      threshold,
+      cushion,
+      isDiscount: Number(row.price) < 100,
+      isDeMinimis: Number(row.price) < threshold
+    };
+  }
+
+  function fullYearsToMaturity(row) {
+    if (!row || !row.maturity) return null;
+    const settle = parseIsoDate(row.settle) || new Date();
+    const maturity = parseIsoDate(row.maturity);
+    if (!maturity || maturity <= settle) return null;
+    let years = maturity.getFullYear() - settle.getFullYear();
+    const maturityMonthDay = (maturity.getMonth() * 100) + maturity.getDate();
+    const settleMonthDay = (settle.getMonth() * 100) + settle.getDate();
+    if (maturityMonthDay < settleMonthDay) years -= 1;
+    return Math.max(0, years);
+  }
+
+  function solveBondYieldWithRedemption(couponPct, price, endDateStr, settleDateStr, redemptionValue) {
+    const priceNum = Number(price);
+    const coupon = Number(couponPct);
+    const redemption = Number(redemptionValue);
+    if (!Number.isFinite(priceNum) || priceNum <= 0 || !Number.isFinite(coupon) || !Number.isFinite(redemption)) return null;
+
+    const settle = parseIsoDate(settleDateStr) || new Date();
+    const endDate = parseIsoDate(endDateStr);
+    if (!endDate || endDate <= settle) return null;
+
+    const periods = Math.max(1, Math.ceil(monthsBetween(settle, endDate) / 6));
+    const couponPerPeriod = coupon / 2;
+
+    let low = -0.95;
+    let high = 1.5;
+    for (let i = 0; i < 80; i++) {
+      const mid = (low + high) / 2;
+      const rate = mid / 2;
+      let pv = 0;
+      for (let period = 1; period <= periods; period++) {
+        pv += couponPerPeriod / Math.pow(1 + rate, period);
+      }
+      pv += redemption / Math.pow(1 + rate, periods);
+      if (pv > priceNum) low = mid;
+      else high = mid;
+    }
+    return ((low + high) / 2) * 100;
+  }
+
+  function muniAfterTaxYield(row) {
+    const deMin = muniDeMinimis(row);
+    if (!row || row.price == null || row.coupon == null || !deMin || !deMin.isDiscount) return null;
+    const discount = Math.max(0, 100 - Number(row.price));
+    const taxRate = (deMin.isDeMinimis ? muniTaxSettings.rate : muniTaxSettings.capitalGainsRate) / 100;
+    const afterTaxRedemption = 100 - (discount * clampMuniPercent(taxRate * 100, 0, 99.9) / 100);
+    const aty = solveBondYieldWithRedemption(row.coupon, row.price, row.maturity, row.settle, afterTaxRedemption);
+    return aty == null ? null : aty;
+  }
+
+  function muniTaxAdjustedYield(row) {
+    if (!row || row.section === 'Taxable') return null;
+    const taxRate = clampMuniPercent(muniTaxSettings.rate, 0, 99.9);
+    const haircutYield = muniTefraHaircutBps(row) / 100;
+    const deMin = muniDeMinimis(row);
+    if (deMin && deMin.isDiscount) {
+      const aty = muniAfterTaxYield(row);
+      if (aty != null) {
+        const tey = (aty - haircutYield) / (1 - (taxRate / 100));
+        return {
+          label: 'TEY',
+          value: tey,
+          secondaryLabel: 'ATY',
+          secondaryValue: aty
+        };
+      }
+    }
+    const tey = muniTey(row);
+    return tey == null ? null : { label: 'TEY', value: tey };
   }
 
   function muniAudienceLabel() {
     const aud = MUNI_TAX_AUDIENCES[muniTaxSettings.audience];
-    return aud ? `${aud.label} ${Number(muniTaxSettings.rate).toFixed(1)}%` : `Custom ${Number(muniTaxSettings.rate).toFixed(1)}%`;
+    const label = aud ? aud.label : 'Custom';
+    return `${label} ${Number(muniTaxSettings.rate).toFixed(1)}%`;
+  }
+
+  function renderMuniTaxAssumptionNote() {
+    const el = document.getElementById('muniTaxAssumptionNote');
+    if (!el) return;
+    const aud = MUNI_TAX_AUDIENCES[muniTaxSettings.audience];
+    const label = aud ? aud.label : 'Custom';
+    const tefra = muniTaxSettings.applyTefra
+      ? `COF ${Number(muniTaxSettings.costOfFunds).toFixed(2)}%, BQ disallowance ${Number(muniTaxSettings.bqDisallowance).toFixed(0)}%, general-market disallowance ${Number(muniTaxSettings.generalDisallowance).toFixed(0)}%`
+      : 'no TEFRA haircut';
+    el.textContent = `Using ${label}: ordinary tax ${Number(muniTaxSettings.rate).toFixed(1)}%, capital gains ${Number(muniTaxSettings.capitalGainsRate).toFixed(1)}%, ${tefra}. Consult a tax advisor for account-specific treatment; FBBS does not give tax advice.`;
   }
 
   function bestMuniTey(rows) {
     return rows
-      .map(row => ({ row, tey: muniTey(row.ytw) }))
-      .filter(item => Number.isFinite(item.tey))
-      .sort((a, b) => b.tey - a.tey)[0] || null;
+      .map(row => ({ row, adjusted: muniTaxAdjustedYield(row) }))
+      .filter(item => item.adjusted && Number.isFinite(item.adjusted.value))
+      .sort((a, b) => muniTaxSortValue(b.adjusted) - muniTaxSortValue(a.adjusted))[0] || null;
+  }
+
+  function muniTaxSortValue(adjustedYield) {
+    return adjustedYield ? adjustedYield.value : null;
   }
 
   function renderMuniOfferings() {
@@ -6000,18 +7715,19 @@
     const filtered = applyMuniFilters(muniData.offerings);
     sortMuniInPlace(filtered);
     const topTey = bestMuniTey(filtered);
+    renderMuniTaxAssumptionNote();
 
     document.getElementById('muniExplorerStat').textContent = filtered.length;
     renderStatTiles('muniStatTiles', [
       { label: 'Shown', value: formatNumber(filtered.length) },
       { label: 'Average YTW', value: formatPercentTile(average(filtered.map(o => o.ytw)), 3) },
-      { label: 'Top TEY', value: topTey ? formatPercentTile(topTey.tey, 3) : '—' },
+      { label: 'Top TEY/ATY', value: topTey ? formatPercentTile(muniTaxSortValue(topTey.adjusted), 3) : '—' },
       { label: 'TEY Setting', value: muniAudienceLabel() },
       { label: 'Taxable', value: formatNumber(filtered.filter(o => o.section === 'Taxable').length) }
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="16" style="text-align:center;padding:40px;color:var(--text3)">
         No offerings match the current filters.
       </td></tr>`;
       return;
@@ -6032,10 +7748,20 @@
       } else {
         yieldCell = '<span class="no-restrict">&mdash;</span>';
       }
-      const tey = muniTey(o.ytw);
-      const teyCell = tey == null
+      const adjustedYield = muniTaxAdjustedYield(o);
+      const teyCell = !adjustedYield
         ? '<span class="no-restrict">&mdash;</span>'
-        : `<span class="rate-cell tey-cell ${tey >= 4 ? 'beats' : ''}">${tey.toFixed(3)}</span>`;
+        : `<span class="tax-yield-cell"><span class="rate-cell tey-cell ${muniTaxSortValue(adjustedYield) >= 4 ? 'beats' : ''}">${adjustedYield.value.toFixed(3)}</span><small>${adjustedYield.label}</small>${Number.isFinite(adjustedYield.secondaryValue) ? `<span class="tax-yield-secondary">${adjustedYield.secondaryValue.toFixed(3)} ${adjustedYield.secondaryLabel}</span>` : ''}</span>`;
+
+      const haircutBps = muniTefraHaircutBps(o);
+      const haircutCell = haircutBps > 0
+        ? `<span class="rate-cell">${haircutBps.toFixed(1)}</span>`
+        : '<span class="no-restrict">&mdash;</span>';
+
+      const deMin = muniDeMinimis(o);
+      const deMinCell = !deMin || !deMin.isDiscount
+        ? '<span class="no-restrict">&mdash;</span>'
+        : `<span class="demin-chip ${deMin.isDeMinimis ? 'breach' : 'ok'}" title="Threshold ${deMin.threshold.toFixed(3)} using ${deMin.fullYears} full years">${deMin.isDeMinimis ? 'Below' : 'Above'} ${deMin.cushion.toFixed(3)}</span>`;
 
       const priceCell = o.price != null
         ? `<span class="rate-cell">${o.price.toFixed(3)}</span>`
@@ -6062,6 +7788,8 @@
           <td>${callCell}</td>
           <td style="text-align:right">${yieldCell}</td>
           <td style="text-align:right">${teyCell}</td>
+          <td style="text-align:right">${haircutCell}</td>
+          <td style="text-align:right">${deMinCell}</td>
           <td style="text-align:right">${priceCell}</td>
           <td class="cusip-cell">${escapeHtml(o.cusip)}</td>
           <td>${creditCell}</td>
@@ -6094,8 +7822,21 @@
     const { col, dir } = muniSort;
     const mult = dir === 'asc' ? 1 : -1;
     arr.sort((a, b) => {
-      let av = col === 'tey' ? muniTey(a.ytw) : a[col];
-      let bv = col === 'tey' ? muniTey(b.ytw) : b[col];
+      let av;
+      let bv;
+      if (col === 'taxAdjustedYield') {
+        av = muniTaxSortValue(muniTaxAdjustedYield(a));
+        bv = muniTaxSortValue(muniTaxAdjustedYield(b));
+      } else if (col === 'tefraHaircutBps') {
+        av = muniTefraHaircutBps(a);
+        bv = muniTefraHaircutBps(b);
+      } else if (col === 'deMinimisCushion') {
+        av = muniDeMinimis(a)?.cushion;
+        bv = muniDeMinimis(b)?.cushion;
+      } else {
+        av = a[col];
+        bv = b[col];
+      }
       if (av == null) return 1;
       if (bv == null) return -1;
       if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * mult;
@@ -6111,36 +7852,89 @@
     const minYtw    = document.getElementById('mf-minYtw');
     const callable  = document.getElementById('mf-callable');
     const rated     = document.getElementById('mf-rated');
+    const customRate = document.getElementById('muniCustomTaxRate');
+    const capitalGainsRate = document.getElementById('muniCapitalGainsRate');
+    const costOfFunds = document.getElementById('muniCostOfFunds');
+    const bqDisallowance = document.getElementById('muniBqDisallowance');
+    const generalDisallowance = document.getElementById('muniGeneralDisallowance');
 
     if (!search) return; // page not in DOM yet; shouldn't happen but defensive
+
+    const syncMuniTaxInputs = () => {
+      if (customRate) customRate.value = String(muniTaxSettings.rate);
+      if (capitalGainsRate) capitalGainsRate.value = String(muniTaxSettings.capitalGainsRate);
+      if (costOfFunds) costOfFunds.value = Number(muniTaxSettings.costOfFunds).toFixed(2);
+      if (bqDisallowance) bqDisallowance.value = String(muniTaxSettings.bqDisallowance);
+      if (generalDisallowance) generalDisallowance.value = String(muniTaxSettings.generalDisallowance);
+      renderMuniTaxAssumptionNote();
+    };
+
+    const rerenderMuniTax = () => {
+      renderMuniTaxAssumptionNote();
+      if (muniData) renderMuniOfferings();
+      renderRelativeValueNative();
+    };
 
     document.querySelectorAll('[data-muni-tax-audience]').forEach(btn => {
       btn.addEventListener('click', () => {
         const audience = btn.dataset.muniTaxAudience;
         const config = MUNI_TAX_AUDIENCES[audience];
         if (!config) return;
-        muniTaxSettings = { audience, rate: config.rate };
-        const custom = document.getElementById('muniCustomTaxRate');
-        if (custom) custom.value = String(config.rate);
+        muniTaxSettings = { audience, ...config };
+        syncMuniTaxInputs();
         document.querySelectorAll('[data-muni-tax-audience]').forEach(item => {
           item.classList.toggle('active', item === btn);
         });
-        if (muniData) renderMuniOfferings();
-        renderRelativeValueNative();
+        rerenderMuniTax();
       });
     });
 
-    const customRate = document.getElementById('muniCustomTaxRate');
     if (customRate) {
       customRate.addEventListener('input', () => {
         const rate = parseFloat(customRate.value);
         if (!Number.isFinite(rate) || rate < 0 || rate >= 100) return;
-        muniTaxSettings = { audience: 'custom', rate };
+        muniTaxSettings = { ...muniTaxSettings, audience: 'custom', rate };
         document.querySelectorAll('[data-muni-tax-audience]').forEach(item => item.classList.remove('active'));
-        if (muniData) renderMuniOfferings();
-        renderRelativeValueNative();
+        rerenderMuniTax();
       });
     }
+    if (capitalGainsRate) {
+      capitalGainsRate.addEventListener('input', () => {
+        const rate = parseFloat(capitalGainsRate.value);
+        if (!Number.isFinite(rate) || rate < 0 || rate >= 100) return;
+        muniTaxSettings = { ...muniTaxSettings, audience: 'custom', capitalGainsRate: rate };
+        document.querySelectorAll('[data-muni-tax-audience]').forEach(item => item.classList.remove('active'));
+        rerenderMuniTax();
+      });
+    }
+    if (costOfFunds) {
+      costOfFunds.addEventListener('input', () => {
+        const rate = parseFloat(costOfFunds.value);
+        if (!Number.isFinite(rate) || rate < 0) return;
+        muniTaxSettings = { ...muniTaxSettings, audience: 'custom', costOfFunds: clampMuniPercent(rate, 0, 20), applyTefra: rate > 0 };
+        document.querySelectorAll('[data-muni-tax-audience]').forEach(item => item.classList.remove('active'));
+        rerenderMuniTax();
+      });
+    }
+    if (bqDisallowance) {
+      bqDisallowance.addEventListener('input', () => {
+        const pct = parseFloat(bqDisallowance.value);
+        if (!Number.isFinite(pct) || pct < 0) return;
+        muniTaxSettings = { ...muniTaxSettings, audience: 'custom', bqDisallowance: clampMuniPercent(pct, 0), applyTefra: true };
+        document.querySelectorAll('[data-muni-tax-audience]').forEach(item => item.classList.remove('active'));
+        rerenderMuniTax();
+      });
+    }
+    if (generalDisallowance) {
+      generalDisallowance.addEventListener('input', () => {
+        const pct = parseFloat(generalDisallowance.value);
+        if (!Number.isFinite(pct) || pct < 0) return;
+        muniTaxSettings = { ...muniTaxSettings, audience: 'custom', generalDisallowance: clampMuniPercent(pct, 0), applyTefra: true };
+        document.querySelectorAll('[data-muni-tax-audience]').forEach(item => item.classList.remove('active'));
+        rerenderMuniTax();
+      });
+    }
+    syncMuniTaxInputs();
 
     search.addEventListener('input', () => {
       muniFilters.search = search.value.trim();
@@ -6195,7 +7989,7 @@
         } else {
           muniSort.col = col;
           // Sensible default direction per column
-          muniSort.dir = (col === 'coupon' || col === 'ytw' || col === 'tey' || col === 'price' || col === 'quantity' || col === 'maturity')
+          muniSort.dir = (col === 'coupon' || col === 'ytw' || col === 'taxAdjustedYield' || col === 'tefraHaircutBps' || col === 'price' || col === 'quantity' || col === 'maturity')
             ? 'desc' : 'asc';
         }
         document.querySelectorAll('#p-muni-explorer th').forEach(h => {
@@ -6214,22 +8008,43 @@
     if (filtered.length === 0) return showToast('No offerings match filters', true);
 
     const header = ['Section','Moodys','SP','Quantity','State','Issuer','IssueType',
-                    'Coupon','Maturity','CallDate','YTW','TEY','TEY Rate','YTM','Price','Spread',
-                    'Settle','CouponDate','CUSIP','CreditEnhancement'];
-    const rows = filtered.map(o => [
-      o.section, o.moodysRating || '', o.spRating || '', o.quantity,
-      o.issuerState, o.issuerName, o.issueType,
-      o.coupon.toFixed(3), o.maturity,
-      o.callDate || '',
-      o.ytw != null ? o.ytw.toFixed(3) : '',
-      muniTey(o.ytw) != null ? muniTey(o.ytw).toFixed(3) : '',
-      Number(muniTaxSettings.rate).toFixed(1),
-      o.ytm != null ? o.ytm.toFixed(3) : '',
-      o.price != null ? o.price.toFixed(3) : '',
-      o.spread || '',
-      o.settle, o.couponDate, o.cusip,
-      o.creditEnhancement || ''
-    ]);
+                    'Coupon','Maturity','CallDate','YTW','TaxAdjustedYield','TaxAdjustedYieldType',
+                    'DiscountATY','DiscountATYType',
+                    'OrdinaryTaxRate','CapitalGainsRate','CostOfFunds','DisallowancePct',
+                    'TEFRAHaircutBps','DeMinimisFullYears','DeMinimisThreshold','DeMinimisCushion','DeMinimisStatus',
+                    'YTM','Price','Spread','Settle','CouponDate','CUSIP','CreditEnhancement',
+                    'TaxDisclaimer'];
+    const rows = filtered.map(o => {
+      const adjustedYield = muniTaxAdjustedYield(o);
+      const deMin = muniDeMinimis(o);
+      const disallowance = muniDisallowancePct(o);
+      return [
+        o.section, o.moodysRating || '', o.spRating || '', o.quantity,
+        o.issuerState, o.issuerName, o.issueType,
+        o.coupon.toFixed(3), o.maturity,
+        o.callDate || '',
+        o.ytw != null ? o.ytw.toFixed(3) : '',
+        adjustedYield ? adjustedYield.value.toFixed(3) : '',
+        adjustedYield ? adjustedYield.label : '',
+        adjustedYield && Number.isFinite(adjustedYield.secondaryValue) ? adjustedYield.secondaryValue.toFixed(3) : '',
+        adjustedYield && adjustedYield.secondaryLabel ? adjustedYield.secondaryLabel : '',
+        Number(muniTaxSettings.rate).toFixed(1),
+        Number(muniTaxSettings.capitalGainsRate).toFixed(1),
+        Number(muniTaxSettings.costOfFunds).toFixed(2),
+        disallowance.toFixed(0),
+        muniTefraHaircutBps(o).toFixed(1),
+        deMin ? deMin.fullYears : '',
+        deMin ? deMin.threshold.toFixed(3) : '',
+        deMin ? deMin.cushion.toFixed(3) : '',
+        deMin && deMin.isDiscount ? (deMin.isDeMinimis ? 'Below de minimis' : 'Above de minimis') : '',
+        o.ytm != null ? o.ytm.toFixed(3) : '',
+        o.price != null ? o.price.toFixed(3) : '',
+        o.spread || '',
+        o.settle, o.couponDate, o.cusip,
+        o.creditEnhancement || '',
+        'Uses visible portal assumptions. Consult a tax advisor for account-specific treatment; FBBS does not give tax advice.'
+      ];
+    });
     const csv = [header, ...rows]
       .map(r => r.map(cell => {
         const s = String(cell ?? '');
@@ -7726,6 +9541,7 @@
     setupUpload();
     setupGlobalSearch();
     setupCdCostCalculator();
+    setupCdOpportunityTool();
     setupEconomicMarketTool();
     setupNavSearch();
     setupMarketNav();
@@ -7800,13 +9616,63 @@
     selectedLocationIndex: 0,
     visibleBanks: [],
     search: '',
-    advanced: []
+    areaSearch: { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 },
+    locationFilter: null,
+    territory: { owner: '', minAssets: '', maxAssets: '', sort: 'opportunity' },
+    advanced: [],
+    viewport: null,
+    mapRevision: 0
   };
 
   function mapsFieldFilterType(def) {
     if (!def) return 'text';
     return (def.type === 'money' || def.type === 'percent' || def.type === 'percentOf' || def.type === 'number')
       ? 'number' : 'text';
+  }
+
+  function mapsRenderPeerDeltas(bank) {
+    const peer = mapsState.peerComparison;
+    if (!peer || !peer.byKey) return '';
+    const entries = [];
+    for (const [metricKey, info] of Object.entries(peer.byKey)) {
+      const delta = bank ? bank[`peerDelta_${metricKey}`] : null;
+      const def = mapsState.fieldByKey[metricKey];
+      const label = def ? def.label.replace(/\s*\(.*?\)\s*$/, '').trim() : metricKey;
+      let signal = 'neutral';
+      let arrow = '·';
+      let deltaText = '—';
+      if (Number.isFinite(Number(delta))) {
+        const d = Number(delta);
+        if (Math.abs(d) >= 0.01 && info.higherIsBetter !== null && info.higherIsBetter !== undefined) {
+          signal = (info.higherIsBetter ? d > 0 : d < 0) ? 'favorable' : 'watch';
+        } else if (Math.abs(d) >= 0.01) {
+          signal = 'neutral';
+        }
+        arrow = d > 0 ? '▲' : (d < 0 ? '▼' : '·');
+        deltaText = `${arrow} ${Math.abs(d).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+      }
+      entries.push({ label, deltaText, signal, peerValue: info.peerValue });
+    }
+    if (!entries.length) return '';
+    const periodLine = peer.period
+      ? `Peer ${escapeHtml(peer.period)}${peer.bankPeriod && peer.bankPeriod !== peer.period ? ` · bank latest ${escapeHtml(peer.bankPeriod)}` : ''}`
+      : '';
+    return `
+      <div class="maps-peer-block">
+        <div class="maps-peer-head">
+          <strong>vs Peer</strong>
+          <span>${periodLine}</span>
+        </div>
+        <div class="maps-peer-grid">
+          ${entries.map(e => `
+            <div class="maps-peer-chip maps-peer-${e.signal}">
+              <span class="maps-peer-label">${escapeHtml(e.label)}</span>
+              <span class="maps-peer-delta">${escapeHtml(e.deltaText)}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
   }
 
   function mapsFormatValue(value, def) {
@@ -7874,16 +9740,262 @@
 
   function mapsStatusColor(value) {
     const status = mapsStatusSlug(value);
-    if (status === 'client') return '#18735A';
-    if (status === 'prospect') return '#C9972F';
-    if (status === 'open') return '#101715';
-    if (status === 'watchlist') return '#B87524';
+    if (status === 'client') return '#ba2f25';
+    if (status === 'prospect') return '#1597c7';
+    if (status === 'open') return '#7c3bc7';
+    if (status === 'watchlist') return '#6b3d2e';
     if (status === 'dormant') return '#6D7A72';
     return '#345F4A';
   }
 
   function mapsHasCoords(bank) {
     return Number.isFinite(Number(bank && bank.latitude)) && Number.isFinite(Number(bank && bank.longitude));
+  }
+
+  function mapsCoverageOwner(bank) {
+    return String(bank && bank.accountStatus && bank.accountStatus.owner || '').trim();
+  }
+
+  function mapsAssetsMm(bank) {
+    const raw = mapsNumber(bank && bank.totalAssets);
+    return raw === null ? null : raw / 1000;
+  }
+
+  function mapsOpportunityScore(bank) {
+    let score = 0;
+    const status = mapsAccountStatusLabel(bank);
+    if (status === 'Prospect') score += 45;
+    else if (status === 'Open') score += 34;
+    else if (status === 'Watchlist') score += 18;
+    else if (status === 'Client') score += 8;
+    const assets = mapsAssetsMm(bank);
+    if (assets !== null) score += Math.min(28, Math.log10(Math.max(assets, 1)) * 7);
+    const securities = mapsNumber(mapsSecuritiesToAssets(bank));
+    if (securities !== null) score += Math.min(16, securities / 4);
+    const loansToDeposits = mapsNumber(bank && bank.loansToDeposits);
+    if (loansToDeposits !== null && loansToDeposits < 75) score += Math.min(10, (75 - loansToDeposits) / 5);
+    const owner = mapsCoverageOwner(bank);
+    if (!owner) score += 4;
+    return score;
+  }
+
+  function mapsSortRows(rows, area) {
+    const sort = mapsState.territory.sort || 'opportunity';
+    rows.sort((a, b) => {
+      if (area) return (a._mapsAreaDistance || 0) - (b._mapsAreaDistance || 0) || (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0);
+      if (sort === 'name') return mapsBankListName(a).localeCompare(mapsBankListName(b));
+      if (sort === 'securities') return (mapsNumber(mapsSecuritiesToAssets(b)) || 0) - (mapsNumber(mapsSecuritiesToAssets(a)) || 0);
+      if (sort === 'loans') return (mapsNumber(b.loansToDeposits) || 0) - (mapsNumber(a.loansToDeposits) || 0);
+      if (sort === 'opportunity') return mapsOpportunityScore(b) - mapsOpportunityScore(a) || (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0);
+      return (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0);
+    });
+  }
+
+  function mapsOwnerOptions() {
+    const owners = new Set();
+    mapsState.banks.forEach(bank => {
+      const owner = mapsCoverageOwner(bank);
+      if (owner) owners.add(owner);
+    });
+    return Array.from(owners).sort((a, b) => a.localeCompare(b));
+  }
+
+  function mapsLocationFilterMatches(bank) {
+    const filter = mapsState.locationFilter;
+    if (!filter) return true;
+    if (filter.type === 'city') {
+      return String(bank.city || '').trim().toLowerCase() === filter.value &&
+        String(bank.state || '').trim().toLowerCase() === filter.state;
+    }
+    if (filter.type === 'county') {
+      const county = String(bank.county || '').replace(/,\s*[A-Z]{2}.*$/, '').trim().toLowerCase();
+      return county === filter.value && String(bank.state || '').trim().toLowerCase() === filter.state;
+    }
+    return true;
+  }
+
+  function mapsGroupByLocation(rows, type) {
+    const byKey = new Map();
+    rows.forEach(bank => {
+      const state = String(bank.state || '').trim();
+      const rawName = type === 'county'
+        ? String(bank.county || '').replace(/,\s*[A-Z]{2}.*$/, '').trim()
+        : String(bank.city || '').trim();
+      if (!rawName || !state) return;
+      const key = `${type}|${rawName.toLowerCase()}|${state.toLowerCase()}`;
+      const current = byKey.get(key) || { type, value: rawName.toLowerCase(), state: state.toLowerCase(), label: `${rawName}, ${state}`, count: 0, assets: 0 };
+      current.count += 1;
+      current.assets += Number(bank.totalAssets) || 0;
+      byKey.set(key, current);
+    });
+    return Array.from(byKey.values())
+      .sort((a, b) => b.count - a.count || b.assets - a.assets || a.label.localeCompare(b.label))
+      .slice(0, 5);
+  }
+
+  function mapsSetViewport(viewport) {
+    mapsState.viewport = viewport ? {
+      lon: viewport.lon.slice(),
+      lat: viewport.lat.slice()
+    } : null;
+  }
+
+  function mapsFitResults() {
+    mapsSetViewport(null);
+    mapsState.mapRevision += 1;
+    applyMapsFilters();
+  }
+
+  function mapsResetUsView() {
+    mapsSetViewport({ lon: MAPS_DEFAULT_LONAXIS, lat: MAPS_DEFAULT_LATAXIS });
+    mapsState.mapRevision += 1;
+    applyMapsFilters();
+  }
+
+  function mapsNormalizeAreaText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/\b(county|parish|city|town|municipality)\b/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  function mapsDistanceMiles(aLat, aLon, bLat, bLon) {
+    const lat1 = Number(aLat);
+    const lon1 = Number(aLon);
+    const lat2 = Number(bLat);
+    const lon2 = Number(bLon);
+    if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return Infinity;
+    const toRad = deg => deg * Math.PI / 180;
+    const r = 3958.8;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const h = Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return 2 * r * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+
+  function mapsAreaCandidateScore(bank, query) {
+    if (!query || !mapsHasCoords(bank)) return 0;
+    const city = mapsNormalizeAreaText(bank.city);
+    const county = mapsNormalizeAreaText(String(bank.county || '').replace(/,.*/, ''));
+    const state = mapsNormalizeAreaText(bank.state);
+    const zip = mapsNormalizeAreaText(bank.zip5 || bank.zip);
+    const location = [city, county, state, zip].filter(Boolean).join(' ');
+    if (city === query) return 90;
+    if (county === query) return 80;
+    if (`${city} ${state}` === query || `${county} ${state}` === query) return 95;
+    if (city && query.length >= 4 && (query.includes(city) || city.includes(query))) return 72;
+    if (county && query.length >= 4 && (query.includes(county) || county.includes(query))) return 70;
+    if (query.length >= 4 && location.includes(query)) return 55;
+    if (query.includes(location) && location.length >= 3) return 45;
+    return 0;
+  }
+
+  function mapsAreaAnchorKey(bank, query) {
+    const city = mapsNormalizeAreaText(bank && bank.city);
+    const county = mapsNormalizeAreaText(String(bank && bank.county || '').replace(/,.*/, ''));
+    const state = mapsNormalizeAreaText(bank && bank.state);
+    if (city && `${city} ${state}` === query) return `city|${city}|${state}`;
+    if (county && `${county} ${state}` === query) return `county|${county}|${state}`;
+    if (county && (county === query || query.includes(county))) return `county|${county}|${state}`;
+    if (city && (city === query || query.includes(city))) return `city|${city}|${state}`;
+    return `location|${city}|${county}|${state}|${mapsNormalizeAreaText(bank && (bank.zip5 || bank.zip))}`;
+  }
+
+  function mapsAreaAnchorLabel(bank, key) {
+    const parts = String(key || '').split('|');
+    if (parts[0] === 'county') {
+      const county = String(bank && bank.county || '').replace(/,\s*[A-Z]{2}.*$/, '').trim();
+      return [county ? `${county} County` : '', bank && bank.state].filter(Boolean).join(' · ');
+    }
+    return [bank && bank.city, bank && bank.state].filter(Boolean).join(' · ');
+  }
+
+  function mapsAreaIsActive() {
+    return Boolean(mapsState.areaSearch && mapsState.areaSearch.center);
+  }
+
+  function mapsApplyAreaSearch() {
+    const input = document.getElementById('mapsAreaSearchBox');
+    const radius = document.getElementById('mapsAreaRadius');
+    const raw = input ? input.value : '';
+    const query = mapsNormalizeAreaText(raw);
+    if (!query || query.length < 2) {
+      showToast('Enter a town or county to search the map', true);
+      return;
+    }
+    const candidates = mapsState.banks
+      .map(bank => ({ bank, score: mapsAreaCandidateScore(bank, query) }))
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score || mapsBankListName(a.bank).localeCompare(mapsBankListName(b.bank)));
+    if (!candidates.length) {
+      mapsState.areaSearch = { query: raw.trim(), radiusMiles: Number(radius && radius.value) || 50, center: null, label: '', matchedCount: 0 };
+      mapsState.locationFilter = null;
+      renderMapsAreaStatus();
+      applyMapsFilters();
+      showToast('No matching town or county found in the bank data', true);
+      return;
+    }
+    const bestScore = candidates[0].score;
+    const clustered = new Map();
+    candidates.filter(item => item.score === bestScore).forEach(item => {
+      const key = mapsAreaAnchorKey(item.bank, query);
+      if (!clustered.has(key)) clustered.set(key, { key, items: [], assets: 0 });
+      const group = clustered.get(key);
+      group.items.push(item);
+      group.assets += Number(item.bank.totalAssets) || 0;
+    });
+    const bestCluster = Array.from(clustered.values())
+      .sort((a, b) => b.items.length - a.items.length || b.assets - a.assets || a.key.localeCompare(b.key))[0];
+    const anchors = bestCluster ? bestCluster.items : candidates.filter(item => item.score === bestScore);
+    const lat = anchors.reduce((sum, item) => sum + Number(item.bank.latitude), 0) / anchors.length;
+    const lon = anchors.reduce((sum, item) => sum + Number(item.bank.longitude), 0) / anchors.length;
+    const first = anchors[0].bank;
+    const label = mapsAreaAnchorLabel(first, bestCluster && bestCluster.key) || raw.trim();
+    mapsState.areaSearch = {
+      query: raw.trim(),
+      radiusMiles: Number(radius && radius.value) || 50,
+      center: { lat, lon },
+      label,
+      matchedCount: anchors.length
+    };
+    mapsState.selectedStates.clear();
+    mapsState.locationFilter = null;
+    mapsState.selectedBankId = '';
+    mapsState.selectedLocationKey = '';
+    mapsSetViewport(null);
+    mapsState.mapRevision += 1;
+    renderMapsStateChips();
+    renderMapsAreaStatus();
+    applyMapsFilters();
+  }
+
+  function mapsClearAreaSearch() {
+    mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
+    mapsState.locationFilter = null;
+    const input = document.getElementById('mapsAreaSearchBox');
+    const radius = document.getElementById('mapsAreaRadius');
+    if (input) input.value = '';
+    if (radius) radius.value = '50';
+    mapsSetViewport(null);
+    mapsState.mapRevision += 1;
+    renderMapsAreaStatus();
+    applyMapsFilters();
+  }
+
+  function renderMapsAreaStatus() {
+    const el = document.getElementById('mapsAreaStatus');
+    if (!el) return;
+    if (!mapsState.areaSearch || !mapsState.areaSearch.query) {
+      el.textContent = 'Search a town or county to find nearby banks.';
+      return;
+    }
+    if (!mapsAreaIsActive()) {
+      el.textContent = `No town or county matched "${mapsState.areaSearch.query}".`;
+      return;
+    }
+    el.textContent = `${mapsState.areaSearch.label || mapsState.areaSearch.query} · within ${formatNumber(mapsState.areaSearch.radiusMiles)} miles`;
   }
 
   function mapsLocationKey(bank) {
@@ -7955,8 +10067,10 @@
       count += 1;
     }
     if (!count) return null;
-    const padLat = Math.max(0.5, (maxLat - minLat) * 0.18);
-    const padLon = Math.max(0.5, (maxLon - minLon) * 0.18);
+    const spanLat = maxLat - minLat;
+    const spanLon = maxLon - minLon;
+    const padLat = Math.max(4.5, spanLat * 0.35);
+    const padLon = Math.max(7, spanLon * 0.35);
     return {
       lon: [minLon - padLon, maxLon + padLon],
       lat: [minLat - padLat, maxLat + padLat]
@@ -8007,8 +10121,10 @@
       mapsState.stateCounts = data.stateCounts || {};
       mapsState.latestPeriod = data.latestPeriod || '';
       mapsState.mappedCount = data.mappedCount || mapsState.banks.filter(mapsHasCoords).length;
-      mapsState.loaded = true;
+      mapsState.peerComparison = data.peerComparison || null;
+    mapsState.loaded = true;
       mapsBindHandlers();
+      renderMapsOwnerOptions();
       renderMapsView();
     } catch (err) {
       if (subtitle) subtitle.textContent = err.message || 'Failed to load bank data';
@@ -8023,9 +10139,12 @@
     const subtitle = document.getElementById('mapsSubtitle');
     if (!subtitle) return;
     const hasStates = mapsState.selectedStates.size > 0;
+    const hasArea = mapsAreaIsActive();
     const tail = hasStates
-      ? 'Click a pin for status and key stats — click another state to add it.'
-      : 'Click any state to drop pins for the banks there.';
+      ? 'Drag or scroll the map freely, then click a pin for status and key stats.'
+      : hasArea
+        ? 'Showing banks around the searched muni deal area.'
+      : 'Use Add State or area search to drop pins, then drag the map freely.';
     subtitle.textContent = mapsState.latestPeriod
       ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · ${tail}`
       : `${mapsState.banks.length.toLocaleString()} banks · ${tail}`;
@@ -8037,6 +10156,9 @@
     renderMapsSubtitle();
     renderMapsStateChips();
     renderMapsStatusFilters();
+    renderMapsAreaStatus();
+    renderMapsStateSummary();
+    renderMapsDrilldown(mapsState.visibleBanks.length ? mapsState.visibleBanks : mapsState.banks);
     renderMapsDetailPanel();
     applyMapsFilters();
   }
@@ -8049,9 +10171,10 @@
     if (!el) return;
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
     if (!el.style.position) el.style.position = 'relative';
-    const showMarkers = mapsState.selectedStates.size > 0;
+    const showMarkers = mapsState.selectedStates.size > 0 || mapsAreaIsActive() || (mapsState.search || '').trim().length >= 2;
     const groups = showMarkers ? mapsLocationGroups(rows) : [];
     const selectedKey = mapsState.selectedLocationKey;
+    const area = mapsAreaIsActive() ? mapsState.areaSearch : null;
     const stateEntries = Object.entries(mapsState.stateCounts).sort();
     const portalScale = [
       [0.00, '#f6faf7'],
@@ -8075,7 +10198,42 @@
         }
       },
       opacity: showMarkers ? 0.55 : 0.85
-    }, {
+    }];
+    if (area) {
+      const ring = [];
+      const lat = area.center.lat;
+      const lon = area.center.lon;
+      const radius = area.radiusMiles || 50;
+      for (let deg = 0; deg <= 360; deg += 8) {
+        const rad = deg * Math.PI / 180;
+        const dLat = radius / 69;
+        const dLon = radius / Math.max(1, 69 * Math.cos(lat * Math.PI / 180));
+        ring.push({ lat: lat + Math.sin(rad) * dLat, lon: lon + Math.cos(rad) * dLon });
+      }
+      figData.push({
+        type: 'scattergeo',
+        mode: 'lines',
+        lat: ring.map(point => point.lat),
+        lon: ring.map(point => point.lon),
+        hoverinfo: 'skip',
+        line: { color: '#8257d6', width: 2, dash: 'dot' },
+        showlegend: false
+      }, {
+        type: 'scattergeo',
+        mode: 'markers',
+        lat: [lat],
+        lon: [lon],
+        hovertemplate: `<b>${escapeHtml(area.label || area.query)}</b><br>${formatNumber(radius)} mile search area<extra></extra>`,
+        marker: {
+          color: '#ffffff',
+          line: { color: '#8257d6', width: 3 },
+          size: 18,
+          symbol: 'star'
+        },
+        showlegend: false
+      });
+    }
+    figData.push({
       type: 'scattergeo',
       mode: 'markers+text',
       lat: groups.map(group => group.lat),
@@ -8090,28 +10248,35 @@
         return `<b>${escapeHtml(bankLabel)}</b><br>${escapeHtml(group.label || '')}<extra></extra>`;
       }),
       marker: {
-        size: groups.map(group => group.key === selectedKey ? 20 : Math.min(24, 12 + Math.sqrt(group.banks.length) * 3)),
+        size: groups.map(group => group.key === selectedKey ? 24 : Math.min(28, 14 + Math.sqrt(group.banks.length) * 3.5)),
         color: groups.map(group => mapsStatusColor(mapsAccountStatusLabel(group.banks[0]))),
-        opacity: 0.95,
+        opacity: 0.98,
         line: {
-          color: groups.map(group => group.key === selectedKey ? '#ffffff' : '#1f2925'),
-          width: groups.map(group => group.key === selectedKey ? 3 : 1.4)
-        }
-      }
-    }];
+          color: '#ffffff',
+          width: groups.map(group => group.key === selectedKey ? 4 : 2)
+        },
+        symbol: groups.map(group => group.banks.length > 1 ? 'circle' : 'circle')
+      },
+      showlegend: false
+    });
     const bounds = showMarkers ? mapsComputeBounds(rows) : null;
-    const lonaxis = bounds ? { range: bounds.lon } : { range: MAPS_DEFAULT_LONAXIS.slice() };
-    const lataxis = bounds ? { range: bounds.lat } : { range: MAPS_DEFAULT_LATAXIS.slice() };
+    const viewport = mapsState.viewport;
+    const lonRange = viewport ? viewport.lon : (bounds ? bounds.lon : MAPS_DEFAULT_LONAXIS);
+    const latRange = viewport ? viewport.lat : (bounds ? bounds.lat : MAPS_DEFAULT_LATAXIS);
+    const lonaxis = { range: lonRange.slice() };
+    const lataxis = { range: latRange.slice() };
     const layout = {
       geo: {
         scope: 'usa',
         projection: { type: 'albers usa' },
         showlakes: true,
-        lakecolor: '#e8f1ef',
+        lakecolor: '#b7e1e6',
+        showocean: true,
+        oceancolor: '#a7dce8',
         bgcolor: 'rgba(0,0,0,0)',
-        landcolor: '#f6f8f5',
-        countrycolor: '#cad8cf',
-        subunitcolor: '#cad8cf',
+        landcolor: '#dff1de',
+        countrycolor: '#94afa2',
+        subunitcolor: '#94afa2',
         showcountries: true,
         showsubunits: true,
         lonaxis,
@@ -8120,9 +10285,10 @@
       font: { family: 'inherit', color: '#1f2925' },
       margin: { t: 10, r: 10, b: 10, l: 10 },
       paper_bgcolor: 'rgba(0,0,0,0)',
-      plot_bgcolor: 'rgba(0,0,0,0)'
+      plot_bgcolor: 'rgba(0,0,0,0)',
+      uirevision: `maps-${mapsState.mapRevision}`
     };
-    Plotly.react(el, figData, layout, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['select2d', 'lasso2d'] }).then(() => {
+    Plotly.react(el, figData, layout, { responsive: true, displaylogo: false, scrollZoom: true, modeBarButtonsToRemove: ['select2d', 'lasso2d'] }).then(() => {
       if (el.dataset.mapsClickBound) return;
       el.dataset.mapsClickBound = '1';
       el.on('plotly_click', (data) => {
@@ -8133,7 +10299,14 @@
           if (!st) return;
           if (mapsState.selectedStates.has(st)) mapsState.selectedStates.delete(st);
           else mapsState.selectedStates.add(st);
+          mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
+          mapsState.locationFilter = null;
+          const areaInput = document.getElementById('mapsAreaSearchBox');
+          if (areaInput) areaInput.value = '';
+          mapsSetViewport(null);
+          mapsState.mapRevision += 1;
           renderMapsStateChips();
+          renderMapsAreaStatus();
           applyMapsFilters();
           return;
         }
@@ -8155,6 +10328,14 @@
 
   function renderMapsStateChips() {
     const chipsEl = document.getElementById('mapsStateChips');
+    const select = document.getElementById('mapsStateSelect');
+    if (select) {
+      const states = Object.entries(mapsState.stateCounts).sort((a, b) => a[0].localeCompare(b[0]));
+      select.innerHTML = '<option value="">Add State...</option>' + states.map(([state, count]) =>
+        `<option value="${escapeHtml(state)}"${mapsState.selectedStates.has(state) ? ' disabled' : ''}>${escapeHtml(state)} (${formatNumber(count)})</option>`
+      ).join('');
+      select.value = '';
+    }
     if (!chipsEl) return;
     if (mapsState.selectedStates.size === 0) {
       chipsEl.innerHTML = '<span class="maps-chip">All</span>';
@@ -8164,6 +10345,89 @@
       `<span class="maps-chip"><span>${escapeHtml(st)}</span><span class="x" data-maps-remove-state="${escapeHtml(st)}" title="Remove">×</span></span>`
     ).join('');
     chipsEl.innerHTML = html;
+  }
+
+  function renderMapsOwnerOptions() {
+    const select = document.getElementById('mapsOwnerSelect');
+    if (!select) return;
+    const current = mapsState.territory.owner || '';
+    select.innerHTML = '<option value="">All owners</option>' + mapsOwnerOptions().map(owner =>
+      `<option value="${escapeHtml(owner)}"${owner === current ? ' selected' : ''}>${escapeHtml(owner)}</option>`
+    ).join('');
+  }
+
+  function renderMapsStateSummary() {
+    const el = document.getElementById('mapsStateSummary');
+    if (!el) return;
+    const states = Array.from(mapsState.selectedStates).sort();
+    const area = mapsAreaIsActive() ? mapsState.areaSearch : null;
+    const owner = mapsState.territory.owner;
+    const filter = mapsState.locationFilter;
+    const parts = [];
+    if (states.length) parts.push(`<strong>${escapeHtml(states.join(', '))}</strong><span>Click a selected state again to remove it.</span>`);
+    else if (area) parts.push(`<strong>${escapeHtml(area.label || area.query)}</strong><span>${formatNumber(area.radiusMiles)} mile area search.</span>`);
+    else parts.push('<strong>All states</strong><span>Click any state to drop pins and focus the list.</span>');
+    if (filter) parts.push(`<span>Drilldown: ${escapeHtml(filter.label)}</span>`);
+    if (owner) parts.push(`<span>Owner: ${escapeHtml(owner)}</span>`);
+    if (mapsState.selectedStatuses.size) parts.push(`<span>Status: ${escapeHtml(Array.from(mapsState.selectedStatuses).sort().join(', '))}</span>`);
+    el.innerHTML = parts.join('');
+  }
+
+  function renderMapsDrilldown(rows) {
+    const el = document.getElementById('mapsStateDrilldown');
+    if (!el) return;
+    const shouldShow = mapsState.selectedStates.size > 0 || mapsAreaIsActive() || mapsState.locationFilter;
+    if (!shouldShow) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+    const cities = mapsGroupByLocation(rows, 'city');
+    const counties = mapsGroupByLocation(rows, 'county');
+    const section = (title, items) => `
+      <div class="maps-drilldown-block">
+        <strong>${escapeHtml(title)}</strong>
+        <div class="maps-drilldown-list">
+          ${items.map(item => {
+            const active = mapsState.locationFilter &&
+              mapsState.locationFilter.type === item.type &&
+              mapsState.locationFilter.value === item.value &&
+              mapsState.locationFilter.state === item.state;
+            return `<button type="button" class="maps-drilldown-item${active ? ' active' : ''}"
+                data-maps-drill-type="${escapeHtml(item.type)}"
+                data-maps-drill-value="${escapeHtml(item.value)}"
+                data-maps-drill-state="${escapeHtml(item.state)}"
+                data-maps-drill-label="${escapeHtml(item.label)}">
+              <span>${escapeHtml(item.label)}</span>
+              <em>${formatNumber(item.count)}</em>
+            </button>`;
+          }).join('') || '<span class="maps-tip">No locations in the current result.</span>'}
+        </div>
+      </div>`;
+    el.hidden = false;
+    el.innerHTML = section('Top cities', cities) + section('Top counties', counties);
+    el.querySelectorAll('[data-maps-drill-type]').forEach(btn => {
+      btn.addEventListener('click', event => {
+        event.stopPropagation();
+        mapsApplyLocationDrilldown(btn);
+      });
+    });
+  }
+
+  function mapsApplyLocationDrilldown(btn) {
+    if (!btn) return;
+    const same = mapsState.locationFilter &&
+      mapsState.locationFilter.type === btn.dataset.mapsDrillType &&
+      mapsState.locationFilter.value === btn.dataset.mapsDrillValue &&
+      mapsState.locationFilter.state === btn.dataset.mapsDrillState;
+    mapsState.locationFilter = same ? null : {
+      type: btn.dataset.mapsDrillType,
+      value: btn.dataset.mapsDrillValue,
+      state: btn.dataset.mapsDrillState,
+      label: btn.dataset.mapsDrillLabel || ''
+    };
+    mapsState.selectedBankId = '';
+    applyMapsFilters();
   }
 
   function mapsStatusCounts() {
@@ -8238,20 +10502,40 @@
     const q = (mapsState.search || '').toLowerCase().trim();
     const sel = mapsState.selectedStates;
     const statusSel = mapsState.selectedStatuses;
+    const area = mapsAreaIsActive() ? mapsState.areaSearch : null;
+    const ownerFilter = mapsState.territory.owner;
+    const minAssets = mapsNumber(mapsState.territory.minAssets);
+    const maxAssets = mapsNumber(mapsState.territory.maxAssets);
     const rows = [];
+    const drilldownRows = [];
     for (const b of mapsState.banks) {
       if (sel.size > 0 && !sel.has(b.state)) continue;
       if (statusSel.size > 0 && !statusSel.has(mapsAccountStatusLabel(b))) continue;
+      if (ownerFilter && mapsCoverageOwner(b) !== ownerFilter) continue;
+      const assetsMm = mapsAssetsMm(b);
+      if (minAssets !== null && (assetsMm === null || assetsMm < minAssets)) continue;
+      if (maxAssets !== null && (assetsMm === null || assetsMm > maxAssets)) continue;
+      if (area) {
+        const distance = mapsDistanceMiles(area.center.lat, area.center.lon, b.latitude, b.longitude);
+        if (distance > area.radiusMiles) continue;
+        b._mapsAreaDistance = distance;
+      } else if (b._mapsAreaDistance !== undefined) {
+        delete b._mapsAreaDistance;
+      }
       if (q) {
-        const hay = (String(b.displayName || '') + ' ' + String(b.certNumber || '') + ' ' + String(b.city || '') + ' ' + String(b.state || '') + ' ' + mapsAccountStatusLabel(b)).toLowerCase();
+        const hay = (String(b.displayName || '') + ' ' + String(b.certNumber || '') + ' ' + String(b.city || '') + ' ' + String(b.county || '') + ' ' + String(b.state || '') + ' ' + mapsAccountStatusLabel(b)).toLowerCase();
         if (!hay.includes(q)) continue;
       }
       if (!rowMatchesAdvanced(b)) continue;
+      drilldownRows.push(b);
+      if (!mapsLocationFilterMatches(b)) continue;
       rows.push(b);
     }
-    rows.sort((a, b) => (Number(b.totalAssets) || 0) - (Number(a.totalAssets) || 0));
+    mapsSortRows(rows, area);
     mapsState.visibleBanks = rows;
     renderMapsSubtitle();
+    renderMapsStateSummary();
+    renderMapsDrilldown(drilldownRows);
     const limit = 1000;
     const shown = rows.slice(0, limit);
     const visibleIds = new Set(shown.map(row => String(row.id || '')));
@@ -8269,10 +10553,11 @@
         <td>${escapeHtml(b.city || '')}</td>
         <td>${escapeHtml(b.state || '')}</td>
         <td><span class="maps-status-pill maps-status-${escapeHtml(mapsStatusSlug(mapsAccountStatusLabel(b)))}">${escapeHtml(mapsAccountStatusLabel(b))}</span></td>
+        <td class="num">${escapeHtml(Math.round(mapsOpportunityScore(b)))}</td>
         <td class="num">${escapeHtml(mapsFormatValue(b.totalAssets, assetsDef))}</td>
         <td class="num">${escapeHtml(mapsFormatValue(mapsSecuritiesToAssets(b), securitiesToAssetsDef))}</td>
       </tr>
-    `).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
+    `).join('') || '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
     const previewBank = btn => {
       const bank = mapsFindBank(btn.dataset.mapsBankPreview || '');
       mapsSelectBank(bank, mapsLocationGroups(rows).find(group => group.key === mapsLocationKey(bank)));
@@ -8285,9 +10570,16 @@
     });
     if (rowCountEl) {
       const total = rows.length.toLocaleString();
+      const areaPrefix = area ? `within ${formatNumber(area.radiusMiles)} mi · ` : '';
       rowCountEl.textContent = rows.length > limit
-        ? `${shown.length.toLocaleString()} of ${total} bank(s) shown (top by assets)`
-        : `${total} bank(s) shown`;
+        ? `${areaPrefix}${shown.length.toLocaleString()} of ${total} bank(s) shown (top by assets)`
+        : `${areaPrefix}${total} bank(s) shown`;
+    }
+    if (area) {
+      const areaStatus = document.getElementById('mapsAreaStatus');
+      if (areaStatus) {
+        areaStatus.textContent = `${area.label || area.query} · ${formatNumber(rows.length)} banks within ${formatNumber(area.radiusMiles)} miles`;
+      }
     }
     renderMapsActiveFilters();
     renderMapsDetailPanel();
@@ -8348,6 +10640,7 @@
         ${mapsDetailMetric('Deposits ($MM)', mapsFormatValue(bank.totalDeposits, depositsDef))}
         ${mapsDetailMetric('Loans / Deposits', mapsFormatValue(bank.loansToDeposits, loansToDepositsDef))}
       </div>
+      ${mapsRenderPeerDeltas(bank)}
       <div class="maps-detail-actions">
         <button type="button" class="small-btn primary" id="mapsOpenTearSheet">Open tear sheet</button>
       </div>
@@ -8419,6 +10712,7 @@
         ${mapsDetailMetric('Deposits ($MM)', mapsFormatValue(bank.totalDeposits, depositsDef))}
         ${mapsDetailMetric('Loans / Deposits', mapsFormatValue(bank.loansToDeposits, loansToDepositsDef))}
       </div>
+      ${mapsRenderPeerDeltas(bank)}
       <div class="maps-detail-actions">
         <button type="button" class="small-btn primary" id="mapsFullOpenTearSheet">Open tear sheet</button>
       </div>
@@ -8475,12 +10769,15 @@
   function renderMapsActiveFilters() {
     const el = document.getElementById('mapsActiveFilters');
     if (!el) return;
-    if (!mapsState.advanced.length) { el.textContent = ''; return; }
     const parts = mapsState.advanced.map(f => {
       const def = mapsState.fieldByKey[f.field];
       return (def ? def.label : f.field) + ' ' + f.op + ' ' + f.value;
     });
-    el.textContent = 'Active filter: ' + parts.join(' AND ');
+    if (mapsState.locationFilter) parts.push(`Location ${mapsState.locationFilter.label}`);
+    if (mapsState.territory.owner) parts.push(`Owner ${mapsState.territory.owner}`);
+    if (mapsState.territory.minAssets) parts.push(`Assets >= ${mapsState.territory.minAssets}MM`);
+    if (mapsState.territory.maxAssets) parts.push(`Assets <= ${mapsState.territory.maxAssets}MM`);
+    el.textContent = parts.length ? 'Active filter: ' + parts.join(' AND ') : '';
   }
 
   function openMapsConditionsModal() {
@@ -8523,13 +10820,81 @@
   function mapsBindHandlers() {
     const search = document.getElementById('mapsSearchBox');
     if (search && !search.dataset.bound) {
-      search.addEventListener('input', () => { mapsState.search = search.value; applyMapsFilters(); });
+      search.addEventListener('input', () => {
+        mapsState.search = search.value;
+        mapsState.locationFilter = null;
+        applyMapsFilters();
+      });
       search.dataset.bound = '1';
+    }
+    const areaInput = document.getElementById('mapsAreaSearchBox');
+    const areaBtn = document.getElementById('mapsAreaSearchBtn');
+    const areaClear = document.getElementById('mapsAreaClearBtn');
+    const areaRadius = document.getElementById('mapsAreaRadius');
+    if (areaInput && !areaInput.dataset.bound) {
+      areaInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          mapsApplyAreaSearch();
+        }
+      });
+      areaInput.dataset.bound = '1';
+    }
+    if (areaBtn && !areaBtn.dataset.bound) {
+      areaBtn.addEventListener('click', mapsApplyAreaSearch);
+      areaBtn.dataset.bound = '1';
+    }
+    if (areaClear && !areaClear.dataset.bound) {
+      areaClear.addEventListener('click', mapsClearAreaSearch);
+      areaClear.dataset.bound = '1';
+    }
+    if (areaRadius && !areaRadius.dataset.bound) {
+      areaRadius.addEventListener('change', () => {
+        if (mapsAreaIsActive()) {
+          mapsState.areaSearch.radiusMiles = Number(areaRadius.value) || 50;
+          mapsSetViewport(null);
+          mapsState.mapRevision += 1;
+          renderMapsAreaStatus();
+          applyMapsFilters();
+        }
+      });
+      areaRadius.dataset.bound = '1';
+    }
+    const fitBtn = document.getElementById('mapsFitResultsBtn');
+    if (fitBtn && !fitBtn.dataset.bound) {
+      fitBtn.addEventListener('click', mapsFitResults);
+      fitBtn.dataset.bound = '1';
+    }
+    const resetViewBtn = document.getElementById('mapsResetViewBtn');
+    if (resetViewBtn && !resetViewBtn.dataset.bound) {
+      resetViewBtn.addEventListener('click', mapsResetUsView);
+      resetViewBtn.dataset.bound = '1';
+    }
+    const stateSelect = document.getElementById('mapsStateSelect');
+    if (stateSelect && !stateSelect.dataset.bound) {
+      stateSelect.addEventListener('change', () => {
+        const state = stateSelect.value;
+        if (!state) return;
+        mapsState.selectedStates.add(state);
+        mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
+        mapsState.locationFilter = null;
+        const areaInput = document.getElementById('mapsAreaSearchBox');
+        if (areaInput) areaInput.value = '';
+        mapsSetViewport(null);
+        mapsState.mapRevision += 1;
+        renderMapsStateChips();
+        renderMapsAreaStatus();
+        applyMapsFilters();
+      });
+      stateSelect.dataset.bound = '1';
     }
     const clearBtn = document.getElementById('mapsClearStates');
     if (clearBtn && !clearBtn.dataset.bound) {
       clearBtn.addEventListener('click', () => {
         mapsState.selectedStates.clear();
+        mapsState.locationFilter = null;
+        mapsSetViewport(null);
+        mapsState.mapRevision += 1;
         renderMapsStateChips();
         applyMapsFilters();
       });
@@ -8545,9 +10910,54 @@
         else if (mapsState.selectedStatuses.has(status)) mapsState.selectedStatuses.delete(status);
         else mapsState.selectedStatuses.add(status);
         renderMapsStatusFilters();
+        renderMapsStateSummary();
         applyMapsFilters();
       });
       statusFilters.dataset.bound = '1';
+    }
+    const ownerSelect = document.getElementById('mapsOwnerSelect');
+    if (ownerSelect && !ownerSelect.dataset.bound) {
+      ownerSelect.addEventListener('change', () => {
+        mapsState.territory.owner = ownerSelect.value;
+        applyMapsFilters();
+      });
+      ownerSelect.dataset.bound = '1';
+    }
+    const minAssets = document.getElementById('mapsMinAssets');
+    if (minAssets && !minAssets.dataset.bound) {
+      minAssets.addEventListener('input', () => {
+        mapsState.territory.minAssets = minAssets.value;
+        applyMapsFilters();
+      });
+      minAssets.dataset.bound = '1';
+    }
+    const maxAssets = document.getElementById('mapsMaxAssets');
+    if (maxAssets && !maxAssets.dataset.bound) {
+      maxAssets.addEventListener('input', () => {
+        mapsState.territory.maxAssets = maxAssets.value;
+        applyMapsFilters();
+      });
+      maxAssets.dataset.bound = '1';
+    }
+    const sortSelect = document.getElementById('mapsSortSelect');
+    if (sortSelect && !sortSelect.dataset.bound) {
+      sortSelect.addEventListener('change', () => {
+        mapsState.territory.sort = sortSelect.value || 'opportunity';
+        applyMapsFilters();
+      });
+      sortSelect.dataset.bound = '1';
+    }
+    const clearTerritory = document.getElementById('mapsClearTerritory');
+    if (clearTerritory && !clearTerritory.dataset.bound) {
+      clearTerritory.addEventListener('click', () => {
+        mapsState.territory = { owner: '', minAssets: '', maxAssets: '', sort: 'opportunity' };
+        if (ownerSelect) ownerSelect.value = '';
+        if (minAssets) minAssets.value = '';
+        if (maxAssets) maxAssets.value = '';
+        if (sortSelect) sortSelect.value = 'opportunity';
+        applyMapsFilters();
+      });
+      clearTerritory.dataset.bound = '1';
     }
     const advBtn = document.getElementById('mapsAdvancedBtn');
     if (advBtn && !advBtn.dataset.bound) {
@@ -8563,6 +10973,16 @@
     if (fullClose && !fullClose.dataset.bound) {
       fullClose.addEventListener('click', closeMapsFullView);
       fullClose.dataset.bound = '1';
+    }
+    const fullFitBtn = document.getElementById('mapsFullFitResultsBtn');
+    if (fullFitBtn && !fullFitBtn.dataset.bound) {
+      fullFitBtn.addEventListener('click', mapsFitResults);
+      fullFitBtn.dataset.bound = '1';
+    }
+    const fullResetViewBtn = document.getElementById('mapsFullResetViewBtn');
+    if (fullResetViewBtn && !fullResetViewBtn.dataset.bound) {
+      fullResetViewBtn.addEventListener('click', mapsResetUsView);
+      fullResetViewBtn.dataset.bound = '1';
     }
     const fullBackdrop = document.getElementById('mapsFullBackdrop');
     if (fullBackdrop && !fullBackdrop.dataset.bound) {
@@ -8659,10 +11079,21 @@
         const x = e.target.closest('[data-maps-remove-state]');
         if (!x) return;
         mapsState.selectedStates.delete(x.dataset.mapsRemoveState);
+        mapsSetViewport(null);
+        mapsState.mapRevision += 1;
         renderMapsStateChips();
         applyMapsFilters();
       });
       chipsEl.dataset.bound = '1';
+    }
+    const drilldown = document.getElementById('mapsStateDrilldown');
+    if (drilldown && !drilldown.dataset.bound) {
+      drilldown.addEventListener('click', e => {
+        const btn = e.target.closest('[data-maps-drill-type]');
+        if (!btn) return;
+        mapsApplyLocationDrilldown(btn);
+      });
+      drilldown.dataset.bound = '1';
     }
   }
 

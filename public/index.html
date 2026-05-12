@@ -45,6 +45,9 @@
         <a class="nav-link nav-minor" data-page="relativeValue" href="#relativeValue">
           <span class="nav-label">Relative Value</span>
         </a>
+        <a class="nav-link nav-minor" data-page="mmd" href="#mmd">
+          <span class="nav-label">MMD Curve</span>
+        </a>
       </div>
     </div>
 
@@ -176,6 +179,7 @@
         <a href="#corporates" data-page="corporates">Corporate Explorer</a>
         <a href="#mbs-cmo" data-page="mbs-cmo">MBS/CMO Explorer</a>
         <a href="#cd-recap" data-page="cd-recap">Weekly CD Recap</a>
+        <a href="#mmd" data-page="mmd">MMD Curve</a>
       </div>
     </div>
     <div class="top-link-menu">
@@ -507,17 +511,17 @@
           <h3>Report Builder</h3>
           <p>Select a report type to stage the inputs. Peer and portfolio exports use the imported bank, averaged-series, and bond-accounting files.</p>
         </div>
-        <button type="button" class="small-btn" disabled>Generate</button>
+        <button type="button" class="small-btn" id="reportsGenerateBtn" disabled>Generate</button>
       </div>
 
       <div class="reports-grid" aria-label="Available report templates">
-        <article class="report-card report-card-ready">
+        <article class="report-card" id="reportsPeerAnalysisCard">
           <span class="report-card-kicker">SNL + Averaged Series</span>
           <h4>Bank Peer Analysis</h4>
           <p>Compare a selected bank against peer averages for liquidity, securities, profitability, capital, and asset quality.</p>
           <div class="report-card-foot">
-            <span>Inputs: bank, period, peer group</span>
-            <button type="button" class="text-btn">Stage</button>
+            <span id="reportsPeerAnalysisCardStatus">Import peer averages</span>
+            <button type="button" class="text-btn" id="reportsPeerAnalysisStageBtn">Stage</button>
           </div>
         </article>
 
@@ -531,13 +535,13 @@
           </div>
         </article>
 
-        <article class="report-card">
+        <article class="report-card" id="reportsOpportunityCard">
           <span class="report-card-kicker">Sales Strategy</span>
           <h4>Opportunity Report</h4>
           <p>Surface banks with peer gaps that suggest funding, liquidity, bond swap, muni, or CECL conversations.</p>
           <div class="report-card-foot">
-            <span>Feeds Strategies Queue</span>
-            <button type="button" class="text-btn" disabled>Stage</button>
+            <span id="reportsOpportunityCardStatus">Needs peer averages</span>
+            <button type="button" class="text-btn" id="reportsOpportunityStageBtn" disabled>Run</button>
           </div>
         </article>
 
@@ -567,6 +571,76 @@
         </div>
       </aside>
 
+      <section class="reports-import-panel" id="averagedSeriesImportPanel">
+        <div class="reports-import-head">
+          <div>
+            <h3>Averaged-Series Import</h3>
+            <p>Upload the FedFis averaged-series workbook used by the Bank Peer Analysis report. The parsed peer periods and metric rows are stored with the bank report data.</p>
+          </div>
+          <button type="button" class="small-btn" id="reportsAveragedSeriesImportBtn">Import Peer Averages</button>
+        </div>
+        <div class="reports-import-grid reports-import-grid-single">
+          <label class="reports-picker" for="reportsAveragedSeriesWorkbookInput" id="reportsAveragedSeriesPicker">
+            <span>Averaged-Series Workbook</span>
+            <strong id="reportsAveragedSeriesWorkbookName">No workbook selected</strong>
+            <small>.xls, .xlsx, or .xlsm with an AVERAGED_SERIES sheet.</small>
+            <input type="file" id="reportsAveragedSeriesWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
+          </label>
+        </div>
+        <div class="reports-import-status" id="reportsAveragedSeriesImportStatus">Ready for the averaged-series workbook.</div>
+      </section>
+
+      <section class="reports-builder-panel" id="peerAnalysisBuilderPanel">
+        <div class="reports-import-head">
+          <div>
+            <h3>Bank Peer Analysis</h3>
+            <p>Pick a bank to compare call-report metrics against the imported averaged-series peer group, then export banker-ready talking points.</p>
+          </div>
+          <button type="button" class="small-btn" id="peerAnalysisExportBtn" disabled>Export Analysis</button>
+        </div>
+        <div class="reports-peer-search">
+          <input type="search" id="peerAnalysisBankSearchInput" placeholder="Search bank name, city, cert, or parent...">
+          <button type="button" class="small-btn" id="peerAnalysisBankSearchBtn">Find Bank</button>
+        </div>
+        <div class="reports-peer-results" id="peerAnalysisBankResults"></div>
+        <div class="reports-peer-output" id="peerAnalysisOutput">
+          <div class="bank-search-empty">Select a bank to generate a peer comparison.</div>
+        </div>
+      </section>
+
+      <section class="reports-builder-panel" id="opportunityReportPanel" hidden>
+        <div class="reports-import-head">
+          <div>
+            <h3>Opportunity Report</h3>
+            <p>Scans every bank against peer averages, flags the largest gaps, and ranks results so coverage can pick the next conversation.</p>
+          </div>
+          <div class="opportunity-actions">
+            <button type="button" class="small-btn" id="opportunityRunBtn">Run scan</button>
+            <button type="button" class="small-btn" id="opportunityExportBtn" disabled>Export CSV</button>
+          </div>
+        </div>
+        <div class="opportunity-filters">
+          <label>Min flags
+            <select id="opportunityMinFlags">
+              <option value="1">1+</option>
+              <option value="2" selected>2+</option>
+              <option value="3">3+</option>
+              <option value="4">4+</option>
+            </select>
+          </label>
+          <label>State
+            <input type="text" id="opportunityStateFilter" placeholder="e.g. IL, IA" maxlength="40">
+          </label>
+          <label>Saved-only
+            <input type="checkbox" id="opportunitySavedOnly">
+          </label>
+          <span class="opportunity-summary" id="opportunitySummary">Run the scan to populate the list.</span>
+        </div>
+        <div class="opportunity-results" id="opportunityResults">
+          <div class="bank-search-empty">No scan yet. Click Run scan to evaluate every bank against the imported peer averages.</div>
+        </div>
+      </section>
+
       <section class="reports-import-panel" id="bondAccountingImportPanel">
         <div class="reports-import-head">
           <div>
@@ -590,6 +664,17 @@
           </label>
         </div>
         <div class="reports-import-status" id="bondAccountingImportStatus">Ready for the bank list and portfolio folder.</div>
+        <div class="reports-review-tools" id="bondAccountingReviewTools">
+          <input type="search" id="bondAccountingSearchInput" placeholder="Search bank, P-code, cert, file">
+          <select id="bondAccountingStatusFilter" aria-label="Bond accounting match status">
+            <option value="">All statuses</option>
+            <option value="matched">Matched</option>
+            <option value="needs-bank-data-match">P-code only</option>
+            <option value="unmatched-pcode">Unmatched P-code</option>
+          </select>
+          <button type="button" class="text-btn" id="bondAccountingExportBtn">Export CSV</button>
+        </div>
+        <div class="explorer-stats reports-match-stats" id="bondAccountingMatchStats"></div>
         <div class="reports-match-list" id="bondAccountingMatchList"></div>
       </section>
     </section>
@@ -855,6 +940,73 @@
   </div>
 </div>
 
+<!-- ========== MMD PAGE ========== -->
+<div class="page" id="p-mmd">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>MMD <strong>Curve</strong></h2>
+        <p class="hero-sub" id="mmdSub">Loading&hellip;</p>
+      </div>
+      <button class="publish-btn" id="mmdDownloadBtn">Download PDF &darr;</button>
+    </div>
+  </section>
+  <div class="container">
+    <section class="mmd-workspace" id="mmdWorkspace">
+      <div class="section-title-bar">
+        <h3>MMD Curve Snapshot</h3>
+        <div class="kicker" id="mmdNativeKicker">&mdash;</div>
+      </div>
+      <div class="explorer-stats" id="mmdStatTiles"></div>
+      <div class="mmd-layout-grid">
+        <section class="market-panel mmd-chart-panel">
+          <div class="market-panel-head">
+            <span>AAA MMD curve</span>
+            <strong id="mmdCurveLabel">&mdash;</strong>
+          </div>
+          <div class="rv-line-chart mmd-line-chart" id="mmdCurveChart"></div>
+        </section>
+        <section class="market-panel mmd-sales-panel">
+          <div class="market-panel-head">
+            <span>Sales pick list</span>
+            <strong id="mmdSalesCueCount">&mdash;</strong>
+          </div>
+          <div class="mmd-sales-list" id="mmdSalesCues"></div>
+        </section>
+      </div>
+      <div class="mmd-detail-grid">
+        <section class="market-panel mmd-curve-table-panel">
+          <div class="market-panel-head">
+            <span>Treasury ratios</span>
+            <strong id="mmdRatioCount">&mdash;</strong>
+          </div>
+          <div class="mmd-ratio-grid" id="mmdRatioGrid"></div>
+          <div class="market-panel-head mmd-table-head">
+            <span>Curve table</span>
+            <strong id="mmdCurveCount">&mdash;</strong>
+          </div>
+          <div class="rv-table-wrap mmd-table-wrap">
+            <table class="rate-comparison-table">
+              <thead>
+                <tr>
+                  <th>Term</th>
+                  <th>Year</th>
+                  <th>AAA</th>
+                  <th>AA</th>
+                  <th>A</th>
+                  <th>BAA</th>
+                  <th>Ratio</th>
+                </tr>
+              </thead>
+              <tbody id="mmdCurveTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+  </div>
+</div>
+
 <!-- ========== TREASURY NOTES PAGE ========== -->
 <div class="page" id="p-treasuryNotes">
   <section class="page-hero">
@@ -942,6 +1094,29 @@
         </div>
       </div>
       <p class="cd-calc-note">Simple-interest estimate using the selected all-in mid. Actual cost depends on final rate, settlement, structure, fees, and execution.</p>
+    </section>
+
+    <section class="cd-opportunity-tool" aria-label="Brokered CD funding opportunity">
+      <div class="cd-tool-head">
+        <div>
+          <span class="tool-eyebrow">Funding Opportunity</span>
+          <h3>Brokered CD Bank Screen</h3>
+          <p>Search a bank, compare the latest call report to prior quarter and peers, then blend that with today's CD curve and WIRP.</p>
+        </div>
+        <label class="small-btn bank-upload-btn">
+          Upload WIRP
+          <input type="file" id="wirpWorkbookInput" accept=".xlsx,.xlsm,.xls,.csv" hidden>
+        </label>
+      </div>
+      <div class="wirp-status" id="wirpStatus">Checking WIRP forward-rate input&hellip;</div>
+      <div class="cd-opportunity-search">
+        <input type="search" id="cdOpportunityBankInput" placeholder="Search bank name, city, or FDIC cert..." autocomplete="off">
+        <button type="button" class="small-btn" id="cdOpportunityBankBtn">Analyze</button>
+      </div>
+      <div class="cd-opportunity-results" id="cdOpportunityBankResults"></div>
+      <div class="cd-opportunity-output" id="cdOpportunityOutput">
+        <div class="bank-search-empty">Search a bank to screen for brokered CD funding fit.</div>
+      </div>
     </section>
 
     <div class="viewer-wrap document-only-view">
@@ -1178,6 +1353,28 @@
           <div class="upload-status" id="status-relativeValue">
             <span>Accepts: .pdf</span>
             <span class="pending">Awaiting</span>
+          </div>
+        </div>
+
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>MMD Curve</span>
+            <span class="ft">.PDF</span>
+          </div>
+          <label class="drop-zone" data-slot="mmd">
+            <input type="file" accept=".pdf" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop PDF File">Drop PDF File</h5>
+            <p data-default="or click to browse">or click to browse</p>
+          </label>
+          <div class="upload-status" id="status-mmd">
+            <span>Accepts: .pdf</span>
+            <span class="pending">Optional</span>
           </div>
         </div>
 
@@ -1687,17 +1884,33 @@
 
     <section class="muni-tey-control" aria-label="Muni tax-equivalent yield settings">
       <div>
-        <span class="tool-eyebrow">TEY Settings</span>
-        <h3>Tax-equivalent yield audience</h3>
-        <p>TEY = YTW / (1 - tax rate). Excludes TEFRA haircut, disallowance, and state/local treatment.</p>
+        <span class="tool-eyebrow">Tax Settings</span>
+        <h3>TEY, ATY, TEFRA, and de minimis</h3>
+        <p id="muniTaxAssumptionNote">Uses visible assumptions below. Consult a tax advisor for account-specific treatment.</p>
       </div>
       <div class="muni-tey-actions">
-        <button type="button" class="active" data-muni-tax-audience="ccorp">C-Corp 21%</button>
-        <button type="button" data-muni-tax-audience="scorp">S-Corp 29.6%</button>
-        <button type="button" data-muni-tax-audience="ria">RIA/Money Manager 35%</button>
+        <button type="button" class="active" data-muni-tax-audience="ccorp">Bank C-Corp</button>
+        <button type="button" data-muni-tax-audience="scorp">S-Corp</button>
+        <button type="button" data-muni-tax-audience="individual">Individual</button>
         <label>
-          <span>Custom</span>
+          <span>Ordinary tax %</span>
           <input type="number" id="muniCustomTaxRate" min="0" max="60" step="0.1" value="21">
+        </label>
+        <label>
+          <span>Cap gains %</span>
+          <input type="number" id="muniCapitalGainsRate" min="0" max="60" step="0.1" value="21">
+        </label>
+        <label>
+          <span>Custom COF %</span>
+          <input type="number" id="muniCostOfFunds" min="0" max="20" step="0.05" value="2.00">
+        </label>
+        <label>
+          <span>BQ disallow %</span>
+          <input type="number" id="muniBqDisallowance" min="0" max="100" step="1" value="20">
+        </label>
+        <label>
+          <span>GM disallow %</span>
+          <input type="number" id="muniGeneralDisallowance" min="0" max="100" step="1" value="100">
         </label>
       </div>
     </section>
@@ -1762,20 +1975,22 @@
             <th style="width:110px">Ratings</th>
             <th data-sort="quantity" style="width:80px;text-align:right">Qnty</th>
             <th data-sort="issuerState" style="width:55px">ST</th>
-            <th data-sort="issuerName">Issuer</th>
+            <th data-sort="issuerName" class="muni-issuer-heading">Issuer</th>
             <th data-sort="issueType" style="width:80px">Type</th>
             <th data-sort="coupon" style="width:80px;text-align:right">Coupon %</th>
             <th data-sort="maturity" style="width:120px">Maturity</th>
             <th data-sort="callDate" style="width:120px">Call Date</th>
             <th data-sort="ytw" style="width:90px;text-align:right">YTW / Sprd</th>
-            <th data-sort="tey" style="width:90px;text-align:right">TEY</th>
+            <th data-sort="taxAdjustedYield" style="width:95px;text-align:right">TEY / ATY</th>
+            <th data-sort="tefraHaircutBps" style="width:95px;text-align:right">TEFRA bp</th>
+            <th data-sort="deMinimisCushion" style="width:95px;text-align:right">De Min</th>
             <th data-sort="price" style="width:85px;text-align:right">Price</th>
             <th data-sort="cusip" style="width:100px">CUSIP</th>
             <th style="width:140px">Credit Enh.</th>
           </tr>
         </thead>
         <tbody id="muniExplorerBody">
-          <tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
+          <tr><td colspan="16" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
         </tbody>
       </table>
     </div>
@@ -1783,7 +1998,7 @@
     <div class="legend-box">
       <strong>Tip:</strong>
       Click a column header to sort. Taxable munis may show a spread (e.g. +40/5YR) in the YTW column instead of a yield.
-      "Section" reflects the PDF's grouping: BQ (bank-qualified), Municipals (standard tax-exempt), Taxable Munis. TEY uses the active audience rate above.
+      "Section" reflects the PDF's grouping: BQ (bank-qualified), Municipals (standard tax-exempt), Taxable Munis. TEY/ATY uses the visible assumptions above and is not tax advice.
     </div>
   </div>
 </div>
@@ -2212,19 +2427,45 @@
       <section class="maps-panel">
         <div class="maps-panel-head">
           <h3>Bank Marker Map</h3>
-          <button id="mapsFullViewBtn" type="button" class="small-btn">Open Full View</button>
+          <div class="maps-head-actions">
+            <button id="mapsFitResultsBtn" type="button" class="small-btn">Fit Results</button>
+            <button id="mapsResetViewBtn" type="button" class="small-btn">Reset US</button>
+            <button id="mapsFullViewBtn" type="button" class="small-btn">Open Full View</button>
+          </div>
         </div>
         <div id="mapsPlot" class="maps-plot">
           <div id="mapsLegend" class="maps-legend" aria-label="Filter map and list by account status"></div>
         </div>
-        <div class="maps-tip">Click a state to drop bank pins. Use the legend to filter by status. Click a pin for the bank's stats.</div>
+        <div class="maps-area-card">
+          <div>
+            <strong>Muni deal area search</strong>
+            <span id="mapsAreaStatus">Search a town or county to find nearby banks.</span>
+          </div>
+          <div class="maps-area-controls">
+            <input type="search" id="mapsAreaSearchBox" placeholder="City or county..." autocomplete="off">
+            <select id="mapsAreaRadius">
+              <option value="25">25 mi</option>
+              <option value="50" selected>50 mi</option>
+              <option value="75">75 mi</option>
+              <option value="100">100 mi</option>
+            </select>
+            <button id="mapsAreaSearchBtn" type="button" class="small-btn primary">Find Area</button>
+            <button id="mapsAreaClearBtn" type="button" class="small-btn">Clear</button>
+          </div>
+        </div>
+        <div class="maps-tip">Drag or scroll the map freely. Use Add State or area search to filter, then click a pin for the bank's stats.</div>
       </section>
 
       <section class="maps-panel">
         <h3>Bank List</h3>
+        <div id="mapsStateSummary" class="maps-state-summary"></div>
+        <div id="mapsStateDrilldown" class="maps-drilldown" hidden></div>
         <div class="maps-controls">
           <div class="maps-control-row">
             <span class="maps-control-label">Selected states:</span>
+            <select id="mapsStateSelect" aria-label="Add state to map filter">
+              <option value="">Add State...</option>
+            </select>
             <div id="mapsStateChips" class="maps-chips"></div>
             <button id="mapsClearStates" type="button" class="small-btn">Clear</button>
           </div>
@@ -2233,6 +2474,22 @@
             <button id="mapsAdvancedBtn" type="button" class="small-btn">Advanced filter&hellip;</button>
             <span id="mapsActiveFilters" class="maps-active-filters"></span>
             <span id="mapsRowCount" class="maps-row-count">&mdash;</span>
+          </div>
+          <div class="maps-control-row maps-territory-row">
+            <span class="maps-control-label">Territory:</span>
+            <select id="mapsOwnerSelect" aria-label="Filter map by coverage owner">
+              <option value="">All owners</option>
+            </select>
+            <input type="number" id="mapsMinAssets" min="0" step="1" placeholder="Min assets $MM" aria-label="Minimum assets in millions">
+            <input type="number" id="mapsMaxAssets" min="0" step="1" placeholder="Max assets $MM" aria-label="Maximum assets in millions">
+            <select id="mapsSortSelect" aria-label="Prioritize bank list">
+              <option value="opportunity">Priority score</option>
+              <option value="assets">Assets high to low</option>
+              <option value="securities">Securities / Assets</option>
+              <option value="loans">Loans / Deposits</option>
+              <option value="name">Bank name</option>
+            </select>
+            <button id="mapsClearTerritory" type="button" class="small-btn">Clear</button>
           </div>
         </div>
         <div class="maps-tablewrap">
@@ -2244,12 +2501,13 @@
                 <th>City</th>
                 <th>State</th>
                 <th>Status</th>
+                <th class="num">Priority</th>
                 <th class="num">Assets ($MM)</th>
                 <th class="num">Securities / Assets (%)</th>
               </tr>
             </thead>
             <tbody id="mapsBankBody">
-              <tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">Loading&hellip;</td></tr>
+              <tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">Loading&hellip;</td></tr>
             </tbody>
           </table>
         </div>
@@ -2280,14 +2538,18 @@
       <header class="maps-full-head">
         <div>
           <strong>Bank Map Full View</strong>
-          <span id="mapsFullSubtitle">Hover states, click states, or select a bank marker.</span>
+          <span id="mapsFullSubtitle">Drag or scroll to move around, then select a bank marker.</span>
         </div>
         <div class="maps-full-legend" aria-label="Marker status legend">
           <span><i class="maps-pin-open"></i>Open</span>
           <span><i class="maps-pin-prospect"></i>Prospect</span>
           <span><i class="maps-pin-client"></i>Client</span>
         </div>
-        <button type="button" class="small-btn" id="mapsFullClose">Close</button>
+        <div class="maps-head-actions">
+          <button type="button" class="small-btn" id="mapsFullFitResultsBtn">Fit Results</button>
+          <button type="button" class="small-btn" id="mapsFullResetViewBtn">Reset US</button>
+          <button type="button" class="small-btn" id="mapsFullClose">Close</button>
+        </div>
       </header>
       <div class="maps-full-body">
         <div id="mapsFullPlot" class="maps-full-plot"></div>

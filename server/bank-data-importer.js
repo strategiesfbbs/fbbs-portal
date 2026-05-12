@@ -607,7 +607,8 @@ const MAP_FIELD_KEYS = [
   'afsTotal', 'htmTotal', 'securitiesToAssets', 'loansToAssets', 'loansToDeposits',
   'roa', 'roe', 'netInterestMargin', 'yieldOnSecurities', 'yieldOnLoans',
   'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio', 'leverageRatio',
-  'nonInterestBearingDeposits', 'wholesaleFundingReliance'
+  'nonInterestBearingDeposits', 'wholesaleFundingReliance',
+  'liquidAssetsToAssets', 'tier1RiskBasedRatio', 'texasRatio', 'nplsToLoans', 'longTermAssetsToAssets'
 ];
 
 function zip5(value) {
@@ -654,7 +655,11 @@ function buildMapFieldDefs() {
     .filter(Boolean);
 }
 
-function queryBankMapDataset(outputDir, periodPattern = null) {
+function peerDeltaFieldKey(metricKey) {
+  return `peerDelta_${metricKey}`;
+}
+
+function queryBankMapDataset(outputDir, periodPattern = null, options = {}) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return null;
   let pattern = periodPattern;
@@ -694,13 +699,52 @@ function queryBankMapDataset(outputDir, periodPattern = null) {
   const stateCounts = {};
   let mappedCount = 0;
   let latestPeriod = '';
+  const peerComparison = options.peerComparison || null;
+  const peerByKey = (peerComparison && peerComparison.byKey) || null;
+  const peerFieldDefs = peerByKey ? Object.keys(peerByKey).map(metricKey => {
+    const def = BANK_FIELDS.find(f => f.key === metricKey);
+    const baseLabel = def ? def.label : metricKey;
+    return {
+      key: peerDeltaFieldKey(metricKey),
+      label: `${baseLabel.replace(/\s*\(.*?\)\s*$/, '').trim()} Δ vs peer`,
+      type: 'percent',
+      section: 'peer',
+      sourceKey: metricKey,
+      higherIsBetter: peerByKey[metricKey].higherIsBetter
+    };
+  }) : [];
+
   for (const r of rows) {
     if (r.state) stateCounts[r.state] = (stateCounts[r.state] || 0) + 1;
     if (r.period && r.period > latestPeriod) latestPeriod = r.period;
     Object.assign(r, mapLocationForRow(r));
     if (Number.isFinite(r.latitude) && Number.isFinite(r.longitude)) mappedCount += 1;
+    if (peerByKey) {
+      for (const def of peerFieldDefs) {
+        const bankRaw = r[def.sourceKey];
+        if (bankRaw === null || bankRaw === undefined || bankRaw === '') continue;
+        const bankValue = Number(bankRaw);
+        const peerValue = Number(peerByKey[def.sourceKey].peerValue);
+        if (!Number.isFinite(bankValue) || !Number.isFinite(peerValue)) continue;
+        r[def.key] = bankValue - peerValue;
+      }
+    }
   }
-  return { banks: rows, fields, stateCounts, latestPeriod, bankCount: rows.length, mappedCount };
+  return {
+    banks: rows,
+    fields: peerFieldDefs.length ? fields.concat(peerFieldDefs) : fields,
+    stateCounts,
+    latestPeriod,
+    bankCount: rows.length,
+    mappedCount,
+    peerComparison: peerComparison ? {
+      peerGroup: peerComparison.peerGroup,
+      period: peerComparison.period,
+      bankPeriod: peerComparison.bankPeriod,
+      periodAligned: peerComparison.periodAligned,
+      byKey: peerComparison.byKey
+    } : null
+  };
 }
 
 module.exports = {

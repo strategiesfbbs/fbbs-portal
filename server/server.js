@@ -31,6 +31,7 @@ const { parseCdOffersText, parseCdOffersWorkbook } = require('./cd-offers-parser
 const { parseBrokeredCdRateSheetText } = require('./brokered-cd-parser');
 const { parseMuniOffersText } = require('./muni-offers-parser');
 const { parseEconomicUpdateText } = require('./economic-update-parser');
+const { parseMmdCurveText } = require('./mmd-parser');
 const { parseTreasuryNotesWorkbook } = require('./treasury-notes-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
 const { parseCorporatesFiles } = require('./corporates-parser');
@@ -59,6 +60,11 @@ const {
   loadBondAccountingManifest,
   resolveBondAccountingStoredFile
 } = require('./bond-accounting-store');
+const {
+  getWirpStatus,
+  loadWirpAnalysis,
+  saveWirpWorkbook
+} = require('./wirp-store');
 const {
   addBankNote,
   getBankCoverage,
@@ -107,6 +113,7 @@ const MBS_CMO_DIR = path.join(DATA_DIR, 'mbs-cmo');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
 const BANK_UPLOAD_MAX_BYTES = (parseInt(process.env.BANK_UPLOAD_MAX_MB, 10) || 300) * 1024 * 1024;
+const BANK_CACHE_MAX_ENTRIES = 200;
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = LOG_LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
@@ -154,13 +161,14 @@ const MIME_TYPES = {
   '.txt':  'text/plain; charset=utf-8'
 };
 
-const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 const CD_COST_FIELD_NAMES = new Set(['cdoffersCost', 'cdCostWorkbook', 'cdCost']);
 const OFFERINGS_FILENAME = '_offerings.json';
 const MUNI_OFFERINGS_FILENAME = '_muni_offerings.json';
 const TREASURY_NOTES_FILENAME = '_treasury_notes.json';
 const ECONOMIC_UPDATE_FILENAME = '_economic_update.json';
 const RELATIVE_VALUE_FILENAME = '_relative_value.json';
+const MMD_FILENAME = '_mmd.json';
 const AGENCIES_FILENAME = '_agencies.json';
 const CORPORATES_FILENAME = '_corporates.json';
 const META_FILENAME = '_meta.json';
@@ -301,8 +309,11 @@ function classifyFile(filename, explicitSlot) {
   }
 
   if (lower.endsWith('.pdf')) {
+    if (lower.includes('mmd') || lower.includes('municipal market data')) {
+      return 'mmd';
+    }
     if (lower.includes('relative_value') || lower.includes('relative value') ||
-        lower.includes('relativevalue')) {
+        lower.includes('relative_val') || lower.includes('relativevalue')) {
       return 'relativeValue';
     }
     // Muni offerings: "FBBS_Offerings", "Muni_Offerings", "Municipal_Offerings",
@@ -798,6 +809,9 @@ function metadataSlotFilename(meta, slot, dirPath, files) {
   const filename = meta && meta.slotFilenames && meta.slotFilenames[slot];
   if (typeof filename !== 'string' || !filename || filename.startsWith('_')) return null;
   if (Array.isArray(files) && !files.includes(filename)) return null;
+  const classifiedSlot = classifyFile(filename);
+  if (slot === 'mmd' && classifiedSlot !== 'mmd') return null;
+  if (slot === 'econ' && classifiedSlot === 'mmd') return null;
   return fileExistsInDir(dirPath, filename) ? filename : null;
 }
 
@@ -812,6 +826,16 @@ function findPackageFileForSlot(dirPath, slot, meta = {}, files = null) {
   if (fromMeta) return fromMeta;
 
   return names.find(filename => classifyFile(filename) === slot) || null;
+}
+
+function findMmdPdfInPackage(dirPath, files = null) {
+  const names = Array.isArray(files)
+    ? files
+    : fs.existsSync(dirPath)
+      ? fs.readdirSync(dirPath).filter(f => !f.startsWith('_'))
+      : [];
+
+  return names.find(filename => /\.pdf$/i.test(filename) && classifyFile(filename) === 'mmd') || null;
 }
 
 function readSlotFileForPackage(dirPath, slot, { slotFilenames = {}, priorMeta = {} } = {}) {
@@ -854,6 +878,7 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     dashboard: null,
     econ: null,
     relativeValue: null,
+    mmd: null,
     treasuryNotes: null,
     cd: null,
     cdoffers: null,
@@ -872,7 +897,8 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     agencyFileDate: null,
     corporatesCount: null,
     corporatesFileDate: null,
-    relativeValueRowsCount: null
+    relativeValueRowsCount: null,
+    mmdCurveCount: null
   };
 
   const assignedFromMeta = new Set();
@@ -894,6 +920,10 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
     if (type && !pkg[type]) pkg[type] = f;
   }
 
+  if (!pkg.mmd) {
+    pkg.mmd = findMmdPdfInPackage(dirPath, files);
+  }
+
   if (meta.date) pkg.date = meta.date;
   if (meta.publishedAt) pkg.publishedAt = meta.publishedAt;
   if (meta.publishedBy) pkg.publishedBy = meta.publishedBy;
@@ -907,6 +937,7 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
   if (Array.isArray(meta.brokeredCdTerms)) pkg.brokeredCdTerms = meta.brokeredCdTerms;
   if (meta.brokeredCdAsOfDate) pkg.brokeredCdAsOfDate = meta.brokeredCdAsOfDate;
   if (typeof meta.relativeValueRowsCount === 'number') pkg.relativeValueRowsCount = meta.relativeValueRowsCount;
+  if (typeof meta.mmdCurveCount === 'number') pkg.mmdCurveCount = meta.mmdCurveCount;
 
   const cdOfferFiles = Array.isArray(meta.slotFileLists && meta.slotFileLists.cdoffers)
     ? meta.slotFileLists.cdoffers.filter(filename => fileExistsInDir(dirPath, filename))
@@ -942,13 +973,25 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
   return pkg;
 }
 
+let currentPackageCache = null;
+let archiveListCache = null;
+
+function invalidatePackageCache() {
+  currentPackageCache = null;
+  archiveListCache = null;
+}
+
 function getCurrentPackage() {
-  return readPackageDir(CURRENT_DIR, { dateIfMissingMeta: null });
+  if (!currentPackageCache) {
+    currentPackageCache = readPackageDir(CURRENT_DIR, { dateIfMissingMeta: null });
+  }
+  return currentPackageCache;
 }
 
 function getArchiveList() {
+  if (archiveListCache) return archiveListCache;
   if (!fs.existsSync(ARCHIVE_DIR)) return [];
-  return fs.readdirSync(ARCHIVE_DIR)
+  archiveListCache = fs.readdirSync(ARCHIVE_DIR)
     .filter(d => {
       const full = path.join(ARCHIVE_DIR, d);
       return fs.statSync(full).isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(d);
@@ -956,6 +999,7 @@ function getArchiveList() {
     .sort()
     .reverse()
     .map(dir => readPackageDir(path.join(ARCHIVE_DIR, dir), { dateIfMissingMeta: dir }));
+  return archiveListCache;
 }
 
 function loadCurrentOfferings() {
@@ -1051,6 +1095,46 @@ function loadArchivedMuniOfferings(date) {
   } catch (e) {
     return null;
   }
+}
+
+async function loadMmdCurveFromPackage(dirPath, { writeCache = false } = {}) {
+  const p = path.join(dirPath, MMD_FILENAME);
+  if (fs.existsSync(p)) {
+    try {
+      return JSON.parse(fs.readFileSync(p, 'utf-8'));
+    } catch (e) {
+      log('warn', 'Could not read MMD curve file:', e.message);
+    }
+  }
+
+  const sourceFile = findMmdPdfInPackage(dirPath);
+  if (!sourceFile) return null;
+
+  const sourcePath = safeJoin(dirPath, sourceFile);
+  if (!sourcePath || !fs.existsSync(sourcePath)) return null;
+
+  try {
+    const extracted = await extractPdfText(fs.readFileSync(sourcePath));
+    const payload = parseMmdCurveText(extracted && extracted.text);
+    payload.extractedAt = new Date().toISOString();
+    payload.sourceFile = sourceFile;
+    if (writeCache) {
+      fs.writeFileSync(p, JSON.stringify(payload, null, 2));
+    }
+    return payload;
+  } catch (e) {
+    log('warn', `Could not extract MMD curve from ${sourceFile}:`, e.message);
+    return null;
+  }
+}
+
+function loadCurrentMmdCurve() {
+  return loadMmdCurveFromPackage(CURRENT_DIR, { writeCache: true });
+}
+
+function loadArchivedMmdCurve(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  return loadMmdCurveFromPackage(path.join(ARCHIVE_DIR, date));
 }
 
 function loadCurrentTreasuryNotes() {
@@ -1425,6 +1509,247 @@ function pickBrokeredCdFunding(meta) {
   };
 }
 
+function pct(value, digits = 2) {
+  const n = numericValue(value);
+  return n == null ? 'n/a' : `${n.toFixed(digits)}%`;
+}
+
+function moneyMillionsFromThousands(value) {
+  const n = numericValue(value);
+  if (n == null) return null;
+  return n / 1000;
+}
+
+function latestPeriodValues(bank) {
+  const periods = bank && Array.isArray(bank.periods) ? bank.periods : [];
+  return {
+    current: periods[0] || null,
+    prior: periods[1] || null,
+    currentValues: periods[0] && periods[0].values ? periods[0].values : {},
+    priorValues: periods[1] && periods[1].values ? periods[1].values : {}
+  };
+}
+
+function metricDelta(currentValues, priorValues, key) {
+  const current = numericValue(currentValues[key]);
+  const prior = numericValue(priorValues[key]);
+  if (current == null || prior == null) return null;
+  return Number((current - prior).toFixed(3));
+}
+
+function peerDelta(peerComparison, currentValues, key) {
+  const current = numericValue(currentValues[key]);
+  const peer = peerComparison && peerComparison.byKey && peerComparison.byKey[key]
+    ? numericValue(peerComparison.byKey[key].peerValue)
+    : null;
+  if (current == null || peer == null) return null;
+  return Number((current - peer).toFixed(3));
+}
+
+function brokeredSignal(signals, condition, points, title, detail, tone = 'neutral') {
+  if (!condition) return 0;
+  signals.push({ title, detail, points, tone });
+  return points;
+}
+
+function recommendBrokeredCdAmount(currentValues, score) {
+  const depositsMm = moneyMillionsFromThousands(currentValues.totalDeposits);
+  if (depositsMm == null || depositsMm <= 0) {
+    return {
+      label: 'Sizing pending',
+      detail: 'Total deposits were unavailable, so size should be set manually.'
+    };
+  }
+  const lowPct = score >= 8 ? 2 : 1;
+  const highPct = score >= 8 ? 5 : 3;
+  const low = Math.max(1, depositsMm * lowPct / 100);
+  const high = Math.max(low, depositsMm * highPct / 100);
+  return {
+    label: `$${low.toFixed(0)}MM - $${high.toFixed(0)}MM`,
+    detail: `Initial sizing band equals ${lowPct}-${highPct}% of total deposits. Treat as a conversation starter, not an underwriting limit.`
+  };
+}
+
+function termMonthsScore(term, context) {
+  const months = numericValue(term.months) || 0;
+  const mid = numericValue(term.mid);
+  if (!months || mid == null) return -Infinity;
+  const cheapest = context.cheapestMid == null ? mid : context.cheapestMid;
+  const extensionCost = Math.max(0, mid - cheapest);
+  let score = 100 - extensionCost * 40;
+
+  if (context.need === 'urgent') {
+    if (months <= 12) score += 18;
+    if (months > 24) score -= 18;
+  } else if (context.need === 'structural') {
+    if (months >= 12 && months <= 36) score += 16;
+    if (months < 6) score -= 10;
+  } else {
+    if (months >= 6 && months <= 18) score += 8;
+  }
+
+  if (context.forwardBias === 'falling') {
+    if (months <= 12) score += 18;
+    if (months > 24) score -= 24;
+  } else if (context.forwardBias === 'rising') {
+    if (months >= 12 && months <= 36) score += 18;
+    if (months <= 6) score -= 10;
+  } else if (context.forwardBias === 'flat') {
+    if (months >= 12 && months <= 24 && extensionCost <= 0.2) score += 14;
+  }
+
+  return score;
+}
+
+function recommendBrokeredCdTerms(terms, wirp, context) {
+  const rows = Array.isArray(terms) ? terms.filter(term => numericValue(term.mid) != null) : [];
+  if (!rows.length) {
+    return {
+      summary: 'Upload the Brokered CD Rate Sheet to recommend terms.',
+      terms: [],
+      rationale: ['Term guidance needs today\'s all-in brokered CD curve.']
+    };
+  }
+
+  const cheapestMid = Math.min(...rows.map(term => numericValue(term.mid)).filter(n => n != null));
+  const forwardBias = wirp && wirp.summary ? wirp.summary.bias : 'unknown';
+  const ranked = rows
+    .map(term => ({ ...term, score: termMonthsScore(term, { ...context, cheapestMid, forwardBias }) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+  const primary = ranked[0];
+  const mix = ranked.length > 1 && context.need !== 'light'
+    ? `${primary.label} lead with ${ranked[1].label} secondary`
+    : primary.label;
+  const rationale = [];
+
+  if (forwardBias === 'falling') rationale.push('WIRP implies lower rates later, so avoid over-extending unless liquidity pressure keeps building.');
+  else if (forwardBias === 'rising') rationale.push('WIRP implies firmer rates, so locking some term can protect funding cost.');
+  else if (forwardBias === 'flat') rationale.push('WIRP looks fairly flat, so prefer terms where extension cost is modest.');
+  else rationale.push('No WIRP path is loaded yet, so term ranking leans on current all-in curve shape and funding need.');
+
+  const curveDetail = primary.low != null && primary.high != null
+    ? `${primary.label} all-in range ${pct(primary.low, 3)} to ${pct(primary.high, 3)}`
+    : `${primary.label} all-in midpoint ${pct(primary.mid, 3)}`;
+  rationale.push(curveDetail);
+
+  return {
+    summary: mix,
+    terms: ranked.map(term => ({
+      label: term.label,
+      months: term.months,
+      mid: term.mid,
+      low: term.low,
+      high: term.high
+    })),
+    rationale
+  };
+}
+
+function buildBrokeredCdOpportunity(bankData) {
+  const bank = bankData && bankData.bank;
+  if (!bank || !bank.summary) return null;
+  const { current, prior, currentValues, priorValues } = latestPeriodValues(bank);
+  const peerComparison = bank.summary.peerComparison || bank.peerComparison || getPeerComparisonForBank(bank);
+  const wirp = loadWirpAnalysis(BANK_REPORTS_DIR);
+  const meta = readMetaFile(CURRENT_DIR);
+  const terms = Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms : [];
+
+  const ltd = numericValue(currentValues.loansToDeposits);
+  const liquidity = numericValue(currentValues.liquidAssetsToAssets);
+  const wholesale = numericValue(currentValues.wholesaleFundingReliance);
+  const brokered = numericValue(currentValues.brokeredDepositsToDeposits);
+  const depositDeltaPct = metricDelta(currentValues, priorValues, 'totalDeposits');
+  const ltdDelta = metricDelta(currentValues, priorValues, 'loansToDeposits');
+  const liquidityDelta = metricDelta(currentValues, priorValues, 'liquidAssetsToAssets');
+  const wholesaleDelta = metricDelta(currentValues, priorValues, 'wholesaleFundingReliance');
+  const brokeredDelta = metricDelta(currentValues, priorValues, 'brokeredDepositsToDeposits');
+  const ltdPeerDelta = peerDelta(peerComparison, currentValues, 'loansToDeposits');
+  const liquidityPeerDelta = peerDelta(peerComparison, currentValues, 'liquidAssetsToAssets');
+  const wholesalePeerDelta = peerDelta(peerComparison, currentValues, 'wholesaleFundingReliance');
+
+  const signals = [];
+  let score = 0;
+  score += brokeredSignal(signals, ltd != null && ltd >= 90, 3, 'Loans/deposits is elevated', `Current loans/deposits is ${pct(ltd)}.`, 'warn');
+  score += brokeredSignal(signals, ltdDelta != null && ltdDelta >= 3, 3, 'Loans/deposits tightened quarter over quarter', `Moved ${ltdDelta >= 0 ? 'up' : 'down'} ${Math.abs(ltdDelta).toFixed(2)} percentage points from prior quarter.`, 'warn');
+  score += brokeredSignal(signals, liquidity != null && liquidity <= 15, 2, 'Liquidity is low', `Liquid assets/assets is ${pct(liquidity)}.`, 'warn');
+  score += brokeredSignal(signals, liquidityDelta != null && liquidityDelta <= -2, 3, 'Liquidity declined quarter over quarter', `Liquid assets/assets fell ${Math.abs(liquidityDelta).toFixed(2)} percentage points from prior quarter.`, 'warn');
+  score += brokeredSignal(signals, depositDeltaPct != null && depositDeltaPct < 0, 2, 'Deposits declined quarter over quarter', `Total deposits fell by ${Math.abs(depositDeltaPct).toLocaleString('en-US', { maximumFractionDigits: 0 })} in reported $000 values.`, 'warn');
+  score += brokeredSignal(signals, wholesaleDelta != null && wholesaleDelta >= 1.5, 2, 'Wholesale funding reliance is rising', `Reliance rose ${wholesaleDelta.toFixed(2)} percentage points from prior quarter.`, 'warn');
+  score += brokeredSignal(signals, ltdPeerDelta != null && ltdPeerDelta >= 5, 2, 'Loans/deposits screens above peer', `Current ratio is ${ltdPeerDelta.toFixed(2)} percentage points above peer.`, 'warn');
+  score += brokeredSignal(signals, liquidityPeerDelta != null && liquidityPeerDelta <= -3, 2, 'Liquidity screens below peer', `Liquid assets/assets is ${Math.abs(liquidityPeerDelta).toFixed(2)} percentage points below peer.`, 'warn');
+  score += brokeredSignal(signals, wholesalePeerDelta != null && wholesalePeerDelta >= 3, 1, 'Wholesale funding is above peer', `Reliance is ${wholesalePeerDelta.toFixed(2)} percentage points above peer.`, 'neutral');
+  score += brokeredSignal(signals, brokered != null && brokered <= 5, 2, 'Current brokered deposit use appears modest', `Brokered deposits/deposits is ${pct(brokered)}.`, 'good');
+  score += brokeredSignal(signals, brokered != null && brokered >= 15, -3, 'Current brokered deposit use is already elevated', `Brokered deposits/deposits is ${pct(brokered)}; review policy and concentration before recommending more.`, 'danger');
+  score += brokeredSignal(signals, wholesale != null && wholesale >= 25, -1, 'Wholesale funding already high', `Wholesale funding reliance is ${pct(wholesale)}.`, 'danger');
+
+  const recommendation = score >= 9
+    ? 'Likely candidate'
+    : score >= 5
+      ? 'Possible candidate'
+      : 'Not priority';
+  const need = score >= 9 ? 'structural' : score >= 5 ? 'urgent' : 'light';
+  const amount = recommendBrokeredCdAmount(currentValues, score);
+  const termRecommendation = recommendBrokeredCdTerms(terms, wirp, { need });
+
+  return {
+    bank: {
+      id: bank.id,
+      displayName: bank.summary.displayName || bank.summary.name || 'Bank',
+      city: bank.summary.city || '',
+      state: bank.summary.state || '',
+      certNumber: bank.summary.certNumber || '',
+      period: current && current.period || bank.summary.period || ''
+    },
+    recommendation,
+    score,
+    need,
+    amount,
+    termRecommendation,
+    wirp: wirp ? {
+      available: true,
+      sourceFile: wirp.sourceFile,
+      uploadedAt: wirp.uploadedAt,
+      summary: wirp.summary,
+      records: Array.isArray(wirp.records) ? wirp.records.slice(0, 8) : [],
+      warnings: wirp.warnings || []
+    } : { available: false, summary: null, records: [], warnings: ['Upload WIRP to add forward-rate term guidance.'] },
+    brokeredCdTerms: terms,
+    periods: {
+      current: current ? current.period : null,
+      prior: prior ? prior.period : null
+    },
+    metrics: [
+      metricCard('Loans / Deposits', currentValues.loansToDeposits, priorValues.loansToDeposits, ltdPeerDelta),
+      metricCard('Liquid Assets / Assets', currentValues.liquidAssetsToAssets, priorValues.liquidAssetsToAssets, liquidityPeerDelta),
+      metricCard('Wholesale Funding Reliance', currentValues.wholesaleFundingReliance, priorValues.wholesaleFundingReliance, wholesalePeerDelta),
+      metricCard('Brokered Deposits / Deposits', currentValues.brokeredDepositsToDeposits, priorValues.brokeredDepositsToDeposits, null),
+      metricCard('Total Deposits ($000)', currentValues.totalDeposits, priorValues.totalDeposits, null, 'money')
+    ],
+    signals,
+    talkingPoints: buildBrokeredCdTalkingPoints({ recommendation, signals, termRecommendation, amount, wirp })
+  };
+}
+
+function metricCard(label, current, prior, peerDeltaValue, type = 'percent') {
+  const currentNumber = numericValue(current);
+  const priorNumber = numericValue(prior);
+  const qoq = currentNumber != null && priorNumber != null ? Number((currentNumber - priorNumber).toFixed(3)) : null;
+  return { label, current: currentNumber, prior: priorNumber, qoq, peerDelta: peerDeltaValue, type };
+}
+
+function buildBrokeredCdTalkingPoints({ recommendation, signals, termRecommendation, amount, wirp }) {
+  const points = [
+    `${recommendation}: screen is driven by quarter-over-quarter funding movement, current liquidity, peer comparison, and existing brokered deposit use.`,
+    `Initial size discussion: ${amount.label}. ${amount.detail}`,
+    `Term guide: ${termRecommendation.summary}.`
+  ];
+  const topSignal = signals.find(signal => signal.points > 0);
+  if (topSignal) points.push(`${topSignal.title}: ${topSignal.detail}`);
+  if (wirp && wirp.summary && wirp.summary.explanation) points.push(wirp.summary.explanation);
+  return points;
+}
+
 function buildRuleBasedSalesCues({ economicUpdate, cdRows, treasuryRows, muniRows, agencyRows, corporateRows }) {
   const cues = [];
   const marketTreasuries = economicUpdate && Array.isArray(economicUpdate.treasuries) ? economicUpdate.treasuries : [];
@@ -1569,17 +1894,39 @@ async function buildDailyIntelligence() {
   };
 }
 
+const bankSearchCache = new Map();
+const bankDetailCache = new Map();
+
+function cacheSet(cache, key, value) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > BANK_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    cache.delete(oldestKey);
+  }
+  return value;
+}
+
+function invalidateBankCaches() {
+  bankSearchCache.clear();
+  bankDetailCache.clear();
+  invalidateMapBankCache();
+}
+
 function searchBanks(query, limit = 12) {
+  const safeLimit = Math.max(1, Math.min(50, parseInt(limit, 10) || 12));
+  const cacheKey = `${String(query || '').trim().toLowerCase()}|${safeLimit}`;
+  if (bankSearchCache.has(cacheKey)) return bankSearchCache.get(cacheKey);
   try {
-    const data = searchBankDatabase(BANK_REPORTS_DIR, query, limit);
+    const data = searchBankDatabase(BANK_REPORTS_DIR, query, safeLimit);
     if (!data || !Array.isArray(data.results)) return data;
     const bankIds = data.results.map(row => row.id);
     const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, bankIds);
     const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, bankIds);
-    return {
+    return cacheSet(bankSearchCache, cacheKey, {
       ...data,
       results: data.results.map(summary => enrichBankSummary(summary, statuses, coverageMap))
-    };
+    });
   } catch (err) {
     log('warn', 'Bank search failed:', err.message);
     return null;
@@ -1587,19 +1934,22 @@ function searchBanks(query, limit = 12) {
 }
 
 function getBankById(id) {
+  const bankId = String(id || '').trim();
+  if (bankDetailCache.has(bankId)) return bankDetailCache.get(bankId);
   try {
-    const data = getBankFromDatabase(BANK_REPORTS_DIR, id);
+    const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId);
     if (!data || !data.bank || !data.bank.summary) return data;
     const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, [data.bank.id]);
     const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, [data.bank.id]);
-    return {
+    return cacheSet(bankDetailCache, bankId, {
       ...data,
       bank: {
         ...data.bank,
         summary: enrichBankSummary(data.bank.summary, statuses, coverageMap),
-        bondAccounting: getBondAccountingForBank(BANK_REPORTS_DIR, data.bank.id)
+        bondAccounting: getBondAccountingForBank(BANK_REPORTS_DIR, data.bank.id),
+        peerComparison: getPeerComparisonForBank(data.bank)
       }
-    };
+    });
   } catch (err) {
     log('warn', `Could not read bank detail ${id}:`, err.message);
     return null;
@@ -1644,11 +1994,523 @@ function getBankDataStatus() {
   };
 }
 
+function compactNumber(value, options = {}) {
+  const n = numericValue(value);
+  if (n === null) return null;
+  const digits = options.digits == null ? 1 : options.digits;
+  if (options.type === 'money') {
+    const abs = Math.abs(n);
+    if (abs >= 1000000) return `$${(n / 1000000).toFixed(digits)}B`;
+    if (abs >= 1000) return `$${(n / 1000).toFixed(digits)}MM`;
+    return `$${n.toFixed(0)}K`;
+  }
+  if (options.type === 'percent') return `${n.toFixed(options.digits == null ? 2 : options.digits)}%`;
+  return n.toLocaleString('en-US', { maximumFractionDigits: digits });
+}
+
+function latestBankValues(bank) {
+  const latest = bank && Array.isArray(bank.periods) ? bank.periods[0] : null;
+  return {
+    latest,
+    values: (latest && latest.values) || {},
+    prior: bank && Array.isArray(bank.periods) ? bank.periods[1] : null
+  };
+}
+
+function bankMetricLine(label, value, type) {
+  const formatted = compactNumber(value, { type, digits: type === 'money' ? 1 : 2 });
+  return formatted ? `${label}: ${formatted}` : null;
+}
+
+function sumBankValues(values, keys) {
+  let total = 0;
+  let hasValue = false;
+  keys.forEach(key => {
+    const value = numericValue(values && values[key]);
+    if (value !== null) {
+      total += value;
+      hasValue = true;
+    }
+  });
+  return hasValue ? total : null;
+}
+
+function strongestOfferings(rows, scoreKeys, limit = 3) {
+  return (Array.isArray(rows) ? rows : [])
+    .map(row => ({
+      row,
+      score: scoreKeys.reduce((best, key) => {
+        const n = numericValue(row[key]);
+        return n === null ? best : Math.max(best, n);
+      }, -Infinity)
+    }))
+    .filter(item => Number.isFinite(item.score))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(item => item.row);
+}
+
+function offeringLabel(row, type) {
+  if (!row) return '';
+  if (type === 'cd') {
+    return `${row.term || ''} ${row.name || 'CD'}${numericValue(row.rate) !== null ? ` at ${Number(row.rate).toFixed(2)}%` : ''}${row.cusip ? ` (${row.cusip})` : ''}`.trim();
+  }
+  if (type === 'muni') {
+    return `${row.issuerState || ''} ${row.issuerName || 'muni'} ${row.maturity || ''}${numericValue(row.ytw) !== null ? ` YTW ${Number(row.ytw).toFixed(3)}%` : ''}`.trim();
+  }
+  if (type === 'agency') {
+    return `${row.ticker || 'Agency'} ${row.structure || ''} ${row.maturity || ''}${numericValue(row.ytm) !== null ? ` YTM ${Number(row.ytm).toFixed(3)}%` : ''}`.trim();
+  }
+  if (type === 'corporate') {
+    return `${row.issuerName || row.ticker || 'Corporate'} ${row.maturity || ''}${numericValue(row.ytm) !== null ? ` YTM ${Number(row.ytm).toFixed(3)}%` : ''}`.trim();
+  }
+  if (type === 'treasury') {
+    return `${row.description || 'Treasury'}${numericValue(row.yield) !== null ? ` yield ${Number(row.yield).toFixed(3)}%` : ''}`.trim();
+  }
+  return row.name || row.issuerName || row.description || '';
+}
+
+function currentInventorySnapshot(bankState) {
+  const pkg = getCurrentPackage() || {};
+  const meta = readMetaFile(CURRENT_DIR);
+  const cd = loadCurrentOfferings();
+  const muni = loadCurrentMuniOfferings();
+  const treasury = loadCurrentTreasuryNotes();
+  const agencies = loadCurrentAgencies();
+  const corporates = loadCurrentCorporates();
+  const cdRows = Array.isArray(cd && cd.offerings) ? cd.offerings : [];
+  const muniRows = Array.isArray(muni && muni.offerings) ? muni.offerings : [];
+  const treasuryRows = Array.isArray(treasury && treasury.notes) ? treasury.notes : [];
+  const agencyRows = Array.isArray(agencies && agencies.offerings) ? agencies.offerings : [];
+  const corporateRows = Array.isArray(corporates && corporates.offerings) ? corporates.offerings : [];
+  const state = String(bankState || '').toUpperCase();
+  const stateMunis = state ? muniRows.filter(row => String(row.issuerState || '').toUpperCase() === state) : [];
+
+  return {
+    asOfDate: pkg.date || cd && cd.asOfDate || muni && muni.asOfDate || null,
+    counts: {
+      cds: cdRows.length,
+      munis: muniRows.length,
+      stateMunis: stateMunis.length,
+      agencies: agencyRows.length,
+      corporates: corporateRows.length,
+      treasuries: treasuryRows.length,
+      brokeredCdTerms: Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms.length : 0
+    },
+    brokeredCdTerms: Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms : [],
+    examples: {
+      cds: strongestOfferings(cdRows, ['rate']).map(row => offeringLabel(row, 'cd')).filter(Boolean),
+      munis: strongestOfferings(stateMunis.length ? stateMunis : muniRows, ['ytw', 'ytm']).map(row => offeringLabel(row, 'muni')).filter(Boolean),
+      agencies: strongestOfferings(agencyRows, ['ytm', 'ytnc']).map(row => offeringLabel(row, 'agency')).filter(Boolean),
+      corporates: strongestOfferings(corporateRows, ['ytm', 'ytnc']).map(row => offeringLabel(row, 'corporate')).filter(Boolean),
+      treasuries: strongestOfferings(treasuryRows, ['yield']).map(row => offeringLabel(row, 'treasury')).filter(Boolean)
+    }
+  };
+}
+
+function buildAssistantSignals(bank, inventory, strategies) {
+  const { latest, values, prior } = latestBankValues(bank);
+  const priorValues = (prior && prior.values) || {};
+  const status = (bank.summary && bank.summary.accountStatus) || {};
+  const deltas = bank.peerComparison && bank.peerComparison.byKey ? bank.peerComparison.byKey : {};
+  const signals = [];
+  const ltd = numericValue(values.loansToDeposits);
+  const liquid = numericValue(values.liquidAssetsToAssets);
+  const securities = numericValue(values.securitiesToAssets);
+  const wholesale = numericValue(values.wholesaleFundingReliance);
+  const brokered = numericValue(values.brokeredDepositsToDeposits);
+  const nim = numericValue(values.netInterestMargin);
+  const yieldSecs = numericValue(values.yieldOnSecurities);
+  const munis = sumBankValues(values, ['afsMunis', 'htmMunis']);
+  const allMbs = sumBankValues(values, ['afsAllMbs', 'htmAllMbs']);
+  const totalSecurities = sumBankValues(values, ['afsTotal', 'htmTotal']);
+  const depositDelta = numericValue(values.totalDeposits) !== null && numericValue(priorValues.totalDeposits) !== null
+    ? numericValue(values.totalDeposits) - numericValue(priorValues.totalDeposits)
+    : null;
+
+  if (ltd !== null && ltd >= 85) {
+    signals.push({
+      type: 'Funding',
+      strength: ltd >= 95 ? 'High' : 'Medium',
+      text: `L/D ${compactNumber(ltd, { type: 'percent' })} — lead with brokered CD terms and funding alternatives.`
+    });
+  }
+  if (liquid !== null && liquid < 12) {
+    signals.push({
+      type: 'Liquidity',
+      strength: liquid < 8 ? 'High' : 'Medium',
+      text: `Liquid assets ${compactNumber(liquid, { type: 'percent' })} of assets — keep ideas short, liquid, and ladder-friendly.`
+    });
+  }
+  if (wholesale !== null && wholesale >= 15) {
+    signals.push({
+      type: 'Wholesale funding',
+      strength: wholesale >= 25 ? 'High' : 'Medium',
+      text: `Wholesale funding ${compactNumber(wholesale, { type: 'percent' })} — compare today's CD levels against their current cost of funds.`
+    });
+  }
+  if (brokered !== null && brokered > 0) {
+    signals.push({
+      type: 'Brokered history',
+      strength: brokered >= 10 ? 'High' : 'Medium',
+      text: `Brokered deposits ${compactNumber(brokered, { type: 'percent' })} of deposits — they already use the channel; ask about term and size.`
+    });
+  }
+  if (securities !== null && securities < 18) {
+    signals.push({
+      type: 'Portfolio room',
+      strength: 'Medium',
+      text: `Securities only ${compactNumber(securities, { type: 'percent' })} of assets — room to add if liquidity and policy allow.`
+    });
+  } else if (securities !== null && securities >= 25) {
+    signals.push({
+      type: 'Active portfolio',
+      strength: 'Medium',
+      text: `Securities ${compactNumber(securities, { type: 'percent' })} of assets — pitch swaps and yield pickup against the existing book.`
+    });
+  }
+  if (munis && totalSecurities) {
+    signals.push({
+      type: 'Muni appetite',
+      strength: (munis / totalSecurities) >= 0.2 ? 'High' : 'Medium',
+      text: `Munis ${((munis / totalSecurities) * 100).toFixed(0)}% of securities — screen BQ and in-state names from today's list.`
+    });
+  } else if (inventory.counts.munis) {
+    signals.push({
+      type: 'Muni screen',
+      strength: 'Low',
+      text: `No muni position visible in the latest filing, but ${inventory.counts.munis} muni offerings to screen today.`
+    });
+  }
+  if (allMbs && totalSecurities && (allMbs / totalSecurities) >= 0.1) {
+    signals.push({
+      type: 'MBS/CMO',
+      strength: (allMbs / totalSecurities) >= 0.25 ? 'High' : 'Medium',
+      text: `MBS ${((allMbs / totalSecurities) * 100).toFixed(0)}% of securities — pull bond accounting before pitching structure.`
+    });
+  }
+  if (nim !== null && yieldSecs !== null && yieldSecs < nim) {
+    signals.push({
+      type: 'Yield gap',
+      strength: 'Medium',
+      text: `Book yield ${compactNumber(yieldSecs, { type: 'percent' })} vs. NIM ${compactNumber(nim, { type: 'percent' })} — frame around income lift inside policy limits.`
+    });
+  }
+  if (depositDelta !== null && depositDelta < 0) {
+    signals.push({
+      type: 'Deposit runoff',
+      strength: Math.abs(depositDelta) > 25000 ? 'High' : 'Medium',
+      text: `Deposits down ${compactNumber(Math.abs(depositDelta), { type: 'money' })} QoQ — confirm funding need before pitching longer bonds.`
+    });
+  }
+  ['loansToDeposits', 'liquidAssetsToAssets', 'yieldOnSecurities', 'netInterestMargin'].forEach(key => {
+    const peer = deltas[key];
+    if (!peer || numericValue(peer.delta) === null) return;
+    const delta = numericValue(peer.delta);
+    if (Math.abs(delta) < 1) return;
+    signals.push({
+      type: 'Peer delta',
+      strength: Math.abs(delta) >= 5 ? 'High' : 'Medium',
+      text: `${peer.label || key} is ${delta > 0 ? 'above' : 'below'} peer average by ${Math.abs(delta).toFixed(2)} points.`
+    });
+  });
+  if (Array.isArray(strategies) && strategies.some(row => row.status === 'Open' || row.status === 'In Progress')) {
+    signals.push({
+      type: 'Open workflow',
+      strength: 'High',
+      text: 'Open strategy request already in the queue — check it before opening a new one.'
+    });
+  }
+  if (status.status && status.status !== 'Open') {
+    signals.push({
+      type: 'Coverage',
+      strength: status.status === 'Client' ? 'High' : 'Medium',
+      text: `Coverage status: ${status.status}${status.owner ? ` (${status.owner})` : ''} — match the ask to the relationship.`
+    });
+  }
+  if (!signals.length) {
+    signals.push({
+      type: 'No standout',
+      strength: 'Low',
+      text: 'No single pressure point in the latest filing — open on relationship, policy limits, and current buy list.'
+    });
+  }
+  return signals.slice(0, 8);
+}
+
+function buildAssistantProductFits(bank, inventory, signals) {
+  const { values } = latestBankValues(bank);
+  const ltd = numericValue(values.loansToDeposits);
+  const liquid = numericValue(values.liquidAssetsToAssets);
+  const securities = numericValue(values.securitiesToAssets);
+  const totalSecurities = sumBankValues(values, ['afsTotal', 'htmTotal']);
+  const munis = sumBankValues(values, ['afsMunis', 'htmMunis']);
+  const allMbs = sumBankValues(values, ['afsAllMbs', 'htmAllMbs']);
+  const fits = [];
+
+  if ((ltd !== null && ltd >= 85) || (liquid !== null && liquid < 12)) {
+    fits.push({
+      product: 'Brokered CDs / funding',
+      explorerPage: 'explorer',
+      explorerLabel: 'Open CD Explorer',
+      fit: ltd !== null && ltd >= 95 ? 'Strong' : 'Good',
+      reason: 'Funding/liquidity profile says they may be in market — open on term, size, and cost of funds.',
+      examples: inventory.brokeredCdTerms
+        .filter(row => Number(row.mid || row.high || row.low || 0) > 0)
+        .slice(0, 4)
+        .map(row => `${row.label}: ${Number(row.mid || row.high || row.low || 0).toFixed(3)}%`)
+    });
+  }
+  if (inventory.counts.agencies && (securities === null || securities < 30)) {
+    fits.push({
+      product: 'Agencies',
+      explorerPage: 'agencies',
+      explorerLabel: 'Open Agency Explorer',
+      fit: securities !== null && securities < 18 ? 'Good' : 'Review',
+      reason: 'Agency bullets/callables are the easy first screen — clean credit, fits most policies.',
+      examples: inventory.examples.agencies
+    });
+  }
+  if (inventory.counts.munis && (munis || inventory.counts.stateMunis)) {
+    fits.push({
+      product: 'Munis / BCIS',
+      explorerPage: 'muni-explorer',
+      explorerLabel: 'Open Muni Explorer',
+      fit: munis && totalSecurities && (munis / totalSecurities) >= 0.2 ? 'Strong' : 'Review',
+      reason: inventory.counts.stateMunis
+        ? `${inventory.counts.stateMunis} in-state munis on today's list — screen for BQ and credit.`
+        : 'Book already carries munis — BQ screen and credit review apply.',
+      examples: inventory.examples.munis
+    });
+  }
+  if (inventory.counts.corporates && securities !== null && securities >= 15) {
+    fits.push({
+      product: 'Corporates',
+      explorerPage: 'corporates',
+      explorerLabel: 'Open Corporates Explorer',
+      fit: 'Review',
+      reason: 'IG names for yield pickup — only if their policy and credit limits allow.',
+      examples: inventory.examples.corporates
+    });
+  }
+  if (allMbs && totalSecurities && (allMbs / totalSecurities) >= 0.1 && inventory.counts.treasuries) {
+    fits.push({
+      product: 'MBS/CMO or Treasury swap',
+      explorerPage: 'mbs-cmo',
+      explorerLabel: 'Open MBS/CMO',
+      fit: 'Review',
+      reason: 'Existing MBS exposure — pull bond accounting first, then frame cash-flow or duration swap.',
+      examples: inventory.examples.treasuries
+    });
+  }
+  if (!fits.length) {
+    fits.push({
+      product: 'Discovery call',
+      fit: 'Review',
+      reason: signals[0] ? signals[0].text : 'Open on policy, liquidity target, tax appetite, and current buy list before pitching.',
+      examples: []
+    });
+  }
+  return fits.slice(0, 5);
+}
+
+function assistantPeriodAgeMonths(period) {
+  if (!period) return null;
+  const str = String(period).trim();
+  let year = null;
+  let monthEnd = null;
+  const q = str.match(/^(\d{4})\s*Q([1-4])$/i);
+  if (q) {
+    year = Number(q[1]);
+    monthEnd = Number(q[2]) * 3;
+  } else {
+    const y = str.match(/^(\d{4})\s*Y?$/i);
+    if (y) {
+      year = Number(y[1]);
+      monthEnd = 12;
+    }
+  }
+  if (!year) return null;
+  const now = new Date();
+  const filing = new Date(year, monthEnd - 1, 28);
+  return (now.getFullYear() - filing.getFullYear()) * 12 + (now.getMonth() - filing.getMonth());
+}
+
+// Assistant response builder.
+//
+// This is the swap point for a future LLM provider. Today the readout is
+// fully deterministic — signals + product fits + curated inventory examples
+// derived from local data, no outbound calls. To bolt on a real model later,
+// wrap this function: keep the same input/output shape, but feed the bounded
+// context object (bank, signals, fits, inventory, strategies) into a prompt
+// and replace `summary` / `callNote` / `sections` with model output. Do NOT
+// send the raw bank blob — the context dict below is already curated for that.
+function buildBankAssistantResponse(bankData, action) {
+  const bank = bankData.bank;
+  const summary = bank.summary || {};
+  const { latest, values } = latestBankValues(bank);
+  const inventory = currentInventorySnapshot(values.state || summary.state);
+  const strategyData = listStrategyRequests(BANK_REPORTS_DIR, { bankId: bank.id, archived: 'all' });
+  const strategies = strategyData && Array.isArray(strategyData.requests) ? strategyData.requests.slice(0, 8) : [];
+  const signals = buildAssistantSignals(bank, inventory, strategies);
+  const fits = buildAssistantProductFits(bank, inventory, signals);
+  const bankName = values.name || summary.displayName || summary.name || 'this bank';
+  const location = [values.city || summary.city, values.state || summary.state].filter(Boolean).join(', ');
+  const metricLines = [
+    bankMetricLine('Assets', values.totalAssets, 'money'),
+    bankMetricLine('Securities/assets', values.securitiesToAssets, 'percent'),
+    bankMetricLine('Loans/deposits', values.loansToDeposits, 'percent'),
+    bankMetricLine('Liquid/assets', values.liquidAssetsToAssets, 'percent'),
+    bankMetricLine('Yield on securities', values.yieldOnSecurities, 'percent'),
+    bankMetricLine('NIM', values.netInterestMargin, 'percent')
+  ].filter(Boolean);
+  const topFit = fits[0];
+  const signalTypes = signals.map(s => String(s.type || '').toLowerCase());
+  const hits = (...kws) => kws.some(kw => signalTypes.some(t => t.includes(kw)));
+  const nextQuestions = [];
+  if (hits('funding', 'wholesale', 'brokered', 'runoff')) nextQuestions.push('Where is cost of funds right now, and what term are they working in?');
+  if (hits('liquidity', 'runoff')) nextQuestions.push('What\'s the on-balance-sheet liquidity target, and how flexible is it?');
+  if (hits('muni')) nextQuestions.push('Is the muni bucket BQ-only, and what credit cutoff is in policy?');
+  if (hits('mbs')) nextQuestions.push('Any concerns on extension or premium amortization in the current MBS book?');
+  if (hits('portfolio', 'yield', 'active')) nextQuestions.push('Add yield, replace runoff, or shorten — which problem is the portfolio solving today?');
+  if (hits('coverage')) nextQuestions.push('Anything in the relationship history that should shape this outreach?');
+  if (!nextQuestions.length) {
+    nextQuestions.push('What\'s the portfolio trying to do this quarter — add yield, hold liquidity, manage funding?');
+    nextQuestions.push('Which sectors are approved and active on the buy list right now?');
+  }
+  nextQuestions.push('Does this turn into a strategy request, a bond-accounting review, or a one-off follow-up?');
+
+  const noteLines = [
+    `${bankName}${location ? ` (${location})` : ''}${latest && latest.period ? ` · ${latest.period}` : ''}`,
+    metricLines.length ? metricLines.join(' · ') : 'Latest call-report metrics not loaded.',
+    '',
+    `Angle: ${topFit.product} (${topFit.fit}) — ${topFit.reason}`,
+    `Ask: ${nextQuestions[0]}`
+  ];
+  if (topFit.examples && topFit.examples[0]) noteLines.push(`Show: ${topFit.examples[0]}`);
+  const callNote = noteLines.join('\n');
+
+  const fitPhrase = topFit.fit === 'Review'
+    ? `worth a look for ${topFit.product.toLowerCase()}`
+    : `a ${topFit.fit.toLowerCase()} fit for ${topFit.product.toLowerCase()}`;
+
+  const notices = [];
+  const inventoryEmpty = Object.values(inventory.counts || {}).every(n => !n);
+  if (inventoryEmpty) {
+    notices.push({
+      tone: 'warn',
+      text: 'No offering inventory parsed yet today — try again after the morning upload.'
+    });
+  }
+  const periodAge = latest && latest.period ? assistantPeriodAgeMonths(latest.period) : null;
+  if (periodAge !== null && periodAge >= 6) {
+    notices.push({
+      tone: 'warn',
+      text: `Latest filing is ${latest.period} — older than usual; verify before acting on these signals.`
+    });
+  }
+  const statusValue = (summary.accountStatus && summary.accountStatus.status) || 'Open';
+  const statusPill = {
+    status: statusValue,
+    slug: String(statusValue).toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    owner: (summary.accountStatus && summary.accountStatus.owner) || ''
+  };
+  const fitsWithLinks = fits.map(fit => ({
+    text: `${fit.product} — ${fit.fit}. ${fit.reason}`,
+    explorerPage: fit.explorerPage || null,
+    explorerLabel: fit.explorerLabel || null
+  }));
+
+  const response = {
+    action,
+    title: `${bankName}`,
+    subtitle: [location, latest && latest.period, summary.certNumber ? `Cert ${summary.certNumber}` : ''].filter(Boolean).join(' · '),
+    summary: `${fitPhrase.charAt(0).toUpperCase() + fitPhrase.slice(1)} based on the latest filing and today's inventory.`,
+    topProduct: topFit.product,
+    statusPill,
+    notices,
+    context: {
+      bankId: bank.id,
+      asOfDate: inventory.asOfDate,
+      inventoryCounts: inventory.counts,
+      strategyCount: strategies.length,
+      periodAgeMonths: periodAge
+    },
+    sections: [
+      { title: 'Read', items: signals.slice(0, 4).map(signal => signal.text) },
+      { title: 'Product fit', items: fitsWithLinks },
+      { title: 'From today\'s inventory', items: fits.flatMap(fit => (fit.examples || []).slice(0, 2).map(example => `${fit.product}: ${example}`)).slice(0, 5) },
+      { title: 'Ask on the call', items: nextQuestions }
+    ],
+    callNote,
+    disclaimer: 'Internal sales support. Not investment advice.'
+  };
+
+  if (action === 'summary') {
+    response.summary = `${bankName}${location ? ` (${location})` : ''} — ${latest && latest.period ? `as of ${latest.period}` : 'latest period unavailable'}.`;
+    response.sections = [
+      { title: 'Snapshot', items: metricLines.length ? metricLines : ['No call-report metrics loaded yet.'] },
+      { title: 'Read', items: signals.slice(0, 4).map(signal => signal.text) },
+      { title: 'Coverage', items: [
+        `Status: ${(summary.accountStatus && summary.accountStatus.status) || 'Open'}${summary.accountStatus && summary.accountStatus.owner ? ` · ${summary.accountStatus.owner}` : ''}`,
+        strategies.length ? `${strategies.length} strategy request${strategies.length === 1 ? '' : 's'} in history.` : 'No strategy history.'
+      ] }
+    ];
+  } else if (action === 'call') {
+    response.summary = `Confirm need first: ${topFit.reason}`;
+    response.sections = [
+      { title: 'Open with', items: signals.slice(0, 3).map(signal => signal.text) },
+      { title: 'Ask', items: nextQuestions },
+      { title: 'Offer only if it fits', items: fits.slice(0, 3).map(fit => `${fit.product}: ${fit.examples && fit.examples[0] ? fit.examples[0] : fit.reason}`) }
+    ];
+  } else if (action === 'note') {
+    response.summary = 'Drop this into coverage notes or a strategy request.';
+    response.sections = [
+      { title: 'Note', items: callNote.split('\n').filter(Boolean) }
+    ];
+  }
+
+  return response;
+}
+
+async function handleBankAssistant(req, res) {
+  try {
+    const body = await readJsonBody(req, 64 * 1024);
+    const bankId = String(body.bankId || '').trim();
+    const action = ['fit', 'summary', 'call', 'note'].includes(body.action) ? body.action : 'fit';
+    if (!bankId) return sendJSON(res, 400, { error: 'Bank ID is required' });
+    const data = getBankById(bankId);
+    if (!data || !data.bank) return sendJSON(res, 404, { error: 'Bank not found' });
+    return sendJSON(res, 200, buildBankAssistantResponse(data, action));
+  } catch (err) {
+    log('warn', 'Bank assistant failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not build assistant response' });
+  }
+}
+
 let mapBankCache = null;
 
+function getPeerComparisonForMap() {
+  const index = getPeerComparisonIndex();
+  if (!index) return null;
+  const period = index.periods[0] || '';
+  return {
+    peerGroup: index.peerGroup,
+    period,
+    bankPeriod: '',
+    periodAligned: false,
+    byKey: index.byPeriod.get(period) || {}
+  };
+}
+
 function buildMapBankList() {
-  const data = queryBankMapDataset(BANK_REPORTS_DIR);
+  const peerForMap = getPeerComparisonForMap();
+  const data = queryBankMapDataset(BANK_REPORTS_DIR, null, { peerComparison: peerForMap });
   if (!data || !Array.isArray(data.banks)) return data;
+  if (data.peerComparison && data.latestPeriod) {
+    data.peerComparison.bankPeriod = data.latestPeriod;
+    data.peerComparison.periodAligned = data.latestPeriod === data.peerComparison.period;
+  }
   const bankIds = data.banks.map(row => row.id);
   const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, bankIds);
   const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, bankIds);
@@ -1681,6 +2543,122 @@ function invalidateMapBankCache() {
   mapBankCache = null;
 }
 
+// Tear-sheet peer comparison: maps BANK_FIELDS keys to FedFis "Averaged Series"
+// peer-group averages so the call-report sections can render a Peer Avg column.
+// The peerLabels regex set mirrors PEER_ANALYSIS_METRICS in public/js/portal.js —
+// keep the two in sync when adding metrics.
+const PEER_TEAR_SHEET_METRICS = [
+  { key: 'loansToDeposits', higherIsBetter: null, peerLabels: [/loans?\s*\/\s*deposits?/i, /loans?.*deposits?/i] },
+  { key: 'liquidAssetsToAssets', higherIsBetter: true, peerLabels: [/liquid assets?.*assets/i] },
+  { key: 'wholesaleFundingReliance', higherIsBetter: false, peerLabels: [/wholesale funding/i] },
+  { key: 'securitiesToAssets', higherIsBetter: true, peerLabels: [/securities.*assets/i, /total securities.*\/.*assets/i] },
+  { key: 'yieldOnSecurities', higherIsBetter: true, peerLabels: [/yield on securities/i] },
+  { key: 'netInterestMargin', higherIsBetter: true, peerLabels: [/net interest margin/i] },
+  { key: 'roa', higherIsBetter: true, peerLabels: [/^roa\b/i, /return on assets/i, /return on avg/i] },
+  { key: 'efficiencyRatio', higherIsBetter: false, peerLabels: [/efficiency ratio/i] },
+  { key: 'tier1RiskBasedRatio', higherIsBetter: true, peerLabels: [/tier 1.*risk/i] },
+  { key: 'texasRatio', higherIsBetter: false, peerLabels: [/texas ratio/i] },
+  { key: 'nplsToLoans', higherIsBetter: false, peerLabels: [/npls?.*loans/i, /nonperforming.*loans/i] },
+  { key: 'longTermAssetsToAssets', higherIsBetter: false, peerLabels: [/long.?term assets?.*assets/i] }
+];
+
+let peerComparisonCache = null;
+
+function peerSeriesNumericValue(seriesRow) {
+  if (!seriesRow) return null;
+  for (const field of ['percent', 'value', 'amount']) {
+    const raw = seriesRow[field];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const n = Number(raw);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function buildPeerComparisonIndex() {
+  const dataset = loadAveragedSeriesDataset(BANK_REPORTS_DIR);
+  if (!dataset) return null;
+  const peerGroup = Array.isArray(dataset.peerGroups) && dataset.peerGroups[0]
+    ? dataset.peerGroups[0]
+    : null;
+  if (!peerGroup) return null;
+  const periods = Array.isArray(dataset.periods) ? dataset.periods : [];
+  const metrics = Array.isArray(dataset.metrics) ? dataset.metrics : [];
+  const series = Array.isArray(dataset.series) ? dataset.series : [];
+  if (!periods.length || !metrics.length || !series.length) return null;
+
+  const cleanLabel = label => String(label || '').replace(/^\s*\d+\.\s*/, '');
+  const seriesByMetricAndPeriod = new Map();
+  for (const row of series) {
+    seriesByMetricAndPeriod.set(`${row.metricKey}|${row.period}`, row);
+  }
+
+  // Build a { period -> { bankFieldKey -> { peerValue, peerLabel, higherIsBetter } } } table
+  // so we can pick the peer period that best aligns with the bank's latest period.
+  const byPeriod = new Map();
+  for (const period of periods) {
+    const byKey = {};
+    for (const config of PEER_TEAR_SHEET_METRICS) {
+      const metric = metrics.find(m => config.peerLabels.some(re => re.test(cleanLabel(m.label))));
+      if (!metric) continue;
+      const seriesRow = seriesByMetricAndPeriod.get(`${metric.key}|${period}`);
+      const peerValue = peerSeriesNumericValue(seriesRow);
+      if (peerValue == null) continue;
+      byKey[config.key] = {
+        peerValue,
+        peerLabel: metric.label,
+        higherIsBetter: config.higherIsBetter
+      };
+    }
+    byPeriod.set(period, byKey);
+  }
+
+  return {
+    peerGroup: {
+      id: peerGroup.id,
+      label: peerGroup.label,
+      criteria: peerGroup.criteria || {},
+      populationCount: peerGroup.populationCount,
+      populationPercent: peerGroup.populationPercent,
+      latestPeriod: peerGroup.latestPeriod
+    },
+    periods,
+    byPeriod
+  };
+}
+
+function getPeerComparisonIndex() {
+  if (peerComparisonCache !== null) return peerComparisonCache || null;
+  try {
+    peerComparisonCache = buildPeerComparisonIndex() || false;
+    return peerComparisonCache || null;
+  } catch (err) {
+    log('warn', 'Peer comparison index build failed:', err.message);
+    peerComparisonCache = false;
+    return null;
+  }
+}
+
+function invalidatePeerComparisonCache() {
+  peerComparisonCache = null;
+}
+
+function getPeerComparisonForBank(bank) {
+  const index = getPeerComparisonIndex();
+  if (!index) return null;
+  const latest = bank && Array.isArray(bank.periods) ? bank.periods[0] : null;
+  const bankPeriod = latest && latest.period ? latest.period : '';
+  const period = index.periods.includes(bankPeriod) ? bankPeriod : (index.periods[0] || '');
+  const byKey = index.byPeriod.get(period) || {};
+  return {
+    peerGroup: index.peerGroup,
+    period,
+    bankPeriod,
+    periodAligned: Boolean(bankPeriod) && period === bankPeriod,
+    byKey
+  };
+}
+
 function getBankSummaryForCoverage(bankId) {
   const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId);
   if (!data || !data.bank || !data.bank.summary) return null;
@@ -1708,7 +2686,7 @@ async function handleSaveBankCoverage(req, res) {
       status: saved.status,
       priority: saved.priority
     });
-    invalidateMapBankCache();
+    invalidateBankCaches();
     return sendJSON(res, 200, { saved, accountStatus });
   } catch (err) {
     log('error', 'Bank coverage save failed:', err.message);
@@ -1739,7 +2717,7 @@ async function handleSaveBankAccountStatus(req, res) {
       bankId,
       status: accountStatus.status
     });
-    invalidateMapBankCache();
+    invalidateBankCaches();
     return sendJSON(res, 200, { accountStatus, saved });
   } catch (err) {
     log('error', 'Bank account status save failed:', err.message);
@@ -1760,6 +2738,7 @@ async function handleAddBankNote(req, res, bankId) {
       bankId,
       noteId: note && note.id
     });
+    invalidateBankCaches();
     return sendJSON(res, 200, { note });
   } catch (err) {
     log('error', 'Bank note add failed:', err.message);
@@ -1904,7 +2883,8 @@ async function handleBankDataUpload(req, res) {
       sourceFile: sanitizeFilename(file.filename)
     });
     fs.renameSync(tmpTarget, target);
-    invalidateMapBankCache();
+    invalidatePeerComparisonCache();
+    invalidateBankCaches();
     appendAuditLog({
       event: 'bank-data-import',
       sourceFile: sanitizeFilename(file.filename),
@@ -1966,7 +2946,7 @@ async function handleBankStatusUpload(req, res) {
       affiliateCount: metadata.affiliateCount,
       bankersBankServicesCount: metadata.bankersBankServicesCount
     });
-    invalidateMapBankCache();
+    invalidateBankCaches();
     return sendJSON(res, 200, { success: true, metadata });
   } catch (err) {
     log('error', 'Bank account status upload failed:', err.message);
@@ -1994,6 +2974,8 @@ async function handleAveragedSeriesUpload(req, res) {
       sourceFile: sanitizeFilename(file.filename)
     });
     fs.rmSync(tmpTarget, { force: true });
+    invalidatePeerComparisonCache();
+    invalidateBankCaches();
     appendAuditLog({
       event: 'averaged-series-import',
       sourceFile: sanitizeFilename(file.filename),
@@ -2063,6 +3045,7 @@ async function handleBondAccountingUpload(req, res) {
       pCodeMatchedCount: manifest.pCodeMatchedCount,
       unmatchedCount: manifest.unmatchedCount
     });
+    invalidateBankCaches();
     return sendJSON(res, 200, { success: true, manifest });
   } catch (err) {
     log('error', 'Bond accounting import failed:', err.message);
@@ -2072,6 +3055,48 @@ async function handleBondAccountingUpload(req, res) {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     }
   }
+}
+
+async function handleWirpUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const file = files.find(f => /\.(xlsm|xlsx|xls|csv)$/i.test(f.filename || ''));
+    if (!file) return sendJSON(res, 400, { error: 'Upload a WIRP export (.xlsx, .xlsm, .xls, or .csv).' });
+    const ext = path.extname(file.filename || '').toLowerCase();
+    const validSignature = ext === '.csv' ? looksLikePlainText(file.data) : looksLikeExcel(file.data);
+    if (!validSignature) {
+      return sendJSON(res, 400, { error: `${file.filename} does not look like a ${ext === '.csv' ? 'CSV' : 'workbook'} file.` });
+    }
+
+    const analysis = saveWirpWorkbook(BANK_REPORTS_DIR, {
+      filename: sanitizeFilename(file.filename),
+      data: file.data
+    });
+    appendAuditLog({
+      event: 'wirp-forward-rates-import',
+      sourceFile: sanitizeFilename(file.filename),
+      recordCount: Array.isArray(analysis.records) ? analysis.records.length : 0,
+      bias: analysis.summary && analysis.summary.bias
+    });
+    return sendJSON(res, 200, { success: true, wirp: analysis });
+  } catch (err) {
+    log('error', 'WIRP upload failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not import WIRP export' });
+  }
+}
+
+function handleBrokeredCdOpportunity(req, res, query) {
+  const bankId = String(query.get('bankId') || '').trim();
+  if (!bankId) return sendJSON(res, 400, { error: 'Bank ID is required' });
+  const bankData = getBankById(bankId);
+  if (!bankData || !bankData.bank) return sendJSON(res, 404, { error: 'Bank not found' });
+  const analysis = buildBrokeredCdOpportunity(bankData);
+  if (!analysis) return sendJSON(res, 404, { error: 'Bank analysis unavailable' });
+  return sendJSON(res, 200, { analysis });
 }
 
 function loadArchivedCorporates(date) {
@@ -2099,7 +3124,7 @@ function appendAuditLog(entry) {
 function readAuditLog({ limit = 200 } = {}) {
   if (!fs.existsSync(AUDIT_LOG_PATH)) return [];
   try {
-    const content = fs.readFileSync(AUDIT_LOG_PATH, 'utf-8');
+    const content = readFileTail(AUDIT_LOG_PATH, Math.max(limit, 1) + 20);
     const lines = content.split('\n').filter(Boolean);
     const entries = [];
     for (let i = lines.length - 1; i >= 0 && entries.length < limit; i--) {
@@ -2112,6 +3137,35 @@ function readAuditLog({ limit = 200 } = {}) {
     log('error', 'Failed to read audit log:', err.message);
     return [];
   }
+}
+
+function readFileTail(filePath, targetLines, chunkSize = 64 * 1024) {
+  const stat = fs.statSync(filePath);
+  if (!stat.size) return '';
+
+  const fd = fs.openSync(filePath, 'r');
+  const chunks = [];
+  let position = stat.size;
+  let lineCount = 0;
+
+  try {
+    while (position > 0 && lineCount <= targetLines) {
+      const readSize = Math.min(chunkSize, position);
+      position -= readSize;
+      const buffer = Buffer.allocUnsafe(readSize);
+      fs.readSync(fd, buffer, 0, readSize, position);
+      chunks.unshift(buffer);
+      for (let i = 0; i < readSize; i++) {
+        if (buffer[i] === 0x0a) lineCount++;
+      }
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  const text = Buffer.concat(chunks).toString('utf-8');
+  const lines = text.split('\n');
+  return lines.slice(Math.max(0, lines.length - targetLines - 1)).join('\n');
 }
 
 // ---------- Upload handling ----------
@@ -2201,6 +3255,7 @@ async function handleUpload(req, res) {
         const perSlotJson = {
           econ:              [ECONOMIC_UPDATE_FILENAME],
           relativeValue:     [RELATIVE_VALUE_FILENAME],
+          mmd:               [MMD_FILENAME],
           treasuryNotes:     [TREASURY_NOTES_FILENAME],
           cdoffers:          [OFFERINGS_FILENAME],
           munioffers:        [MUNI_OFFERINGS_FILENAME],
@@ -2336,6 +3391,28 @@ async function handleUpload(req, res) {
       log('info', `Extracted ${relativeValueRowsCount} relative value snapshot rows from ${sourceFile}`);
     } catch (err) {
       log('error', 'Failed to write relative value JSON:', err.message);
+    }
+  }
+
+  // Extract the MMD PDF into a native curve graph dataset if present.
+  let mmdCurveCount = null;
+  let mmdWarnings = [];
+  let mmdAsOfDate = null;
+  const mmdFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'mmd');
+  if (mmdFile) {
+    const sourceFile = slotFilenames.mmd || sanitizeFilename(mmdFile.filename);
+    const extracted = await extractPdfText(mmdFile.data);
+    const payload = parseMmdCurveText(extracted && extracted.text);
+    mmdCurveCount = Array.isArray(payload.curve) ? payload.curve.length : 0;
+    mmdWarnings = payload.warnings || [];
+    mmdAsOfDate = payload.asOfDate;
+    payload.extractedAt = new Date().toISOString();
+    payload.sourceFile = sourceFile;
+    try {
+      fs.writeFileSync(path.join(CURRENT_DIR, MMD_FILENAME), JSON.stringify(payload, null, 2));
+      log('info', `Extracted ${mmdCurveCount} MMD curve rows from ${sourceFile}`);
+    } catch (err) {
+      log('error', 'Failed to write MMD curve JSON:', err.message);
     }
   }
 
@@ -2564,8 +3641,11 @@ async function handleUpload(req, res) {
   if (offeringsAsOfDate && brokeredCdAsOfDate && offeringsAsOfDate !== brokeredCdAsOfDate) {
     dateWarnings.push(`CD Offers (${offeringsAsOfDate}) and Brokered CD Rate Sheet (${brokeredCdAsOfDate}) are dated differently inside the PDFs.`);
   }
+  if (mmdAsOfDate && dateValues.length > 0 && !dateValues.includes(mmdAsOfDate)) {
+    dateWarnings.push(`MMD document is dated ${mmdAsOfDate}, but filenames suggest ${dateValues.join(', ')}.`);
+  }
 
-  const packageDate = offeringsAsOfDate || brokeredCdAsOfDate || muniOfferingsAsOfDate || uniqueDates[0] || todayStamp();
+  const packageDate = offeringsAsOfDate || brokeredCdAsOfDate || muniOfferingsAsOfDate || mmdAsOfDate || uniqueDates[0] || todayStamp();
 
   const mergedOfferingsCount      = incomingSlots.has('cdoffers')    ? offeringsCount      : (priorMeta.offeringsCount ?? null);
   const mergedMuniOfferingsCount  = incomingSlots.has('munioffers')  ? muniOfferingsCount  : (priorMeta.muniOfferingsCount ?? null);
@@ -2579,6 +3659,9 @@ async function handleUpload(req, res) {
   const mergedRelativeValueRowsCount = incomingSlots.has('relativeValue')
     ? relativeValueRowsCount
     : (priorMeta.relativeValueRowsCount ?? null);
+  const mergedMmdCurveCount = incomingSlots.has('mmd')
+    ? mmdCurveCount
+    : (priorMeta.mmdCurveCount ?? null);
 
   // Merged slot filenames: preserve prior filenames for untouched slots
   const mergedSlotFilenames = { ...(priorMeta.slotFilenames || {}), ...slotFilenames };
@@ -2607,10 +3690,12 @@ async function handleUpload(req, res) {
     brokeredCdTerms:     mergedBrokeredCdTerms,
     brokeredCdAsOfDate:  mergedBrokeredCdAsOfDate,
     relativeValueRowsCount: mergedRelativeValueRowsCount,
+    mmdCurveCount:     mergedMmdCurveCount,
     slotFilenames:       mergedSlotFilenames,
     slotFileLists:       mergedSlotFileLists
   };
   fs.writeFileSync(path.join(CURRENT_DIR, META_FILENAME), JSON.stringify(meta, null, 2));
+  invalidatePackageCache();
 
   appendAuditLog({
     event: 'publish',
@@ -2620,6 +3705,7 @@ async function handleUpload(req, res) {
     offeringsCount,
     cdHistorySnapshot,
     relativeValueRowsCount,
+    mmdCurveCount,
     muniOfferingsCount,
     treasuryNotesCount,
     agencyCount,
@@ -2632,6 +3718,7 @@ async function handleUpload(req, res) {
       cd: brokeredCdWarnings,
       cdoffers: offeringsWarnings,
       munioffers: muniOfferingsWarnings,
+      mmd: mmdWarnings,
       treasuryNotes: treasuryNotesWarnings,
       agencies: agencyWarnings,
       corporates: corporatesWarnings
@@ -2647,6 +3734,8 @@ async function handleUpload(req, res) {
     offeringsCount,
     offeringsWarnings,
     cdHistorySnapshot,
+    mmdCurveCount,
+    mmdWarnings,
     muniOfferingsCount,
     muniOfferingsWarnings,
     treasuryNotesCount,
@@ -2773,6 +3862,19 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/cd-recap/weekly' && req.method === 'GET') {
       const anchorDate = query.get('anchorDate');
       return sendJSON(res, 200, summarizeWeeklyCdHistory(CD_HISTORY_DIR, { anchorDate }));
+    }
+
+    if (pathname === '/api/mmd' && req.method === 'GET') {
+      const date = query.get('date');
+      const data = await (date ? loadArchivedMmdCurve(date) : loadCurrentMmdCurve());
+      if (!data) {
+        return sendJSON(res, 404, {
+          error: date
+            ? `No MMD curve data for ${date}`
+            : 'No MMD curve data in the current package'
+        });
+      }
+      return sendJSON(res, 200, data);
     }
 
     if (pathname === '/api/muni-offerings' && req.method === 'GET') {
@@ -2929,6 +4031,7 @@ const server = http.createServer(async (req, res) => {
       if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
       removeSavedBank(BANK_REPORTS_DIR, bankId);
       appendAuditLog({ event: 'bank-coverage-remove', bankId });
+      invalidateBankCaches();
       return sendJSON(res, 200, { success: true });
     }
 
@@ -2938,6 +4041,7 @@ const server = http.createServer(async (req, res) => {
       if (!noteId) return sendJSON(res, 400, { error: 'Invalid note ID' });
       removeBankNote(BANK_REPORTS_DIR, noteId);
       appendAuditLog({ event: 'bank-note-remove', noteId });
+      invalidateBankCaches();
       return sendJSON(res, 200, { success: true });
     }
 
@@ -2989,6 +4093,22 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, manifest);
     }
 
+    if (pathname === '/api/assistant/bank' && req.method === 'POST') {
+      return await handleBankAssistant(req, res);
+    }
+
+    if (pathname === '/api/brokered-cd/wirp' && req.method === 'GET') {
+      return sendJSON(res, 200, getWirpStatus(BANK_REPORTS_DIR));
+    }
+
+    if (pathname === '/api/brokered-cd/wirp/upload' && req.method === 'POST') {
+      return await handleWirpUpload(req, res);
+    }
+
+    if (pathname === '/api/brokered-cd/opportunity' && req.method === 'GET') {
+      return handleBrokeredCdOpportunity(req, res, query);
+    }
+
     if (pathname.startsWith('/api/banks/') && req.method === 'GET') {
       const id = pathname.slice('/api/banks/'.length);
       const data = getBankById(id);
@@ -3002,16 +4122,6 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/bank-account-statuses/upload' && req.method === 'POST') {
       return await handleBankStatusUpload(req, res);
-    }
-
-    if (pathname === '/api/bank-averaged-series/upload' && req.method === 'POST') {
-      return await handleAveragedSeriesUpload(req, res);
-    }
-
-    if (pathname === '/api/bank-averaged-series' && req.method === 'GET') {
-      const dataset = loadAveragedSeriesDataset(BANK_REPORTS_DIR);
-      if (!dataset) return sendJSON(res, 404, { error: 'No averaged-series peer data has been imported yet' });
-      return sendJSON(res, 200, dataset);
     }
 
     if (pathname === '/api/audit-log' && req.method === 'GET') {

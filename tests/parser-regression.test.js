@@ -11,6 +11,7 @@ const { parseCdOffersText, parseCdOffersWorkbook } = require('../server/cd-offer
 const { parseBrokeredCdRateSheetText } = require('../server/brokered-cd-parser');
 const { parseMuniOffersText } = require('../server/muni-offers-parser');
 const { parseEconomicUpdateText } = require('../server/economic-update-parser');
+const { parseMmdCurveText } = require('../server/mmd-parser');
 const { parseTreasuryNotesWorkbook } = require('../server/treasury-notes-parser');
 const { parseAgenciesFiles } = require('../server/agencies-parser');
 const { parseCorporatesFiles } = require('../server/corporates-parser');
@@ -111,6 +112,8 @@ function assertClassification() {
   assert.strictEqual(classifyFile('FBBS_Dashboard_20260424.html'), 'dashboard');
   assert.strictEqual(classifyFile('20260424.pdf'), 'econ');
   assert.strictEqual(classifyFile('Relative Value 04.24.2026.pdf'), 'relativeValue');
+  assert.strictEqual(classifyFile('20260511_CD_Relative_Val.pdf'), 'relativeValue');
+  assert.strictEqual(classifyFile('MMD-1.pdf'), 'mmd');
   assert.strictEqual(classifyFile('Treasury Notes 04.24.2026.xlsx'), 'treasuryNotes');
   assert.strictEqual(classifyFile('FBBS Brokered CD Rate Sheet_04_24_2026_.pdf'), 'cd');
   assert.strictEqual(classifyFile('20260424_CD_Offers.pdf'), 'cdoffers');
@@ -348,6 +351,29 @@ function assertPackageReaderUsesSlotMetadata() {
     assert.strictEqual(pkg.corporates, 'generic spreadsheet.xlsx');
     assert.strictEqual(pkg.agenciesBullets, null);
     assert.strictEqual(pkg.corporatesCount, 12);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function assertPackageReaderRecoversStaleMmdMetadata() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-package-mmd-meta-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'MMD-1.pdf'), 'not parsed here');
+    fs.writeFileSync(path.join(tmp, '20260511.pdf'), 'not parsed here');
+    fs.writeFileSync(path.join(tmp, '_meta.json'), JSON.stringify({
+      date: '2026-05-11',
+      slotFilenames: {
+        econ: 'MMD-1.pdf'
+      },
+      slotFileLists: {
+        econ: ['MMD-1.pdf', '20260511.pdf']
+      }
+    }));
+
+    const pkg = readPackageDir(tmp);
+    assert.strictEqual(pkg.mmd, 'MMD-1.pdf');
+    assert.notStrictEqual(pkg.econ, 'MMD-1.pdf');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -992,6 +1018,56 @@ function assertWeeklyCdWorksheetImport() {
   }
 }
 
+function assertMmdParser() {
+  const text = `
+YEARAAAP/RINS'DAAABAA
+120272.502.552.592.552.572.92
+220282.452.522.572.502.552.88
+1020362.963.173.093.273.73
+3020564.314.584.534.675.15
+YEARJANFEBMARAPRILMAYJUNEJULYAUGSEPTOCTNOVDEC
+FRIDAY  5/8/2026
+(5% Coupon):
+2027-2056: Unchanged
+US TSY 2yr 3.891% 63%
+US TSY 10yr 4.362% 68%
+`;
+  const parsed = parseMmdCurveText(text);
+  assert.strictEqual(parsed.asOfDate, '2026-05-08');
+  assert.strictEqual(parsed.coupon, 5);
+  assert.strictEqual(parsed.curve.length, 4);
+  assert.deepStrictEqual(parsed.curve[0], {
+    term: 1,
+    label: '1Y',
+    maturityYear: 2027,
+    aaa: 2.5,
+    values: [2.5, 2.55, 2.59, 2.55, 2.57, 2.92],
+    preRefunded: 2.55,
+    insured: 2.59,
+    aa: 2.55,
+    a: 2.57,
+    baa: 2.92
+  });
+  assert.strictEqual(parsed.curve.find(row => row.term === 30).aaa, 4.31);
+  assert.deepStrictEqual(parsed.treasuryRatios[1], { term: 10, treasuryYield: 4.362, ratioPct: 68 });
+  assert.deepStrictEqual(parsed.notes, ['2027-2056: Unchanged']);
+  assert.deepStrictEqual(parsed.warnings, []);
+
+  const spacedText = `
+YEAR AAA P/R INS'D AA A BAA
+1 2027 2.50 2.55 2.59 2.55 2.57 2.92
+9 2035 2.87 3.05 2.99 3.16 3.61
+30 2056 4.31 4.58 4.53 4.67 5.15
+YEAR JAN FEB MAR APRIL MAY JUNE JULY AUG SEPT OCT NOV DEC
+1 2027 2.50 2.50 2.50 2.50 2.50 2.50 2.50 2.50 2.50 2.49 2.49 2.49
+FRIDAY  5/8/2026
+`;
+  const spaced = parseMmdCurveText(spacedText);
+  assert.strictEqual(spaced.curve.length, 3);
+  assert.strictEqual(spaced.curve[1].term, 9);
+  assert.strictEqual(spaced.curve[1].aaa, 2.87);
+}
+
 (async function run() {
   assertDateSniffing();
   assertClassification();
@@ -1001,10 +1077,12 @@ function assertWeeklyCdWorksheetImport() {
   await assertBrokeredCdParser();
   await assertMuniParser();
   await assertEconomicUpdateParser();
+  assertMmdParser();
   assertTreasuryNotesParser();
   assertAgenciesParser();
   assertCorporatesParser();
   assertPackageReaderUsesSlotMetadata();
+  assertPackageReaderRecoversStaleMmdMetadata();
   assertAgencyCollectionPreservesCounterpart();
   assertBankDatabaseRoundTrip();
   assertBankCoverageStore();

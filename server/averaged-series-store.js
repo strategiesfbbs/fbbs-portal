@@ -130,10 +130,6 @@ function peerGroupFromRows(rows, options = {}) {
     .slice(4, 12)
     .map(value => String(value || '').trim())
     .filter(value => /^\d{4}Q[1-4]$/i.test(value));
-  const metricRows = rows.slice(13).filter(row => {
-    const label = String(row[3] || row[0] || '').trim();
-    return label && !/^[A-Z &/()-]+$/.test(label);
-  });
   return {
     id: 'current',
     label: readCell(rows, 0, 3) || 'Averaged Series Peer Group',
