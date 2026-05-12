@@ -885,6 +885,60 @@ function assertBondAccountingStore() {
   }
 }
 
+function assertPortfolioParser() {
+  const { parsePortfolioWorkbook } = require('../server/portfolio-parser');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-portfolio-parser-'));
+  const filePath = path.join(tmp, 'sample.xlsm');
+  try {
+    const wb = XLSX.utils.book_new();
+
+    // Mimic THC template: Overview!C3 holds the as-of date.
+    const overviewRows = [];
+    overviewRows[0] = [];
+    overviewRows[1] = [];
+    overviewRows[2] = ['', '', 'as of 04/30/2026'];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(overviewRows), 'Overview');
+
+    // linked data totals: label in col B, current value in col E.
+    const linkedRows = [
+      ['', '', '', '', 'Current'],
+      ['', 'Total Par Value(000)', '', '', 1000],
+      ['', 'Total Market Value w/o Accrued(000)', '', '', 920],
+      ['', 'Total Book Value(000)', '', '', 990],
+      ['', 'Market YTW%', '', '', 4.50],
+      ['', 'Book YTW%', '', '', 2.10]
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(linkedRows), 'linked data');
+
+    // Agency sheet: header padding above row 47, header at row 47, holdings below.
+    const agencyRows = [];
+    for (let i = 0; i < 46; i += 1) agencyRows.push([]);
+    agencyRows[46] = ['', 'Cusip', 'Description', 'Par (000)', 'Cpn\n(%)', 'Cpn\nType', 'Maturity', 'Next Call', 'Bk Val (000)', 'Mkt Val (000)', 'G/L\n(000)', 'Bk Px', 'Mkt Px', 'Bk YTW\n(%)', 'Bk YTM\n(%)', 'Mkt YTW\n(%)', 'OAS\n(BP)', 'Eff. Dur', 'Eff. Conv', 'AFS/\nHTM'];
+    agencyRows[47] = ['', '3130AKYZ3', 'FHLB CALLABLE QUARTERLY', 500, 1.0, 'Fixed', 47354, 46166, 499.5, 452.3, -47.2, 99.9, 90.5, 1.03, 1.03, 4.10, 25, 3.2, 0.12, 'AFS'];
+    agencyRows[48] = ['', '3130AL7A6', 'FHLB STEP UP', 500, 2.0, 'Step', 47904, '', 500.0, 454.5, -45.5, 100, 90.9, 2.00, 2.00, 4.10, 17, 4.5, 0.23, 'AFS'];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(agencyRows), 'Agency');
+
+    XLSX.writeFile(wb, filePath);
+
+    const parsed = parsePortfolioWorkbook(filePath);
+    assert.strictEqual(parsed.asOfDate, '2026-04-30');
+    assert.strictEqual(parsed.sectorCounts.Agency, 2);
+    assert.strictEqual(parsed.aggregates.totalPositions, 2);
+    assert.strictEqual(parsed.aggregates.par, 1000000);
+    assert.strictEqual(parsed.totals.par, 1000000);
+    assert.strictEqual(parsed.totals.marketValue, 920000);
+    const first = parsed.sectors.Agency[0];
+    assert.strictEqual(first.cusip, '3130AKYZ3');
+    assert.strictEqual(first.par, 500000);
+    assert.strictEqual(first.gainLoss, -47200);
+    assert.strictEqual(first.maturity, '2029-08-24');
+    assert(Math.abs(first.yieldGap - 3.07) < 0.01, 'yieldGap should be ~3.07, got ' + first.yieldGap);
+    assert.strictEqual(parsed.cusipIndex['3130AKYZ3'].sector, 'Agency');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function assertCdHistoryWeeklyDedupe() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-cd-history-'));
   const baseOfferings = [
@@ -1099,6 +1153,7 @@ FRIDAY  5/8/2026
   assertStrategyStore();
   assertAveragedSeriesStore();
   assertBondAccountingStore();
+  assertPortfolioParser();
   assertCdHistoryWeeklyDedupe();
   assertCdHistoryResetsOnNewWeek();
   assertWeeklyCdWorksheetImport();
