@@ -2186,6 +2186,14 @@ function currentInventorySnapshot(bankState) {
       brokeredCdTerms: Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms.length : 0
     },
     brokeredCdTerms: Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms : [],
+    rows: {
+      cds: cdRows,
+      munis: muniRows,
+      stateMunis,
+      agencies: agencyRows,
+      corporates: corporateRows,
+      treasuries: treasuryRows
+    },
     examples: {
       cds: strongestOfferings(cdRows, ['rate']).map(row => offeringLabel(row, 'cd')).filter(Boolean),
       munis: strongestOfferings(stateMunis.length ? stateMunis : muniRows, ['ytw', 'ytm']).map(row => offeringLabel(row, 'muni')).filter(Boolean),
@@ -2457,6 +2465,96 @@ function loadHoldingsForBank(bank) {
   }
 }
 
+// Match a parsed-portfolio sector (THC's labels) to one of today's inventory
+// buckets so we can find swap candidates within the same asset class.
+//
+// `yieldKey` is intentionally a single key per sector — using YTW for munis
+// and YTM for agencies/corporates. We deliberately do NOT consider YTNC
+// (yield-to-next-call) for swap scoring: YTNC spikes to absurd values when
+// the next call is imminent, which would falsely flag every callable as a
+// blockbuster swap. Steady-state yield is what matters for the comparison.
+const SWAP_SECTOR_MAP = {
+  Agency: { rowsKey: 'agencies', type: 'agency', yieldKey: 'ytm' },
+  Treasury: { rowsKey: 'treasuries', type: 'treasury', yieldKey: 'yield' },
+  'Exempt Muni': { rowsKey: 'munis', type: 'muni', yieldKey: 'ytw' },
+  'Taxable Muni': { rowsKey: 'munis', type: 'muni', yieldKey: 'ytw' },
+  CDs: { rowsKey: 'cds', type: 'cd', yieldKey: 'rate' },
+  Corporate: { rowsKey: 'corporates', type: 'corporate', yieldKey: 'ytm' }
+};
+
+function pickBestOffering(rows, yieldKey, heldCusip) {
+  let best = null;
+  let bestYld = -Infinity;
+  for (const row of rows) {
+    if (heldCusip && row.cusip && String(row.cusip).toUpperCase() === heldCusip) continue;
+    const n = numericValue(row[yieldKey]);
+    if (n == null || n > 15) continue; // sanity cap — anything above 15% is bad data
+    if (n > bestYld) { best = row; bestYld = n; }
+  }
+  return best ? { row: best, yld: bestYld } : null;
+}
+
+function findSwapCandidates(parsedHoldings, inventory, options = {}) {
+  if (!parsedHoldings || !parsedHoldings.sectors || !inventory || !inventory.rows) return [];
+  const minHeldYieldGap = options.minHeldYieldGap ?? 1.0;   // book vs market on the held bond
+  const minPickupVsBook = options.minPickupVsBook ?? 0.5;   // today's offer vs their book yield
+  const candidates = [];
+
+  for (const [sector, holdings] of Object.entries(parsedHoldings.sectors)) {
+    const map = SWAP_SECTOR_MAP[sector];
+    if (!map) continue;
+    const rows = inventory.rows[map.rowsKey];
+    if (!Array.isArray(rows) || !rows.length) continue;
+    // For munis, prefer in-state rows when we have them.
+    const candidateRows = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
+      ? inventory.rows.stateMunis
+      : rows;
+
+    for (const held of holdings) {
+      const bookYld = held.bookYieldYtm ?? held.bookYieldYtw;
+      const mktYld = held.marketYieldYtw ?? held.marketYieldYtm;
+      if (bookYld == null || mktYld == null) continue;
+      const heldGap = mktYld - bookYld;
+      if (heldGap < minHeldYieldGap) continue;
+
+      const pick = pickBestOffering(candidateRows, map.yieldKey, held.cusip ? String(held.cusip).toUpperCase() : null);
+      if (!pick) continue;
+      const pickup = pick.yld - bookYld;
+      if (pickup < minPickupVsBook) continue;
+
+      const parWeight = (held.par || 0) / 1000; // par in $K
+      candidates.push({
+        sector,
+        held: {
+          cusip: held.cusip || '',
+          description: held.description || '',
+          par: held.par || 0,
+          bookYield: Number(bookYld.toFixed(3)),
+          marketYield: Number(mktYld.toFixed(3)),
+          gainLoss: held.gainLoss || 0
+        },
+        offering: {
+          label: offeringLabel(pick.row, map.type),
+          cusip: pick.row.cusip || '',
+          yield: Number(pick.yld.toFixed(3))
+        },
+        yieldPickupVsBook: Number(pickup.toFixed(2)),
+        priority: parWeight * pickup
+      });
+    }
+  }
+  candidates.sort((a, b) => b.priority - a.priority);
+  return candidates.slice(0, 5);
+}
+
+function formatSwapCandidateLine(c) {
+  const heldDescr = c.held.description ? c.held.description.slice(0, 36) : c.held.cusip;
+  const parK = c.held.par ? `$${Math.round(c.held.par / 1000)}K` : '';
+  const heldLeft = `${c.held.cusip || 'held'} ${heldDescr}`.trim();
+  const heldYld = `${c.held.bookYield.toFixed(2)}% book / ${c.held.marketYield.toFixed(2)}% market${parK ? ` · ${parK}` : ''}`;
+  return `${heldLeft} (${heldYld}) → ${c.offering.label} · +${c.yieldPickupVsBook.toFixed(2)}% pickup`;
+}
+
 function filterExamplesAgainstHoldings(examples, holdings) {
   if (!holdings || !holdings.cusipIndex || !Array.isArray(examples)) return examples;
   return examples.filter(label => {
@@ -2506,6 +2604,7 @@ function buildBankAssistantResponse(bankData, action) {
   const strategyData = listStrategyRequests(BANK_REPORTS_DIR, { bankId: bank.id, archived: 'all' });
   const strategies = strategyData && Array.isArray(strategyData.requests) ? strategyData.requests.slice(0, 8) : [];
   const parsedHoldings = loadHoldingsForBank(bank);
+  const swapCandidates = findSwapCandidates(parsedHoldings, inventory);
   const signals = buildAssistantSignals(bank, inventory, strategies, parsedHoldings);
   const fits = buildAssistantProductFits(bank, inventory, signals, parsedHoldings);
   const bankName = values.name || summary.displayName || summary.name || 'this bank';
@@ -2544,6 +2643,10 @@ function buildBankAssistantResponse(bankData, action) {
   ];
   if (topFit.examples && topFit.examples[0]) noteLines.push(`Show: ${topFit.examples[0]}`);
   if (holdings) noteLines.push(`Holdings: bond accounting file on disk through ${holdings.latestReportDate || 'recent'} — review before pitching.`);
+  if (swapCandidates.length) {
+    const top = swapCandidates[0];
+    noteLines.push(`Swap: ${top.held.cusip} (${top.held.bookYield.toFixed(2)}% book) → ${top.offering.label} · +${top.yieldPickupVsBook.toFixed(2)}% pickup`);
+  }
   const callNote = noteLines.join('\n');
 
   const fitPhrase = topFit.fit === 'Review'
@@ -2594,6 +2697,7 @@ function buildBankAssistantResponse(bankData, action) {
       marketYieldYtw: parsedHoldings && parsedHoldings.totals ? parsedHoldings.totals.marketYieldYtw : null,
       unrealizedGainLoss: parsedHoldings && parsedHoldings.totals ? parsedHoldings.totals.unrealizedGainLoss : null
     } : null,
+    swapCandidates,
     notices,
     context: {
       bankId: bank.id,
@@ -2604,6 +2708,7 @@ function buildBankAssistantResponse(bankData, action) {
     },
     sections: [
       { title: 'Read', items: signals.slice(0, 4).map(signal => signal.text) },
+      ...(swapCandidates.length ? [{ title: 'Swap candidates', items: swapCandidates.map(formatSwapCandidateLine) }] : []),
       { title: 'Product fit', items: fitsWithLinks },
       { title: 'From today\'s inventory', items: fits.flatMap(fit => (fit.examples || []).slice(0, 2).map(example => `${fit.product}: ${example}`)).slice(0, 5) },
       { title: 'Ask on the call', items: nextQuestions }
@@ -2626,6 +2731,7 @@ function buildBankAssistantResponse(bankData, action) {
     response.summary = `Confirm need first: ${topFit.reason}`;
     response.sections = [
       { title: 'Open with', items: signals.slice(0, 3).map(signal => signal.text) },
+      ...(swapCandidates.length ? [{ title: 'Swap candidates', items: swapCandidates.map(formatSwapCandidateLine) }] : []),
       { title: 'Ask', items: nextQuestions },
       { title: 'Offer only if it fits', items: fits.slice(0, 3).map(fit => `${fit.product}: ${fit.examples && fit.examples[0] ? fit.examples[0] : fit.reason}`) }
     ];
