@@ -4,12 +4,20 @@ data/archive/*
 data/cd-history/*
 data/bank-reports/*
 data/mbs-cmo/*
+data/dropbox/*
+data/cd-internal/*
+data/structured-notes/*
+data/market-color/*
 data/audit.log
 !data/current/.gitkeep
 !data/archive/.gitkeep
 !data/cd-history/.gitkeep
 !data/bank-reports/.gitkeep
 !data/mbs-cmo/.gitkeep
+!data/dropbox/.gitkeep
+!data/cd-internal/.gitkeep
+!data/structured-notes/.gitkeep
+!data/market-color/.gitkeep
 
 # Node / IIS logs
 node_modules/
