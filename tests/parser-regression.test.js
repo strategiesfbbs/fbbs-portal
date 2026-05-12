@@ -18,6 +18,7 @@ const { parseCorporatesFiles } = require('../server/corporates-parser');
 const {
   sniffDateFromFilename,
   classifyFile,
+  classifyFolderDropFile,
   hasPrivatePathSegment,
   isSameOriginWrite,
   readPackageDir,
@@ -123,6 +124,14 @@ function assertClassification() {
   assert.strictEqual(classifyFile('bullets 04.24.26.xlsx'), 'agenciesBullets');
   assert.strictEqual(classifyFile('callables 04.24.26.xlsx'), 'agenciesCallables');
   assert.strictEqual(classifyFile('corporates 04.24.26.xlsx'), 'corporates');
+
+  assert.strictEqual(classifyFolderDropFile('TSY NOTE OFFERS 5.12.26.xlsx'), 'treasuryNotes');
+  assert.strictEqual(classifyFolderDropFile('bullets 05.12.26.xlsx'), 'agenciesBullets');
+  assert.strictEqual(classifyFolderDropFile('callables 05.12.26.xlsx'), 'agenciesCallables');
+  assert.strictEqual(classifyFolderDropFile('corporates 05.12.26.xlsx'), 'corporates');
+  assert.strictEqual(classifyFolderDropFile('20260512_MASTER.xls'), null);
+  assert.strictEqual(classifyFolderDropFile('grid1_nnepvdfk.xlsx'), null);
+  assert.strictEqual(classifyFolderDropFile('random spreadsheet.xlsx'), null);
 }
 
 function assertSecurityHelpers() {

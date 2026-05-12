@@ -1224,8 +1224,8 @@
   <section class="page-hero">
     <div class="page-hero-inner">
       <div>
-        <h2>Upload <strong>Today's Package</strong></h2>
-        <p class="hero-sub">Drop the daily package below &middot; CD PDF and cost workbook flow into one Explorer</p>
+        <h2>Daily <strong>Intake</strong></h2>
+        <p class="hero-sub">Use the dated folder as the main workflow; keep manual uploads for quick fixes.</p>
       </div>
       <div class="hero-stat">
         <div class="num" id="uploadStat">0 / 10</div>
@@ -1236,7 +1236,7 @@
 
   <div class="container">
     <div class="section-title-bar">
-      <h3>Daily Upload</h3>
+      <h3>Daily Intake</h3>
       <div class="kicker" id="uploadDate">&mdash;</div>
     </div>
 
@@ -1247,43 +1247,11 @@
       <div class="quality-item"><span class="q-label">Warnings</span><strong id="uploadQualityWarnings">—</strong></div>
     </div>
 
-    <section class="upload-qa-panel" id="uploadQaPanel" hidden>
-      <div class="upload-qa-head">
-        <div>
-          <h3>Selected File Check</h3>
-          <p>Quick check before publishing: slot, file type, filename date, and CD PDF/workbook pairing.</p>
-        </div>
-        <strong id="uploadQaSummary">0 selected</strong>
-      </div>
-      <div class="upload-qa-body" id="uploadQaBody"></div>
-    </section>
-
-    <section class="bank-upload-panel">
-      <div>
-        <h3>Bank call report workbook</h3>
-        <p id="bankImportStatus">Checking imported bank data&hellip;</p>
-        <p id="bankStatusImportStatus">Account statuses default to Open until imported or edited.</p>
-        <p id="averagedSeriesImportStatus">Averaged-series peer data has not been imported yet.</p>
-      </div>
-      <label class="small-btn bank-upload-btn">
-        Upload Call Reports
-        <input type="file" id="bankWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
-      </label>
-      <label class="small-btn bank-upload-btn">
-        Upload Statuses
-        <input type="file" id="bankStatusWorkbookInput" accept=".xlsb,.xlsm,.xlsx,.xls" hidden>
-      </label>
-      <label class="small-btn bank-upload-btn">
-        Upload Peer Averages
-        <input type="file" id="averagedSeriesWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
-      </label>
-    </section>
-
     <section class="folder-drop-panel" id="folderDropPanel">
       <div class="folder-drop-head">
         <div>
           <h3>Folder Drop</h3>
-          <p>Copy today&apos;s files into the dated folder, scan it here, then publish the detected package slots.</p>
+          <p>Copy today&apos;s package, trader emails, and internal reference files into the dated folder. Only detected package slots publish.</p>
         </div>
         <div class="folder-drop-actions">
           <button type="button" class="small-btn" id="folderDropScanBtn">Scan Folder</button>
@@ -1298,12 +1266,23 @@
       <div class="folder-drop-grid" id="folderDropGrid"></div>
     </section>
 
+    <section class="upload-qa-panel" id="uploadQaPanel" hidden>
+      <div class="upload-qa-head">
+        <div>
+          <h3>Manual File Check</h3>
+          <p>Fallback path for replacing one slot or fixing a package file without using the folder.</p>
+        </div>
+        <strong id="uploadQaSummary">0 selected</strong>
+      </div>
+      <div class="upload-qa-body" id="uploadQaBody"></div>
+    </section>
+
     <form id="uploadForm" enctype="multipart/form-data">
       <section class="upload-section">
         <div class="upload-section-head">
           <div>
-            <h4>Daily Publications</h4>
-            <p>Core documents sales teams open throughout the day.</p>
+            <h4>Manual Upload Fallback</h4>
+            <p>Use this when one package slot needs a quick replacement.</p>
           </div>
           <span>HTML + PDFs</span>
         </div>
@@ -1426,7 +1405,7 @@
         <div class="upload-section-head">
           <div>
             <h4>Offering Files</h4>
-            <p>Daily CD PDF plus optional cost workbook flow into one searchable CD Explorer.</p>
+            <p>Daily CD PDF publishes the client view; optional internal workbooks can be handled separately when needed.</p>
           </div>
           <span>Structured uploads</span>
         </div>
@@ -1456,7 +1435,7 @@
 
         <div class="upload-card">
           <div class="upload-card-head">
-            <span>CD Cost Workbook</span>
+            <span>Internal CD Workbook</span>
             <span class="ft">.XLSX</span>
           </div>
           <label class="drop-zone" data-slot="cdoffersCost">
@@ -1467,8 +1446,8 @@
                 <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
               </svg>
             </div>
-            <h5 data-default="Drop Cost Workbook">Drop Cost Workbook</h5>
-            <p data-default="optional price/commission source">optional price/commission source</p>
+            <h5 data-default="Drop Internal Workbook">Drop Internal Workbook</h5>
+            <p data-default="optional private source">optional private source</p>
           </label>
           <div class="upload-status" id="status-cdoffersCost">
             <span>Accepts: .xlsx, .xlsm, .xls</span>
@@ -1607,6 +1586,27 @@
         <button type="submit" class="publish-btn" id="publishBtn">Publish Package</button>
       </div>
     </form>
+
+    <section class="bank-upload-panel">
+      <div>
+        <h3>Bank call report workbook</h3>
+        <p id="bankImportStatus">Checking imported bank data&hellip;</p>
+        <p id="bankStatusImportStatus">Account statuses default to Open until imported or edited.</p>
+        <p id="averagedSeriesImportStatus">Averaged-series peer data has not been imported yet.</p>
+      </div>
+      <label class="small-btn bank-upload-btn">
+        Upload Call Reports
+        <input type="file" id="bankWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
+      </label>
+      <label class="small-btn bank-upload-btn">
+        Upload Statuses
+        <input type="file" id="bankStatusWorkbookInput" accept=".xlsb,.xlsm,.xlsx,.xls" hidden>
+      </label>
+      <label class="small-btn bank-upload-btn">
+        Upload Peer Averages
+        <input type="file" id="averagedSeriesWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
+      </label>
+    </section>
   </div>
 </div>
 

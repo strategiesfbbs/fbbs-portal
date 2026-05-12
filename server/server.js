@@ -357,6 +357,50 @@ function classifyFile(filename, explicitSlot) {
   return null;
 }
 
+function looksLikeInternalCdWorkbook(filename) {
+  const lower = String(filename || '').toLowerCase();
+  return /\.(xlsx|xlsm|xls)$/i.test(lower) &&
+    (lower.includes('master') ||
+     lower.includes('cost') ||
+     lower.includes('commission') ||
+     lower.includes('spreadsheet'));
+}
+
+function looksLikeWirpWorkbook(filename) {
+  const lower = String(filename || '').toLowerCase();
+  return /\.(xlsx|xlsm|xls)$/i.test(lower) &&
+    (lower.includes('wirp') ||
+     lower.includes('fed funds') ||
+     lower.includes('fedfunds') ||
+     /^grid\d*[_-]/i.test(path.basename(lower)));
+}
+
+function classifyFolderDropFile(filename) {
+  if (!filename) return null;
+  const lower = String(filename).toLowerCase();
+
+  if (looksLikeInternalCdWorkbook(filename) || looksLikeWirpWorkbook(filename)) return null;
+
+  if (/\.(xlsx|xlsm|xls)$/i.test(lower)) {
+    if ((lower.includes('treasury') || lower.includes('tsy')) &&
+        (lower.includes('note') || lower.includes('notes'))) {
+      return 'treasuryNotes';
+    }
+    if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
+        lower.includes('daily_cd') || lower.includes('daily cd') ||
+        lower.includes('cd offering') || lower.includes('cd_offering') ||
+        lower.includes('new issue cd') || lower.includes('new issue cds')) {
+      return 'cdoffers';
+    }
+    if (lower.includes('corporate') || lower.includes('corp_')) return 'corporates';
+    if (lower.includes('callable') || lower.includes('call')) return 'agenciesCallables';
+    if (lower.includes('bullet')) return 'agenciesBullets';
+    return null;
+  }
+
+  return classifyFile(filename);
+}
+
 function hasBytes(buffer, bytes, offset = 0) {
   return bytes.every((byte, i) => buffer[offset + i] === byte);
 }
@@ -3361,16 +3405,25 @@ function readFileTail(filePath, targetLines, chunkSize = 64 * 1024) {
 // ---------- Folder drop publishing ----------
 
 function folderDropCompanionRole(filename) {
-  const lower = String(filename || '').toLowerCase();
-  if (/\.(xlsx|xlsm|xls)$/i.test(lower) &&
-      (lower.includes('cost') || lower.includes('commission') || lower.includes('spreadsheet'))) {
+  if (looksLikeInternalCdWorkbook(filename)) {
     return 'cdCostWorkbook';
   }
   return '';
 }
 
 function isReferenceDropFile(filename) {
-  return /\.(txt|eml|msg)$/i.test(String(filename || ''));
+  return /\.(txt|eml|msg)$/i.test(String(filename || '')) ||
+    looksLikeInternalCdWorkbook(filename) ||
+    looksLikeWirpWorkbook(filename);
+}
+
+function folderDropReferenceLabel(filename) {
+  if (looksLikeInternalCdWorkbook(filename)) return 'Internal CD workbook';
+  if (looksLikeWirpWorkbook(filename)) return 'WIRP rates workbook';
+  if (/\.eml$/i.test(String(filename || ''))) return 'Email source';
+  if (/\.msg$/i.test(String(filename || ''))) return 'Email source';
+  if (/\.txt$/i.test(String(filename || ''))) return 'Text note';
+  return 'Reference file';
 }
 
 function scanFolderDrop(dateValue) {
@@ -3388,14 +3441,14 @@ function scanFolderDrop(dateValue) {
       const filename = entry.name;
       const fullPath = path.join(folderPath, filename);
       const stat = fs.statSync(fullPath);
-      const slot = classifyFile(filename);
+      const slot = classifyFolderDropFile(filename);
       const reference = !slot && isReferenceDropFile(filename);
       return {
         filename,
         size: stat.size,
         modifiedAt: stat.mtime.toISOString(),
         slot,
-        label: slot ? (slot === 'cdoffers' && folderDropCompanionRole(filename) === 'cdCostWorkbook' ? 'CD Cost Workbook' : DOC_TYPES_LABELS[slot] || slot) : '',
+        label: slot ? (DOC_TYPES_LABELS[slot] || slot) : folderDropReferenceLabel(filename),
         companionRole: folderDropCompanionRole(filename),
         date: sniffDateFromFilename(filename),
         reference,
@@ -3421,7 +3474,7 @@ function scanFolderDrop(dateValue) {
   }
   const dates = [...new Set(publishable.map(row => row.date).filter(Boolean))];
   if (dates.length > 1) warnings.push(`Files appear to reference multiple dates: ${dates.join(', ')}.`);
-  if (references.length) warnings.push(`${references.length} reference email/text file${references.length === 1 ? '' : 's'} found. They will stay in the folder but will not replace package slots yet.`);
+  if (references.length) warnings.push(`${references.length} reference/internal file${references.length === 1 ? '' : 's'} found. They will stay in the folder and will not replace package slots yet.`);
 
   return {
     date,
@@ -4575,6 +4628,7 @@ if (require.main === module) {
 
 module.exports = {
   classifyFile,
+  classifyFolderDropFile,
   hasPrivatePathSegment,
   isSameOriginWrite,
   sniffDateFromFilename,

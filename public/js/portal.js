@@ -68,7 +68,7 @@
     treasuryNotes:     { label: 'Treasury Notes', ext: 'XLSX', viewer: 'treasuryNotes' },
     cd:                { label: 'Brokered CD Sheet', ext: 'PDF', viewer: 'cd' },
     cdoffers:          { label: 'Daily CD Offerings PDF', ext: 'PDF', viewer: 'cdoffers' },
-    cdoffersCost:      { label: 'CD Cost Workbook', ext: 'XLSX', viewer: 'explorer' },
+    cdoffersCost:      { label: 'Internal CD Workbook', ext: 'XLSX', viewer: 'explorer' },
     munioffers:        { label: 'Muni Offerings', ext: 'PDF', viewer: 'munioffers' },
     agenciesBullets:   { label: 'Agencies — Bullets', ext: 'XLSX', viewer: 'agencies' },
     agenciesCallables: { label: 'Agencies — Callables', ext: 'XLSX', viewer: 'agencies' },
@@ -2872,7 +2872,7 @@
           ${chip(day.treasuryNotes, 'Treasury_Notes.xlsx')}
           ${chip(day.cd, 'CD_Rate_Sheet.pdf')}
           ${chip(cdOfferIsWorkbook ? null : day.cdoffers, 'CD_Offerings.pdf')}
-          ${chip(cdOfferIsWorkbook ? day.cdoffers : costFile, 'CD_Cost.xlsx')}
+          ${chip(cdOfferIsWorkbook ? day.cdoffers : costFile, 'CD_Internal.xlsx')}
           ${chip(day.munioffers, 'Muni_Offerings.pdf')}
           ${qualityHtml}
         </td>
@@ -2891,14 +2891,14 @@
       return `<span class="archive-quality-pill ${ok ? 'ok' : 'warn'}">${escapeHtml(label)} ${ok ? formatNumber(n) : 'missing'}</span>`;
     };
     const warnings = Number(day.warningCount || day.warningsCount || 0);
-    const cdCostReady = Boolean(day.cdoffersCost || context.costFile || context.cdOfferIsWorkbook);
+    const cdInternalReady = Boolean(day.cdoffersCost || context.costFile || context.cdOfferIsWorkbook);
     const pills = [
       countChip('CD rows', day.offeringsCount),
       countChip('Treasury rows', day.treasuryNotesCount),
       countChip('Muni rows', day.muniOfferingsCount),
       countChip('Agency rows', day.agencyCount),
       countChip('Corp rows', day.corporatesCount),
-      `<span class="archive-quality-pill ${cdCostReady ? 'ok' : 'warn'}">CD cost ${cdCostReady ? 'loaded' : 'missing'}</span>`,
+      `<span class="archive-quality-pill ${cdInternalReady ? 'ok' : ''}">CD internal ${cdInternalReady ? 'loaded' : 'optional'}</span>`,
       `<span class="archive-quality-pill ${warnings ? 'warn' : 'ok'}">${warnings ? `${formatNumber(warnings)} warnings` : 'No warnings'}</span>`
     ];
     return `<div class="archive-quality">${pills.join('')}</div>`;
@@ -6640,9 +6640,8 @@
     const hasCdCost = Boolean(selectedFiles.cdoffersCost);
     const warnings = [];
     if (uniqueDates.length > 1) warnings.push('Filename dates do not all match');
-    if (hasCdPdf && !hasCdCost) warnings.push('CD PDF selected without cost workbook');
     if (hasCdCost && !hasCdPdf && !(currentPackage && currentPackage.cdoffers && !/\.(xlsx|xlsm|xls)$/i.test(currentPackage.cdoffers))) {
-      warnings.push('Cost workbook selected without a CD PDF in this upload or current package');
+      warnings.push('Internal CD workbook selected without a CD PDF in this upload or current package');
     }
 
     panel.hidden = false;
@@ -6721,7 +6720,7 @@
     if (summary) {
       summary.innerHTML = `
         <strong>${escapeHtml(formatNumber(publishable.length))}</strong> publishable ·
-        <strong>${escapeHtml(formatNumber(references.length))}</strong> reference ·
+        <strong>${escapeHtml(formatNumber(references.length))}</strong> reference/internal ·
         <strong>${escapeHtml(formatNumber(ignored.length))}</strong> ignored
         ${warnings.length ? `<span>${escapeHtml(warnings[0])}</span>` : '<span>Ready to publish after review.</span>'}
       `;
@@ -6744,7 +6743,7 @@
           <div class="folder-drop-file ${escapeHtml(row.tone)}">
             <div>
               <strong>${escapeHtml(row.filename)}</strong>
-              <span>${escapeHtml(folderDropSlotLabel(row))}${row.date ? ` · ${escapeHtml(row.date)}` : ''}${row.companionRole ? ' · companion' : ''}</span>
+              <span>${escapeHtml(folderDropSlotLabel(row))}${row.date ? ` · ${escapeHtml(row.date)}` : ''}${row.companionRole && row.tone === 'ok' ? ' · companion' : ''}</span>
             </div>
             <em>${escapeHtml(formatFileSize(row.size || 0))}</em>
           </div>
