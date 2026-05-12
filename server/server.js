@@ -2453,6 +2453,60 @@ function resolvePortfolioFilePath(bondAccounting) {
   return resolveBondAccountingStoredFile(BANK_REPORTS_DIR, latest.storedPath);
 }
 
+// Slim per-bank index for the inverse-query path. Keeps only the cusip set
+// and sector counts in memory so we can score 1000+ coverage banks without
+// hauling around every bond row. Built lazily and rebuilt when the bond-
+// accounting manifest is re-imported.
+let coverageHoldingsIndex = null;
+let coverageHoldingsIndexBuiltAt = 0;
+
+function invalidateCoverageHoldingsIndex() {
+  coverageHoldingsIndex = null;
+  coverageHoldingsIndexBuiltAt = 0;
+}
+
+function buildCoverageHoldingsIndex() {
+  const manifest = loadBondAccountingManifest(BANK_REPORTS_DIR);
+  if (!manifest || !Array.isArray(manifest.matches)) return new Map();
+  const index = new Map();
+  for (const row of manifest.matches) {
+    if (!row || !row.bankId || !row.storedPath) continue;
+    const filePath = resolveBondAccountingStoredFile(BANK_REPORTS_DIR, row.storedPath);
+    if (!filePath) continue;
+    let parsed;
+    try {
+      parsed = loadParsedPortfolio(filePath);
+    } catch (err) {
+      log('warn', `Holdings index: skipping ${row.bankId} (${err.message})`);
+      continue;
+    }
+    if (!parsed) continue;
+    const bankId = String(row.bankId);
+    const existing = index.get(bankId);
+    // If multiple portfolio files exist for one bank, keep the latest report date.
+    if (existing && existing.reportDate >= (parsed.asOfDate || '')) continue;
+    const cusips = parsed.cusipIndex ? Object.keys(parsed.cusipIndex) : [];
+    index.set(bankId, {
+      reportDate: parsed.asOfDate || row.reportDate || '',
+      totalPositions: parsed.aggregates ? parsed.aggregates.totalPositions : 0,
+      sectorCounts: parsed.sectorCounts || {},
+      cusipSet: new Set(cusips.map(c => c.toUpperCase())),
+      bookYieldYtw: parsed.totals ? parsed.totals.bookYieldYtw : null,
+      marketYieldYtw: parsed.totals ? parsed.totals.marketYieldYtw : null
+    });
+  }
+  return index;
+}
+
+function getCoverageHoldingsIndex() {
+  if (coverageHoldingsIndex) return coverageHoldingsIndex;
+  const t0 = Date.now();
+  coverageHoldingsIndex = buildCoverageHoldingsIndex();
+  coverageHoldingsIndexBuiltAt = Date.now();
+  log('info', `Coverage holdings index built: ${coverageHoldingsIndex.size} banks in ${coverageHoldingsIndexBuiltAt - t0}ms`);
+  return coverageHoldingsIndex;
+}
+
 function loadHoldingsForBank(bank) {
   if (!bank || !bank.bondAccounting || !bank.bondAccounting.available) return null;
   const filePath = resolvePortfolioFilePath(bank.bondAccounting);
@@ -2797,10 +2851,28 @@ function buyerOfferingHeadline(productType, offering) {
   return '';
 }
 
-function scoreCoverageBankForOffering(bank, productType, offering) {
+// Sectors in the parsed-holdings index that count as "this bank actively holds
+// inventory in the same asset class as the offering" — used for the sector
+// boost in scoreCoverageBankForOffering.
+const HOLDINGS_SECTOR_BOOST = {
+  agency:    { sectors: ['Agency'], boost: 10, label: 'agencies' },
+  muni:      { sectors: ['Exempt Muni', 'Taxable Muni'], boost: 10, label: 'munis' },
+  cd:        { sectors: ['CDs'], boost: 6, label: 'CDs' },
+  corporate: { sectors: ['Corporate'], boost: 10, label: 'corporates' },
+  mbs:       { sectors: ['MBS', 'CMO', 'CMBS'], boost: 12, label: 'MBS/CMO' },
+  treasury:  { sectors: ['Treasury'], boost: 8, label: 'treasuries' }
+};
+
+function scoreCoverageBankForOffering(bank, productType, offering, holdingsForBank) {
   const status = String(bank.accountStatusLabel || 'Open');
   const base = BUYER_STATUS_BASE[status] || 0;
   if (base <= 0) return null;
+
+  // Hard exclude if they already own this exact CUSIP.
+  const offeringCusip = offering && offering.cusip ? String(offering.cusip).toUpperCase() : '';
+  if (offeringCusip && holdingsForBank && holdingsForBank.cusipSet && holdingsForBank.cusipSet.has(offeringCusip)) {
+    return null;
+  }
 
   const ltd = numericValue(bank.loansToDeposits);
   const securities = numericValue(bank.securitiesToAssets);
@@ -2846,6 +2918,16 @@ function scoreCoverageBankForOffering(bank, productType, offering) {
     if (yieldSecs !== null && nim !== null && yieldSecs < nim - 1.5) { score += 10; why.push(`Book yield trails NIM`); }
     if (ltd !== null && ltd > 95) { score -= 8; why.push(`L/D ${ltd.toFixed(0)}% (funding-pressured)`); }
   }
+
+  // Sector-presence boost when we have parsed holdings for this bank.
+  const sectorBoost = HOLDINGS_SECTOR_BOOST[productType];
+  if (sectorBoost && holdingsForBank && holdingsForBank.sectorCounts) {
+    const count = sectorBoost.sectors.reduce((acc, sector) => acc + (holdingsForBank.sectorCounts[sector] || 0), 0);
+    if (count > 0) {
+      score += sectorBoost.boost;
+      why.push(`Holds ${count} ${sectorBoost.label}`);
+    }
+  }
   return { score, rationale: why };
 }
 
@@ -2860,9 +2942,11 @@ function findBuyerCandidates({ productType, offering, limit = 10 }) {
     return { offeringHeadline: buyerOfferingHeadline(productType, offering), buyers: [], coverageCount: 0, notice: 'Bank dataset not loaded.' };
   }
   const coverage = mapData.banks.filter(b => b.accountStatusLabel && b.accountStatusLabel !== 'Open');
+  const holdingsIndex = getCoverageHoldingsIndex();
   const scored = coverage
     .map(b => {
-      const result = scoreCoverageBankForOffering(b, productType, offering);
+      const holdingsForBank = holdingsIndex ? holdingsIndex.get(String(b.id)) : null;
+      const result = scoreCoverageBankForOffering(b, productType, offering, holdingsForBank);
       if (!result || result.score <= 0) return null;
       const statusSlug = String(b.accountStatusLabel || 'open').toLowerCase().replace(/[^a-z0-9]+/g, '-');
       return {
@@ -3453,6 +3537,7 @@ async function handleBondAccountingUpload(req, res) {
       bankSummaries,
       sourceFolderLabel: `${portfolioFiles.length} uploaded portfolio workbook${portfolioFiles.length === 1 ? '' : 's'}`
     });
+    invalidateCoverageHoldingsIndex();
     appendAuditLog({
       event: 'bond-accounting-import',
       bankListSourceFile: sanitizeFilename(bankListFile.filename),
@@ -4887,6 +4972,16 @@ function startServer() {
 ================================================================
 `;
     console.log(banner);
+    // Prime the coverage holdings index in the background so the first
+    // inverse-query request doesn't pay the cold-parse cost. Failures here
+    // don't fail the server — scoring falls back to call-report-only.
+    setImmediate(() => {
+      try {
+        getCoverageHoldingsIndex();
+      } catch (err) {
+        log('warn', `Coverage holdings prime failed: ${err.message}`);
+      }
+    });
   });
 }
 
