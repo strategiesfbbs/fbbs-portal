@@ -2214,6 +2214,16 @@ function buildAssistantSignals(bank, inventory, strategies) {
       text: `${peer.label || key} is ${delta > 0 ? 'above' : 'below'} peer average by ${Math.abs(delta).toFixed(2)} points.`
     });
   });
+  const holdings = bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
+  if (holdings) {
+    const reportDate = holdings.latestReportDate || 'recent';
+    const count = holdings.portfolioFileCount || 1;
+    signals.unshift({
+      type: 'Holdings on file',
+      strength: 'High',
+      text: `Portfolio file${count > 1 ? `s (${count})` : ''} on disk through ${reportDate} — pull holdings before pitching; frame as a swap, not an add.`
+    });
+  }
   if (Array.isArray(strategies) && strategies.some(row => row.status === 'Open' || row.status === 'In Progress')) {
     signals.push({
       type: 'Open workflow',
@@ -2240,6 +2250,7 @@ function buildAssistantSignals(bank, inventory, strategies) {
 
 function buildAssistantProductFits(bank, inventory, signals) {
   const { values } = latestBankValues(bank);
+  const holdings = bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
   const ltd = numericValue(values.loansToDeposits);
   const liquid = numericValue(values.liquidAssetsToAssets);
   const securities = numericValue(values.securitiesToAssets);
@@ -2267,7 +2278,9 @@ function buildAssistantProductFits(bank, inventory, signals) {
       explorerPage: 'agencies',
       explorerLabel: 'Open Agency Explorer',
       fit: securities !== null && securities < 18 ? 'Good' : 'Review',
-      reason: 'Agency bullets/callables are the easy first screen — clean credit, fits most policies.',
+      reason: holdings
+        ? 'Holdings file on disk — open it first and frame as a swap from existing positions.'
+        : 'Agency bullets/callables are the easy first screen — clean credit, fits most policies.',
       examples: inventory.examples.agencies
     });
   }
@@ -2299,7 +2312,9 @@ function buildAssistantProductFits(bank, inventory, signals) {
       explorerPage: 'mbs-cmo',
       explorerLabel: 'Open MBS/CMO',
       fit: 'Review',
-      reason: 'Existing MBS exposure — pull bond accounting first, then frame cash-flow or duration swap.',
+      reason: holdings
+        ? `Holdings on file (${holdings.latestReportDate || 'recent'}) — review the existing MBS book before pitching; this is a swap conversation, not an add.`
+        : 'Existing MBS exposure — pull bond accounting first, then frame cash-flow or duration swap.',
       examples: inventory.examples.treasuries
     });
   }
@@ -2380,6 +2395,7 @@ function buildBankAssistantResponse(bankData, action) {
   }
   nextQuestions.push('Does this turn into a strategy request, a bond-accounting review, or a one-off follow-up?');
 
+  const holdings = bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
   const noteLines = [
     `${bankName}${location ? ` (${location})` : ''}${latest && latest.period ? ` · ${latest.period}` : ''}`,
     metricLines.length ? metricLines.join(' · ') : 'Latest call-report metrics not loaded.',
@@ -2388,6 +2404,7 @@ function buildBankAssistantResponse(bankData, action) {
     `Ask: ${nextQuestions[0]}`
   ];
   if (topFit.examples && topFit.examples[0]) noteLines.push(`Show: ${topFit.examples[0]}`);
+  if (holdings) noteLines.push(`Holdings: bond accounting file on disk through ${holdings.latestReportDate || 'recent'} — review before pitching.`);
   const callNote = noteLines.join('\n');
 
   const fitPhrase = topFit.fit === 'Review'
@@ -2428,6 +2445,11 @@ function buildBankAssistantResponse(bankData, action) {
     summary: `${fitPhrase.charAt(0).toUpperCase() + fitPhrase.slice(1)} based on the latest filing and today's inventory.`,
     topProduct: topFit.product,
     statusPill,
+    holdings: holdings ? {
+      reportDate: holdings.latestReportDate || '',
+      fileCount: holdings.portfolioFileCount || 0,
+      latestStoredPath: (holdings.portfolios && holdings.portfolios[0] && holdings.portfolios[0].storedPath) || ''
+    } : null,
     notices,
     context: {
       bankId: bank.id,

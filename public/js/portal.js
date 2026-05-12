@@ -5557,6 +5557,9 @@
         ` : ''}
         <div class="bank-assistant-actions">
           <button type="button" class="small-btn" id="bankAssistantStrategyBtn">Open as strategy request</button>
+          ${data.holdings && data.holdings.latestStoredPath
+            ? `<a class="small-btn" href="/api/banks/bond-accounting/files/${encodeURIComponent(data.holdings.latestStoredPath)}" target="_blank" rel="noopener">View holdings (${escapeHtml(data.holdings.reportDate || 'on file')})</a>`
+            : ''}
           ${data.disclaimer ? `<span>${escapeHtml(data.disclaimer)}</span>` : ''}
         </div>
       </article>
