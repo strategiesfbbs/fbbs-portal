@@ -5686,6 +5686,117 @@ body {
   text-decoration: underline;
 }
 
+.buyers-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.buyers-drawer-backdrop {
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 18px;
+}
+
+.buyers-drawer {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 36px);
+  display: flex;
+  flex-direction: column;
+}
+
+.buyers-drawer-subtitle {
+  color: var(--text3);
+  font-size: 11.5px;
+  font-weight: 400;
+  margin-top: 3px;
+}
+
+.buyers-drawer-disclaimer {
+  color: var(--text3);
+  font-size: 11px;
+  flex: 1;
+}
+
+.buyers-summary {
+  color: var(--text3);
+  font-size: 11.5px;
+  margin-bottom: 10px;
+}
+
+.buyers-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.buyer-row {
+  align-items: start;
+  background: #fafcfb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 26px 1fr auto;
+  padding: 9px 11px;
+}
+
+.buyer-rank {
+  color: var(--text3);
+  font-size: 12px;
+  font-weight: 700;
+  padding-top: 1px;
+}
+
+.buyer-name {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 6px;
+}
+
+.buyer-name a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.buyer-name a:hover {
+  text-decoration: underline;
+}
+
+.buyer-meta {
+  color: var(--text3);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.buyer-rationale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.buyer-chip {
+  background: #eef5f1;
+  border: 1px solid #cfe0d9;
+  border-radius: 999px;
+  color: #1f4b36;
+  font-size: 10.5px;
+  padding: 2px 7px;
+}
+
+.buyer-score {
+  color: var(--racing-green);
+  font-size: 16px;
+  font-weight: 800;
+  padding-top: 2px;
+}
+
 .bank-assistant-empty {
   background: #fff;
   border: 1px dashed #cfe0d9;

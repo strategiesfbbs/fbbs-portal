@@ -107,6 +107,7 @@ const DATA_DIR = process.env.DATA_DIR
   : path.join(ROOT, 'data');
 const CURRENT_DIR = path.join(DATA_DIR, 'current');
 const ARCHIVE_DIR = path.join(DATA_DIR, 'archive');
+const DROPBOX_DIR = path.join(DATA_DIR, 'dropbox');
 const CD_HISTORY_DIR = path.join(DATA_DIR, 'cd-history');
 const BANK_REPORTS_DIR = path.join(DATA_DIR, 'bank-reports');
 const MBS_CMO_DIR = path.join(DATA_DIR, 'mbs-cmo');
@@ -130,7 +131,7 @@ function log(level, ...args) {
 
 // ---------- Setup ----------
 
-[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR].forEach(dir => {
+[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, DROPBOX_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('info', 'Created data directory:', dir);
@@ -162,6 +163,19 @@ const MIME_TYPES = {
 };
 
 const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+const DOC_TYPES_LABELS = {
+  dashboard: 'FBBS Sales Dashboard',
+  econ: 'Economic Update',
+  relativeValue: 'Relative Value',
+  mmd: 'MMD Curve',
+  treasuryNotes: 'Treasury Notes',
+  cd: 'Brokered CD Sheet',
+  cdoffers: 'Daily CD Offerings',
+  munioffers: 'Muni Offerings',
+  agenciesBullets: 'Agency Bullets',
+  agenciesCallables: 'Agency Callables',
+  corporates: 'Corporates'
+};
 const CD_COST_FIELD_NAMES = new Set(['cdoffersCost', 'cdCostWorkbook', 'cdCost']);
 const OFFERINGS_FILENAME = '_offerings.json';
 const MUNI_OFFERINGS_FILENAME = '_muni_offerings.json';
@@ -639,6 +653,16 @@ function readJsonBody(req, limit = 1024 * 1024) {
       }
     });
   });
+}
+
+function normalizeDropDate(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : todayStamp();
+}
+
+function dropboxDirForDate(dateValue) {
+  const date = normalizeDropDate(dateValue);
+  return safeJoin(DROPBOX_DIR, date);
 }
 
 // ---------- Filename sanitization ----------
@@ -2510,6 +2534,150 @@ async function handleBankAssistant(req, res) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Inverse query: who in our coverage might buy this offering?
+//
+// Trader-facing flip-side of the bank assistant. Same provider-seam discipline:
+// today the scoring is deterministic on call-report fields + coverage status.
+// To plug a model in later, keep the bounded context (coverage universe slice
+// + offering blob) and replace `scoreCoverageBankForOffering` with a model
+// call — do NOT widen the universe or send raw bank blobs downstream.
+
+const BUYER_PRODUCT_TYPES = new Set(['agency', 'muni', 'cd', 'corporate', 'mbs', 'treasury']);
+const BUYER_STATUS_BASE = { Client: 24, Prospect: 14, Watchlist: 8, Dormant: 3, Open: 0 };
+
+function buyerOfferingHeadline(productType, offering) {
+  if (!offering || typeof offering !== 'object') return '';
+  const num = (v, d = 3) => (v === null || v === undefined || v === '') ? '' : Number(v).toFixed(d);
+  if (productType === 'agency') {
+    const yld = num(offering.ytm); const ync = num(offering.ytnc);
+    return `${offering.structure || 'Agency'} ${offering.ticker || ''} ${offering.maturity || ''}${yld ? ` · YTM ${yld}%` : ''}${ync ? ` · YTNC ${ync}%` : ''}${offering.cusip ? ` (${offering.cusip})` : ''}`.replace(/\s+/g, ' ').trim();
+  }
+  if (productType === 'muni') {
+    return `${offering.issuerState || ''} ${offering.issuerName || 'Muni'} ${offering.maturity || ''}${num(offering.ytw) ? ` · YTW ${num(offering.ytw)}%` : ''}`.replace(/\s+/g, ' ').trim();
+  }
+  if (productType === 'cd') {
+    return `${offering.term || ''} ${offering.name || 'CD'}${num(offering.rate, 2) ? ` at ${num(offering.rate, 2)}%` : ''}`.replace(/\s+/g, ' ').trim();
+  }
+  if (productType === 'corporate') {
+    return `${offering.issuerName || offering.ticker || 'Corporate'} ${offering.maturity || ''}${num(offering.ytm) ? ` · YTM ${num(offering.ytm)}%` : ''}`.replace(/\s+/g, ' ').trim();
+  }
+  if (productType === 'mbs') {
+    return `${offering.cusip || offering.description || 'MBS/CMO'}${num(offering.yield) ? ` · ${num(offering.yield)}%` : ''}`.trim();
+  }
+  if (productType === 'treasury') {
+    return `${offering.description || 'Treasury'}${num(offering.yield) ? ` · ${num(offering.yield)}%` : ''}`.trim();
+  }
+  return '';
+}
+
+function scoreCoverageBankForOffering(bank, productType, offering) {
+  const status = String(bank.accountStatusLabel || 'Open');
+  const base = BUYER_STATUS_BASE[status] || 0;
+  if (base <= 0) return null;
+
+  const ltd = numericValue(bank.loansToDeposits);
+  const securities = numericValue(bank.securitiesToAssets);
+  const liquid = numericValue(bank.liquidAssetsToAssets);
+  const wholesale = numericValue(bank.wholesaleFundingReliance);
+  const yieldSecs = numericValue(bank.yieldOnSecurities);
+  const nim = numericValue(bank.netInterestMargin);
+  const assets = numericValue(bank.totalAssets);
+  let score = base;
+  const why = [status];
+
+  if (productType === 'agency') {
+    if (securities !== null) {
+      if (securities >= 12 && securities <= 30) { score += 15; why.push(`Securities ${securities.toFixed(0)}% (active book, room)`); }
+      else if (securities < 12) { score += 8; why.push(`Securities only ${securities.toFixed(0)}% (room to add)`); }
+    }
+    if (ltd !== null && ltd > 95) { score -= 12; why.push(`L/D ${ltd.toFixed(0)}% (funding-pressured)`); }
+    if (yieldSecs !== null && nim !== null && yieldSecs < nim - 1) {
+      score += 10; why.push(`Book yield ${yieldSecs.toFixed(2)}% trails NIM (lift opportunity)`);
+    }
+  } else if (productType === 'muni') {
+    const offState = String((offering && (offering.issuerState || offering.state)) || '').toUpperCase();
+    const bankState = String(bank.state || '').toUpperCase();
+    if (offState && bankState && offState === bankState) { score += 28; why.push(`In-state (${bankState})`); }
+    if (securities !== null && securities >= 18) { score += 10; why.push(`Securities ${securities.toFixed(0)}% (active book)`); }
+    if (assets !== null && assets >= 500000) { score += 6; why.push('Size supports broader BQ universe'); }
+    if (ltd !== null && ltd > 95) { score -= 8; why.push(`L/D ${ltd.toFixed(0)}% (funding-pressured)`); }
+  } else if (productType === 'cd') {
+    if (ltd !== null && ltd >= 95) { score += 22; why.push(`L/D ${ltd.toFixed(0)}% (likely in market)`); }
+    else if (ltd !== null && ltd >= 85) { score += 14; why.push(`L/D ${ltd.toFixed(0)}%`); }
+    if (liquid !== null && liquid < 10) { score += 10; why.push(`Liquid only ${liquid.toFixed(0)}%`); }
+    if (wholesale !== null && wholesale >= 20) { score += 8; why.push(`Wholesale funding ${wholesale.toFixed(0)}%`); }
+  } else if (productType === 'corporate') {
+    if (securities !== null && securities >= 22) { score += 14; why.push(`Securities ${securities.toFixed(0)}% (active book)`); }
+    if (assets !== null && assets >= 1000000) { score += 8; why.push('Bank size supports corporates'); }
+    else if (assets !== null && assets < 250000) { score -= 12; why.push('Smaller bank — corporates often outside policy'); }
+  } else if (productType === 'mbs') {
+    if (securities !== null && securities >= 22) { score += 18; why.push(`Securities ${securities.toFixed(0)}% (active reinvestor)`); }
+    else if (securities !== null && securities >= 18) { score += 10; why.push(`Securities ${securities.toFixed(0)}%`); }
+    if (assets !== null && assets >= 500000) { score += 6; why.push('Size supports MBS analysis'); }
+  } else if (productType === 'treasury') {
+    if (liquid !== null && liquid >= 25) { score += 14; why.push(`Liquid ${liquid.toFixed(0)}% (treasury-friendly)`); }
+    if (yieldSecs !== null && nim !== null && yieldSecs < nim - 1.5) { score += 10; why.push(`Book yield trails NIM`); }
+    if (ltd !== null && ltd > 95) { score -= 8; why.push(`L/D ${ltd.toFixed(0)}% (funding-pressured)`); }
+  }
+  return { score, rationale: why };
+}
+
+function findBuyerCandidates({ productType, offering, limit = 10 }) {
+  if (!BUYER_PRODUCT_TYPES.has(productType)) {
+    const err = new Error('Unsupported product type');
+    err.statusCode = 400;
+    throw err;
+  }
+  const mapData = getMapBankData();
+  if (!mapData || !Array.isArray(mapData.banks)) {
+    return { offeringHeadline: buyerOfferingHeadline(productType, offering), buyers: [], coverageCount: 0, notice: 'Bank dataset not loaded.' };
+  }
+  const coverage = mapData.banks.filter(b => b.accountStatusLabel && b.accountStatusLabel !== 'Open');
+  const scored = coverage
+    .map(b => {
+      const result = scoreCoverageBankForOffering(b, productType, offering);
+      if (!result || result.score <= 0) return null;
+      const statusSlug = String(b.accountStatusLabel || 'open').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      return {
+        bankId: b.id,
+        displayName: b.displayName || b.legalName || 'Unknown bank',
+        location: [b.city, b.state].filter(Boolean).join(', '),
+        certNumber: b.certNumber || '',
+        status: b.accountStatusLabel,
+        statusSlug,
+        owner: (b.accountStatus && b.accountStatus.owner) || '',
+        period: b.period || '',
+        score: Math.round(result.score),
+        rationale: result.rationale
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(limit, 25)));
+  return {
+    offeringHeadline: buyerOfferingHeadline(productType, offering),
+    coverageCount: coverage.length,
+    buyers: scored,
+    notice: coverage.length === 0 ? 'No banks have an active coverage status — every bank is set to Open.' : ''
+  };
+}
+
+async function handleBuyerCandidates(req, res) {
+  try {
+    const body = await readJsonBody(req, 64 * 1024);
+    const productType = String(body.productType || '').trim().toLowerCase();
+    if (!BUYER_PRODUCT_TYPES.has(productType)) return sendJSON(res, 400, { error: 'Unsupported product type' });
+    const offering = (body.offering && typeof body.offering === 'object') ? body.offering : {};
+    const limit = Number(body.limit) || 10;
+    const result = findBuyerCandidates({ productType, offering, limit });
+    return sendJSON(res, 200, result);
+  } catch (err) {
+    log('warn', 'Buyer candidates failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not score buyer candidates' });
+  }
+}
+
 let mapBankCache = null;
 
 function getPeerComparisonForMap() {
@@ -3190,6 +3358,127 @@ function readFileTail(filePath, targetLines, chunkSize = 64 * 1024) {
   return lines.slice(Math.max(0, lines.length - targetLines - 1)).join('\n');
 }
 
+// ---------- Folder drop publishing ----------
+
+function folderDropCompanionRole(filename) {
+  const lower = String(filename || '').toLowerCase();
+  if (/\.(xlsx|xlsm|xls)$/i.test(lower) &&
+      (lower.includes('cost') || lower.includes('commission') || lower.includes('spreadsheet'))) {
+    return 'cdCostWorkbook';
+  }
+  return '';
+}
+
+function isReferenceDropFile(filename) {
+  return /\.(txt|eml|msg)$/i.test(String(filename || ''));
+}
+
+function scanFolderDrop(dateValue) {
+  const date = normalizeDropDate(dateValue);
+  const folderPath = dropboxDirForDate(date);
+  if (!folderPath) {
+    const err = new Error('Invalid folder date');
+    err.statusCode = 400;
+    throw err;
+  }
+  fs.mkdirSync(folderPath, { recursive: true });
+  const entries = fs.readdirSync(folderPath, { withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => {
+      const filename = entry.name;
+      const fullPath = path.join(folderPath, filename);
+      const stat = fs.statSync(fullPath);
+      const slot = classifyFile(filename);
+      const reference = !slot && isReferenceDropFile(filename);
+      return {
+        filename,
+        size: stat.size,
+        modifiedAt: stat.mtime.toISOString(),
+        slot,
+        label: slot ? (slot === 'cdoffers' && folderDropCompanionRole(filename) === 'cdCostWorkbook' ? 'CD Cost Workbook' : DOC_TYPES_LABELS[slot] || slot) : '',
+        companionRole: folderDropCompanionRole(filename),
+        date: sniffDateFromFilename(filename),
+        reference,
+        ignored: filename.startsWith('.') || filename.startsWith('_') || (!slot && !reference)
+      };
+    })
+    .filter(row => !row.filename.startsWith('.') && row.filename !== '.DS_Store');
+
+  const publishable = entries.filter(row => row.slot && !row.ignored);
+  const references = entries.filter(row => row.reference && !row.ignored);
+  const ignored = entries.filter(row => row.ignored || (!row.slot && !row.reference));
+  const slots = {};
+  publishable.forEach(row => {
+    if (!slots[row.slot]) slots[row.slot] = [];
+    slots[row.slot].push(row);
+  });
+
+  const warnings = [];
+  if (!publishable.length) warnings.push('No publishable portal files were found in this folder.');
+  const touchesAgencies = Boolean(slots.agenciesBullets || slots.agenciesCallables);
+  if (touchesAgencies && (!slots.agenciesBullets || !slots.agenciesCallables)) {
+    warnings.push('Agency publishing needs both the bullets and callables workbooks unless the other file already exists in today’s current package.');
+  }
+  const dates = [...new Set(publishable.map(row => row.date).filter(Boolean))];
+  if (dates.length > 1) warnings.push(`Files appear to reference multiple dates: ${dates.join(', ')}.`);
+  if (references.length) warnings.push(`${references.length} reference email/text file${references.length === 1 ? '' : 's'} found. They will stay in the folder but will not replace package slots yet.`);
+
+  return {
+    date,
+    folderPath,
+    created: true,
+    publishable,
+    references,
+    ignored,
+    slots,
+    warnings
+  };
+}
+
+function folderDropFilesForPublish(scan) {
+  return (scan.publishable || []).map(row => {
+    const folderPath = dropboxDirForDate(scan.date);
+    const sourcePath = safeJoin(folderPath, row.filename);
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      const err = new Error(`Could not read ${row.filename}`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return {
+      fieldName: row.slot,
+      filename: row.filename,
+      data: fs.readFileSync(sourcePath),
+      explicitSlot: row.slot,
+      companionRole: row.companionRole || ''
+    };
+  });
+}
+
+async function handleFolderDropScan(req, res, query) {
+  try {
+    return sendJSON(res, 200, scanFolderDrop(query.get('date')));
+  } catch (err) {
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not scan folder' });
+  }
+}
+
+async function handleFolderDropPublish(req, res) {
+  try {
+    const body = await readJsonBody(req, 64 * 1024);
+    const scan = scanFolderDrop(body.date);
+    if (!scan.publishable.length) return sendJSON(res, 400, { error: 'No publishable portal files were found in the folder.' });
+    const files = folderDropFilesForPublish(scan);
+    return await publishPackageFiles(files, res, {
+      auditEvent: 'folder-publish',
+      publishedBy: 'Folder Drop',
+      sourceFolder: scan.folderPath
+    });
+  } catch (err) {
+    log('error', 'Folder drop publish failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Folder drop publish failed' });
+  }
+}
+
 // ---------- Upload handling ----------
 
 async function handleUpload(req, res) {
@@ -3209,6 +3498,10 @@ async function handleUpload(req, res) {
   const { files } = parsed;
   if (!files.length) return sendJSON(res, 400, { error: 'No files in upload' });
 
+  return await publishPackageFiles(files, res);
+}
+
+async function publishPackageFiles(files, res, options = {}) {
   let priorMeta = readMetaFile(CURRENT_DIR);
   const existingBeforeUpload = fs.existsSync(CURRENT_DIR)
     ? fs.readdirSync(CURRENT_DIR).filter(f => f !== '.gitkeep' && f !== '.DS_Store')
@@ -3701,7 +3994,7 @@ async function handleUpload(req, res) {
   const meta = {
     date: packageDate,
     publishedAt: new Date().toISOString(),
-    publishedBy: 'Portal User',
+    publishedBy: options.publishedBy || 'Portal User',
     offeringsCount:      mergedOfferingsCount,
     muniOfferingsCount:  mergedMuniOfferingsCount,
     treasuryNotesCount:  mergedTreasuryNotesCount,
@@ -3720,9 +4013,10 @@ async function handleUpload(req, res) {
   invalidatePackageCache();
 
   appendAuditLog({
-    event: 'publish',
+    event: options.auditEvent || 'publish',
     packageDate,
     publishedBy: meta.publishedBy,
+    sourceFolder: options.sourceFolder || undefined,
     files: saved.map(s => ({ type: s.type, filename: s.filename, size: s.size })),
     offeringsCount,
     cdHistorySnapshot,
@@ -4117,6 +4411,10 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/assistant/bank' && req.method === 'POST') {
       return await handleBankAssistant(req, res);
+    }
+
+    if (pathname === '/api/assistant/buyers' && req.method === 'POST') {
+      return await handleBuyerCandidates(req, res);
     }
 
     if (pathname === '/api/brokered-cd/wirp' && req.method === 'GET') {

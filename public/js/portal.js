@@ -5622,6 +5622,95 @@
     }
   }
 
+  function ensureBuyersDrawer() {
+    let backdrop = document.getElementById('buyersDrawerBackdrop');
+    if (backdrop) return backdrop;
+    backdrop = document.createElement('div');
+    backdrop.id = 'buyersDrawerBackdrop';
+    backdrop.className = 'maps-modal-backdrop buyers-drawer-backdrop';
+    backdrop.hidden = true;
+    backdrop.innerHTML = `
+      <div class="maps-modal buyers-drawer" role="dialog" aria-modal="true" aria-labelledby="buyersDrawerTitle">
+        <header>
+          <div>
+            <div class="title" id="buyersDrawerTitle">Who buys this?</div>
+            <div class="buyers-drawer-subtitle" id="buyersDrawerSubtitle"></div>
+          </div>
+          <button type="button" class="text-btn" id="buyersDrawerClose" aria-label="Close">✕</button>
+        </header>
+        <div class="maps-modal-body" id="buyersDrawerBody">
+          <div class="bank-search-empty">Scoring covered banks…</div>
+        </div>
+        <footer>
+          <span class="buyers-drawer-disclaimer">Coverage banks only — scored on call-report fit + status. Internal sales support.</span>
+          <button type="button" class="small-btn" id="buyersDrawerCloseFooter">Close</button>
+        </footer>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => { backdrop.hidden = true; };
+    backdrop.querySelector('#buyersDrawerClose').addEventListener('click', close);
+    backdrop.querySelector('#buyersDrawerCloseFooter').addEventListener('click', close);
+    backdrop.addEventListener('click', evt => { if (evt.target === backdrop) close(); });
+    document.addEventListener('keydown', evt => { if (evt.key === 'Escape' && !backdrop.hidden) close(); });
+    return backdrop;
+  }
+
+  function renderBuyersList(data) {
+    const body = document.getElementById('buyersDrawerBody');
+    if (!body) return;
+    if (!data || !Array.isArray(data.buyers) || !data.buyers.length) {
+      body.innerHTML = `<div class="bank-search-empty">${escapeHtml(data && data.notice ? data.notice : 'No coverage banks matched this offering.')}</div>`;
+      return;
+    }
+    body.innerHTML = `
+      <div class="buyers-summary">${escapeHtml(data.buyers.length)} of ${escapeHtml(data.coverageCount)} covered banks ranked.</div>
+      <ol class="buyers-list">
+        ${data.buyers.map((b, i) => `
+          <li class="buyer-row">
+            <div class="buyer-rank">${i + 1}</div>
+            <div class="buyer-main">
+              <div class="buyer-name">
+                <a href="#" data-buyers-bank-id="${escapeHtml(b.bankId)}">${escapeHtml(b.displayName)}</a>
+                <span class="maps-status-pill maps-status-${escapeHtml(b.statusSlug || 'open')}">${escapeHtml(b.status)}</span>
+              </div>
+              <div class="buyer-meta">${escapeHtml([b.location, b.period, b.owner ? `Owner: ${b.owner}` : ''].filter(Boolean).join(' · '))}</div>
+              <div class="buyer-rationale">${b.rationale.map(r => `<span class="buyer-chip">${escapeHtml(r)}</span>`).join('')}</div>
+            </div>
+            <div class="buyer-score">${escapeHtml(b.score)}</div>
+          </li>
+        `).join('')}
+      </ol>`;
+    body.querySelectorAll('[data-buyers-bank-id]').forEach(a => {
+      a.addEventListener('click', evt => {
+        evt.preventDefault();
+        document.getElementById('buyersDrawerBackdrop').hidden = true;
+        goTo('banks');
+        setTimeout(() => loadBank(a.dataset.buyersBankId), 200);
+      });
+    });
+  }
+
+  async function openBuyersDrawer(productType, offering) {
+    const backdrop = ensureBuyersDrawer();
+    backdrop.hidden = false;
+    const subtitle = document.getElementById('buyersDrawerSubtitle');
+    const body = document.getElementById('buyersDrawerBody');
+    if (subtitle) subtitle.textContent = '';
+    if (body) body.innerHTML = '<div class="bank-search-empty">Scoring covered banks…</div>';
+    try {
+      const res = await fetch('/api/assistant/buyers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productType, offering, limit: 10 })
+      });
+      const data = await readBankJson(res);
+      if (subtitle) subtitle.textContent = data.offeringHeadline || '';
+      renderBuyersList(data);
+    } catch (e) {
+      if (body) body.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
   async function copyBankAssistantNote() {
     const note = bankAssistantLastResponse && bankAssistantLastResponse.callNote;
     const btn = document.getElementById('bankAssistantCopyBtn');
@@ -8348,7 +8437,7 @@
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
         No agencies match the current filters.
       </td></tr>`;
       return;
@@ -8357,7 +8446,7 @@
     const fmt = (v, d = 3) => v == null ? '<span class="no-restrict">&mdash;</span>' : v.toFixed(d);
     const fmtDate = v => v ? formatNumericDate(v) : '<span class="no-restrict">&mdash;</span>';
 
-    body.innerHTML = filtered.map(o => {
+    body.innerHTML = filtered.map((o, idx) => {
       const structureClass = o.structure === 'Bullet' ? 'structure-bullet' : 'structure-callable';
       const benchmark = effectiveAgencyBenchmark(o);
       return `
@@ -8375,8 +8464,17 @@
           <td style="text-align:right" class="qnty-cell">${fmt(o.availableSize, 3)}</td>
           <td style="text-align:right">${commissionSpreadHtml(o)}</td>
           <td>${benchmark ? escapeHtml(benchmark) : '<span class="no-restrict">&mdash;</span>'}</td>
+          <td><button type="button" class="small-btn buyers-btn" data-buyers-product="agency" data-buyers-idx="${idx}">Find buyers</button></td>
         </tr>`;
     }).join('');
+
+    body.querySelectorAll('[data-buyers-product="agency"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.buyersIdx);
+        const offering = filtered[idx];
+        if (offering) openBuyersDrawer('agency', offering);
+      });
+    });
   }
 
   function setupAgencyFilters() {
