@@ -1279,6 +1279,25 @@
       </label>
     </section>
 
+    <section class="folder-drop-panel" id="folderDropPanel">
+      <div class="folder-drop-head">
+        <div>
+          <h3>Folder Drop</h3>
+          <p>Copy today&apos;s files into the dated folder, scan it here, then publish the detected package slots.</p>
+        </div>
+        <div class="folder-drop-actions">
+          <button type="button" class="small-btn" id="folderDropScanBtn">Scan Folder</button>
+          <button type="button" class="publish-btn" id="folderDropPublishBtn" disabled>Publish Folder</button>
+        </div>
+      </div>
+      <div class="folder-drop-path">
+        <span>Today&apos;s folder</span>
+        <code id="folderDropPath">Loading&hellip;</code>
+      </div>
+      <div class="folder-drop-summary" id="folderDropSummary">Scan the folder after copying files into it.</div>
+      <div class="folder-drop-grid" id="folderDropGrid"></div>
+    </section>
+
     <form id="uploadForm" enctype="multipart/form-data">
       <section class="upload-section">
         <div class="upload-section-head">

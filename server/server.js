@@ -4453,6 +4453,14 @@ const server = http.createServer(async (req, res) => {
       return await handleUpload(req, res);
     }
 
+    if (pathname === '/api/folder-drop/scan' && req.method === 'GET') {
+      return await handleFolderDropScan(req, res, query);
+    }
+
+    if (pathname === '/api/folder-drop/publish' && req.method === 'POST') {
+      return await handleFolderDropPublish(req, res);
+    }
+
     if (pathname.startsWith('/api/')) {
       return sendJSON(res, 404, { error: 'API endpoint not found' });
     }

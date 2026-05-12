@@ -2908,6 +2908,8 @@
 
   function setupUpload() {
     const dropZones = document.querySelectorAll('.drop-zone');
+    const folderScanBtn = document.getElementById('folderDropScanBtn');
+    const folderPublishBtn = document.getElementById('folderDropPublishBtn');
 
     dropZones.forEach(zone => {
       const input = zone.querySelector('input[type="file"]');
@@ -2947,6 +2949,9 @@
       e.preventDefault();
       await publishPackage();
     });
+    if (folderScanBtn) folderScanBtn.addEventListener('click', () => scanFolderDrop());
+    if (folderPublishBtn) folderPublishBtn.addEventListener('click', publishFolderDrop);
+    scanFolderDrop({ silent: true });
   }
 
   function setupGlobalSearch() {
@@ -6669,6 +6674,144 @@
     body.innerHTML = rows.join('') + footer;
   }
 
+  function todayIsoDate() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function folderDropSlotLabel(row) {
+    if (!row) return 'File';
+    if (row.label) return row.label;
+    return row.slot && DOC_TYPES[row.slot] ? DOC_TYPES[row.slot].label : (row.reference ? 'Reference file' : 'Unclassified');
+  }
+
+  async function scanFolderDrop(options = {}) {
+    const summary = document.getElementById('folderDropSummary');
+    const grid = document.getElementById('folderDropGrid');
+    const pathEl = document.getElementById('folderDropPath');
+    const publishBtn = document.getElementById('folderDropPublishBtn');
+    const scanBtn = document.getElementById('folderDropScanBtn');
+    const date = todayIsoDate();
+    if (scanBtn) scanBtn.disabled = true;
+    if (summary && !options.silent) summary.textContent = 'Scanning folder...';
+    try {
+      const res = await fetch(`/api/folder-drop/scan?date=${encodeURIComponent(date)}`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      if (pathEl) pathEl.textContent = data.folderPath || '';
+      renderFolderDropScan(data);
+      if (!options.silent) showToast(`Scanned folder · ${formatNumber((data.publishable || []).length)} publishable file${(data.publishable || []).length === 1 ? '' : 's'}`);
+    } catch (e) {
+      if (summary) summary.textContent = e.message;
+      if (grid) grid.innerHTML = '';
+      if (publishBtn) publishBtn.disabled = true;
+      if (!options.silent) showToast(e.message, true);
+    } finally {
+      if (scanBtn) scanBtn.disabled = false;
+    }
+  }
+
+  function renderFolderDropScan(data) {
+    const summary = document.getElementById('folderDropSummary');
+    const grid = document.getElementById('folderDropGrid');
+    const publishBtn = document.getElementById('folderDropPublishBtn');
+    const publishable = Array.isArray(data.publishable) ? data.publishable : [];
+    const references = Array.isArray(data.references) ? data.references : [];
+    const ignored = Array.isArray(data.ignored) ? data.ignored : [];
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    if (summary) {
+      summary.innerHTML = `
+        <strong>${escapeHtml(formatNumber(publishable.length))}</strong> publishable ·
+        <strong>${escapeHtml(formatNumber(references.length))}</strong> reference ·
+        <strong>${escapeHtml(formatNumber(ignored.length))}</strong> ignored
+        ${warnings.length ? `<span>${escapeHtml(warnings[0])}</span>` : '<span>Ready to publish after review.</span>'}
+      `;
+    }
+    if (publishBtn) publishBtn.disabled = publishable.length === 0;
+    if (!grid) return;
+    const rows = [
+      ...publishable.map(row => ({ ...row, tone: 'ok' })),
+      ...references.map(row => ({ ...row, tone: 'ref' })),
+      ...ignored.map(row => ({ ...row, tone: 'ignored' }))
+    ];
+    if (!rows.length) {
+      grid.innerHTML = '<div class="bank-search-empty">Folder is empty. Copy today’s package files into the folder above, then scan again.</div>';
+      return;
+    }
+    grid.innerHTML = `
+      ${warnings.length ? `<div class="folder-drop-warnings">${warnings.map(w => `<span>${escapeHtml(w)}</span>`).join('')}</div>` : ''}
+      <div class="folder-drop-list">
+        ${rows.map(row => `
+          <div class="folder-drop-file ${escapeHtml(row.tone)}">
+            <div>
+              <strong>${escapeHtml(row.filename)}</strong>
+              <span>${escapeHtml(folderDropSlotLabel(row))}${row.date ? ` · ${escapeHtml(row.date)}` : ''}${row.companionRole ? ' · companion' : ''}</span>
+            </div>
+            <em>${escapeHtml(formatFileSize(row.size || 0))}</em>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function resetSelectedUploadFiles() {
+    selectedFiles = {
+      dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
+      agenciesBullets: null, agenciesCallables: null, corporates: null
+    };
+    UPLOAD_SLOTS.forEach(resetDropZone);
+    updateUploadStat();
+    renderUploadQaPreview();
+  }
+
+  async function handlePublishedPackage(data) {
+    const parts = [];
+    if (typeof data.offeringsCount === 'number') parts.push(`${data.offeringsCount} CDs`);
+    if (typeof data.treasuryNotesCount === 'number') parts.push(`${data.treasuryNotesCount} treasuries`);
+    if (typeof data.mmdCurveCount === 'number') parts.push(`${data.mmdCurveCount} MMD points`);
+    if (typeof data.muniOfferingsCount === 'number') parts.push(`${data.muniOfferingsCount} munis`);
+    if (typeof data.agencyCount === 'number') parts.push(`${data.agencyCount} agencies`);
+    if (typeof data.corporatesCount === 'number') parts.push(`${data.corporatesCount} corporates`);
+    const extract = parts.length ? ` · ${parts.join(', ')} extracted` : '';
+    showToast(`Published ${data.saved.length} file${data.saved.length === 1 ? '' : 's'}${extract}`);
+    if (Array.isArray(data.dateWarnings) && data.dateWarnings.length) {
+      setTimeout(() => showToast(data.dateWarnings[0], true), 600);
+    }
+    resetSelectedUploadFiles();
+    await loadCurrent();
+    await loadArchive();
+    scanFolderDrop({ silent: true });
+    setTimeout(() => goTo('home'), 500);
+  }
+
+  async function publishFolderDrop() {
+    const btn = document.getElementById('folderDropPublishBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Publishing...';
+    }
+    try {
+      const res = await fetch('/api/folder-drop/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: todayIsoDate() })
+      });
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (res.ok && data.success) {
+        await handlePublishedPackage(data);
+      } else {
+        showToast(data.error || `Folder publish failed (HTTP ${res.status})`, true);
+      }
+    } catch (e) {
+      showToast('Folder publish failed: ' + e.message, true);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Publish Folder';
+      }
+    }
+  }
+
   async function publishPackage() {
     const entries = selectedUploadEntries();
     if (entries.length === 0) {
@@ -6691,29 +6834,7 @@
       try { data = await res.json(); } catch (_) {}
 
       if (res.ok && data.success) {
-        const parts = [];
-        if (typeof data.offeringsCount === 'number') parts.push(`${data.offeringsCount} CDs`);
-        if (typeof data.treasuryNotesCount === 'number') parts.push(`${data.treasuryNotesCount} treasuries`);
-        if (typeof data.mmdCurveCount === 'number') parts.push(`${data.mmdCurveCount} MMD points`);
-        if (typeof data.muniOfferingsCount === 'number') parts.push(`${data.muniOfferingsCount} munis`);
-        if (typeof data.agencyCount === 'number') parts.push(`${data.agencyCount} agencies`);
-        if (typeof data.corporatesCount === 'number') parts.push(`${data.corporatesCount} corporates`);
-        const extract = parts.length ? ` · ${parts.join(', ')} extracted` : '';
-        showToast(`Published ${data.saved.length} file${data.saved.length === 1 ? '' : 's'}${extract}`);
-
-        if (Array.isArray(data.dateWarnings) && data.dateWarnings.length) {
-          setTimeout(() => showToast(data.dateWarnings[0], true), 600);
-        }
-
-        selectedFiles = {
-          dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
-          agenciesBullets: null, agenciesCallables: null, corporates: null
-        };
-        UPLOAD_SLOTS.forEach(resetDropZone);
-        updateUploadStat();
-        await loadCurrent();
-        await loadArchive();
-        setTimeout(() => goTo('home'), 500);
+        await handlePublishedPackage(data);
       } else {
         showToast(data.error || `Upload failed (HTTP ${res.status})`, true);
       }

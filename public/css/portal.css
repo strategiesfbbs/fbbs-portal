@@ -5567,6 +5567,136 @@ body {
   padding: 16px 18px;
 }
 
+.folder-drop-panel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 18px;
+  padding: 18px;
+}
+
+.folder-drop-head {
+  align-items: start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.folder-drop-head h3 {
+  font-size: 15px;
+  margin: 0 0 4px;
+}
+
+.folder-drop-head p,
+.folder-drop-summary,
+.folder-drop-path span {
+  color: var(--text3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.folder-drop-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.folder-drop-path {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 11px 12px;
+}
+
+.folder-drop-path code {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.folder-drop-summary {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.folder-drop-summary strong {
+  color: var(--racing-green);
+}
+
+.folder-drop-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.folder-drop-warnings {
+  display: grid;
+  gap: 6px;
+}
+
+.folder-drop-warnings span {
+  background: #fff8e8;
+  border: 1px solid #ecd8a6;
+  border-radius: 8px;
+  color: #7a5618;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 8px 10px;
+}
+
+.folder-drop-list {
+  display: grid;
+  gap: 8px;
+}
+
+.folder-drop-file {
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.folder-drop-file.ok {
+  border-color: #cfe0d9;
+  box-shadow: inset 3px 0 0 var(--racing-green);
+}
+
+.folder-drop-file.ref {
+  background: #f7faf8;
+}
+
+.folder-drop-file.ignored {
+  opacity: 0.68;
+}
+
+.folder-drop-file strong {
+  color: var(--text);
+  display: block;
+  font-size: 13px;
+}
+
+.folder-drop-file span,
+.folder-drop-file em {
+  color: var(--text3);
+  display: block;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
 .bank-upload-panel h3 {
   margin: 0 0 4px;
   font-size: 15px;
