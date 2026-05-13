@@ -112,6 +112,7 @@ const {
   saveCdHistorySnapshot,
   summarizeWeeklyCdHistory
 } = require('./cd-history');
+const swapMath = require('./swap-math');
 
 // ---------- Config ----------
 
@@ -2618,18 +2619,30 @@ function swapEconomics(held, offering, map, pickYield, asOfDate) {
   };
 }
 
+// Find swap candidates by walking the bank's parsed holdings against today's
+// inventory. Apply the FBBS desk rules from server/swap-math.js so we only
+// surface trades a rep would actually call about: breakeven within 12 months,
+// held maturity > 12 months, held cannot mature before the breakeven, and the
+// swap must produce annual income pickup.
+//
+// `options.rules` overrides the defaults but is clamped to maxBreakevenCapMonths.
+// `options.includeRejected = true` returns `{ kept, dropped }` so the UI can
+// show "X candidates dropped because…" instead of swallowing them silently.
 function findSwapCandidates(parsedHoldings, inventory, options = {}) {
-  if (!parsedHoldings || !parsedHoldings.sectors || !inventory || !inventory.rows) return [];
-  const minHeldYieldGap = options.minHeldYieldGap ?? 1.0;   // book vs market on the held bond
-  const minPickupVsBook = options.minPickupVsBook ?? 0.5;   // today's offer vs their book yield
-  const candidates = [];
+  const empty = options.includeRejected ? { kept: [], dropped: [] } : [];
+  if (!parsedHoldings || !parsedHoldings.sectors || !inventory || !inventory.rows) return empty;
+  const minHeldYieldGap = options.minHeldYieldGap ?? 1.0;
+  const minPickupVsBook = options.minPickupVsBook ?? 0.5;
+  const rules = options.rules || swapMath.DEFAULT_FBBS_RULES;
+  const limit = Math.max(1, parseInt(options.limit, 10) || 5);
+  const kept = [];
+  const dropped = [];
 
   for (const [sector, holdings] of Object.entries(parsedHoldings.sectors)) {
     const map = SWAP_SECTOR_MAP[sector];
     if (!map) continue;
     const rows = inventory.rows[map.rowsKey];
     if (!Array.isArray(rows) || !rows.length) continue;
-    // For munis, prefer in-state rows when we have them.
     const candidateRows = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
       ? inventory.rows.stateMunis
       : rows;
@@ -2646,12 +2659,20 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       const pickup = pick.yld - bookYld;
       if (pickup < minPickupVsBook) continue;
       const economics = swapEconomics(held, pick.row, map, pick.yld, inventory.asOfDate);
-      if (!economics || economics.annualIncomePickup <= 0) continue;
+      if (!economics) continue;
 
-      const parWeight = (held.par || 0) / 1000; // par in $K
+      const monthsToMaturity = swapMath.monthsUntilMaturity(held.maturity, inventory.asOfDate);
+      const ruleCheck = swapMath.passesFbbsSwapRules({
+        breakevenMonths: economics.breakevenMonths,
+        monthsToMaturity,
+        annualIncomePickup: economics.annualIncomePickup,
+        rules
+      });
+
+      const parWeight = (held.par || 0) / 1000;
       const breakevenPenalty = economics.breakevenMonths === null ? 0 : Math.min(economics.breakevenMonths, 120) * 2;
       const netBenefitScore = Math.max(economics.netBenefitToHorizon || 0, 0) / 1000;
-      candidates.push({
+      const candidate = {
         sector,
         held: {
           cusip: held.cusip || '',
@@ -2661,7 +2682,9 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
           marketValue: held.marketValue || 0,
           bookYield: Number(bookYld.toFixed(3)),
           marketYield: Number(mktYld.toFixed(3)),
-          gainLoss: held.gainLoss || 0
+          gainLoss: held.gainLoss || 0,
+          maturity: held.maturity || '',
+          monthsToMaturity: monthsToMaturity == null ? null : Number(monthsToMaturity.toFixed(1))
         },
         offering: {
           label: offeringLabel(pick.row, map.type),
@@ -2670,12 +2693,21 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
         },
         yieldPickupVsBook: Number(pickup.toFixed(2)),
         economics,
+        rule: { passes: ruleCheck.passes, reasons: ruleCheck.reasons },
         priority: parWeight * pickup + netBenefitScore - breakevenPenalty
-      });
+      };
+
+      if (ruleCheck.passes) kept.push(candidate);
+      else dropped.push(candidate);
     }
   }
-  candidates.sort((a, b) => b.priority - a.priority);
-  return candidates.slice(0, 5);
+  kept.sort((a, b) => b.priority - a.priority);
+  dropped.sort((a, b) => b.priority - a.priority);
+  const trimmedKept = kept.slice(0, limit);
+  if (options.includeRejected) {
+    return { kept: trimmedKept, dropped: dropped.slice(0, 20), rules };
+  }
+  return trimmedKept;
 }
 
 function formatSwapCandidateLine(c) {
