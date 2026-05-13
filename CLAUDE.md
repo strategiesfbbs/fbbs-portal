@@ -38,6 +38,9 @@ Filename auto-classification lives in `classifyFile()` in `server/server.js`. Sa
 - `server/averaged-series-store.js` — parses the FedFis "AVERAGED_SERIES" peer-group workbook into `{ peerGroups, metrics, series }` JSON. Pure fs + xlsx; output lands in `data/bank-reports/averaged-series/`.
 - `server/bond-accounting-store.js` — ingests the bond-accounting bank list workbook + a folder of portfolio workbooks, joins each portfolio file to a bank by `P####` code → FDIC cert, copies the files into `data/bank-reports/bond-accounting/{matched,unmatched}/...`, and writes `manifest.json`. Tear sheets read this via `getBondAccountingForBank()`.
 - `server/mbs-cmo-store.js` — stores MBS/CMO source uploads and parsed offer inventory under `data/mbs-cmo/`.
+- `server/swap-math.js` — pure-function bond swap math: day count (30/360 + Actual/Actual), accrued interest, TE-yield, breakeven, per-leg economics, FBBS desk-rule check, weighted-avg portfolio aggregation, end-to-end summary. No I/O — shared by the server route and the regression tests so the math is auditable.
+- `server/swap-store.js` — SQLite store for the bond-swap proposal builder (`data/bank-reports/swap-proposals.sqlite`): proposals + legs + frozen snapshots. Sequence IDs `SP-YYYY-NNNN`. Once `send`ed, legs become read-only and the canonical record is the snapshot JSON (so re-renders of a sent proposal never silently shift as market data moves). Same sqlite3-CLI pattern as `strategy-store.js`.
+- `server/swap-render.js` — server-side renderer for printable swap proposals (`/api/swap-proposals/:id/render`). Standalone HTML, inline styles, `@media print` for Save-as-PDF. Layout mirrors the FBBS Master Swap Template v4.6 print area.
 - `scripts/import-weekly-cd-worksheet.js`, `scripts/import-bank-workbook.js`, `scripts/import-bond-accounting-folder.js` — one-off CLI importers.
 
 ## Data layout
@@ -53,7 +56,8 @@ data/
 │   ├── bank-coverage.sqlite            (notes + saved-coverage workspace)
 │   ├── bank-strategies.sqlite          (Strategies Queue requests)
 │   ├── averaged-series/                (FedFis peer-group workbook + parsed JSON)
-│   └── bond-accounting/                (manifest.json + matched/unmatched portfolio copies)
+│   ├── bond-accounting/                (manifest.json + matched/unmatched portfolio copies)
+│   └── swap-proposals.sqlite           (Bond Swap proposals — header + legs + frozen snapshots)
 ├── mbs-cmo/             ← MBS/CMO source uploads + parsed inventory
 └── audit.log             ← append-only JSON-lines, one record per publish
 ```
@@ -78,6 +82,40 @@ data/
 
 What's intentionally *not* there: app-level auth, CSRF tokens, rate limiting, log rotation. All deferred to the LAN/IIS posture.
 
+## Bond Swap proposal builder (Strategies → Bond Swap tab)
+
+Multi-leg swap-proposal tool aimed at producing the client-facing one-pager FBBS reps currently build in `Master Swap Template v4.6.xlsx`. Backend is live (commits Apr/May 2026); UI tab is the next commit.
+
+**Hard rule (the only auto-filter on suggested swaps):** the held bond can't mature *before* the breakeven — the loss can't be recouped from a bond that's already gone. The Build-your-own (manual CUSIP entry) flow bypasses this; rep + account can override with intent.
+
+**Soft thinking points** (warnings only, never filters): breakeven > 12mo · held maturity < 12mo · no annual yield pickup. Every swap and portfolio is different — the desk decides per situation. Defaults live in `swapMath.DEFAULT_FBBS_RULES`.
+
+**Tax rate:** auto-derived from the bank's `Subchapter S Election?` field (already parsed on every tear sheet). `No` → 21% (C-corp), `Yes` → 29.6% (Sub-S). Rep can override per proposal.
+
+**Settle date:** T+1 business day from the proposal date by default (`swapMath.defaultSettleDate`). T+2 for munis. Rep can override.
+
+**Status lifecycle:** `draft → sent → executed → cancelled`. On `send` the legs freeze and the canonical record becomes the `swap_proposal_snapshots.snapshot_json` row — re-renders never silently shift as market data moves. Revisions clone into a new SP-YYYY-NNNN.
+
+**Routes (server/server.js):**
+
+```
+GET    /api/swap-proposals/eligible-banks      banks with bond-accounting holdings (picker)
+GET    /api/swap-proposals/suggested?bankId=X  hardened detector → { kept, dropped }
+GET    /api/swap-proposals/holdings?bankId=X   parsed portfolio for CUSIP search
+GET    /api/swap-proposals                     list (bankId/status filters)
+POST   /api/swap-proposals                     create draft
+GET    /api/swap-proposals/:id                 fetch full record
+PATCH  /api/swap-proposals/:id                 update header (draft only)
+POST   /api/swap-proposals/:id/legs            add leg
+PATCH  /api/swap-proposals/:id/legs/:legId     update leg
+DELETE /api/swap-proposals/:id/legs/:legId     remove leg
+POST   /api/swap-proposals/:id/send            freeze + write snapshot
+POST   /api/swap-proposals/:id/cancel          cancel
+GET    /api/swap-proposals/:id/render          printable HTML (uses snapshot if sent)
+```
+
+Every mutating route writes to `data/audit.log`.
+
 ## Known issues / open work
 
 - **Bank module's SQL pipe.** `bank-data-importer.js`, `bank-coverage-store.js`, and `bank-account-status-store.js` currently spawn `sqlite3` per query. Slow, requires sqlite3 on PATH, easy to slip an unescaped value past `sqlString()`. `better-sqlite3` is the planned swap. The same pattern bites in `effectiveAccountStatus()` — it spawns one `sqlite3` per search result via `getBankCoverage()`. Should be batched the way `getBankAccountStatuses()` already is before search latency becomes user-visible.
@@ -97,7 +135,7 @@ What's intentionally *not* there: app-level auth, CSRF tokens, rate limiting, lo
 ## Branch / workflow
 
 - Single trunk: `main`. Both Codex and Claude Code commit here. Keep commits small and self-contained so the other agent can `git log` and pick up where you left off.
-- Tests: `npm test` (runs `tests/parser-regression.test.js`).
+- Tests: `npm test` (runs `tests/parser-regression.test.js`, `tests/swap-math.test.js`, `tests/swap-store.test.js`).
 - Start: `npm start` or `node server/server.js`, or double-click the platform launcher.
 
 ## Dual-agent workflow (Codex + Claude Code)
