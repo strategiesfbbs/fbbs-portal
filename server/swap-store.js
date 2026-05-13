@@ -547,6 +547,57 @@ function freezeProposal(outputDir, id, snapshotData) {
   return getProposal(outputDir, id);
 }
 
+// Clone a frozen proposal into a new draft so a rep can revise after send
+// or cancel. Copies header fields + legs (with position preserved) into a
+// fresh SP-YYYY-NNNN row. Strategy link is intentionally NOT carried — the
+// new draft will mint its own when sent.
+function cloneProposalToDraft(outputDir, sourceId) {
+  const source = getProposal(outputDir, sourceId);
+  if (!source) throw new Error(`Proposal ${sourceId} not found`);
+  const { proposal, legs } = source;
+  const newId = nextProposalId(outputDir);
+  const newProposal = createProposal(outputDir, {
+    id: newId,
+    bankId: proposal.bankId,
+    title: (proposal.title || 'Bond Swap') + ' (revised)',
+    proposalDate: new Date().toISOString().slice(0, 10),
+    settleDate: proposal.settleDate,
+    isSubchapterS: proposal.isSubchapterS,
+    taxRate: proposal.taxRate,
+    horizonYears: proposal.horizonYears,
+    breakevenCapMonths: proposal.breakevenCapMonths,
+    maturityFloorMonths: proposal.maturityFloorMonths,
+    preparedBy: proposal.preparedBy,
+    preparedFor: proposal.preparedFor,
+    notes: `Cloned from ${sourceId}. ${proposal.notes || ''}`.trim()
+  });
+  for (const leg of legs) {
+    addLeg(outputDir, newId, {
+      side: leg.side,
+      cusip: leg.cusip,
+      description: leg.description,
+      sector: leg.sector,
+      coupon: leg.coupon,
+      maturity: leg.maturity,
+      callDate: leg.callDate,
+      par: leg.par,
+      bookPrice: leg.bookPrice,
+      marketPrice: leg.marketPrice,
+      bookYieldYtm: leg.bookYieldYtm,
+      bookYieldYtw: leg.bookYieldYtw,
+      marketYieldYtm: leg.marketYieldYtm,
+      marketYieldYtw: leg.marketYieldYtw,
+      modifiedDuration: leg.modifiedDuration,
+      averageLife: leg.averageLife,
+      accrued: leg.accrued,
+      sourceKind: leg.sourceKind,
+      sourceRef: leg.sourceRef,
+      sourceDate: leg.sourceDate
+    });
+  }
+  return getProposal(outputDir, newId);
+}
+
 function updateProposalStrategyLink(outputDir, id, strategyId) {
   const dbPath = ensureSwapDatabase(outputDir);
   const now = new Date().toISOString();
@@ -590,6 +641,7 @@ module.exports = {
   freezeProposal,
   markExecuted,
   cancelProposal,
+  cloneProposalToDraft,
   updateProposalStrategyLink,
   // Exposed for tests
   SWAP_STATUSES,

@@ -4442,6 +4442,9 @@
             ${proposal.status === 'sent' ? `
               <button type="button" class="publish-btn" data-editor-execute>Mark executed</button>
             ` : ''}
+            ${(proposal.status === 'sent' || proposal.status === 'executed' || proposal.status === 'cancelled') ? `
+              <button type="button" class="small-btn" data-editor-clone>Revise (new draft)</button>
+            ` : ''}
           </div>
         </header>
         <div class="swap-editor-meta">
@@ -4560,6 +4563,7 @@
     body.querySelector('[data-editor-cancel]')?.addEventListener('click', () => cancelProposalFromEditor());
     body.querySelector('[data-editor-send]')?.addEventListener('click', () => sendProposalFromEditor());
     body.querySelector('[data-editor-execute]')?.addEventListener('click', () => executeProposalFromEditor());
+    body.querySelector('[data-editor-clone]')?.addEventListener('click', () => cloneProposalToDraft());
     body.querySelectorAll('[data-editor-field]').forEach(input => {
       input.addEventListener('change', () => queueProposalHeaderUpdate(input));
     });
@@ -4753,6 +4757,21 @@
       showToast(`Proposal ${id} sent — added to Strategies queue`);
     } catch (err) {
       showToast('Send failed: ' + (err.message || err), true);
+    }
+  }
+
+  async function cloneProposalToDraft() {
+    const id = swapBuilderState.proposalId;
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/clone`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Clone failed');
+      showToast(`Created new draft ${data.proposal.id} from ${id}`);
+      await openProposalInEditor(data.proposal.id);
+      loadRecentSwapProposals(swapBuilderState.bankId);
+    } catch (err) {
+      showToast('Clone failed: ' + (err.message || err), true);
     }
   }
 

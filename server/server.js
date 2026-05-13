@@ -3702,6 +3702,17 @@ async function handleSendSwapProposal(req, res, id) {
   }
 }
 
+function handleCloneSwapProposal(req, res, id) {
+  try {
+    const cloned = swapStore.cloneProposalToDraft(BANK_REPORTS_DIR, id);
+    appendAuditLog({ event: 'swap-proposal-clone', sourceId: id, newId: cloned.proposal.id });
+    return sendJSON(res, 200, withComputedSummary(cloned));
+  } catch (err) {
+    const status = /not found/i.test(err.message) ? 404 : 500;
+    return sendJSON(res, status, { error: err.message });
+  }
+}
+
 function handleExecuteSwapProposal(req, res, id) {
   try {
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
@@ -5336,6 +5347,13 @@ const server = http.createServer(async (req, res) => {
       const id = safeDecodeURIComponent(swapExecuteMatch[1]);
       if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
       return handleExecuteSwapProposal(req, res, id);
+    }
+
+    const swapCloneMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/clone$/);
+    if (swapCloneMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(swapCloneMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return handleCloneSwapProposal(req, res, id);
     }
 
     const swapRenderMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/render$/);
