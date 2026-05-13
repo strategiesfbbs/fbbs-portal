@@ -137,6 +137,7 @@ const BANK_CACHE_MAX_ENTRIES = 200;
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = LOG_LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
+const PORTAL_BUILD = 'swap-workflow-2026-05-13';
 
 // ---------- Logging ----------
 
@@ -2829,6 +2830,8 @@ function buildBankAssistantResponse(bankData, action) {
       bankId: bank.id,
       asOfDate: inventory.asOfDate,
       inventoryCounts: inventory.counts,
+      swapCandidateCount: swapCandidates.length,
+      portalBuild: PORTAL_BUILD,
       strategyCount: strategies.length,
       periodAgeMonths: periodAge
     },
@@ -4577,7 +4580,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/health' && req.method === 'GET') {
-      return sendJSON(res, 200, { status: 'ok', now: new Date().toISOString() });
+      return sendJSON(res, 200, { status: 'ok', now: new Date().toISOString(), build: PORTAL_BUILD });
     }
 
     if (pathname === '/api/daily-intelligence' && req.method === 'GET') {
