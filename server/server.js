@@ -113,6 +113,7 @@ const {
   summarizeWeeklyCdHistory
 } = require('./cd-history');
 const swapMath = require('./swap-math');
+const swapStore = require('./swap-store');
 
 // ---------- Config ----------
 
@@ -3435,6 +3436,256 @@ async function handleUploadStrategyRequestFile(req, res, id) {
   }
 }
 
+// ---------- Swap proposals (Bond Swap tab under Strategies) ----------
+
+function listSwapEligibleBanks() {
+  const manifest = loadBondAccountingManifest(BANK_REPORTS_DIR);
+  if (!manifest || !Array.isArray(manifest.matches)) return [];
+  const seen = new Map();
+  for (const row of manifest.matches) {
+    if (!row || !row.bankId) continue;
+    const id = String(row.bankId);
+    if (seen.has(id)) continue;
+    const summary = getBankSummaryForCoverage(id);
+    if (!summary) continue;
+    seen.set(id, {
+      id,
+      name: summary.displayName || summary.name || 'Bank',
+      city: summary.city || '',
+      state: summary.state || '',
+      certNumber: summary.certNumber || '',
+      reportDate: row.reportDate || '',
+      isSubchapterS: summary.subchapterS === 'Yes',
+      accountStatus: summary.accountStatus ? summary.accountStatus.status : ''
+    });
+  }
+  return Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getSwapBankContext(bankId) {
+  const data = getBankById(bankId);
+  if (!data || !data.bank) return null;
+  const bank = data.bank;
+  const summary = bank.summary || {};
+  const parsedHoldings = loadHoldingsForBank(bank);
+  const inventory = currentInventorySnapshot(summary.state);
+  return { bank, summary, parsedHoldings, inventory };
+}
+
+async function handleCreateSwapProposal(req, res) {
+  try {
+    const body = await readJsonBody(req);
+    const bankId = String(body.bankId || '').trim();
+    if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
+
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+
+    const isSubS = summary.subchapterS === 'Yes';
+    const proposalDate = new Date().toISOString().slice(0, 10);
+    const settleDate = swapMath.ymd(swapMath.defaultSettleDate(proposalDate)) || proposalDate;
+
+    const created = swapStore.createProposal(BANK_REPORTS_DIR, {
+      bankId,
+      title: body.title || `Bond Swap — ${summary.displayName || summary.name}`,
+      proposalDate,
+      settleDate: body.settleDate || settleDate,
+      isSubchapterS: body.isSubchapterS != null ? body.isSubchapterS : isSubS,
+      taxRate: body.taxRate,
+      horizonYears: body.horizonYears,
+      breakevenCapMonths: body.breakevenCapMonths || swapMath.DEFAULT_FBBS_RULES.breakevenCapMonths,
+      maturityFloorMonths: body.maturityFloorMonths || swapMath.DEFAULT_FBBS_RULES.maturityFloorMonths,
+      preparedBy: body.preparedBy,
+      preparedFor: body.preparedFor,
+      notes: body.notes
+    });
+    appendAuditLog({
+      event: 'swap-proposal-create',
+      proposalId: created.proposal.id,
+      bankId
+    });
+    return sendJSON(res, 200, created);
+  } catch (err) {
+    log('error', 'Swap proposal create failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not create swap proposal' });
+  }
+}
+
+async function handleUpdateSwapProposal(req, res, id) {
+  try {
+    const body = await readJsonBody(req);
+    const updated = swapStore.updateProposal(BANK_REPORTS_DIR, id, body);
+    appendAuditLog({ event: 'swap-proposal-update', proposalId: id });
+    return sendJSON(res, 200, updated);
+  } catch (err) {
+    const status = /not found/i.test(err.message) ? 404 : (/sent|frozen|cancelled/i.test(err.message) ? 409 : 500);
+    return sendJSON(res, status, { error: err.message });
+  }
+}
+
+async function handleAddSwapLeg(req, res, id) {
+  try {
+    const body = await readJsonBody(req);
+    const after = swapStore.addLeg(BANK_REPORTS_DIR, id, body);
+    appendAuditLog({ event: 'swap-leg-add', proposalId: id, side: body.side, cusip: body.cusip || null });
+    return sendJSON(res, 200, after);
+  } catch (err) {
+    const status = /not found/i.test(err.message) ? 404 : (/frozen|sent|cancelled/i.test(err.message) ? 409 : 500);
+    return sendJSON(res, status, { error: err.message });
+  }
+}
+
+async function handleUpdateSwapLeg(req, res, id, legId) {
+  try {
+    const body = await readJsonBody(req);
+    const after = swapStore.updateLeg(BANK_REPORTS_DIR, id, legId, body);
+    appendAuditLog({ event: 'swap-leg-update', proposalId: id, legId });
+    return sendJSON(res, 200, after);
+  } catch (err) {
+    const status = /not found/i.test(err.message) ? 404 : (/frozen|sent|cancelled/i.test(err.message) ? 409 : 500);
+    return sendJSON(res, status, { error: err.message });
+  }
+}
+
+function handleDeleteSwapLeg(req, res, id, legId) {
+  try {
+    const after = swapStore.deleteLeg(BANK_REPORTS_DIR, id, legId);
+    appendAuditLog({ event: 'swap-leg-delete', proposalId: id, legId });
+    return sendJSON(res, 200, after);
+  } catch (err) {
+    const status = /not found/i.test(err.message) ? 404 : (/frozen|sent|cancelled/i.test(err.message) ? 409 : 500);
+    return sendJSON(res, status, { error: err.message });
+  }
+}
+
+function buildProposalSnapshot(proposalRecord) {
+  const { proposal, legs } = proposalRecord;
+  const sells = legs.filter(l => l.side === 'sell');
+  const buys = legs.filter(l => l.side === 'buy');
+  const summary = swapMath.swapSummary({
+    sells, buys,
+    horizonYears: proposal.horizonYears || 3,
+    taxRate: proposal.taxRate
+  });
+  return {
+    proposal,
+    sells,
+    buys,
+    summary,
+    builtAt: new Date().toISOString()
+  };
+}
+
+async function handleSendSwapProposal(req, res, id) {
+  try {
+    const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
+    if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
+    if (current.proposal.status !== 'draft') {
+      return sendJSON(res, 409, { error: `Proposal is already ${current.proposal.status}` });
+    }
+    const snapshot = buildProposalSnapshot(current);
+    const frozen = swapStore.freezeProposal(BANK_REPORTS_DIR, id, snapshot);
+    appendAuditLog({
+      event: 'swap-proposal-send',
+      proposalId: id,
+      bankId: current.proposal.bankId,
+      sells: current.legs.filter(l => l.side === 'sell').length,
+      buys: current.legs.filter(l => l.side === 'buy').length,
+      totalIncome: snapshot.summary.dollars.totalIncome
+    });
+    return sendJSON(res, 200, frozen);
+  } catch (err) {
+    log('error', 'Swap proposal send failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not send proposal' });
+  }
+}
+
+function handleCancelSwapProposal(req, res, id) {
+  try {
+    const cancelled = swapStore.cancelProposal(BANK_REPORTS_DIR, id);
+    appendAuditLog({ event: 'swap-proposal-cancel', proposalId: id });
+    return sendJSON(res, 200, cancelled);
+  } catch (err) {
+    return sendJSON(res, err.statusCode || 500, { error: err.message });
+  }
+}
+
+function handleSwapSuggested(res, bankId, query) {
+  const ctx = getSwapBankContext(bankId);
+  if (!ctx) return sendJSON(res, 404, { error: 'Bank not found' });
+  if (!ctx.parsedHoldings) {
+    return sendJSON(res, 200, {
+      bankId,
+      bankName: ctx.summary.displayName || ctx.summary.name || 'Bank',
+      isSubchapterS: ctx.summary.subchapterS === 'Yes',
+      holdingsAvailable: false,
+      kept: [],
+      dropped: [],
+      rules: swapMath.DEFAULT_FBBS_RULES,
+      notice: 'No bond accounting holdings on file for this bank — upload a portfolio workbook before generating suggested swaps.'
+    });
+  }
+  const rules = {
+    breakevenCapMonths: parseInt(query.get('breakevenCap'), 10) || swapMath.DEFAULT_FBBS_RULES.breakevenCapMonths,
+    maturityFloorMonths: parseInt(query.get('maturityFloor'), 10) || swapMath.DEFAULT_FBBS_RULES.maturityFloorMonths,
+    maxBreakevenCapMonths: swapMath.DEFAULT_FBBS_RULES.maxBreakevenCapMonths
+  };
+  const result = findSwapCandidates(ctx.parsedHoldings, ctx.inventory, {
+    includeRejected: true,
+    rules,
+    limit: parseInt(query.get('limit'), 10) || 5
+  });
+  return sendJSON(res, 200, {
+    bankId,
+    bankName: ctx.summary.displayName || ctx.summary.name || 'Bank',
+    isSubchapterS: ctx.summary.subchapterS === 'Yes',
+    taxRate: ctx.summary.subchapterS === 'Yes' ? 29.6 : 21,
+    holdingsAvailable: true,
+    holdingsReportDate: ctx.parsedHoldings.asOfDate || '',
+    holdingsTotalPositions: ctx.parsedHoldings.aggregates ? ctx.parsedHoldings.aggregates.totalPositions : 0,
+    kept: result.kept,
+    dropped: result.dropped,
+    rules
+  });
+}
+
+function handleSwapHoldings(res, bankId) {
+  const ctx = getSwapBankContext(bankId);
+  if (!ctx) return sendJSON(res, 404, { error: 'Bank not found' });
+  if (!ctx.parsedHoldings) return sendJSON(res, 200, { available: false });
+  const positions = [];
+  for (const [sector, rows] of Object.entries(ctx.parsedHoldings.sectors || {})) {
+    for (const row of rows) {
+      positions.push({
+        sector,
+        cusip: row.cusip || '',
+        description: row.description || '',
+        coupon: row.coupon || null,
+        maturity: row.maturity || '',
+        callDate: row.callDate || '',
+        par: row.par || 0,
+        bookPrice: row.bookPrice || null,
+        marketPrice: row.marketPrice || null,
+        bookYieldYtm: row.bookYieldYtm || null,
+        bookYieldYtw: row.bookYieldYtw || null,
+        marketYieldYtm: row.marketYieldYtm || null,
+        marketYieldYtw: row.marketYieldYtw || null,
+        modifiedDuration: row.modifiedDuration || null,
+        averageLife: row.averageLife || null,
+        gainLoss: row.gainLoss || 0,
+        bookValue: row.bookValue || null,
+        marketValue: row.marketValue || null
+      });
+    }
+  }
+  return sendJSON(res, 200, {
+    available: true,
+    reportDate: ctx.parsedHoldings.asOfDate || '',
+    totalPositions: positions.length,
+    positions
+  });
+}
+
 async function handleMbsCmoUpload(req, res) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
@@ -4780,6 +5031,89 @@ const server = http.createServer(async (req, res) => {
       const file = getMbsCmoSourceFile(MBS_CMO_DIR, fileId);
       if (!file || !fs.existsSync(file.path)) return sendText(res, 404, 'Not found');
       return sendFile(res, file.path, { download: true, filename: file.filename });
+    }
+
+    // ---- Bond Swap proposals (tab under Strategies; routes namespaced
+    // under /api/swap-proposals so they don't tangle with the existing
+    // /api/strategies/:id catchall below.) ----
+
+    if (pathname === '/api/swap-proposals/eligible-banks' && req.method === 'GET') {
+      return sendJSON(res, 200, { banks: listSwapEligibleBanks() });
+    }
+
+    if (pathname === '/api/swap-proposals/suggested' && req.method === 'GET') {
+      const bankId = String(query.get('bankId') || '').trim();
+      if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
+      return handleSwapSuggested(res, bankId, query);
+    }
+
+    if (pathname === '/api/swap-proposals/holdings' && req.method === 'GET') {
+      const bankId = String(query.get('bankId') || '').trim();
+      if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
+      return handleSwapHoldings(res, bankId);
+    }
+
+    if (pathname === '/api/swap-proposals' && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        proposals: swapStore.listProposals(BANK_REPORTS_DIR, {
+          bankId: query.get('bankId') || undefined,
+          status: query.get('status') || undefined,
+          limit: parseInt(query.get('limit'), 10) || 100
+        })
+      });
+    }
+
+    if (pathname === '/api/swap-proposals' && req.method === 'POST') {
+      return await handleCreateSwapProposal(req, res);
+    }
+
+    const swapLegDeleteMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/legs\/(\d+)$/);
+    if (swapLegDeleteMatch && req.method === 'DELETE') {
+      const id = safeDecodeURIComponent(swapLegDeleteMatch[1]);
+      const legId = parseInt(swapLegDeleteMatch[2], 10);
+      if (!id || !Number.isFinite(legId)) return sendJSON(res, 400, { error: 'Invalid leg path' });
+      return handleDeleteSwapLeg(req, res, id, legId);
+    }
+    if (swapLegDeleteMatch && req.method === 'PATCH') {
+      const id = safeDecodeURIComponent(swapLegDeleteMatch[1]);
+      const legId = parseInt(swapLegDeleteMatch[2], 10);
+      if (!id || !Number.isFinite(legId)) return sendJSON(res, 400, { error: 'Invalid leg path' });
+      return await handleUpdateSwapLeg(req, res, id, legId);
+    }
+
+    const swapLegMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/legs$/);
+    if (swapLegMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(swapLegMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return await handleAddSwapLeg(req, res, id);
+    }
+
+    const swapSendMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/send$/);
+    if (swapSendMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(swapSendMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return await handleSendSwapProposal(req, res, id);
+    }
+
+    const swapCancelMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/cancel$/);
+    if (swapCancelMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(swapCancelMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return handleCancelSwapProposal(req, res, id);
+    }
+
+    const swapProposalMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)$/);
+    if (swapProposalMatch && req.method === 'GET') {
+      const id = safeDecodeURIComponent(swapProposalMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      const record = swapStore.getProposal(BANK_REPORTS_DIR, id);
+      if (!record) return sendJSON(res, 404, { error: 'Proposal not found' });
+      return sendJSON(res, 200, record);
+    }
+    if (swapProposalMatch && req.method === 'PATCH') {
+      const id = safeDecodeURIComponent(swapProposalMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return await handleUpdateSwapProposal(req, res, id);
     }
 
     if (pathname === '/api/strategies' && req.method === 'GET') {
