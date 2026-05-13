@@ -3512,7 +3512,7 @@ async function handleCreateSwapProposal(req, res) {
       proposalId: created.proposal.id,
       bankId
     });
-    return sendJSON(res, 200, created);
+    return sendJSON(res, 200, withComputedSummary(created));
   } catch (err) {
     log('error', 'Swap proposal create failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not create swap proposal' });
@@ -3524,7 +3524,7 @@ async function handleUpdateSwapProposal(req, res, id) {
     const body = await readJsonBody(req);
     const updated = swapStore.updateProposal(BANK_REPORTS_DIR, id, body);
     appendAuditLog({ event: 'swap-proposal-update', proposalId: id });
-    return sendJSON(res, 200, updated);
+    return sendJSON(res, 200, withComputedSummary(updated));
   } catch (err) {
     const status = /not found/i.test(err.message) ? 404 : (/sent|frozen|cancelled/i.test(err.message) ? 409 : 500);
     return sendJSON(res, status, { error: err.message });
@@ -3536,7 +3536,7 @@ async function handleAddSwapLeg(req, res, id) {
     const body = await readJsonBody(req);
     const after = swapStore.addLeg(BANK_REPORTS_DIR, id, body);
     appendAuditLog({ event: 'swap-leg-add', proposalId: id, side: body.side, cusip: body.cusip || null });
-    return sendJSON(res, 200, after);
+    return sendJSON(res, 200, withComputedSummary(after));
   } catch (err) {
     const status = /not found/i.test(err.message) ? 404 : (/frozen|sent|cancelled/i.test(err.message) ? 409 : 500);
     return sendJSON(res, status, { error: err.message });
@@ -3548,7 +3548,7 @@ async function handleUpdateSwapLeg(req, res, id, legId) {
     const body = await readJsonBody(req);
     const after = swapStore.updateLeg(BANK_REPORTS_DIR, id, legId, body);
     appendAuditLog({ event: 'swap-leg-update', proposalId: id, legId });
-    return sendJSON(res, 200, after);
+    return sendJSON(res, 200, withComputedSummary(after));
   } catch (err) {
     const status = /not found/i.test(err.message) ? 404 : (/frozen|sent|cancelled/i.test(err.message) ? 409 : 500);
     return sendJSON(res, status, { error: err.message });
@@ -3559,7 +3559,7 @@ function handleDeleteSwapLeg(req, res, id, legId) {
   try {
     const after = swapStore.deleteLeg(BANK_REPORTS_DIR, id, legId);
     appendAuditLog({ event: 'swap-leg-delete', proposalId: id, legId });
-    return sendJSON(res, 200, after);
+    return sendJSON(res, 200, withComputedSummary(after));
   } catch (err) {
     const status = /not found/i.test(err.message) ? 404 : (/frozen|sent|cancelled/i.test(err.message) ? 409 : 500);
     return sendJSON(res, status, { error: err.message });
@@ -3584,6 +3584,25 @@ function buildProposalSnapshot(proposalRecord) {
   };
 }
 
+// Always returns the record with a fresh client-facing computedSummary so the
+// inline editor can show live $ / breakeven / portfolio-diff as the rep edits.
+// For sent proposals, the snapshot summary is the canonical record but we
+// still expose the live recomputation for diff comparison.
+function withComputedSummary(record) {
+  if (!record || !record.proposal) return record;
+  const { proposal, legs } = record;
+  const sells = (legs || []).filter(l => l.side === 'sell');
+  const buys = (legs || []).filter(l => l.side === 'buy');
+  return {
+    ...record,
+    computedSummary: swapMath.swapSummary({
+      sells, buys,
+      horizonYears: proposal.horizonYears || 3,
+      taxRate: proposal.taxRate
+    })
+  };
+}
+
 async function handleSendSwapProposal(req, res, id) {
   try {
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
@@ -3591,17 +3610,52 @@ async function handleSendSwapProposal(req, res, id) {
     if (current.proposal.status !== 'draft') {
       return sendJSON(res, 409, { error: `Proposal is already ${current.proposal.status}` });
     }
+    const sellsCount = current.legs.filter(l => l.side === 'sell').length;
+    const buysCount = current.legs.filter(l => l.side === 'buy').length;
+    if (!sellsCount || !buysCount) {
+      return sendJSON(res, 400, { error: 'Add at least one sell leg and one buy leg before sending.' });
+    }
+
     const snapshot = buildProposalSnapshot(current);
-    const frozen = swapStore.freezeProposal(BANK_REPORTS_DIR, id, snapshot);
+    let frozen = swapStore.freezeProposal(BANK_REPORTS_DIR, id, snapshot);
+
+    // Promote into the Strategies Queue as type 'Bond Swap' so the rest
+    // of the desk sees it in their existing workflow. Skip if the
+    // proposal is already linked (idempotent re-sends).
+    let strategy = null;
+    if (!frozen.proposal.strategyId) {
+      const summary = getBankSummaryForCoverage(frozen.proposal.bankId);
+      if (summary) {
+        try {
+          strategy = createStrategyRequest(BANK_REPORTS_DIR, summary, {
+            requestType: 'Bond Swap',
+            status: 'In Progress',
+            summary: frozen.proposal.title || `Bond Swap proposal ${frozen.proposal.id}`,
+            comments: `Linked to swap proposal ${frozen.proposal.id}.\n` +
+                      `${sellsCount} sell / ${buysCount} buy · ` +
+                      `total income $${snapshot.summary.dollars.totalIncome}` +
+                      (snapshot.summary.breakevenMonths != null
+                        ? ` · breakeven ${snapshot.summary.breakevenMonths.toFixed(1)}mo`
+                        : '') + '\n' +
+                      `Print: /api/swap-proposals/${frozen.proposal.id}/render`
+          });
+          frozen = swapStore.updateProposalStrategyLink(BANK_REPORTS_DIR, id, strategy.id);
+        } catch (err) {
+          log('warn', `Swap proposal ${id} sent, but could not create linked strategy: ${err.message}`);
+        }
+      }
+    }
+
     appendAuditLog({
       event: 'swap-proposal-send',
       proposalId: id,
       bankId: current.proposal.bankId,
-      sells: current.legs.filter(l => l.side === 'sell').length,
-      buys: current.legs.filter(l => l.side === 'buy').length,
-      totalIncome: snapshot.summary.dollars.totalIncome
+      sells: sellsCount,
+      buys: buysCount,
+      totalIncome: snapshot.summary.dollars.totalIncome,
+      strategyId: strategy && strategy.id || frozen.proposal.strategyId || null
     });
-    return sendJSON(res, 200, frozen);
+    return sendJSON(res, 200, withComputedSummary(frozen));
   } catch (err) {
     log('error', 'Swap proposal send failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not send proposal' });
@@ -3610,9 +3664,27 @@ async function handleSendSwapProposal(req, res, id) {
 
 function handleCancelSwapProposal(req, res, id) {
   try {
+    const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
+    if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
     const cancelled = swapStore.cancelProposal(BANK_REPORTS_DIR, id);
-    appendAuditLog({ event: 'swap-proposal-cancel', proposalId: id });
-    return sendJSON(res, 200, cancelled);
+    // If a strategy was created on send, archive it so the queue doesn't
+    // dangle. Editing+executing happens through the existing Strategies tab.
+    if (current.proposal.strategyId) {
+      try {
+        updateStrategyRequest(BANK_REPORTS_DIR, current.proposal.strategyId, {
+          archived: true,
+          archivedBy: 'swap-proposal-cancel'
+        });
+      } catch (err) {
+        log('warn', `Could not archive linked strategy ${current.proposal.strategyId}: ${err.message}`);
+      }
+    }
+    appendAuditLog({
+      event: 'swap-proposal-cancel',
+      proposalId: id,
+      strategyId: current.proposal.strategyId || null
+    });
+    return sendJSON(res, 200, withComputedSummary(cancelled));
   } catch (err) {
     return sendJSON(res, err.statusCode || 500, { error: err.message });
   }
@@ -5134,7 +5206,7 @@ const server = http.createServer(async (req, res) => {
       if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
       const record = swapStore.getProposal(BANK_REPORTS_DIR, id);
       if (!record) return sendJSON(res, 404, { error: 'Proposal not found' });
-      return sendJSON(res, 200, record);
+      return sendJSON(res, 200, withComputedSummary(record));
     }
     if (swapProposalMatch && req.method === 'PATCH') {
       const id = safeDecodeURIComponent(swapProposalMatch[1]);

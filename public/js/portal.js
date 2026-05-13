@@ -4013,7 +4013,12 @@
     bankName: '',
     suggestion: null,
     suggestionLoading: false,
-    recentLoading: false
+    recentLoading: false,
+    view: 'home',         // 'home' or 'editor'
+    proposalId: null,
+    record: null,
+    saveTimer: null,
+    pendingPatches: new Map()
   };
 
   function setupSwapBuilderTab() {
@@ -4042,10 +4047,26 @@
     document.querySelectorAll('[data-strategies-panel]').forEach(panel => {
       panel.hidden = panel.dataset.strategiesPanel !== valid;
     });
-    replaceHashParams('strategies', { tab: valid === 'queue' ? '' : valid, bank: swapBuilderState.bankId || '' });
+    // Capture deep-link params BEFORE overwriting the hash, otherwise
+    // replaceHashParams clobbers ?bank= and ?proposal= on activation.
+    const params = hashParamsForPage('strategies');
+    const proposalFromHash = params.get('proposal') || '';
+    const bankFromHash = params.get('bank') || swapBuilderState.bankId || '';
+    replaceHashParams('strategies', {
+      tab: valid === 'queue' ? '' : valid,
+      bank: bankFromHash,
+      proposal: proposalFromHash
+    });
     if (valid === 'bond-swap') {
       if (!swapBuilderState.eligibleBanks) loadSwapEligibleBanks();
       if (!swapBuilderState.bankId) loadRecentSwapProposals(null);
+      if (proposalFromHash && swapBuilderState.proposalId !== proposalFromHash) {
+        openProposalInEditor(proposalFromHash);
+      }
+    } else if (valid === 'queue') {
+      // Re-fetch in case the user just sent a swap proposal from the
+      // Bond Swap tab; the Queue would otherwise show stale counts.
+      loadStrategies();
     }
   }
 
@@ -4063,11 +4084,17 @@
       // Restore selection from hash if present
       const params = hashParamsForPage('strategies');
       const bankFromHash = params.get('bank') || '';
+      const proposalFromHash = params.get('proposal') || '';
       if (bankFromHash && swapBuilderState.eligibleBanks.some(b => b.id === bankFromHash)) {
         select.value = bankFromHash;
         swapBuilderState.bankId = bankFromHash;
         swapBuilderState.bankName = select.options[select.selectedIndex].textContent;
-        loadSuggestedSwapsForBank(bankFromHash);
+        // Only push the home-suggested view if we're not also restoring a
+        // specific proposal — otherwise openProposalInEditor's render gets
+        // race-overwritten by the suggested-swap load.
+        if (!proposalFromHash && swapBuilderState.view !== 'editor') {
+          loadSuggestedSwapsForBank(bankFromHash);
+        }
         loadRecentSwapProposals(bankFromHash);
       }
     } catch (err) {
@@ -4281,8 +4308,8 @@
         })
       });
 
-      window.open(`/api/swap-proposals/${id}/render`, '_blank');
-      showToast(`Proposal ${id} created — opened in new tab`);
+      showToast(`Proposal ${id} created with seeded legs`);
+      await openProposalInEditor(id);
       loadRecentSwapProposals(bankId);
     } catch (err) {
       showToast('Could not build proposal: ' + (err.message || err), true);
@@ -4304,11 +4331,323 @@
       });
       const created = await res.json();
       if (!res.ok) throw new Error(created.error || 'Could not create proposal');
-      window.open(`/api/swap-proposals/${created.proposal.id}/render`, '_blank');
-      showToast(`Draft ${created.proposal.id} created — add legs via API or upcoming inline editor.`);
+      showToast(`Draft ${created.proposal.id} created — add sell + buy legs`);
+      await openProposalInEditor(created.proposal.id);
       loadRecentSwapProposals(bankId);
     } catch (err) {
       showToast('Could not create proposal: ' + (err.message || err), true);
+    }
+  }
+
+  // ============ Inline editor ============
+
+  async function openProposalInEditor(id) {
+    if (!id) return;
+    swapBuilderState.view = 'editor';
+    swapBuilderState.proposalId = id;
+    replaceHashParams('strategies', {
+      tab: 'bond-swap',
+      bank: swapBuilderState.bankId || '',
+      proposal: id
+    });
+    try {
+      const res = await fetch('/api/swap-proposals/' + encodeURIComponent(id), { cache: 'no-store' });
+      const record = await res.json();
+      if (!res.ok) throw new Error(record.error || 'Failed to load proposal');
+      swapBuilderState.record = record;
+      renderProposalEditor(record);
+    } catch (err) {
+      renderSwapBuilderEmpty('Could not load proposal: ' + (err.message || err));
+    }
+  }
+
+  function exitEditorToHome() {
+    swapBuilderState.view = 'home';
+    swapBuilderState.proposalId = null;
+    swapBuilderState.record = null;
+    replaceHashParams('strategies', { tab: 'bond-swap', bank: swapBuilderState.bankId || '' });
+    if (swapBuilderState.bankId) loadSuggestedSwapsForBank(swapBuilderState.bankId);
+    else renderSwapBuilderEmpty();
+    loadRecentSwapProposals(swapBuilderState.bankId);
+  }
+
+  function renderProposalEditor(record) {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body || !record || !record.proposal) return;
+    const { proposal, legs, computedSummary } = record;
+    const isDraft = proposal.status === 'draft';
+    const sells = legs.filter(l => l.side === 'sell');
+    const buys = legs.filter(l => l.side === 'buy');
+    body.innerHTML = `
+      <div class="swap-editor">
+        <header class="swap-editor-head">
+          <button type="button" class="text-btn" data-editor-back>&larr; Back to suggested</button>
+          <div class="swap-editor-title">
+            <strong>${escapeHtml(proposal.id)}</strong>
+            <span>${escapeHtml(proposal.title || 'Bond Swap')}</span>
+            ${renderProposalStatusBadge(proposal)}
+          </div>
+          <div class="swap-editor-actions">
+            <a class="small-btn" href="/api/swap-proposals/${encodeURIComponent(proposal.id)}/render" target="_blank" rel="noopener">View / Print</a>
+            ${isDraft ? `
+              <button type="button" class="small-btn" data-editor-cancel>Cancel</button>
+              <button type="button" class="publish-btn" data-editor-send>Send proposal</button>
+            ` : ''}
+          </div>
+        </header>
+        <div class="swap-editor-meta">
+          <label><span>Title</span><input type="text" data-editor-field="title" value="${escapeHtml(proposal.title || '')}" ${isDraft ? '' : 'readonly'}></label>
+          <label><span>Settle date</span><input type="date" data-editor-field="settleDate" value="${escapeHtml(proposal.settleDate || '')}" ${isDraft ? '' : 'readonly'}></label>
+          <label><span>Horizon (yr)</span><input type="number" step="0.25" min="0.25" max="30" data-editor-field="horizonYears" value="${proposal.horizonYears == null ? '' : proposal.horizonYears}" ${isDraft ? '' : 'readonly'}></label>
+          <label><span>Tax rate (%)</span><input type="number" step="0.1" data-editor-field="taxRate" value="${proposal.taxRate == null ? '' : proposal.taxRate}" ${isDraft ? '' : 'readonly'}></label>
+          <label class="swap-editor-notes"><span>Notes</span><textarea data-editor-field="notes" rows="1" ${isDraft ? '' : 'readonly'}>${escapeHtml(proposal.notes || '')}</textarea></label>
+        </div>
+        ${renderLegSideTable('sell', sells, isDraft)}
+        ${renderLegSideTable('buy', buys, isDraft)}
+        ${renderEditorSummary(computedSummary, proposal)}
+      </div>`;
+    bindEditorHandlers(record);
+  }
+
+  function renderProposalStatusBadge(p) {
+    const map = {
+      draft: ['draft', 'Draft'],
+      sent: ['sent', 'Sent'],
+      executed: ['executed', 'Executed'],
+      cancelled: ['cancelled', 'Cancelled']
+    };
+    const [cls, label] = map[p.status] || ['draft', p.status];
+    return `<span class="swap-status-pill ${cls}">${escapeHtml(label)}</span>`;
+  }
+
+  const LEG_INPUTS = [
+    { key: 'cusip', label: 'CUSIP', type: 'text', size: 10 },
+    { key: 'description', label: 'Description', type: 'text', size: 26 },
+    { key: 'coupon', label: 'Cpn', type: 'number', step: '0.001' },
+    { key: 'maturity', label: 'Maturity', type: 'date' },
+    { key: 'par', label: 'Par', type: 'number', step: '1' },
+    { key: 'bookPrice', label: 'Bk Px', type: 'number', step: '0.001' },
+    { key: 'marketPrice', label: 'Mkt Px', type: 'number', step: '0.001' },
+    { key: 'bookYieldYtm', label: 'Bk YTM %', type: 'number', step: '0.001' },
+    { key: 'marketYieldYtw', label: 'Mkt YTW %', type: 'number', step: '0.001' },
+    { key: 'averageLife', label: 'WAL', type: 'number', step: '0.01' }
+  ];
+
+  function renderLegSideTable(side, rows, isDraft) {
+    const title = side === 'sell' ? 'Funding Source (Sells)' : 'Investments (Buys)';
+    const tag = side === 'sell' ? 'sell' : 'buy';
+    const heads = LEG_INPUTS.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+    const body = rows.length
+      ? rows.map(leg => renderLegEditorRow(leg, isDraft)).join('')
+      : `<tr><td colspan="${LEG_INPUTS.length + 1}" class="swap-leg-empty">No ${tag} legs yet. ${isDraft ? 'Click "Add ' + tag + '" below to create one.' : ''}</td></tr>`;
+    return `
+      <section class="swap-editor-side" data-side="${tag}">
+        <header><strong>${escapeHtml(title)} (${rows.length})</strong>
+          ${isDraft ? `<button type="button" class="small-btn" data-add-leg="${tag}">Add ${tag}</button>` : ''}
+        </header>
+        <table class="swap-leg-table">
+          <thead><tr>${heads}<th></th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </section>`;
+  }
+
+  function renderLegEditorRow(leg, isDraft) {
+    const cells = LEG_INPUTS.map(col => {
+      const value = leg[col.key] == null ? '' : leg[col.key];
+      const step = col.step ? ` step="${col.step}"` : '';
+      const readonly = isDraft ? '' : 'readonly';
+      return `<td><input type="${col.type}" data-leg-field="${col.key}"${step} value="${escapeHtml(value)}" ${readonly}></td>`;
+    }).join('');
+    const del = isDraft
+      ? `<button type="button" class="swap-leg-del" data-del-leg="${leg.id}" title="Remove leg">&times;</button>`
+      : '';
+    return `<tr data-leg-id="${leg.id}">${cells}<td class="swap-leg-actions">${del}</td></tr>`;
+  }
+
+  function renderEditorSummary(summary, proposal) {
+    if (!summary) {
+      return `<aside class="swap-editor-summary swap-editor-summary-empty">Add legs to see the live summary.</aside>`;
+    }
+    const d = summary.dollars || {};
+    const diff = summary.portfolioDiff || {};
+    const moneyChip = (label, value) => {
+      const formatted = value == null ? '—' : (value < 0 ? `(${Math.abs(value).toLocaleString('en-US')})` : value.toLocaleString('en-US'));
+      return `<div><dt>${escapeHtml(label)}</dt><dd>${formatted}</dd></div>`;
+    };
+    const pctChip = (label, value) => {
+      const formatted = value == null ? '—' : value.toFixed(3) + '%';
+      return `<div><dt>${escapeHtml(label)}</dt><dd>${formatted}</dd></div>`;
+    };
+    return `
+      <aside class="swap-editor-summary">
+        <h4>Live summary</h4>
+        <dl class="swap-summary-grid">
+          ${moneyChip('Total income $', d.totalIncome)}
+          ${moneyChip('Net interest $', d.netInterest)}
+          ${moneyChip('Realized G/L $', d.realizedGainLoss)}
+          ${moneyChip('Settle adjust $', summary.settleAdjust)}
+          <div><dt>Breakeven</dt><dd>${summary.breakevenMonths == null ? '—' : summary.breakevenMonths.toFixed(1) + ' mo'}</dd></div>
+          <div><dt>Horizon</dt><dd>${summary.horizonYears == null ? '—' : summary.horizonYears.toFixed(2) + ' yr'}</dd></div>
+          ${pctChip('Δ TE Bk Yld', diff.teBookYield)}
+          ${pctChip('Δ TE Mkt Yld', diff.teMarketYield)}
+        </dl>
+      </aside>`;
+  }
+
+  function bindEditorHandlers(record) {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body) return;
+    body.querySelector('[data-editor-back]')?.addEventListener('click', exitEditorToHome);
+    body.querySelector('[data-editor-cancel]')?.addEventListener('click', () => cancelProposalFromEditor());
+    body.querySelector('[data-editor-send]')?.addEventListener('click', () => sendProposalFromEditor());
+    body.querySelectorAll('[data-editor-field]').forEach(input => {
+      input.addEventListener('change', () => queueProposalHeaderUpdate(input));
+    });
+    body.querySelectorAll('[data-add-leg]').forEach(btn => {
+      btn.addEventListener('click', () => addEmptyLeg(btn.dataset.addLeg));
+    });
+    body.querySelectorAll('[data-del-leg]').forEach(btn => {
+      btn.addEventListener('click', () => deleteLeg(Number(btn.dataset.delLeg)));
+    });
+    body.querySelectorAll('tr[data-leg-id]').forEach(tr => {
+      tr.querySelectorAll('input[data-leg-field]').forEach(input => {
+        input.addEventListener('change', () => queueLegUpdate(Number(tr.dataset.legId), input));
+      });
+    });
+  }
+
+  function queueProposalHeaderUpdate(input) {
+    const id = swapBuilderState.proposalId;
+    if (!id) return;
+    const field = input.dataset.editorField;
+    const value = input.type === 'number' ? (input.value === '' ? null : Number(input.value)) : input.value;
+    debouncedPatchProposal(id, { [field]: value });
+  }
+
+  function queueLegUpdate(legId, input) {
+    const id = swapBuilderState.proposalId;
+    if (!id || !legId) return;
+    const field = input.dataset.legField;
+    const value = input.type === 'number' ? (input.value === '' ? null : Number(input.value)) : input.value;
+    patchLeg(id, legId, { [field]: value });
+  }
+
+  let proposalPatchTimer = null;
+  let pendingHeaderPatch = {};
+  function debouncedPatchProposal(id, patch) {
+    Object.assign(pendingHeaderPatch, patch);
+    clearTimeout(proposalPatchTimer);
+    proposalPatchTimer = setTimeout(async () => {
+      const body = { ...pendingHeaderPatch };
+      pendingHeaderPatch = {};
+      try {
+        const res = await fetch('/api/swap-proposals/' + encodeURIComponent(id), {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Update failed');
+        swapBuilderState.record = data;
+        updateLiveSummary(data);
+      } catch (err) {
+        showToast('Save failed: ' + (err.message || err), true);
+      }
+    }, 350);
+  }
+
+  async function patchLeg(id, legId, patch) {
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/legs/${legId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Leg update failed');
+      swapBuilderState.record = data;
+      updateLiveSummary(data);
+    } catch (err) {
+      showToast('Leg save failed: ' + (err.message || err), true);
+    }
+  }
+
+  function updateLiveSummary(record) {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body) return;
+    const summaryNode = body.querySelector('.swap-editor-summary');
+    if (!summaryNode) return;
+    const wrap = document.createElement('div');
+    wrap.innerHTML = renderEditorSummary(record.computedSummary, record.proposal);
+    const fresh = wrap.firstElementChild;
+    if (fresh) summaryNode.replaceWith(fresh);
+  }
+
+  async function addEmptyLeg(side) {
+    const id = swapBuilderState.proposalId;
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/legs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ side, sourceKind: 'manual' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Add leg failed');
+      swapBuilderState.record = data;
+      renderProposalEditor(data);
+    } catch (err) {
+      showToast('Could not add leg: ' + (err.message || err), true);
+    }
+  }
+
+  async function deleteLeg(legId) {
+    const id = swapBuilderState.proposalId;
+    if (!id || !legId) return;
+    if (!confirm('Remove this leg?')) return;
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/legs/${legId}`, {
+        method: 'DELETE'
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Delete failed');
+      swapBuilderState.record = data;
+      renderProposalEditor(data);
+    } catch (err) {
+      showToast('Could not remove leg: ' + (err.message || err), true);
+    }
+  }
+
+  async function sendProposalFromEditor() {
+    const id = swapBuilderState.proposalId;
+    if (!id) return;
+    if (!confirm('Send this proposal? Once sent, legs are frozen and a Bond Swap entry will be added to the Strategies queue.')) return;
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/send`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Send failed');
+      swapBuilderState.record = data;
+      renderProposalEditor(data);
+      showToast(`Proposal ${id} sent — added to Strategies queue`);
+    } catch (err) {
+      showToast('Send failed: ' + (err.message || err), true);
+    }
+  }
+
+  async function cancelProposalFromEditor() {
+    const id = swapBuilderState.proposalId;
+    if (!id) return;
+    if (!confirm('Cancel this proposal? It will be archived from the Strategies queue if linked.')) return;
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Cancel failed');
+      swapBuilderState.record = data;
+      renderProposalEditor(data);
+      showToast(`Proposal ${id} cancelled`);
+    } catch (err) {
+      showToast('Cancel failed: ' + (err.message || err), true);
     }
   }
 
@@ -4325,12 +4664,18 @@
       wrap.hidden = false;
       list.innerHTML = items.map(p => `
         <li>
-          <a href="/api/swap-proposals/${encodeURIComponent(p.id)}/render" target="_blank" rel="noopener">
+          <a href="#strategies?tab=bond-swap&bank=${encodeURIComponent(p.bankId || '')}&proposal=${encodeURIComponent(p.id)}" data-open-proposal="${escapeHtml(p.id)}">
             <strong>${escapeHtml(p.id)}</strong>
             <span>${escapeHtml(p.title || 'Bond Swap')}</span>
             <em>${escapeHtml(p.status)} · ${escapeHtml(p.updatedAt ? p.updatedAt.slice(0, 10) : '')}</em>
           </a>
         </li>`).join('');
+      list.querySelectorAll('[data-open-proposal]').forEach(a => {
+        a.addEventListener('click', e => {
+          e.preventDefault();
+          openProposalInEditor(a.dataset.openProposal);
+        });
+      });
     } catch (_) {
       wrap.hidden = true;
     }

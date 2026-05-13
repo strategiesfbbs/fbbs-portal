@@ -547,6 +547,16 @@ function freezeProposal(outputDir, id, snapshotData) {
   return getProposal(outputDir, id);
 }
 
+function updateProposalStrategyLink(outputDir, id, strategyId) {
+  const dbPath = ensureSwapDatabase(outputDir);
+  const now = new Date().toISOString();
+  runSqlite(dbPath, `
+    UPDATE swap_proposals SET strategy_id = ${sqlString(strategyId)},
+      updated_at = ${sqlString(now)} WHERE id = ${sqlString(id)};
+  `);
+  return getProposal(outputDir, id);
+}
+
 function markExecuted(outputDir, id) {
   const dbPath = ensureSwapDatabase(outputDir);
   const now = new Date().toISOString();
@@ -580,6 +590,7 @@ module.exports = {
   freezeProposal,
   markExecuted,
   cancelProposal,
+  updateProposalStrategyLink,
   // Exposed for tests
   SWAP_STATUSES,
   SWAP_LEG_SIDES,
