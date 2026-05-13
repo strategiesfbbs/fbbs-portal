@@ -126,6 +126,21 @@ npm start
 
 ---
 
+## Reports tab
+
+The Reports page uses the portal's existing hash routing and vanilla JavaScript shell. There is no React, TypeScript, or build step.
+
+- `#reports` opens the new Reports landing list with the left rail, freshness strip, saved-report fixtures, and any reports generated during the current browser session.
+- `#reports/new` opens the report type picker for Bank Peer Analysis, Portfolio Peer Review, Opportunity Report, and Coverage Book.
+- `#reports/build/bank-peer`, `#reports/build/portfolio-peer`, `#reports/build/opportunity`, and `#reports/build/coverage` open the unified builder shell for each report type.
+- `#reports/data` contains the Averaged-Series and Bond Accounting import panels.
+- `#reports/data/files` contains the full Bond Accounting file table with search, status filtering, CSV export, and sortable columns.
+- `#reports?legacy=1` keeps the prior Reports workspace reachable for one release.
+
+The Phase 1 refactor preserves the existing report engines and importer handlers. Report rows are not persisted yet; durable saved reports and folders are planned for the next phase.
+
+---
+
 ## How it works
 
 ### File storage

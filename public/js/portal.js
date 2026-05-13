@@ -54,7 +54,14 @@
   let cdInternalData = null;
   let bondAccountingManifest = null;
   let bondAccountingFilters = { search: '', status: '' };
+  let bondAccountingFileSort = { key: 'filename', dir: 'asc' };
   let peerAnalysisState = { bankData: null, peerData: null, rows: [], flags: [], period: '', peerGroup: null };
+  let reportsActiveRail = localStorage.getItem('fbbs.reports.lastRail') || 'recent';
+  let reportsSearchQuery = '';
+  let reportsSort = { key: 'lastRunAt', dir: 'desc' };
+  let reportsSelectedType = '';
+  let reportsSessionReports = [];
+  let reportsAppEventsBound = false;
   let selectedFiles = {
     dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -187,6 +194,60 @@
   const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'THO Report', 'CECL Analysis', 'Miscellaneous'];
   const STRATEGY_STATUSES = ['Open', 'In Progress', 'Needs Billed', 'Completed'];
   const STRATEGY_PRIORITIES = ['1', '2', '3', '4', '5'];
+  const REPORT_TYPE_META = {
+    'bank-peer': {
+      slug: 'bank-peer',
+      name: 'Bank Peer Analysis',
+      shortName: 'Bank Peer',
+      category: 'Bank Intelligence',
+      folder: 'Coverage',
+      description: 'Compare a selected bank against peer averages for liquidity, securities, profitability, capital, and asset quality.'
+    },
+    'portfolio-peer': {
+      slug: 'portfolio-peer',
+      name: 'Portfolio Peer Review',
+      shortName: 'Portfolio Peer',
+      category: 'Portfolio',
+      folder: 'Portfolio Reviews',
+      description: 'Blend matched portfolio reports with call-report context to review yield, mix, duration, unrealized loss, and concentrations.'
+    },
+    opportunity: {
+      slug: 'opportunity',
+      name: 'Opportunity Report',
+      shortName: 'Opportunity',
+      category: 'Sales',
+      folder: 'Sales Strategy',
+      description: 'Surface banks with peer gaps that suggest funding, liquidity, bond swap, muni, or CECL conversations.'
+    },
+    coverage: {
+      slug: 'coverage',
+      name: 'Coverage Book',
+      shortName: 'Coverage',
+      category: 'Sales',
+      folder: 'Coverage',
+      description: 'Summarize saved banks, statuses, notes, strategy requests, latest call-report period, and report availability.'
+    }
+  };
+  const REPORT_FIXTURES = [
+    { id: 'fixture-bank-peer', name: 'Bank Peer Analysis - Coverage Baseline', type: 'bank-peer', folder: 'Coverage', description: REPORT_TYPE_META['bank-peer'].description, lastRunAt: '2026-05-13T08:15:00.000Z', lastRunBy: 'You', pinned: true },
+    { id: 'fixture-opportunity', name: 'Midwest Opportunity Scan', type: 'opportunity', folder: 'Sales Strategy', description: REPORT_TYPE_META.opportunity.description, lastRunAt: '2026-05-12T15:40:00.000Z', lastRunBy: 'You', pinned: false },
+    { id: 'fixture-portfolio', name: 'Portfolio Peer Review - Matched Files', type: 'portfolio-peer', folder: 'Portfolio Reviews', description: REPORT_TYPE_META['portfolio-peer'].description, lastRunAt: '2026-05-12T10:05:00.000Z', lastRunBy: 'You', pinned: false },
+    { id: 'fixture-coverage', name: 'Coverage Book - Saved Banks', type: 'coverage', folder: 'Coverage', description: REPORT_TYPE_META.coverage.description, lastRunAt: '2026-05-11T16:25:00.000Z', lastRunBy: 'You', pinned: false }
+  ];
+  const REPORT_RAIL_ITEMS = [
+    { id: 'recent', section: 'REPORTS', label: 'Recent' },
+    { id: 'created', section: 'REPORTS', label: 'Created by Me' },
+    { id: 'pinned', section: 'REPORTS', label: 'Pinned' },
+    { id: 'subscribed', section: 'REPORTS', label: 'Subscribed', disabled: true },
+    { id: 'all', section: 'REPORTS', label: 'All Reports' },
+    { id: 'folders-all', section: 'FOLDERS', label: 'All Folders' },
+    { id: 'folder-coverage', section: 'FOLDERS', label: 'Coverage', folder: 'Coverage' },
+    { id: 'folder-sales', section: 'FOLDERS', label: 'Sales Strategy', folder: 'Sales Strategy' },
+    { id: 'folder-portfolio', section: 'FOLDERS', label: 'Portfolio Reviews', folder: 'Portfolio Reviews' },
+    { id: 'folder-billing', section: 'FOLDERS', label: 'Billing', folder: 'Billing' },
+    { id: 'folder-personal', section: 'FOLDERS', label: 'Personal', folder: 'Personal' },
+    { id: 'favorites', section: 'FAVORITES', label: 'All Favorites', disabled: true }
+  ];
   const COMMISSION_PRODUCT_LABELS = {
     agencies: 'Agencies',
     corporates: 'Corporates'
@@ -999,8 +1060,10 @@
   function parseHashTarget(hashValue) {
     const raw = String(hashValue || '').replace(/^#/, '') || 'home';
     const [page, query = ''] = raw.split('?');
+    const [basePage, ...subpathParts] = page.split('/').filter(Boolean);
     return {
-      page: VALID_PAGES.includes(page) ? page : 'home',
+      page: VALID_PAGES.includes(basePage) ? basePage : 'home',
+      subpath: subpathParts.join('/'),
       query
     };
   }
@@ -1108,6 +1171,7 @@
     if (pageName === 'reports') {
       loadBankStatus();
       loadBondAccountingManifest();
+      renderReportsWorkspace();
     }
     if (pageName === 'strategies') {
       loadStrategies();
@@ -3238,6 +3302,7 @@
     }
 
     if (typeof renderHomeTileAccounts === 'function') renderHomeTileAccounts();
+    if (parseHashTarget(window.location.hash || '#home').page === 'reports') renderReportsWorkspace();
   }
 
   async function loadBondAccountingManifest() {
@@ -3251,6 +3316,7 @@
       return;
     }
     renderBondAccountingMatches();
+    if (parseHashTarget(window.location.hash || '#home').page === 'reports') renderReportsWorkspace();
   }
 
   function bondAccountingFileUrl(row) {
@@ -4838,6 +4904,8 @@
   }
 
   function setupReports() {
+    loadReportsSessionReports();
+    setupReportsAppEvents();
     const averagedInput = document.getElementById('reportsAveragedSeriesWorkbookInput');
     const averagedImportBtn = document.getElementById('reportsAveragedSeriesImportBtn');
     const bankListInput = document.getElementById('bondAccountingBankListInput');
@@ -5090,6 +5158,640 @@
     downloadCsv(filename, [header, ...csvRows]);
     showToast('Exported peer analysis CSV');
   }
+
+  // Reports Workspace v2 -------------------------------------------------
+  function reportsRoute() {
+    const parsed = parseHashTarget(window.location.hash || '#reports');
+    return {
+      subpath: parsed.page === 'reports' ? parsed.subpath : '',
+      params: new URLSearchParams(parsed.query || '')
+    };
+  }
+
+  function reportsHash(subpath, query) {
+    const clean = String(subpath || '').replace(/^\/+/, '');
+    const qs = query ? `?${query}` : '';
+    return `#reports${clean ? '/' + clean : ''}${qs}`;
+  }
+
+  function loadReportsSessionReports() {
+    try {
+      const parsed = JSON.parse(sessionStorage.getItem('fbbs.reports.sessionReports') || '[]');
+      reportsSessionReports = Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      reportsSessionReports = [];
+    }
+  }
+
+  function saveReportsSessionReports() {
+    try {
+      sessionStorage.setItem('fbbs.reports.sessionReports', JSON.stringify(reportsSessionReports.slice(0, 25)));
+    } catch (e) {
+      // Session history is a convenience only.
+    }
+  }
+
+  function allReportsRows() {
+    const seen = new Set();
+    return [...reportsSessionReports, ...REPORT_FIXTURES].filter(row => {
+      if (!row || seen.has(row.id)) return false;
+      seen.add(row.id);
+      return true;
+    });
+  }
+
+  function reportRailItem(id) {
+    return REPORT_RAIL_ITEMS.find(item => item.id === id) || REPORT_RAIL_ITEMS[0];
+  }
+
+  function reportTypeMeta(type) {
+    return REPORT_TYPE_META[type] || REPORT_TYPE_META['bank-peer'];
+  }
+
+  function reportRelativeDate(iso) {
+    if (!iso) return 'Never';
+    const diffMs = Date.now() - new Date(iso).getTime();
+    if (!Number.isFinite(diffMs)) return 'Recently';
+    const mins = Math.max(1, Math.round(diffMs / 60000));
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    return `${days}d ago`;
+  }
+
+  function reportAbsoluteDate(iso) {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleString();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function filterReportsRows() {
+    const active = reportRailItem(reportsActiveRail);
+    const search = reportsSearchQuery.trim().toLowerCase();
+    let rows = allReportsRows();
+    if (active.id === 'pinned') rows = rows.filter(row => row.pinned);
+    if (active.folder) rows = rows.filter(row => row.folder === active.folder);
+    if (search) {
+      rows = rows.filter(row => [row.name, row.description, row.folder, reportTypeMeta(row.type).name].filter(Boolean).join(' ').toLowerCase().includes(search));
+    }
+    rows = rows.slice().sort((a, b) => {
+      const av = a[reportsSort.key] || '';
+      const bv = b[reportsSort.key] || '';
+      const cmp = String(av).localeCompare(String(bv));
+      return reportsSort.dir === 'asc' ? cmp : -cmp;
+    });
+    return rows;
+  }
+
+  function reportsFreshnessHtml() {
+    const averaged = bankDataStatus && bankDataStatus.averagedSeries ? bankDataStatus.averagedSeries : {};
+    const averagedMeta = averaged.metadata || {};
+    const averagedDataset = averaged.dataset || {};
+    const bond = bankDataStatus && bankDataStatus.bondAccounting ? bankDataStatus.bondAccounting : {};
+    const peerText = averaged.available
+      ? `Peer averages: ${escapeHtml(averagedMeta.latestPeriod || 'latest')} · imported ${escapeHtml(formatImportedDate(averagedMeta.importedAt))} · ${escapeHtml(formatNumber(averagedDataset.metricCount || averagedMeta.metricCount || 0))} metrics · ${escapeHtml(formatNumber(averagedDataset.seriesRowCount || averagedMeta.seriesRowCount || 0))} peer rows`
+      : 'Peer averages: —';
+    const bondText = bond.available
+      ? `Portfolio files: ${escapeHtml(formatNumber(bond.matchedCount || 0))} matched · ${escapeHtml(formatNumber(bond.pCodeMatchedCount || 0))} P-code only · ${escapeHtml(formatNumber(bond.unmatchedCount || 0))} unmatched`
+      : 'Portfolio files: —';
+    return `
+      <div class="reports-freshness">
+        <a href="#reports/data">${peerText} <span>Manage</span></a>
+        <a href="#reports/data/files">${bondText} <span>Manage</span></a>
+      </div>
+    `;
+  }
+
+  function reportsLeftRailHtml() {
+    let currentSection = '';
+    return `
+      <aside class="reports-left-rail" aria-label="Reports navigation">
+        ${REPORT_RAIL_ITEMS.map(item => {
+          const section = item.section !== currentSection ? (currentSection = item.section, `<h3>${escapeHtml(item.section)}</h3>`) : '';
+          const title = item.disabled ? 'Available in a later phase' : '';
+          return `${section}<button type="button" class="${item.id === reportsActiveRail ? 'active' : ''}" data-reports-rail="${escapeHtml(item.id)}" ${item.disabled ? 'disabled' : ''} title="${escapeHtml(title)}">${escapeHtml(item.label)}</button>`;
+        }).join('')}
+      </aside>
+    `;
+  }
+
+  function reportsHomeHtml() {
+    const active = reportRailItem(reportsActiveRail);
+    const rows = filterReportsRows();
+    return `
+      <div class="reports-layout">
+        ${reportsLeftRailHtml()}
+        <main class="reports-main">
+          <header class="reports-page-head">
+            <div>
+              <span>Reports</span>
+              <h3>${escapeHtml(active.label)}</h3>
+              <p>${escapeHtml(formatNumber(rows.length))} item${rows.length === 1 ? '' : 's'}</p>
+            </div>
+            <div class="reports-head-actions">
+              <input type="search" id="reportsSearchInput" placeholder="Search all reports..." value="${escapeHtml(reportsSearchQuery)}">
+              <a class="small-btn" href="#reports/new">New Report</a>
+              <button type="button" class="small-btn secondary" disabled title="Available in Phase 2">New Folder</button>
+              <button type="button" class="icon-btn" disabled title="Available in Phase 1">⚙</button>
+            </div>
+          </header>
+          ${reportsFreshnessHtml()}
+          ${reportsListHtml(rows)}
+        </main>
+      </div>
+    `;
+  }
+
+  function reportsListHtml(rows) {
+    if (!rows.length) {
+      return `
+        <div class="reports-empty">
+          <strong>No reports yet.</strong>
+          <span>Click New Report to create one.</span>
+          <a class="small-btn" href="#reports/new">New Report</a>
+        </div>
+      `;
+    }
+    const header = (key, label) => `<button type="button" data-reports-sort="${escapeHtml(key)}">${escapeHtml(label)}${reportsSort.key === key ? (reportsSort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>`;
+    return `
+      <div class="reports-list-wrap">
+        <table class="reports-list">
+          <thead>
+            <tr>
+              <th>${header('name', 'Report Name')}</th>
+              <th>Description</th>
+              <th>${header('type', 'Type')}</th>
+              <th>${header('folder', 'Folder')}</th>
+              <th>${header('lastRunAt', 'Last Run')}</th>
+              <th>Last Run By</th>
+              <th>Subscribed</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => {
+              const meta = reportTypeMeta(row.type);
+              return `
+                <tr data-report-id="${escapeHtml(row.id)}">
+                  <td><a href="#reports/build/${escapeHtml(row.type)}">${escapeHtml(row.name)}</a></td>
+                  <td><span class="reports-desc">${escapeHtml(row.description || meta.description)}</span></td>
+                  <td><span class="reports-type-badge">${escapeHtml(meta.shortName)}</span></td>
+                  <td>${escapeHtml(row.folder || 'Personal')}</td>
+                  <td title="${escapeHtml(reportAbsoluteDate(row.lastRunAt))}">${escapeHtml(reportRelativeDate(row.lastRunAt))}</td>
+                  <td>${escapeHtml(row.lastRunBy || 'You')}</td>
+                  <td class="reports-sub-cell"></td>
+                  <td>
+                    <details class="reports-row-menu">
+                      <summary aria-label="Report actions">⌄</summary>
+                      <button type="button" data-report-action="run" data-report-type="${escapeHtml(row.type)}">Run</button>
+                      <button type="button" data-report-action="duplicate" data-report-id="${escapeHtml(row.id)}">Duplicate</button>
+                      <button type="button" disabled title="Available in Phase 2">Edit</button>
+                      <button type="button" disabled title="Available in Phase 3">Subscribe</button>
+                      <button type="button" disabled title="Available in Phase 2">Delete</button>
+                    </details>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function reportTypePickerHtml() {
+    const categories = ['Recently Used', 'All', 'Bank Intelligence', 'Portfolio', 'Sales', 'Market Color', 'Billing & Ops', 'Other'];
+    const types = Object.values(REPORT_TYPE_META);
+    return `
+      <div class="reports-modal-backdrop" role="presentation">
+        <section class="reports-modal" role="dialog" aria-modal="true" aria-labelledby="reportsTypePickerTitle">
+          <header>
+            <h3 id="reportsTypePickerTitle">Create Report</h3>
+            <a href="#reports" aria-label="Close">×</a>
+          </header>
+          <div class="reports-type-picker">
+            <nav aria-label="Report type categories">
+              ${categories.map((cat, idx) => `<button type="button" class="${idx === 0 ? 'active' : ''}" ${idx > 4 ? 'disabled title="Coming soon"' : ''}>${escapeHtml(cat)}</button>`).join('')}
+            </nav>
+            <main>
+              <div class="reports-type-head">
+                <h4>Select a Report Type</h4>
+                <input type="search" id="reportsTypeSearchInput" placeholder="Search Report Types...">
+                <button type="button" class="small-btn secondary" disabled>Filter report types (0)</button>
+              </div>
+              <div class="reports-type-results">
+                ${types.map(type => `
+                  <button type="button" class="reports-type-row" data-report-type-select="${escapeHtml(type.slug)}">
+                    <span>
+                      <strong>${escapeHtml(type.name)}</strong>
+                      <small>${escapeHtml(type.description)}</small>
+                    </span>
+                    <em>${escapeHtml(type.category)}</em>
+                  </button>
+                `).join('')}
+              </div>
+              <footer>
+                <a class="small-btn secondary" href="#reports">Cancel</a>
+                <button type="button" class="small-btn" id="reportsTypeContinueBtn" disabled>Continue</button>
+              </footer>
+            </main>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  function builderFieldHtml(type) {
+    if (type === 'bank-peer') return '<div id="reportsBankPeerMount"></div>';
+    if (type === 'portfolio-peer') return '<p class="reports-muted">Portfolio review uses the matched bond-accounting files managed under Data Sources.</p><a class="text-btn" href="#reports/data/files">Open matched files</a>';
+    if (type === 'opportunity') return '<div id="reportsOpportunityMount"></div>';
+    return '<p class="reports-muted">Coverage Book will use saved banks, statuses, notes, strategy requests, and latest call-report availability.</p>';
+  }
+
+  function reportsBuilderHtml(type) {
+    const meta = reportTypeMeta(type);
+    return `
+      <div class="reports-layout">
+        ${reportsLeftRailHtml()}
+        <main class="reports-main">
+          <header class="reports-builder-head">
+            <div>
+              <span>Report Builder</span>
+              <h3>${escapeHtml(meta.name)}</h3>
+              <p>${escapeHtml(meta.description)}</p>
+            </div>
+            <a class="text-btn" href="#reports">Back to Reports</a>
+          </header>
+          ${reportsFreshnessHtml()}
+          <section class="reports-builder-section">
+            <h4>Inputs</h4>
+            ${builderFieldHtml(type)}
+          </section>
+          <section class="reports-builder-section">
+            <h4>Filters &amp; Grouping</h4>
+            ${type === 'opportunity' ? '<p class="reports-muted">Min flags, state, and saved-only filters are in the scan panel above.</p>' : '<p class="reports-muted">No additional filters for this report type yet.</p>'}
+          </section>
+          <section class="reports-builder-section">
+            <h4>Output</h4>
+            <div class="reports-output-options">
+              <label><input type="radio" name="reportsOutputFormat" value="view" checked> In-app view</label>
+              <label><input type="radio" name="reportsOutputFormat" value="csv"> CSV</label>
+              <label title="Coming soon"><input type="radio" name="reportsOutputFormat" value="xlsx" disabled> XLSX</label>
+              <label title="Coming soon"><input type="radio" name="reportsOutputFormat" value="pdf" disabled> PDF</label>
+            </div>
+          </section>
+          <footer class="reports-builder-footer">
+            <a class="small-btn secondary" href="#reports">Cancel</a>
+            <button type="button" class="small-btn secondary" disabled title="Available in Phase 1">Save As</button>
+            <button type="button" class="small-btn secondary" disabled title="Available in Phase 1">Save</button>
+            <button type="button" class="small-btn secondary" disabled title="Available in Phase 3">Save &amp; Schedule</button>
+            <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
+          </footer>
+        </main>
+      </div>
+    `;
+  }
+
+  function reportsDataHtml(filesOnly) {
+    return `
+      <div class="reports-layout">
+        ${reportsLeftRailHtml()}
+        <main class="reports-main">
+          <header class="reports-builder-head">
+            <div>
+              <span>Reports</span>
+              <h3>${filesOnly ? 'Matched Portfolio Files' : 'Data Sources'}</h3>
+              <p>${filesOnly ? 'Review the full bond-accounting file manifest.' : 'Manage the peer-average and portfolio sources that power reports.'}</p>
+            </div>
+            <a class="text-btn" href="#reports">Back to Reports</a>
+          </header>
+          ${reportsFreshnessHtml()}
+          ${filesOnly ? '<section class="reports-builder-section"><div id="reportsFilesMount"></div></section>' : `
+            <div class="reports-data-grid">
+              <div id="reportsAveragedMount"></div>
+              <div id="reportsBondMount"></div>
+            </div>
+            <section class="reports-builder-section">
+              <header class="reports-section-inline-head">
+                <h4>Matched portfolio files</h4>
+                <a class="text-btn" href="#reports/data/files">Open full file list ›</a>
+              </header>
+              <div id="reportsFilesPreview"></div>
+            </section>
+          `}
+        </main>
+      </div>
+    `;
+  }
+
+  function parkReportPanels() {
+    const parking = document.getElementById('reportsPanelParking');
+    if (!parking) return;
+    ['averagedSeriesImportPanel', 'peerAnalysisBuilderPanel', 'opportunityReportPanel', 'bondAccountingImportPanel'].forEach(id => {
+      const panel = document.getElementById(id);
+      if (panel && panel.parentElement !== parking) parking.appendChild(panel);
+    });
+  }
+
+  function restoreLegacyReportPanels() {
+    const legacy = document.getElementById('reportsLegacyShell');
+    const parking = document.getElementById('reportsPanelParking');
+    if (!legacy || !parking) return;
+    ['averagedSeriesImportPanel', 'peerAnalysisBuilderPanel', 'opportunityReportPanel', 'bondAccountingImportPanel'].forEach(id => {
+      const panel = document.getElementById(id);
+      if (panel && panel.parentElement !== legacy) legacy.insertBefore(panel, parking);
+      if (panel) panel.hidden = id === 'opportunityReportPanel';
+    });
+  }
+
+  function mountReportPanel(id, mountId) {
+    const mount = document.getElementById(mountId);
+    const panel = document.getElementById(id);
+    if (!mount || !panel) return;
+    mount.appendChild(panel);
+    panel.hidden = false;
+  }
+
+  function renderReportsFilesPreview() {
+    const target = document.getElementById('reportsFilesPreview');
+    if (!target) return;
+    const rows = bondAccountingManifest && Array.isArray(bondAccountingManifest.matches) ? bondAccountingManifest.matches.slice(0, 5) : [];
+    if (!rows.length) {
+      target.innerHTML = '<div class="bank-search-empty">No portfolio files imported yet.</div>';
+      return;
+    }
+    target.innerHTML = rows.map(row => `
+      <div class="reports-match-row">
+        <div><strong>${escapeHtml(row.bankDisplayName || row.portfolioClientName || row.filename || 'Portfolio file')}</strong><span>${escapeHtml([row.pCode, row.reportDate].filter(Boolean).join(' · '))}</span></div>
+        <div><strong>${escapeHtml(bondAccountingStatusLabel(row))}</strong><small>${escapeHtml(row.filename || '')}</small></div>
+        ${row.storedPath ? `<a class="text-btn" href="${bondAccountingFileUrl(row)}" target="_blank" rel="noopener">Open</a>` : '<span></span>'}
+      </div>
+    `).join('');
+  }
+
+  function renderReportsFilesTable() {
+    const target = document.getElementById('reportsFilesMount');
+    if (!target) return;
+    const allRows = bondAccountingManifest && Array.isArray(bondAccountingManifest.matches) ? bondAccountingManifest.matches : [];
+    const sortValue = row => {
+      if (bondAccountingFileSort.key === 'bank') return row.bankDisplayName || row.portfolioClientName || '';
+      if (bondAccountingFileSort.key === 'pCode') return row.pCode || '';
+      if (bondAccountingFileSort.key === 'cert') return row.certNumber || '';
+      if (bondAccountingFileSort.key === 'period') return row.reportDate || '';
+      if (bondAccountingFileSort.key === 'status') return bondAccountingStatusLabel(row);
+      return row.filename || '';
+    };
+    const rows = filteredBondAccountingRows().slice().sort((a, b) => {
+      const cmp = String(sortValue(a)).localeCompare(String(sortValue(b)));
+      return bondAccountingFileSort.dir === 'asc' ? cmp : -cmp;
+    });
+    const fileHeader = (key, label) => `<button type="button" data-reports-file-sort="${escapeHtml(key)}">${escapeHtml(label)}${bondAccountingFileSort.key === key ? (bondAccountingFileSort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>`;
+    target.innerHTML = `
+      <div class="reports-files-sticky">
+        <strong>Showing ${escapeHtml(formatNumber(rows.length))} of ${escapeHtml(formatNumber(allRows.length))} portfolio files</strong>
+        <div class="reports-review-tools">
+          <input type="search" id="reportsFilesSearchInput" placeholder="Search bank, P-code, cert, file" value="${escapeHtml(bondAccountingFilters.search || '')}">
+          <select id="reportsFilesStatusFilter" aria-label="Bond accounting match status">
+            <option value="">All statuses</option>
+            <option value="matched" ${bondAccountingFilters.status === 'matched' ? 'selected' : ''}>Matched</option>
+            <option value="needs-bank-data-match" ${bondAccountingFilters.status === 'needs-bank-data-match' ? 'selected' : ''}>P-code only</option>
+            <option value="unmatched-pcode" ${bondAccountingFilters.status === 'unmatched-pcode' ? 'selected' : ''}>Unmatched P-code</option>
+          </select>
+          <button type="button" class="text-btn" id="reportsFilesExportBtn">Export CSV</button>
+        </div>
+      </div>
+      ${rows.length ? `
+        <div class="reports-list-wrap">
+          <table class="reports-list reports-files-table">
+            <thead><tr><th>${fileHeader('filename', 'File')}</th><th>${fileHeader('bank', 'Bank')}</th><th>${fileHeader('pCode', 'P-code')}</th><th>${fileHeader('cert', 'Cert')}</th><th>${fileHeader('period', 'Period')}</th><th>${fileHeader('status', 'Status')}</th><th></th></tr></thead>
+            <tbody>${rows.map(row => `
+              <tr>
+                <td>${escapeHtml(row.filename || '')}</td>
+                <td>${escapeHtml(row.bankDisplayName || row.portfolioClientName || '')}</td>
+                <td>${escapeHtml(row.pCode || '')}</td>
+                <td>${escapeHtml(row.certNumber || '')}</td>
+                <td>${escapeHtml(row.reportDate || '')}</td>
+                <td>${escapeHtml(bondAccountingStatusLabel(row))}</td>
+                <td>${row.storedPath ? `<a class="text-btn" href="${bondAccountingFileUrl(row)}" target="_blank" rel="noopener">Open</a>` : ''}</td>
+              </tr>
+            `).join('')}</tbody>
+          </table>
+        </div>
+      ` : '<div class="bank-search-empty">No portfolio files match the current filters.</div>'}
+    `;
+  }
+
+  function addSessionReport(type) {
+    const meta = reportTypeMeta(type);
+    const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
+    const latest = bank && bank.periods && bank.periods[0] ? bank.periods[0] : {};
+    const values = latest.values || {};
+    const subject = type === 'bank-peer' && (values.name || bank?.summary?.displayName)
+      ? ` - ${values.name || bank.summary.displayName}`
+      : '';
+    reportsSessionReports.unshift({
+      id: `session-${Date.now()}`,
+      name: `${meta.name}${subject} - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+      type,
+      folder: meta.folder || 'Personal',
+      description: meta.description,
+      lastRunAt: new Date().toISOString(),
+      lastRunBy: 'You',
+      pinned: false
+    });
+    saveReportsSessionReports();
+  }
+
+  function renderReportsWorkspace() {
+    const app = document.getElementById('reportsApp');
+    const legacy = document.getElementById('reportsLegacyShell');
+    if (!app || !legacy) return;
+    const route = reportsRoute();
+    const legacyMode = route.params.get('legacy') === '1';
+    if (legacyMode) {
+      app.hidden = true;
+      legacy.hidden = false;
+      restoreLegacyReportPanels();
+      return;
+    }
+    legacy.hidden = true;
+    app.hidden = false;
+    parkReportPanels();
+    reportsSelectedType = '';
+    const path = route.subpath || '';
+    if (path === 'new') {
+      app.innerHTML = reportsHomeHtml() + reportTypePickerHtml();
+    } else if (path.startsWith('build/')) {
+      const type = path.split('/')[1] || 'bank-peer';
+      app.innerHTML = reportsBuilderHtml(type);
+      if (type === 'bank-peer') mountReportPanel('peerAnalysisBuilderPanel', 'reportsBankPeerMount');
+      if (type === 'opportunity') mountReportPanel('opportunityReportPanel', 'reportsOpportunityMount');
+      if (route.params.get('autorun') === '1') setTimeout(() => runReportBuilder(type), 0);
+    } else if (path === 'data/files') {
+      app.innerHTML = reportsDataHtml(true);
+      renderReportsFilesTable();
+    } else if (path === 'data') {
+      app.innerHTML = reportsDataHtml(false);
+      mountReportPanel('averagedSeriesImportPanel', 'reportsAveragedMount');
+      mountReportPanel('bondAccountingImportPanel', 'reportsBondMount');
+      renderReportsFilesPreview();
+    } else {
+      app.innerHTML = reportsHomeHtml();
+    }
+  }
+
+  function setupReportsAppEvents() {
+    if (reportsAppEventsBound) return;
+    reportsAppEventsBound = true;
+    document.addEventListener('input', event => {
+      const target = event.target;
+      if (!target) return;
+      if (target.id === 'reportsSearchInput') {
+        reportsSearchQuery = target.value || '';
+        renderReportsWorkspace();
+        const nextInput = document.getElementById('reportsSearchInput');
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+        }
+      }
+      if (target.id === 'reportsFilesSearchInput') {
+        bondAccountingFilters.search = target.value || '';
+        renderReportsFilesTable();
+        const nextInput = document.getElementById('reportsFilesSearchInput');
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+        }
+      }
+      if (target.id === 'reportsTypeSearchInput') {
+        const query = String(target.value || '').trim().toLowerCase();
+        document.querySelectorAll('.reports-type-row').forEach(row => {
+          row.hidden = query && !row.textContent.toLowerCase().includes(query);
+        });
+      }
+    });
+    document.addEventListener('change', event => {
+      const target = event.target;
+      if (!target) return;
+      if (target.id === 'reportsFilesStatusFilter') {
+        bondAccountingFilters.status = target.value || '';
+        renderReportsFilesTable();
+      }
+    });
+    document.addEventListener('click', event => {
+      const rail = event.target.closest('[data-reports-rail]');
+      if (rail) {
+        reportsActiveRail = rail.dataset.reportsRail || 'recent';
+        localStorage.setItem('fbbs.reports.lastRail', reportsActiveRail);
+        renderReportsWorkspace();
+        return;
+      }
+      const sorter = event.target.closest('[data-reports-sort]');
+      if (sorter) {
+        const key = sorter.dataset.reportsSort;
+        if (reportsSort.key === key) {
+          reportsSort.dir = reportsSort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          reportsSort = { key, dir: key === 'lastRunAt' ? 'desc' : 'asc' };
+        }
+        renderReportsWorkspace();
+        return;
+      }
+      const fileSorter = event.target.closest('[data-reports-file-sort]');
+      if (fileSorter) {
+        const key = fileSorter.dataset.reportsFileSort;
+        if (bondAccountingFileSort.key === key) {
+          bondAccountingFileSort.dir = bondAccountingFileSort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          bondAccountingFileSort = { key, dir: 'asc' };
+        }
+        renderReportsFilesTable();
+        return;
+      }
+      const typeRow = event.target.closest('[data-report-type-select]');
+      if (typeRow) {
+        reportsSelectedType = typeRow.dataset.reportTypeSelect || '';
+        document.querySelectorAll('.reports-type-row.selected').forEach(row => row.classList.remove('selected'));
+        typeRow.classList.add('selected');
+        const continueBtn = document.getElementById('reportsTypeContinueBtn');
+        if (continueBtn) continueBtn.disabled = !reportsSelectedType;
+        return;
+      }
+      const continueBtn = event.target.closest('#reportsTypeContinueBtn');
+      if (continueBtn && reportsSelectedType) {
+        event.preventDefault();
+        const recent = JSON.parse(localStorage.getItem('fbbs.reports.recentTypes') || '[]').filter(type => type !== reportsSelectedType);
+        recent.unshift(reportsSelectedType);
+        localStorage.setItem('fbbs.reports.recentTypes', JSON.stringify(recent.slice(0, 6)));
+        window.location.hash = reportsHash(`build/${reportsSelectedType}`);
+        return;
+      }
+      const runBtn = event.target.closest('[data-reports-run]');
+      if (runBtn) {
+        runReportBuilder(runBtn.dataset.reportsRun);
+        return;
+      }
+      const rowAction = event.target.closest('[data-report-action]');
+      if (rowAction) {
+        const action = rowAction.dataset.reportAction;
+        if (action === 'run') {
+          window.location.hash = reportsHash(`build/${rowAction.dataset.reportType || 'bank-peer'}`, 'autorun=1');
+        }
+        if (action === 'duplicate') {
+          const source = allReportsRows().find(row => row.id === rowAction.dataset.reportId);
+          if (source) {
+            reportsSessionReports.unshift({ ...source, id: `session-${Date.now()}`, name: `${source.name} (Copy)`, lastRunAt: new Date().toISOString(), lastRunBy: 'You' });
+            saveReportsSessionReports();
+            renderReportsWorkspace();
+            showToast('Duplicated report');
+          }
+        }
+        return;
+      }
+      if (event.target.closest('#reportsFilesExportBtn')) {
+        exportBondAccountingCsv();
+      }
+    });
+  }
+
+  function runReportBuilder(type) {
+    const outputFormat = (document.querySelector('input[name="reportsOutputFormat"]:checked') || {}).value || 'view';
+    if (type === 'bank-peer') {
+      const input = document.getElementById('peerAnalysisBankSearchInput');
+      const hasBank = peerAnalysisState.bankData && peerAnalysisState.rows && peerAnalysisState.rows.length;
+      if (!hasBank && input && input.value.trim()) {
+        searchPeerAnalysisBanks(input.value, { openFirst: true }).then(() => addSessionReport(type));
+      } else if (hasBank) {
+        renderPeerAnalysis();
+        addSessionReport(type);
+        showToast(outputFormat === 'csv' ? 'Report ready; use Export Analysis for CSV' : 'Bank Peer Analysis refreshed');
+      } else {
+        showToast('Choose a bank before running the report', true);
+      }
+      return;
+    }
+    if (type === 'opportunity') {
+      runOpportunityScan().then(() => addSessionReport(type));
+      return;
+    }
+    if (type === 'portfolio-peer') {
+      addSessionReport(type);
+      window.location.hash = reportsHash('data/files');
+      showToast('Portfolio files opened for review');
+      return;
+    }
+    if (type === 'coverage') {
+      addSessionReport(type);
+      goTo('banks');
+      showToast('Coverage Book uses the saved bank workspace in this phase');
+    }
+  }
+  // ----------------------------------------------------------------------
 
   async function loadStrategies() {
     const board = document.getElementById('strategyBoard');
