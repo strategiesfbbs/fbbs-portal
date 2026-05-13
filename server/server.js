@@ -237,10 +237,16 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
     if (err || !stat.isFile()) {
       return sendText(res, 404, 'Not found');
     }
+    const appShellFile = path.resolve(filePath);
+    const noStoreAppShell = [
+      path.join(PUBLIC_DIR, 'index.html'),
+      path.join(PUBLIC_DIR, 'js', 'portal.js'),
+      path.join(PUBLIC_DIR, 'css', 'portal.css')
+    ].some(staticPath => path.resolve(staticPath) === appShellFile);
     const headers = {
       'Content-Type': getContentType(filePath),
       'Content-Length': stat.size,
-      'Cache-Control': 'no-cache'
+      'Cache-Control': noStoreAppShell ? 'no-store' : 'no-cache'
     };
     if (download) {
       const downloadName = path.basename(filename || filePath).replace(/["\r\n]/g, '');
