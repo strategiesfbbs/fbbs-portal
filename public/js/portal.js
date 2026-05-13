@@ -4018,7 +4018,10 @@
     proposalId: null,
     record: null,
     saveTimer: null,
-    pendingPatches: new Map()
+    pendingPatches: new Map(),
+    // CUSIP picker caches — populated when entering the editor for a bank.
+    holdingsByCusip: new Map(),     // sell-side: bank's parsed portfolio
+    inventoryByCusip: new Map()     // buy-side: today's daily package
   };
 
   function setupSwapBuilderTab() {
@@ -4355,9 +4358,52 @@
       const record = await res.json();
       if (!res.ok) throw new Error(record.error || 'Failed to load proposal');
       swapBuilderState.record = record;
+      // Prime the picker caches in parallel so the rep can type a CUSIP
+      // the moment the editor renders.
+      const bankId = record.proposal.bankId;
+      primeSwapPickerCaches(bankId).catch(() => {});
       renderProposalEditor(record);
     } catch (err) {
       renderSwapBuilderEmpty('Could not load proposal: ' + (err.message || err));
+    }
+  }
+
+  async function primeSwapPickerCaches(bankId) {
+    const [hRes, iRes] = await Promise.all([
+      bankId ? fetch('/api/swap-proposals/holdings?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' }) : Promise.resolve(null),
+      fetch('/api/swap-proposals/inventory', { cache: 'no-store' })
+    ]);
+    swapBuilderState.holdingsByCusip = new Map();
+    if (hRes && hRes.ok) {
+      const h = await hRes.json();
+      for (const p of (h.positions || [])) {
+        if (p && p.cusip) swapBuilderState.holdingsByCusip.set(String(p.cusip).toUpperCase(), p);
+      }
+    }
+    swapBuilderState.inventoryByCusip = new Map();
+    if (iRes && iRes.ok) {
+      const inv = await iRes.json();
+      for (const item of (inv.inventory || [])) {
+        if (item && item.cusip) swapBuilderState.inventoryByCusip.set(String(item.cusip).toUpperCase(), item);
+      }
+    }
+    // Datalists may have been rendered already with no options — refresh
+    // them in place so the dropdown populates without a full re-render.
+    refreshPickerDatalists();
+  }
+
+  function refreshPickerDatalists() {
+    const sellList = document.getElementById('swapHoldingsDatalist');
+    if (sellList) {
+      sellList.innerHTML = Array.from(swapBuilderState.holdingsByCusip.values()).slice(0, 500).map(p =>
+        `<option value="${escapeHtml(p.cusip)}">${escapeHtml(p.cusip + ' · ' + (p.description || '') + (p.maturity ? ' · ' + p.maturity : ''))}</option>`
+      ).join('');
+    }
+    const buyList = document.getElementById('swapInventoryDatalist');
+    if (buyList) {
+      buyList.innerHTML = Array.from(swapBuilderState.inventoryByCusip.values()).slice(0, 500).map(p =>
+        `<option value="${escapeHtml(p.cusip)}">${escapeHtml(p.cusip + ' · ' + (p.description || '') + ' · ' + (p.sector || ''))}</option>`
+      ).join('');
     }
   }
 
@@ -4408,7 +4454,10 @@
         ${renderLegSideTable('sell', sells, isDraft)}
         ${renderLegSideTable('buy', buys, isDraft)}
         ${renderEditorSummary(computedSummary, proposal)}
+        <datalist id="swapHoldingsDatalist"></datalist>
+        <datalist id="swapInventoryDatalist"></datalist>
       </div>`;
+    refreshPickerDatalists();
     bindEditorHandlers(record);
   }
 
@@ -4456,16 +4505,22 @@
   }
 
   function renderLegEditorRow(leg, isDraft) {
+    const side = leg.side;
     const cells = LEG_INPUTS.map(col => {
       const value = leg[col.key] == null ? '' : leg[col.key];
       const step = col.step ? ` step="${col.step}"` : '';
       const readonly = isDraft ? '' : 'readonly';
-      return `<td><input type="${col.type}" data-leg-field="${col.key}"${step} value="${escapeHtml(value)}" ${readonly}></td>`;
+      // Wire the CUSIP column to the appropriate datalist for autocomplete
+      // + smart-fill of all sibling fields when the rep picks a known one.
+      const listAttr = col.key === 'cusip' && isDraft
+        ? ` list="${side === 'sell' ? 'swapHoldingsDatalist' : 'swapInventoryDatalist'}"`
+        : '';
+      return `<td><input type="${col.type}" data-leg-field="${col.key}"${step}${listAttr} value="${escapeHtml(value)}" ${readonly}></td>`;
     }).join('');
     const del = isDraft
       ? `<button type="button" class="swap-leg-del" data-del-leg="${leg.id}" title="Remove leg">&times;</button>`
       : '';
-    return `<tr data-leg-id="${leg.id}">${cells}<td class="swap-leg-actions">${del}</td></tr>`;
+    return `<tr data-leg-id="${leg.id}" data-side="${escapeHtml(side)}">${cells}<td class="swap-leg-actions">${del}</td></tr>`;
   }
 
   function renderEditorSummary(summary, proposal) {
@@ -4516,9 +4571,71 @@
     });
     body.querySelectorAll('tr[data-leg-id]').forEach(tr => {
       tr.querySelectorAll('input[data-leg-field]').forEach(input => {
-        input.addEventListener('change', () => queueLegUpdate(Number(tr.dataset.legId), input));
+        input.addEventListener('change', () => {
+          // CUSIP changes are the "pick" event — if the value matches a known
+          // holding (sells) or inventory item (buys), bulk-fill the row from
+          // the source. Otherwise just persist what the rep typed.
+          if (input.dataset.legField === 'cusip') {
+            const picked = lookupSwapPickerSource(tr.dataset.side, input.value);
+            if (picked) {
+              return autoFillLegFromPick(Number(tr.dataset.legId), picked, tr);
+            }
+          }
+          queueLegUpdate(Number(tr.dataset.legId), input);
+        });
       });
     });
+  }
+
+  function lookupSwapPickerSource(side, cusipRaw) {
+    const cusip = String(cusipRaw || '').toUpperCase().trim();
+    if (!cusip) return null;
+    if (side === 'sell') return swapBuilderState.holdingsByCusip.get(cusip) || null;
+    if (side === 'buy') return swapBuilderState.inventoryByCusip.get(cusip) || null;
+    return null;
+  }
+
+  async function autoFillLegFromPick(legId, picked, tr) {
+    const id = swapBuilderState.proposalId;
+    if (!id || !legId) return;
+    // Build a patch with every field the source has. Server will recompute
+    // accrued on top from settle + 30/360 / Actual/Actual.
+    const patch = {
+      cusip: picked.cusip || '',
+      description: picked.description || '',
+      sector: picked.sector || '',
+      coupon: picked.coupon ?? null,
+      maturity: picked.maturity || '',
+      callDate: picked.callDate || '',
+      par: picked.par ?? null,
+      bookPrice: picked.bookPrice ?? null,
+      marketPrice: picked.marketPrice ?? null,
+      bookYieldYtm: picked.bookYieldYtm ?? null,
+      bookYieldYtw: picked.bookYieldYtw ?? null,
+      marketYieldYtm: picked.marketYieldYtm ?? null,
+      marketYieldYtw: picked.marketYieldYtw ?? null,
+      modifiedDuration: picked.modifiedDuration ?? null,
+      averageLife: picked.averageLife ?? null,
+      sourceKind: picked.sourceKind || 'manual',
+      sourceRef: picked.sourceRef || '',
+      sourceDate: picked.sourceDate || picked.reportDate || ''
+    };
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/legs/${legId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Auto-fill failed');
+      swapBuilderState.record = data;
+      // Full re-render so all the new field values appear in inputs.
+      renderProposalEditor(data);
+      const fromLabel = tr && tr.dataset.side === 'sell' ? 'holdings' : "today's inventory";
+      showToast(`Filled leg from ${fromLabel}`);
+    } catch (err) {
+      showToast('Auto-fill failed: ' + (err.message || err), true);
+    }
   }
 
   function queueProposalHeaderUpdate(input) {

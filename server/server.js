@@ -3800,6 +3800,80 @@ function handleSwapSuggested(res, bankId, query) {
   });
 }
 
+// Flattened view of today's buyable inventory keyed by CUSIP. Used by the
+// inline editor's buy-side picker so the rep can search across all sectors
+// at once. Pulled from the existing per-sector parsed JSONs in
+// `currentInventorySnapshot` — no new data ingest needed.
+function listSwapInventory(stateCode) {
+  const inventory = currentInventorySnapshot(stateCode);
+  if (!inventory || !inventory.rows) return [];
+  const flatten = [];
+  const seen = new Set();
+  const pushRow = (row, sector, sourceRef, description) => {
+    if (!row || !row.cusip) return;
+    const cusip = String(row.cusip).toUpperCase();
+    if (seen.has(cusip)) return;
+    seen.add(cusip);
+    flatten.push({
+      sector,
+      cusip,
+      description: description || '',
+      coupon: row.coupon != null ? Number(row.coupon) : null,
+      maturity: row.maturity || '',
+      callDate: row.nextCallDate || row.callDate || '',
+      par: row.availableSize != null ? Number(row.availableSize) * 1000 : null,
+      marketPrice: row.askPrice != null ? Number(row.askPrice) : (row.price != null ? Number(row.price) : null),
+      marketYieldYtw: row.ytw != null ? Number(row.ytw)
+        : (row.ytnc != null ? Number(row.ytnc)
+        : (row.ytm != null ? Number(row.ytm) : null)),
+      marketYieldYtm: row.ytm != null ? Number(row.ytm) : null,
+      averageLife: row.averageLife != null ? Number(row.averageLife) : null,
+      sourceKind: 'daily-package',
+      sourceRef
+    });
+  };
+
+  // Agencies: combined `agencies` array with row.structure = 'Bullet' or 'Callable'
+  for (const row of (inventory.rows.agencies || [])) {
+    const struct = String(row.structure || '').toLowerCase();
+    const sector = struct === 'callable' ? 'Agency Callable' : 'Agency Bullet';
+    const ref = struct === 'callable' ? '_agencies.json#callables' : '_agencies.json#bullets';
+    const descr = [row.ticker, row.structure, row.maturity].filter(Boolean).join(' ');
+    pushRow(row, sector, ref, descr);
+  }
+  for (const row of (inventory.rows.corporates || [])) {
+    const descr = [row.issuerName, row.maturity ? `due ${row.maturity}` : ''].filter(Boolean).join(' ');
+    pushRow(row, 'Corporate', '_corporates.json', descr);
+  }
+  for (const row of (inventory.rows.stateMunis || [])) {
+    const descr = [row.issuer, row.maturity ? `due ${row.maturity}` : ''].filter(Boolean).join(' ');
+    pushRow(row, 'Muni (in-state)', '_muni_offerings.json#stateMunis', descr);
+  }
+  for (const row of (inventory.rows.munis || [])) {
+    const descr = [row.issuer, row.maturity ? `due ${row.maturity}` : ''].filter(Boolean).join(' ');
+    pushRow(row, 'Muni', '_muni_offerings.json', descr);
+  }
+  for (const row of (inventory.rows.treasuries || [])) {
+    const descr = ['Treasury', row.coupon ? row.coupon + '%' : '', row.maturity ? `due ${row.maturity}` : ''].filter(Boolean).join(' ');
+    pushRow(row, 'Treasury', '_treasury_notes.json', descr);
+  }
+  for (const row of (inventory.rows.cds || [])) {
+    const descr = [row.issuer, row.maturity ? `due ${row.maturity}` : ''].filter(Boolean).join(' ');
+    pushRow(row, 'CD', '_offerings.json', descr);
+  }
+  return flatten.sort((a, b) => a.cusip.localeCompare(b.cusip));
+}
+
+function handleSwapInventory(res, query) {
+  try {
+    const stateCode = String(query.get('state') || '').toUpperCase() || null;
+    const inventory = listSwapInventory(stateCode);
+    return sendJSON(res, 200, { count: inventory.length, inventory });
+  } catch (err) {
+    return sendJSON(res, 500, { error: err.message });
+  }
+}
+
 function handleSwapHoldings(res, bankId) {
   const ctx = getSwapBankContext(bankId);
   if (!ctx) return sendJSON(res, 404, { error: 'Bank not found' });
@@ -5202,6 +5276,10 @@ const server = http.createServer(async (req, res) => {
       const bankId = String(query.get('bankId') || '').trim();
       if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
       return handleSwapHoldings(res, bankId);
+    }
+
+    if (pathname === '/api/swap-proposals/inventory' && req.method === 'GET') {
+      return handleSwapInventory(res, query);
     }
 
     if (pathname === '/api/swap-proposals' && req.method === 'GET') {
