@@ -23,6 +23,7 @@
 'use strict';
 
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const { extractPdfText } = require('./pdf-text');
@@ -5027,7 +5028,40 @@ process.on('unhandledRejection', reason => {
 
 // ---------- Start ----------
 
+function checkLoopbackPortAvailable(callback) {
+  const probe = net.createServer();
+  probe.once('error', err => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already occupied on 127.0.0.1.`);
+      console.error('Stop the old FBBS portal process before starting a new one, then run: npm run doctor');
+      process.exitCode = 1;
+      return;
+    }
+    callback();
+  });
+  probe.once('listening', () => {
+    probe.close(callback);
+  });
+  probe.listen(PORT, '127.0.0.1');
+}
+
 function startServer() {
+  if (HOST === '0.0.0.0') {
+    checkLoopbackPortAvailable(() => listenServer());
+    return;
+  }
+  listenServer();
+}
+
+function listenServer() {
+  server.once('error', err => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already occupied on ${HOST}.`);
+      console.error('Stop the old FBBS portal process before starting a new one, then run: npm run doctor');
+      process.exit(1);
+    }
+    throw err;
+  });
   server.listen(PORT, HOST, () => {
     const banner =
 `
