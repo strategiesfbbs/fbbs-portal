@@ -1109,7 +1109,11 @@
       loadBankStatus();
       loadBondAccountingManifest();
     }
-    if (pageName === 'strategies') loadStrategies();
+    if (pageName === 'strategies') {
+      loadStrategies();
+      const tabFromHash = hashParamsForPage('strategies').get('tab');
+      switchStrategiesTab(tabFromHash === 'bond-swap' ? 'bond-swap' : 'queue');
+    }
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'admin') loadAuditLog();
   }
@@ -3998,6 +4002,338 @@
     if (type) type.addEventListener('change', renderStrategyBoard);
     if (archive) archive.addEventListener('change', loadStrategies);
     if (refresh) refresh.addEventListener('click', loadStrategies);
+    setupSwapBuilderTab();
+  }
+
+  // ============ Bond Swap tab ============
+
+  const swapBuilderState = {
+    eligibleBanks: null,
+    bankId: null,
+    bankName: '',
+    suggestion: null,
+    suggestionLoading: false,
+    recentLoading: false
+  };
+
+  function setupSwapBuilderTab() {
+    document.querySelectorAll('[data-strategies-tab]').forEach(btn => {
+      btn.addEventListener('click', () => switchStrategiesTab(btn.dataset.strategiesTab));
+    });
+    const picker = document.getElementById('swapBankSelect');
+    if (picker) picker.addEventListener('change', () => {
+      const id = picker.value || null;
+      swapBuilderState.bankId = id;
+      swapBuilderState.bankName = id ? picker.options[picker.selectedIndex].textContent : '';
+      replaceHashParams('strategies', { tab: 'bond-swap', bank: id || '' });
+      if (id) loadSuggestedSwapsForBank(id);
+      else renderSwapBuilderEmpty();
+      loadRecentSwapProposals(id);
+    });
+  }
+
+  function switchStrategiesTab(tab) {
+    const valid = tab === 'bond-swap' ? 'bond-swap' : 'queue';
+    document.querySelectorAll('[data-strategies-tab]').forEach(btn => {
+      const active = btn.dataset.strategiesTab === valid;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-strategies-panel]').forEach(panel => {
+      panel.hidden = panel.dataset.strategiesPanel !== valid;
+    });
+    replaceHashParams('strategies', { tab: valid === 'queue' ? '' : valid, bank: swapBuilderState.bankId || '' });
+    if (valid === 'bond-swap') {
+      if (!swapBuilderState.eligibleBanks) loadSwapEligibleBanks();
+      if (!swapBuilderState.bankId) loadRecentSwapProposals(null);
+    }
+  }
+
+  async function loadSwapEligibleBanks() {
+    const select = document.getElementById('swapBankSelect');
+    if (!select) return;
+    try {
+      const res = await fetch('/api/swap-proposals/eligible-banks', { cache: 'no-store' });
+      const data = await res.json();
+      swapBuilderState.eligibleBanks = Array.isArray(data.banks) ? data.banks : [];
+      select.innerHTML = '<option value="">Choose a bank with a bond-accounting file…</option>'
+        + swapBuilderState.eligibleBanks.map(b =>
+            `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)} · ${escapeHtml(b.city || '')}${b.state ? ', ' + escapeHtml(b.state) : ''} · ${b.isSubchapterS ? 'Sub-S' : 'C-corp'}</option>`
+          ).join('');
+      // Restore selection from hash if present
+      const params = hashParamsForPage('strategies');
+      const bankFromHash = params.get('bank') || '';
+      if (bankFromHash && swapBuilderState.eligibleBanks.some(b => b.id === bankFromHash)) {
+        select.value = bankFromHash;
+        swapBuilderState.bankId = bankFromHash;
+        swapBuilderState.bankName = select.options[select.selectedIndex].textContent;
+        loadSuggestedSwapsForBank(bankFromHash);
+        loadRecentSwapProposals(bankFromHash);
+      }
+    } catch (err) {
+      select.innerHTML = `<option value="">Failed to load banks (${escapeHtml(err.message || 'error')})</option>`;
+    }
+  }
+
+  function renderSwapBuilderEmpty(message) {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body) return;
+    body.innerHTML = `<div class="bank-search-empty">${escapeHtml(message || 'Pick a bank to see suggested swaps or build your own.')}</div>`;
+  }
+
+  async function loadSuggestedSwapsForBank(bankId) {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body || !bankId) return;
+    swapBuilderState.suggestionLoading = true;
+    body.innerHTML = `<div class="bank-search-empty">Loading suggested swaps for ${escapeHtml(swapBuilderState.bankName || bankId)}&hellip;</div>`;
+    try {
+      const res = await fetch('/api/swap-proposals/suggested?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' });
+      const data = await res.json();
+      swapBuilderState.suggestion = data;
+      renderSuggestedSwaps(data);
+    } catch (err) {
+      renderSwapBuilderEmpty('Failed to load suggested swaps: ' + (err.message || 'error'));
+    } finally {
+      swapBuilderState.suggestionLoading = false;
+    }
+  }
+
+  function renderSuggestedSwaps(data) {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body) return;
+    if (!data || data.notice) {
+      body.innerHTML = `
+        <div class="swap-bank-banner">
+          <div>
+            <strong>${escapeHtml(data && data.bankName || swapBuilderState.bankName)}</strong>
+            <span>${escapeHtml(data && data.notice || 'No bond-accounting file on record.')}</span>
+          </div>
+          <button type="button" class="small-btn" data-swap-manual="1">Build manual proposal</button>
+        </div>`;
+      bindBuildManual(body);
+      return;
+    }
+    const kept = Array.isArray(data.kept) ? data.kept : [];
+    const dropped = Array.isArray(data.dropped) ? data.dropped : [];
+    const teLabel = data.isSubchapterS ? 'TE @ 29.6%' : 'TE @ 21%';
+    body.innerHTML = `
+      <div class="swap-bank-banner">
+        <div>
+          <strong>${escapeHtml(data.bankName || swapBuilderState.bankName)}</strong>
+          <span>Holdings on file: ${escapeHtml(String(data.holdingsTotalPositions || 0))} positions
+            (${escapeHtml(data.holdingsReportDate || '—')}) · ${escapeHtml(teLabel)}</span>
+        </div>
+        <div class="swap-banner-actions">
+          <button type="button" class="small-btn" data-swap-manual="1">Build manual proposal</button>
+        </div>
+      </div>
+      <h3 class="swap-section-head">Suggested swaps <span class="swap-count">${kept.length}</span></h3>
+      ${kept.length
+        ? `<div class="swap-card-grid">${kept.map((c, i) => renderSwapCandidateCardForTab(c, i)).join('')}</div>`
+        : `<div class="bank-search-empty">No swap candidates pass the hard rule for this bank's current holdings.</div>`}
+      ${dropped.length ? renderDroppedSwapsSection(dropped) : ''}`;
+    bindBuildManual(body);
+    body.querySelectorAll('[data-build-from-candidate]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.buildFromCandidate);
+        const candidate = (data.kept || [])[idx];
+        if (candidate) buildProposalFromCandidate(data.bankId, candidate);
+      });
+    });
+    const droppedToggle = body.querySelector('[data-toggle-dropped]');
+    if (droppedToggle) {
+      droppedToggle.addEventListener('click', () => {
+        const list = body.querySelector('.swap-dropped-list');
+        if (!list) return;
+        const open = list.hasAttribute('hidden') ? false : true;
+        list.toggleAttribute('hidden');
+        droppedToggle.textContent = open ? `Show hard-dropped (${dropped.length})` : `Hide hard-dropped (${dropped.length})`;
+      });
+    }
+  }
+
+  function bindBuildManual(scope) {
+    const btn = scope.querySelector('[data-swap-manual]');
+    if (!btn) return;
+    btn.addEventListener('click', () => createManualSwapProposal());
+  }
+
+  function renderSwapCandidateCardForTab(c, index) {
+    const econ = c.economics || {};
+    const warnings = (c.rule && c.rule.warnings) || [];
+    const heldTitle = [c.held.cusip, c.held.description].filter(Boolean).join(' · ') || 'Current holding';
+    return `
+      <article class="swap-card">
+        <header>
+          <span class="swap-card-num">Swap ${index + 1}</span>
+          <strong>${escapeHtml(c.sector || 'Portfolio')}</strong>
+        </header>
+        <div class="swap-card-legs">
+          <div><span>Sell</span><strong>${escapeHtml(heldTitle)}</strong><em>${escapeHtml([
+            c.held.par ? compactCurrency(c.held.par) + ' par' : '',
+            `${Number(c.held.bookYield).toFixed(2)}% book`,
+            `${Number(c.held.marketYield).toFixed(2)}% market`,
+            c.held.maturity ? 'matures ' + c.held.maturity : ''
+          ].filter(Boolean).join(' · '))}</em></div>
+          <div><span>Buy</span><strong>${escapeHtml(c.offering.label || 'Replacement offering')}</strong><em>${escapeHtml(`${Number(c.offering.yield).toFixed(3)}% YTW · CUSIP ${c.offering.cusip || '—'}`)}</em></div>
+        </div>
+        <dl class="swap-card-metrics">
+          <div><dt>Pickup</dt><dd>+${Number(c.yieldPickupVsBook).toFixed(2)}%</dd></div>
+          <div><dt>Breakeven</dt><dd>${econ.breakevenMonths == null ? '—' : Number(econ.breakevenMonths).toFixed(1) + ' mo'}</dd></div>
+          <div><dt>Gain/Loss</dt><dd>${compactCurrency(econ.realizedGainLoss)}</dd></div>
+          <div><dt>Annual pickup</dt><dd>${compactCurrency(econ.annualIncomePickup)}</dd></div>
+          <div><dt>Net benefit</dt><dd>${compactCurrency(econ.netBenefitToHorizon)}</dd></div>
+          <div><dt>Horizon</dt><dd>${econ.horizonYears == null ? '—' : Number(econ.horizonYears).toFixed(2) + ' yr'}</dd></div>
+        </dl>
+        ${warnings.length ? `<ul class="swap-card-warnings">${warnings.map(w => `<li>${escapeHtml(w.message)}</li>`).join('')}</ul>` : ''}
+        <div class="swap-card-actions">
+          <button type="button" class="small-btn" data-build-from-candidate="${index}">Build proposal from this</button>
+        </div>
+      </article>`;
+  }
+
+  function renderDroppedSwapsSection(dropped) {
+    return `
+      <h3 class="swap-section-head">
+        <button type="button" class="swap-dropped-toggle" data-toggle-dropped>Show hard-dropped (${dropped.length})</button>
+      </h3>
+      <ul class="swap-dropped-list" hidden>
+        ${dropped.map(d => `
+          <li>
+            <strong>${escapeHtml(d.held.cusip || '—')}</strong>
+            <span>${escapeHtml(d.held.description || '')}</span>
+            <em>${escapeHtml(d.rule && d.rule.hardReason || 'matures before breakeven')}</em>
+          </li>`).join('')}
+      </ul>`;
+  }
+
+  function compactCurrency(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    const sign = n < 0 ? '-' : '';
+    const abs = Math.abs(n);
+    if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}MM`;
+    if (abs >= 1_000) return `${sign}$${Math.round(abs / 1_000)}K`;
+    return `${sign}$${Math.round(abs)}`;
+  }
+
+  async function buildProposalFromCandidate(bankId, candidate) {
+    if (!bankId || !candidate) return;
+    try {
+      const createRes = await fetch('/api/swap-proposals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bankId,
+          title: `Bond Swap — ${swapBuilderState.bankName || bankId}`,
+          notes: `Seeded from suggested swap (${candidate.held.cusip || ''} → ${candidate.offering.cusip || ''}).`
+        })
+      });
+      const created = await createRes.json();
+      if (!createRes.ok) throw new Error(created.error || 'Could not create proposal');
+      const id = created.proposal.id;
+
+      // Look up the bank's holdings row so we get full sell-side metadata
+      const holdingsRes = await fetch('/api/swap-proposals/holdings?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' });
+      const holdings = await holdingsRes.json();
+      const sellRow = (holdings.positions || []).find(p => p.cusip === candidate.held.cusip) || {};
+
+      await fetch(`/api/swap-proposals/${id}/legs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          side: 'sell',
+          cusip: candidate.held.cusip,
+          description: sellRow.description || candidate.held.description,
+          sector: sellRow.sector || candidate.sector,
+          coupon: sellRow.coupon,
+          maturity: sellRow.maturity,
+          callDate: sellRow.callDate,
+          par: sellRow.par || candidate.held.par,
+          bookPrice: sellRow.bookPrice,
+          marketPrice: sellRow.marketPrice,
+          bookYieldYtm: sellRow.bookYieldYtm,
+          bookYieldYtw: sellRow.bookYieldYtw,
+          marketYieldYtm: sellRow.marketYieldYtm,
+          marketYieldYtw: sellRow.marketYieldYtw,
+          modifiedDuration: sellRow.modifiedDuration,
+          averageLife: sellRow.averageLife,
+          sourceKind: 'holdings',
+          sourceRef: 'bond-accounting',
+          sourceDate: holdings.reportDate || ''
+        })
+      });
+
+      await fetch(`/api/swap-proposals/${id}/legs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          side: 'buy',
+          cusip: candidate.offering.cusip,
+          description: candidate.offering.label,
+          sector: candidate.sector,
+          par: sellRow.par || candidate.held.par,
+          marketPrice: 100,
+          marketYieldYtw: candidate.offering.yield,
+          sourceKind: 'daily-package',
+          sourceRef: '_agencies.json',
+          sourceDate: new Date().toISOString().slice(0, 10)
+        })
+      });
+
+      window.open(`/api/swap-proposals/${id}/render`, '_blank');
+      showToast(`Proposal ${id} created — opened in new tab`);
+      loadRecentSwapProposals(bankId);
+    } catch (err) {
+      showToast('Could not build proposal: ' + (err.message || err), true);
+    }
+  }
+
+  async function createManualSwapProposal() {
+    const bankId = swapBuilderState.bankId;
+    if (!bankId) return showToast('Pick a bank first', true);
+    try {
+      const res = await fetch('/api/swap-proposals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bankId,
+          title: `Bond Swap — ${swapBuilderState.bankName || bankId}`,
+          notes: 'Manual proposal — legs entered by rep.'
+        })
+      });
+      const created = await res.json();
+      if (!res.ok) throw new Error(created.error || 'Could not create proposal');
+      window.open(`/api/swap-proposals/${created.proposal.id}/render`, '_blank');
+      showToast(`Draft ${created.proposal.id} created — add legs via API or upcoming inline editor.`);
+      loadRecentSwapProposals(bankId);
+    } catch (err) {
+      showToast('Could not create proposal: ' + (err.message || err), true);
+    }
+  }
+
+  async function loadRecentSwapProposals(bankId) {
+    const wrap = document.getElementById('swapRecentProposals');
+    const list = document.getElementById('swapRecentList');
+    if (!wrap || !list) return;
+    try {
+      const qs = bankId ? '?bankId=' + encodeURIComponent(bankId) + '&limit=8' : '?limit=8';
+      const res = await fetch('/api/swap-proposals' + qs, { cache: 'no-store' });
+      const data = await res.json();
+      const items = Array.isArray(data.proposals) ? data.proposals : [];
+      if (!items.length) { wrap.hidden = true; return; }
+      wrap.hidden = false;
+      list.innerHTML = items.map(p => `
+        <li>
+          <a href="/api/swap-proposals/${encodeURIComponent(p.id)}/render" target="_blank" rel="noopener">
+            <strong>${escapeHtml(p.id)}</strong>
+            <span>${escapeHtml(p.title || 'Bond Swap')}</span>
+            <em>${escapeHtml(p.status)} · ${escapeHtml(p.updatedAt ? p.updatedAt.slice(0, 10) : '')}</em>
+          </a>
+        </li>`).join('');
+    } catch (_) {
+      wrap.hidden = true;
+    }
   }
 
   function setupReports() {

@@ -704,29 +704,55 @@
   </section>
 
   <div class="container">
-    <div class="strategy-toolbar">
-      <div class="strategy-filter-row">
-        <input type="search" id="strategySearchInput" placeholder="Search requests, banks, comments, invoice contacts..." autocomplete="off">
-        <select id="strategyTypeFilter" aria-label="Filter strategy type">
-          <option value="">All request types</option>
-          <option value="Bond Swap">Bond Swaps</option>
-          <option value="Muni BCIS">Muni BCIS</option>
-          <option value="THO Report">THO Report</option>
-          <option value="CECL Analysis">CECL Analysis</option>
-          <option value="Miscellaneous">Miscellaneous</option>
-        </select>
-        <select id="strategyArchiveFilter" aria-label="Filter archived requests">
-          <option value="">Active requests</option>
-          <option value="only">Archived requests</option>
-          <option value="all">All requests</option>
-        </select>
-        <button type="button" class="small-btn" id="strategyRefreshBtn">Refresh</button>
+    <nav class="strategy-tabs" role="tablist" aria-label="Strategies view">
+      <button type="button" class="strategy-tab active" role="tab" aria-selected="true" data-strategies-tab="queue">Queue</button>
+      <button type="button" class="strategy-tab" role="tab" aria-selected="false" data-strategies-tab="bond-swap">Bond Swap</button>
+    </nav>
+
+    <div class="strategy-tab-panel" data-strategies-panel="queue">
+      <div class="strategy-toolbar">
+        <div class="strategy-filter-row">
+          <input type="search" id="strategySearchInput" placeholder="Search requests, banks, comments, invoice contacts..." autocomplete="off">
+          <select id="strategyTypeFilter" aria-label="Filter strategy type">
+            <option value="">All request types</option>
+            <option value="Bond Swap">Bond Swaps</option>
+            <option value="Muni BCIS">Muni BCIS</option>
+            <option value="THO Report">THO Report</option>
+            <option value="CECL Analysis">CECL Analysis</option>
+            <option value="Miscellaneous">Miscellaneous</option>
+          </select>
+          <select id="strategyArchiveFilter" aria-label="Filter archived requests">
+            <option value="">Active requests</option>
+            <option value="only">Archived requests</option>
+            <option value="all">All requests</option>
+          </select>
+          <button type="button" class="small-btn" id="strategyRefreshBtn">Refresh</button>
+        </div>
+        <div class="strategy-counts" id="strategyCounts"></div>
       </div>
-      <div class="strategy-counts" id="strategyCounts"></div>
+
+      <div class="strategy-board" id="strategyBoard">
+        <div class="bank-search-empty">Loading strategy requests&hellip;</div>
+      </div>
     </div>
 
-    <div class="strategy-board" id="strategyBoard">
-      <div class="bank-search-empty">Loading strategy requests&hellip;</div>
+    <div class="strategy-tab-panel" data-strategies-panel="bond-swap" hidden>
+      <div class="swap-builder-toolbar">
+        <label class="swap-bank-picker">
+          <span>Bank</span>
+          <select id="swapBankSelect">
+            <option value="">Choose a bank with a bond-accounting file…</option>
+          </select>
+        </label>
+        <span class="swap-bank-meta" id="swapBankMeta">Banks shown have a parsed portfolio on file. Suggested swaps come from holdings against today's offerings.</span>
+      </div>
+      <div class="swap-builder-body" id="swapBuilderBody">
+        <div class="bank-search-empty">Pick a bank to see suggested swaps or build your own.</div>
+      </div>
+      <div class="swap-recent" id="swapRecentProposals" hidden>
+        <h3>Recent proposals</h3>
+        <ul id="swapRecentList"></ul>
+      </div>
     </div>
   </div>
 </div>
