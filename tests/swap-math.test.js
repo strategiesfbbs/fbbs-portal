@@ -211,75 +211,89 @@ test('swapEconomicsForLeg mirrors expected pickup', () => {
 });
 
 // ---------- FBBS rule check ----------
+//
+// Hard rule: matures-before-breakeven. Everything else is a soft warning.
 
-test('passesFbbsSwapRules: classic in-rule case', () => {
-  const r = m.passesFbbsSwapRules({
+test('evaluateSwapAgainstRules: classic in-bounds case', () => {
+  const r = m.evaluateSwapAgainstRules({
     breakevenMonths: 7.3,
     monthsToMaturity: 48,
     annualIncomePickup: 45_000
   });
-  assert.deepStrictEqual(r, { passes: true, reasons: [] });
+  assert.strictEqual(r.hardPass, true);
+  assert.strictEqual(r.hardReason, null);
+  assert.strictEqual(r.warnings.length, 0);
 });
 
-test('passesFbbsSwapRules: breakeven exceeds 12mo cap', () => {
-  const r = m.passesFbbsSwapRules({
+test('evaluateSwapAgainstRules: breakeven over soft cap is a warning, not a drop', () => {
+  const r = m.evaluateSwapAgainstRules({
     breakevenMonths: 18,
     monthsToMaturity: 60,
     annualIncomePickup: 10_000
   });
-  assert.strictEqual(r.passes, false);
-  assert.ok(r.reasons.some(s => s.includes('exceeds 12 mo cap')), r.reasons);
+  assert.strictEqual(r.hardPass, true);
+  assert.ok(r.warnings.some(w => w.code === 'breakeven-over-soft-cap'), r.warnings);
 });
 
-test('passesFbbsSwapRules: held matures before breakeven', () => {
-  const r = m.passesFbbsSwapRules({
+test('evaluateSwapAgainstRules: held matures before breakeven is a HARD drop', () => {
+  const r = m.evaluateSwapAgainstRules({
     breakevenMonths: 10,
     monthsToMaturity: 6,
     annualIncomePickup: 5_000
   });
-  assert.strictEqual(r.passes, false);
-  assert.ok(r.reasons.some(s => s.includes('matures before breakeven')), r.reasons);
+  assert.strictEqual(r.hardPass, false);
+  assert.ok(/before breakeven/.test(r.hardReason || ''), r.hardReason);
 });
 
-test('passesFbbsSwapRules: maturity below 12mo floor', () => {
-  const r = m.passesFbbsSwapRules({
+test('evaluateSwapAgainstRules: maturity below soft floor is a warning, not a drop', () => {
+  const r = m.evaluateSwapAgainstRules({
     breakevenMonths: 3,
     monthsToMaturity: 8,
     annualIncomePickup: 5_000
   });
-  assert.strictEqual(r.passes, false);
-  assert.ok(r.reasons.some(s => s.includes('floor')), r.reasons);
+  assert.strictEqual(r.hardPass, true);
+  assert.ok(r.warnings.some(w => w.code === 'maturity-under-soft-floor'), r.warnings);
 });
 
-test('passesFbbsSwapRules: pickup required by default', () => {
-  const r = m.passesFbbsSwapRules({
+test('evaluateSwapAgainstRules: no pickup is a warning, not a drop', () => {
+  const r = m.evaluateSwapAgainstRules({
     breakevenMonths: 5,
     monthsToMaturity: 36,
     annualIncomePickup: -100
   });
-  assert.strictEqual(r.passes, false);
-  assert.ok(r.reasons.some(s => s.includes('pickup')), r.reasons);
+  assert.strictEqual(r.hardPass, true);
+  assert.ok(r.warnings.some(w => w.code === 'no-annual-pickup'), r.warnings);
 });
 
-test('passesFbbsSwapRules: relaxed breakeven cap up to 24mo if allowed', () => {
-  const r = m.passesFbbsSwapRules({
-    breakevenMonths: 20,
+test('evaluateSwapAgainstRules: configurable soft thresholds', () => {
+  const r = m.evaluateSwapAgainstRules({
+    breakevenMonths: 18,
     monthsToMaturity: 60,
     annualIncomePickup: 5_000,
-    rules: { breakevenCapMonths: 24, maturityFloorMonths: 12 }
+    rules: { breakevenSoftCapMonths: 24, maturitySoftFloorMonths: 6 }
+  });
+  assert.strictEqual(r.hardPass, true);
+  assert.strictEqual(r.warnings.length, 0, 'expected no warnings at relaxed thresholds');
+});
+
+test('passesFbbsSwapRules (legacy): hard fail propagates', () => {
+  const r = m.passesFbbsSwapRules({
+    breakevenMonths: 10,
+    monthsToMaturity: 4,
+    annualIncomePickup: 5_000
+  });
+  assert.strictEqual(r.passes, false);
+  assert.ok(r.reasons.some(s => /before breakeven/.test(s)));
+});
+
+test('passesFbbsSwapRules (legacy): strict pass needs hard + no warnings', () => {
+  const r = m.passesFbbsSwapRules({
+    breakevenMonths: 5,
+    monthsToMaturity: 24,
+    annualIncomePickup: 5_000
   });
   assert.strictEqual(r.passes, true);
-});
-
-test('passesFbbsSwapRules: cannot exceed maxBreakevenCapMonths even if asked', () => {
-  // Even if the rep cranks breakevenCapMonths to 36, the engine clamps at 24.
-  const r = m.passesFbbsSwapRules({
-    breakevenMonths: 30,
-    monthsToMaturity: 60,
-    annualIncomePickup: 5_000,
-    rules: { breakevenCapMonths: 36 }
-  });
-  assert.strictEqual(r.passes, false);
+  assert.deepStrictEqual(r.reasons, []);
 });
 
 // ---------- Aggregates / summary ----------

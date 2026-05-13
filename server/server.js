@@ -2621,14 +2621,17 @@ function swapEconomics(held, offering, map, pickYield, asOfDate) {
 }
 
 // Find swap candidates by walking the bank's parsed holdings against today's
-// inventory. Apply the FBBS desk rules from server/swap-math.js so we only
-// surface trades a rep would actually call about: breakeven within 12 months,
-// held maturity > 12 months, held cannot mature before the breakeven, and the
-// swap must produce annual income pickup.
+// inventory. The desk has exactly ONE hard rule for auto-suggested swaps:
+// the held bond can't mature before the breakeven (otherwise the loss can't
+// be recouped before the bond is gone). Everything else — breakeven cap,
+// maturity floor, requiring annual pickup — is a soft "thinking point"
+// returned as warning chips on the candidate, not a filter reason.
+// Every swap and portfolio is different; the rep decides per situation.
 //
-// `options.rules` overrides the defaults but is clamped to maxBreakevenCapMonths.
-// `options.includeRejected = true` returns `{ kept, dropped }` so the UI can
-// show "X candidates dropped because…" instead of swallowing them silently.
+// `options.includeRejected = true` returns `{ kept, dropped, rules }` where
+// kept candidates may carry warnings and dropped only contains hard-rule
+// failures. The Build-your-own (manual) flow bypasses this entirely and
+// lets the rep build any swap they want.
 function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   const empty = options.includeRejected ? { kept: [], dropped: [] } : [];
   if (!parsedHoldings || !parsedHoldings.sectors || !inventory || !inventory.rows) return empty;
@@ -2663,7 +2666,7 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       if (!economics) continue;
 
       const monthsToMaturity = swapMath.monthsUntilMaturity(held.maturity, inventory.asOfDate);
-      const ruleCheck = swapMath.passesFbbsSwapRules({
+      const ruleEval = swapMath.evaluateSwapAgainstRules({
         breakevenMonths: economics.breakevenMonths,
         monthsToMaturity,
         annualIncomePickup: economics.annualIncomePickup,
@@ -2694,11 +2697,15 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
         },
         yieldPickupVsBook: Number(pickup.toFixed(2)),
         economics,
-        rule: { passes: ruleCheck.passes, reasons: ruleCheck.reasons },
+        rule: {
+          hardPass: ruleEval.hardPass,
+          hardReason: ruleEval.hardReason,
+          warnings: ruleEval.warnings
+        },
         priority: parWeight * pickup + netBenefitScore - breakevenPenalty
       };
 
-      if (ruleCheck.passes) kept.push(candidate);
+      if (ruleEval.hardPass) kept.push(candidate);
       else dropped.push(candidate);
     }
   }
@@ -3626,9 +3633,10 @@ function handleSwapSuggested(res, bankId, query) {
     });
   }
   const rules = {
-    breakevenCapMonths: parseInt(query.get('breakevenCap'), 10) || swapMath.DEFAULT_FBBS_RULES.breakevenCapMonths,
-    maturityFloorMonths: parseInt(query.get('maturityFloor'), 10) || swapMath.DEFAULT_FBBS_RULES.maturityFloorMonths,
-    maxBreakevenCapMonths: swapMath.DEFAULT_FBBS_RULES.maxBreakevenCapMonths
+    breakevenSoftCapMonths: parseInt(query.get('breakevenSoftCap'), 10)
+      || swapMath.DEFAULT_FBBS_RULES.breakevenSoftCapMonths,
+    maturitySoftFloorMonths: parseInt(query.get('maturitySoftFloor'), 10)
+      || swapMath.DEFAULT_FBBS_RULES.maturitySoftFloorMonths
   };
   const result = findSwapCandidates(ctx.parsedHoldings, ctx.inventory, {
     includeRejected: true,

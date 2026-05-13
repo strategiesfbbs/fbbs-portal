@@ -312,51 +312,81 @@ function swapEconomicsForLeg({ held, offering, pickYield, asOfDate, horizonYears
 
 // ---------- FBBS rule check ----------
 //
-// A swap candidate is *shown* only if all the FBBS desk rules pass.
-// Defaults mirror what the user spelled out:
-//   - breakeven ≤ 12 months (strict)
-//   - held bond matures *after* breakeven
-//   - held bond maturity > 12 months
-//   - annual income pickup > 0 (must benefit the bank by yield or recouped loss)
+// There is exactly ONE hard rule for the Suggested-swap view:
+//   - The held bond must mature AFTER the breakeven. Selling a bond that
+//     matures before the loss is recouped is structurally broken and we
+//     never auto-suggest it. (A rep + account can still build that swap
+//     manually in the Build-your-own tab if they have a reason; the
+//     manual builder doesn't apply this filter.)
+//
+// Everything else is soft — "thinking points" surfaced as warnings on the
+// candidate card, not as drop reasons. The desk picks each swap on its
+// own merits and every portfolio is different.
+//
+// Soft warnings:
+//   - breakeven > breakevenSoftCapMonths (default 12)
+//   - held maturity < maturitySoftFloorMonths (default 12)
+//   - annual income pickup ≤ 0 (rare for a real swap — usually means
+//     the rep is solving for duration / loss harvesting, not yield)
 
 const DEFAULT_FBBS_RULES = Object.freeze({
-  breakevenCapMonths: 12,
-  maturityFloorMonths: 12,
-  requirePickup: true,
-  maxBreakevenCapMonths: 24
+  breakevenSoftCapMonths: 12,
+  maturitySoftFloorMonths: 12
 });
 
-function passesFbbsSwapRules({
+function evaluateSwapAgainstRules({
   breakevenMonths,
   monthsToMaturity,
   annualIncomePickup,
   rules = DEFAULT_FBBS_RULES
 }) {
-  const reasons = [];
-  const cap = Math.min(
-    num(rules.breakevenCapMonths) || DEFAULT_FBBS_RULES.breakevenCapMonths,
-    num(rules.maxBreakevenCapMonths) || DEFAULT_FBBS_RULES.maxBreakevenCapMonths
-  );
-  const floor = num(rules.maturityFloorMonths) || DEFAULT_FBBS_RULES.maturityFloorMonths;
-  const requirePickup = rules.requirePickup !== false;
   const be = num(breakevenMonths);
   const mtm = num(monthsToMaturity);
   const pickup = num(annualIncomePickup);
+  const softCap = num(rules.breakevenSoftCapMonths) || DEFAULT_FBBS_RULES.breakevenSoftCapMonths;
+  const softFloor = num(rules.maturitySoftFloorMonths) || DEFAULT_FBBS_RULES.maturitySoftFloorMonths;
 
-  if (requirePickup && (pickup == null || pickup <= 0)) {
-    reasons.push('no annual yield pickup');
+  // Hard rule: matures before breakeven → never auto-suggest.
+  let hardPass = true;
+  let hardReason = null;
+  if (be != null && be > 0 && mtm != null && be > mtm) {
+    hardPass = false;
+    hardReason = `held matures in ${mtm.toFixed(1)} mo, before breakeven of ${be.toFixed(1)} mo`;
   }
-  if (mtm == null) {
-    reasons.push('unknown maturity');
-  } else if (mtm <= floor) {
-    reasons.push(`held matures in ${mtm.toFixed(1)} mo (floor ${floor} mo)`);
+
+  // Soft warnings: surfaced as chips on the card, never as filter reasons.
+  const warnings = [];
+  if (be != null && be > softCap) {
+    warnings.push({
+      code: 'breakeven-over-soft-cap',
+      message: `Breakeven ${be.toFixed(1)} mo (above ${softCap} mo desk preference)`
+    });
   }
-  if (be != null) {
-    if (be > cap) reasons.push(`breakeven ${be.toFixed(1)} mo exceeds ${cap} mo cap`);
-    if (mtm != null && be > mtm) reasons.push(`held matures before breakeven (${mtm.toFixed(1)} mo < ${be.toFixed(1)} mo)`);
+  if (mtm != null && mtm < softFloor) {
+    warnings.push({
+      code: 'maturity-under-soft-floor',
+      message: `Held matures in ${mtm.toFixed(1)} mo (inside ${softFloor} mo desk preference)`
+    });
   }
-  // A pickup-only swap with no loss to recover (breakeven == 0) is fine.
-  return { passes: reasons.length === 0, reasons };
+  if (pickup == null || pickup <= 0) {
+    warnings.push({
+      code: 'no-annual-pickup',
+      message: 'No annual yield pickup — likely a duration or loss-harvesting trade'
+    });
+  }
+
+  return { hardPass, hardReason, warnings };
+}
+
+// Back-compat alias for callers still using the older name. Reports a strict
+// pass only if hard and no warnings. New code should call
+// evaluateSwapAgainstRules directly and route warnings to the UI.
+function passesFbbsSwapRules(input) {
+  const r = evaluateSwapAgainstRules(input);
+  const reasons = [];
+  if (r.hardReason) reasons.push(r.hardReason);
+  for (const w of r.warnings) reasons.push(w.message);
+  return { passes: r.hardPass && r.warnings.length === 0, reasons };
 }
 
 // ---------- Portfolio aggregates / diff (Sells vs Buys) ----------
@@ -515,6 +545,7 @@ module.exports = {
   swapEconomicsForLeg,
   holdingHorizonYears,
   // Rule check
+  evaluateSwapAgainstRules,
   passesFbbsSwapRules,
   DEFAULT_FBBS_RULES,
   // Portfolio / summary
