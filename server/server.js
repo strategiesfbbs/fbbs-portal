@@ -114,6 +114,7 @@ const {
 } = require('./cd-history');
 const swapMath = require('./swap-math');
 const swapStore = require('./swap-store');
+const { renderProposalHtml } = require('./swap-render');
 
 // ---------- Config ----------
 
@@ -5108,6 +5109,23 @@ const server = http.createServer(async (req, res) => {
       const id = safeDecodeURIComponent(swapCancelMatch[1]);
       if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
       return handleCancelSwapProposal(req, res, id);
+    }
+
+    const swapRenderMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/render$/);
+    if (swapRenderMatch && req.method === 'GET') {
+      const id = safeDecodeURIComponent(swapRenderMatch[1]);
+      if (!id) return sendText(res, 400, 'Invalid proposal id');
+      const record = swapStore.getProposal(BANK_REPORTS_DIR, id);
+      if (!record) return sendText(res, 404, 'Proposal not found');
+      const summary = getBankSummaryForCoverage(record.proposal.bankId);
+      const html = renderProposalHtml(record, {
+        bankName: summary ? (summary.displayName || summary.name) : ''
+      });
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store'
+      });
+      return res.end(html);
     }
 
     const swapProposalMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)$/);
