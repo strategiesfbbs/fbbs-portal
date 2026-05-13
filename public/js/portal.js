@@ -5528,6 +5528,62 @@
     return `<li>${escapeHtml(String(item || ''))}</li>`;
   }
 
+  function compactMoney(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    const sign = n < 0 ? '-' : '';
+    const abs = Math.abs(n);
+    if (abs >= 1000000) return `${sign}$${(abs / 1000000).toFixed(abs >= 10000000 ? 0 : 1)}MM`;
+    if (abs >= 1000) return `${sign}$${Math.round(abs / 1000)}K`;
+    return `${sign}$${Math.round(abs)}`;
+  }
+
+  function renderSwapCandidateCards(candidates) {
+    if (!Array.isArray(candidates) || !candidates.length) return '';
+    return `
+      <div class="bank-assistant-swap-grid">
+        ${candidates.map((candidate, index) => {
+          const held = candidate.held || {};
+          const offering = candidate.offering || {};
+          const econ = candidate.economics || {};
+          const heldTitle = [held.cusip, held.description].filter(Boolean).join(' · ') || 'Current holding';
+          const realized = econ.realizedGainLoss == null ? held.gainLoss : econ.realizedGainLoss;
+          const breakeven = econ.breakevenMonths == null ? 'N/A' : `${Number(econ.breakevenMonths).toFixed(1)} mo`;
+          const horizon = econ.horizonYears == null ? '' : `${Number(econ.horizonYears).toFixed(2)} yr horizon`;
+          return `
+            <article class="bank-assistant-swap-card">
+              <div class="bank-assistant-swap-head">
+                <span>Swap Candidate ${index + 1}</span>
+                <strong>${escapeHtml(candidate.sector || 'Portfolio')}</strong>
+              </div>
+              <div class="bank-assistant-swap-main">
+                <div>
+                  <span>Sell</span>
+                  <strong>${escapeHtml(heldTitle)}</strong>
+                  <em>${escapeHtml([held.par ? compactMoney(held.par) + ' par' : '', `${Number(held.bookYield || 0).toFixed(2)}% book`, `${Number(held.marketYield || 0).toFixed(2)}% market`].filter(Boolean).join(' · '))}</em>
+                </div>
+                <div>
+                  <span>Buy</span>
+                  <strong>${escapeHtml(offering.label || 'Replacement offering')}</strong>
+                  <em>${escapeHtml(offering.yield == null ? 'Yield pending' : `${Number(offering.yield).toFixed(3)}% replacement yield`)}</em>
+                </div>
+              </div>
+              <dl class="bank-assistant-swap-metrics">
+                <div><dt>Pickup</dt><dd>${escapeHtml(candidate.yieldPickupVsBook == null ? '—' : `+${Number(candidate.yieldPickupVsBook).toFixed(2)}%`)}</dd></div>
+                <div><dt>Breakeven</dt><dd>${escapeHtml(breakeven)}</dd></div>
+                <div><dt>Gain/Loss</dt><dd>${escapeHtml(compactMoney(realized))}</dd></div>
+                <div><dt>Annual Pickup</dt><dd>${escapeHtml(compactMoney(econ.annualIncomePickup))}</dd></div>
+                <div><dt>Net Benefit</dt><dd>${escapeHtml(compactMoney(econ.netBenefitToHorizon))}</dd></div>
+                <div><dt>Horizon</dt><dd>${escapeHtml(horizon || '—')}</dd></div>
+              </dl>
+              <button type="button" class="text-btn bank-assistant-swap-action" data-assistant-swap-strategy="${index}">Create strategy request</button>
+            </article>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
   function renderAssistantResponse(data) {
     const output = document.getElementById('bankAssistantOutput');
     if (!output) return;
@@ -5536,7 +5592,9 @@
       return;
     }
     output.classList.remove('is-loading');
-    const sections = Array.isArray(data.sections) ? data.sections : [];
+    const sections = (Array.isArray(data.sections) ? data.sections : [])
+      .filter(section => String(section && section.title || '').toLowerCase() !== 'swap candidates');
+    const swapCards = renderSwapCandidateCards(data.swapCandidates);
     const pill = data.statusPill;
     const pillHtml = pill && pill.status
       ? `<span class="bank-assistant-status-pill maps-status-pill maps-status-${escapeHtml(pill.slug || 'open')}" title="${escapeHtml(pill.owner ? 'Owner: ' + pill.owner : '')}">${escapeHtml(pill.status)}</span>`
@@ -5556,6 +5614,7 @@
         </div>
         ${noticesHtml}
         ${data.summary ? `<p class="bank-assistant-summary">${escapeHtml(data.summary)}</p>` : ''}
+        ${swapCards}
         ${sections.map(section => `
           <div class="bank-assistant-block">
             <h4>${escapeHtml(section.title || 'Notes')}</h4>
@@ -5574,7 +5633,7 @@
           </div>
         ` : ''}
         <div class="bank-assistant-actions">
-          <button type="button" class="small-btn" id="bankAssistantStrategyBtn">Open as strategy request</button>
+          <button type="button" class="small-btn" id="bankAssistantStrategyBtn">${Array.isArray(data.swapCandidates) && data.swapCandidates.length ? 'Open top swap as strategy' : 'Open as strategy request'}</button>
           ${data.holdings && data.holdings.latestStoredPath
             ? `<a class="small-btn" href="/api/banks/bond-accounting/files/${encodeURIComponent(data.holdings.latestStoredPath)}" target="_blank" rel="noopener">View holdings${data.holdings.totalPositions ? ` (${escapeHtml(data.holdings.totalPositions)} positions · ${escapeHtml(data.holdings.reportDate || 'on file')})` : ` (${escapeHtml(data.holdings.reportDate || 'on file')})`}</a>`
             : ''}
@@ -5584,6 +5643,9 @@
     `;
     document.getElementById('bankAssistantCopyBtn')?.addEventListener('click', copyBankAssistantNote);
     document.getElementById('bankAssistantStrategyBtn')?.addEventListener('click', useAssistantInStrategyRequest);
+    output.querySelectorAll('[data-assistant-swap-strategy]').forEach(btn => {
+      btn.addEventListener('click', () => useAssistantInStrategyRequest(Number(btn.dataset.assistantSwapStrategy || 0)));
+    });
     output.querySelectorAll('[data-assistant-explorer]').forEach(link => {
       link.addEventListener('click', evt => {
         evt.preventDefault();
@@ -5746,24 +5808,64 @@
     }
   }
 
-  function useAssistantInStrategyRequest() {
+  function swapStrategySummary(data, candidate) {
+    const held = candidate && candidate.held ? candidate.held : {};
+    const offering = candidate && candidate.offering ? candidate.offering : {};
+    const bankName = data && data.title ? data.title : 'Bank';
+    const sell = held.cusip || held.description || 'current holding';
+    const buy = offering.cusip || offering.label || 'replacement offering';
+    return `${bankName}: swap ${sell} into ${buy}`.slice(0, 220);
+  }
+
+  function swapStrategyComments(data, candidate) {
+    const held = candidate && candidate.held ? candidate.held : {};
+    const offering = candidate && candidate.offering ? candidate.offering : {};
+    const econ = candidate && candidate.economics ? candidate.economics : {};
+    const lines = [
+      'Swap candidate from Sales Assistant',
+      '',
+      `Sell: ${[held.cusip, held.description].filter(Boolean).join(' · ') || 'Current holding'}`,
+      `Sell par: ${held.par ? compactMoney(held.par) : 'n/a'}`,
+      `Book yield / market yield: ${held.bookYield == null ? 'n/a' : Number(held.bookYield).toFixed(3) + '%'} / ${held.marketYield == null ? 'n/a' : Number(held.marketYield).toFixed(3) + '%'}`,
+      `Realized gain/loss: ${compactMoney(econ.realizedGainLoss == null ? held.gainLoss : econ.realizedGainLoss)}`,
+      '',
+      `Buy: ${offering.label || 'Replacement offering'}`,
+      `Replacement yield: ${offering.yield == null ? 'n/a' : Number(offering.yield).toFixed(3) + '%'}`,
+      `Yield pickup vs book: ${candidate && candidate.yieldPickupVsBook != null ? '+' + Number(candidate.yieldPickupVsBook).toFixed(2) + '%' : 'n/a'}`,
+      `Annual income pickup: ${compactMoney(econ.annualIncomePickup)}`,
+      `Net benefit to horizon: ${compactMoney(econ.netBenefitToHorizon)}`,
+      `Breakeven: ${econ.breakevenMonths == null ? 'n/a' : Number(econ.breakevenMonths).toFixed(1) + ' months'}`,
+      `Horizon: ${econ.horizonYears == null ? 'n/a' : Number(econ.horizonYears).toFixed(2) + ' years'}`,
+      '',
+      data && data.callNote ? data.callNote : ''
+    ];
+    return lines.filter((line, index, arr) => line || arr[index - 1]).join('\n').trim();
+  }
+
+  function useAssistantInStrategyRequest(candidateIndex = null) {
     const data = bankAssistantLastResponse;
     if (!data || !data.callNote) return showToast('Run the assistant first', true);
+    const candidates = Array.isArray(data.swapCandidates) ? data.swapCandidates : [];
+    const candidate = candidates.length
+      ? candidates[Math.max(0, Math.min(Number(candidateIndex) || 0, candidates.length - 1))]
+      : null;
     openBankStrategyRequestPanel();
     const summary = document.getElementById('bankStrategySummary');
     const comments = document.getElementById('bankStrategyComments');
     const type = document.getElementById('bankStrategyType');
-    if (summary && !summary.value.trim()) summary.value = data.summary || 'Assistant follow-up';
+    if (summary && !summary.value.trim()) summary.value = candidate ? swapStrategySummary(data, candidate) : (data.summary || 'Assistant follow-up');
     if (comments) {
       const existing = comments.value.trim();
-      comments.value = [existing, data.callNote].filter(Boolean).join(existing ? '\n\n' : '');
+      const next = candidate ? swapStrategyComments(data, candidate) : data.callNote;
+      comments.value = [existing, next].filter(Boolean).join(existing ? '\n\n' : '');
     }
     if (type) {
       const topProduct = String(data.topProduct || '').toLowerCase();
-      if (/muni|bcis/.test(topProduct)) type.value = 'Muni BCIS';
+      if (candidate) type.value = 'Bond Swap';
+      else if (/muni|bcis/.test(topProduct)) type.value = 'Muni BCIS';
       else if (/swap/.test(topProduct)) type.value = 'Bond Swap';
     }
-    showToast('Added assistant context to strategy request');
+    showToast(candidate ? 'Added swap candidate to strategy request' : 'Added assistant context to strategy request');
   }
 
   function toggleBankStrategyRequestPanel() {

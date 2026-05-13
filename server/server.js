@@ -2548,6 +2548,68 @@ function pickBestOffering(rows, yieldKey, heldCusip) {
   return best ? { row: best, yld: bestYld } : null;
 }
 
+function offeringPrice(row, type) {
+  if (!row) return null;
+  if (type === 'agency' || type === 'corporate') return numericValue(row.askPrice);
+  if (type === 'muni' || type === 'treasury') return numericValue(row.price);
+  return null;
+}
+
+function holdingHorizonYears(held, offering, asOfDate) {
+  const explicit = numericValue(held.averageLife);
+  if (explicit !== null && explicit > 0) return explicit;
+  const duration = numericValue(held.effectiveDuration);
+  if (duration !== null && duration > 0) return duration;
+  const maturityYears = yearsUntil(held.maturity, asOfDate);
+  if (maturityYears !== null && maturityYears > 0) return Math.min(maturityYears, 10);
+  const offeringYears = yearsUntil(offering && offering.maturity, asOfDate);
+  if (offeringYears !== null && offeringYears > 0) return Math.min(offeringYears, 10);
+  return 1;
+}
+
+function roundMoney(value) {
+  const n = numericValue(value);
+  return n === null ? null : Math.round(n);
+}
+
+function swapEconomics(held, offering, map, pickYield, asOfDate) {
+  const bookYield = numericValue(held.bookYieldYtm ?? held.bookYieldYtw);
+  if (bookYield === null || pickYield === null) return null;
+  const par = numericValue(held.par) || 0;
+  const bookValue = numericValue(held.bookValue) || (par && numericValue(held.bookPrice) !== null ? par * numericValue(held.bookPrice) / 100 : par);
+  const marketValue = numericValue(held.marketValue) || (par && numericValue(held.marketPrice) !== null ? par * numericValue(held.marketPrice) / 100 : par);
+  if (!bookValue || !marketValue) return null;
+
+  const gainLoss = numericValue(held.gainLoss);
+  const realizedGainLoss = gainLoss !== null ? gainLoss : marketValue - bookValue;
+  const horizonYears = Math.max(0.1, holdingHorizonYears(held, offering, asOfDate));
+  const annualIncomeGivenUp = bookValue * bookYield / 100;
+  const annualBuyIncome = marketValue * pickYield / 100;
+  const annualIncomePickup = annualBuyIncome - annualIncomeGivenUp;
+  const interestGivenUp = -annualIncomeGivenUp * horizonYears;
+  const buyIncome = annualBuyIncome * horizonYears;
+  const netInterestToHorizon = annualIncomePickup * horizonYears;
+  const netBenefitToHorizon = netInterestToHorizon + realizedGainLoss;
+  const lossToEarnBack = realizedGainLoss < 0 ? -realizedGainLoss : 0;
+  const breakevenMonths = lossToEarnBack > 0 && annualIncomePickup > 0
+    ? lossToEarnBack / (annualIncomePickup / 12)
+    : null;
+  const price = offeringPrice(offering, map.type);
+  const replacementPar = price && price > 0 ? marketValue / price * 100 : null;
+
+  return {
+    horizonYears: Number(horizonYears.toFixed(2)),
+    realizedGainLoss: roundMoney(realizedGainLoss),
+    interestGivenUp: roundMoney(interestGivenUp),
+    buyIncome: roundMoney(buyIncome),
+    annualIncomePickup: roundMoney(annualIncomePickup),
+    netInterestToHorizon: roundMoney(netInterestToHorizon),
+    netBenefitToHorizon: roundMoney(netBenefitToHorizon),
+    breakevenMonths: breakevenMonths === null ? null : Number(breakevenMonths.toFixed(1)),
+    replacementPar: replacementPar === null ? null : Math.round(replacementPar)
+  };
+}
+
 function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   if (!parsedHoldings || !parsedHoldings.sectors || !inventory || !inventory.rows) return [];
   const minHeldYieldGap = options.minHeldYieldGap ?? 1.0;   // book vs market on the held bond
@@ -2575,14 +2637,20 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       if (!pick) continue;
       const pickup = pick.yld - bookYld;
       if (pickup < minPickupVsBook) continue;
+      const economics = swapEconomics(held, pick.row, map, pick.yld, inventory.asOfDate);
+      if (!economics || economics.annualIncomePickup <= 0) continue;
 
       const parWeight = (held.par || 0) / 1000; // par in $K
+      const breakevenPenalty = economics.breakevenMonths === null ? 0 : Math.min(economics.breakevenMonths, 120) * 2;
+      const netBenefitScore = Math.max(economics.netBenefitToHorizon || 0, 0) / 1000;
       candidates.push({
         sector,
         held: {
           cusip: held.cusip || '',
           description: held.description || '',
           par: held.par || 0,
+          bookValue: held.bookValue || 0,
+          marketValue: held.marketValue || 0,
           bookYield: Number(bookYld.toFixed(3)),
           marketYield: Number(mktYld.toFixed(3)),
           gainLoss: held.gainLoss || 0
@@ -2593,7 +2661,8 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
           yield: Number(pick.yld.toFixed(3))
         },
         yieldPickupVsBook: Number(pickup.toFixed(2)),
-        priority: parWeight * pickup
+        economics,
+        priority: parWeight * pickup + netBenefitScore - breakevenPenalty
       });
     }
   }
@@ -2606,7 +2675,10 @@ function formatSwapCandidateLine(c) {
   const parK = c.held.par ? `$${Math.round(c.held.par / 1000)}K` : '';
   const heldLeft = `${c.held.cusip || 'held'} ${heldDescr}`.trim();
   const heldYld = `${c.held.bookYield.toFixed(2)}% book / ${c.held.marketYield.toFixed(2)}% market${parK ? ` · ${parK}` : ''}`;
-  return `${heldLeft} (${heldYld}) → ${c.offering.label} · +${c.yieldPickupVsBook.toFixed(2)}% pickup`;
+  const econ = c.economics || {};
+  const breakeven = econ.breakevenMonths !== null && econ.breakevenMonths !== undefined ? ` · breakeven ${econ.breakevenMonths.toFixed(1)} mo` : '';
+  const net = econ.netBenefitToHorizon ? ` · est. net $${Math.round(econ.netBenefitToHorizon / 1000)}K` : '';
+  return `${heldLeft} (${heldYld}) → ${c.offering.label} · +${c.yieldPickupVsBook.toFixed(2)}% pickup${breakeven}${net}`;
 }
 
 function filterExamplesAgainstHoldings(examples, holdings) {
