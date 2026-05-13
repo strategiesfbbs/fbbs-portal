@@ -4393,6 +4393,9 @@
               <button type="button" class="small-btn" data-editor-cancel>Cancel</button>
               <button type="button" class="publish-btn" data-editor-send>Send proposal</button>
             ` : ''}
+            ${proposal.status === 'sent' ? `
+              <button type="button" class="publish-btn" data-editor-execute>Mark executed</button>
+            ` : ''}
           </div>
         </header>
         <div class="swap-editor-meta">
@@ -4501,6 +4504,7 @@
     body.querySelector('[data-editor-back]')?.addEventListener('click', exitEditorToHome);
     body.querySelector('[data-editor-cancel]')?.addEventListener('click', () => cancelProposalFromEditor());
     body.querySelector('[data-editor-send]')?.addEventListener('click', () => sendProposalFromEditor());
+    body.querySelector('[data-editor-execute]')?.addEventListener('click', () => executeProposalFromEditor());
     body.querySelectorAll('[data-editor-field]').forEach(input => {
       input.addEventListener('change', () => queueProposalHeaderUpdate(input));
     });
@@ -4632,6 +4636,22 @@
       showToast(`Proposal ${id} sent — added to Strategies queue`);
     } catch (err) {
       showToast('Send failed: ' + (err.message || err), true);
+    }
+  }
+
+  async function executeProposalFromEditor() {
+    const id = swapBuilderState.proposalId;
+    if (!id) return;
+    if (!confirm('Mark this proposal executed? The linked Strategies queue entry will transition to Completed.')) return;
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/execute`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Execute failed');
+      swapBuilderState.record = data;
+      renderProposalEditor(data);
+      showToast(`Proposal ${id} executed — Strategies entry moved to Completed`);
+    } catch (err) {
+      showToast('Execute failed: ' + (err.message || err), true);
     }
   }
 

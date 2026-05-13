@@ -3531,10 +3531,37 @@ async function handleUpdateSwapProposal(req, res, id) {
   }
 }
 
+// If a leg has par + coupon + maturity but the rep didn't type an accrued
+// value, compute it from the proposal's settle date using the day-count
+// convention for the leg's sector (Treasuries/Agency = Actual/Actual,
+// everything else = 30/360). This makes the per-leg artifact "complete"
+// without forcing the rep to do the calc by hand.
+function autoFillAccrued(body, proposal) {
+  if (!body || !proposal) return body;
+  if (body.accrued != null && body.accrued !== '') return body;
+  const par = Number(body.par);
+  const coupon = Number(body.coupon);
+  const maturity = body.maturity;
+  if (!Number.isFinite(par) || par <= 0) return body;
+  if (!Number.isFinite(coupon) || coupon <= 0) return body;
+  if (!maturity) return body;
+  const dayCount = swapMath.defaultDayCountForSector(body.sector);
+  const accrued = swapMath.accruedInterest({
+    par, coupon, maturity,
+    settleDate: proposal.settleDate || new Date().toISOString().slice(0, 10),
+    dayCount,
+    frequency: 2
+  });
+  if (accrued == null) return body;
+  return { ...body, accrued: Math.round(accrued * 100) / 100 };
+}
+
 async function handleAddSwapLeg(req, res, id) {
   try {
     const body = await readJsonBody(req);
-    const after = swapStore.addLeg(BANK_REPORTS_DIR, id, body);
+    const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
+    if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
+    const after = swapStore.addLeg(BANK_REPORTS_DIR, id, autoFillAccrued(body, current.proposal));
     appendAuditLog({ event: 'swap-leg-add', proposalId: id, side: body.side, cusip: body.cusip || null });
     return sendJSON(res, 200, withComputedSummary(after));
   } catch (err) {
@@ -3546,7 +3573,20 @@ async function handleAddSwapLeg(req, res, id) {
 async function handleUpdateSwapLeg(req, res, id, legId) {
   try {
     const body = await readJsonBody(req);
-    const after = swapStore.updateLeg(BANK_REPORTS_DIR, id, legId, body);
+    const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
+    if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
+    // Merge the incoming patch with the leg's current values, then auto-fill
+    // accrued if the rep didn't supply it. This way a Par or Coupon edit
+    // re-derives accrued without losing rep-typed overrides.
+    const existingLeg = (current.legs || []).find(l => Number(l.id) === Number(legId)) || {};
+    const merged = { ...existingLeg, ...body };
+    const patch = body.accrued != null ? body : autoFillAccrued(merged, current.proposal);
+    // Only pass through the fields the rep actually changed plus any
+    // auto-computed accrued so we don't overwrite unrelated leg fields.
+    const finalPatch = body.accrued != null
+      ? body
+      : { ...body, ...(patch.accrued != null && patch.accrued !== existingLeg.accrued ? { accrued: patch.accrued } : {}) };
+    const after = swapStore.updateLeg(BANK_REPORTS_DIR, id, legId, finalPatch);
     appendAuditLog({ event: 'swap-leg-update', proposalId: id, legId });
     return sendJSON(res, 200, withComputedSummary(after));
   } catch (err) {
@@ -3659,6 +3699,36 @@ async function handleSendSwapProposal(req, res, id) {
   } catch (err) {
     log('error', 'Swap proposal send failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not send proposal' });
+  }
+}
+
+function handleExecuteSwapProposal(req, res, id) {
+  try {
+    const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
+    if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
+    if (current.proposal.status !== 'sent') {
+      return sendJSON(res, 409, { error: `Proposal is ${current.proposal.status}; only sent proposals can be executed` });
+    }
+    const executed = swapStore.markExecuted(BANK_REPORTS_DIR, id);
+    // Move the linked Strategies entry to Completed so the queue stays in
+    // sync with the actual trade workflow.
+    if (current.proposal.strategyId) {
+      try {
+        updateStrategyRequest(BANK_REPORTS_DIR, current.proposal.strategyId, {
+          status: 'Completed'
+        });
+      } catch (err) {
+        log('warn', `Could not transition linked strategy ${current.proposal.strategyId} to Completed: ${err.message}`);
+      }
+    }
+    appendAuditLog({
+      event: 'swap-proposal-execute',
+      proposalId: id,
+      strategyId: current.proposal.strategyId || null
+    });
+    return sendJSON(res, 200, withComputedSummary(executed));
+  } catch (err) {
+    return sendJSON(res, err.statusCode || 500, { error: err.message });
   }
 }
 
@@ -5181,6 +5251,13 @@ const server = http.createServer(async (req, res) => {
       const id = safeDecodeURIComponent(swapCancelMatch[1]);
       if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
       return handleCancelSwapProposal(req, res, id);
+    }
+
+    const swapExecuteMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/execute$/);
+    if (swapExecuteMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(swapExecuteMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return handleExecuteSwapProposal(req, res, id);
     }
 
     const swapRenderMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/render$/);
