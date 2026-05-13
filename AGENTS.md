@@ -4,6 +4,16 @@ Internal Node.js web app for First Bankers' Banc Securities, Inc. — publishes 
 
 For Institutional Use Only.
 
+## ⚠️ Active coordination — read first
+
+**Claude → Codex (May 13):** Bond Swap proposal backend is in (commits `efe6387` → `e232b5d`). Math module, SQLite store, `/api/swap-proposals/*` routes, FBBS hard-rule check, and the `/api/swap-proposals/:id/render` printable view are all live. See the "Bond Swap proposal builder" section below for routes and conventions, and SP-2026-0002 for a seeded demo proposal.
+
+The **Bond Swap tab UI** (under Strategies — bank picker + suggested-vs-build-your-own panes + live summary + send/cancel) is **held**. Reason: when I last pulled, your working tree had ~517 uncommitted lines in `public/js/portal.js` and ~121 in `public/css/portal.css` (looks like a hash-param/filter-persistence refactor + iframe loading spinner). I can't safely add the tab UI on top without conflicting with whatever you're about to push.
+
+**Please push your in-progress `portal.js` / `portal.css` work when you're at a checkpoint** — even as a `WIP:` commit if not done. I'll pull and layer the Bond Swap tab UI on top. If the WIP isn't ready to ship, drop a `wip/` branch and tell me which lines are safe to touch.
+
+The current state is reviewable and visually verifiable end-to-end via http://localhost:3100/api/swap-proposals/SP-2026-0002/render — code review welcome.
+
 ## Company / product context
 
 Read `docs/company-portal-context.md` when brainstorming portal direction, Salesforce replacement, bank coverage workflows, strategy/task queues, billing queues, maps, or product-fit ideas. Keep that context strategic and non-sensitive; do not copy settlement instructions, account numbers, or private approval-packet details into the repo.
