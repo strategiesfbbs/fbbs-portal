@@ -998,7 +998,65 @@
 
   // ============ Navigation ============
 
+  function parseHashTarget(hashValue) {
+    const raw = String(hashValue || '').replace(/^#/, '') || 'home';
+    const [page, query = ''] = raw.split('?');
+    return {
+      page: VALID_PAGES.includes(page) ? page : 'home',
+      query
+    };
+  }
+
+  function hashParamsForPage(pageName) {
+    const parsed = parseHashTarget(window.location.hash || '#home');
+    return parsed.page === pageName ? new URLSearchParams(parsed.query || '') : new URLSearchParams();
+  }
+
+  function replaceHashParams(pageName, values) {
+    const parsed = parseHashTarget(window.location.hash || '#home');
+    if (parsed.page !== pageName) return;
+    const params = new URLSearchParams();
+    Object.entries(values || {}).forEach(([key, value]) => {
+      if (value == null || value === '' || value === false) return;
+      if (value instanceof Set) {
+        if (value.size) params.set(key, Array.from(value).join(','));
+        return;
+      }
+      params.set(key, String(value));
+    });
+    const nextHash = `#${pageName}${params.toString() ? '?' + params.toString() : ''}`;
+    if (window.location.hash !== nextHash) history.replaceState(null, '', nextHash);
+  }
+
+  function hashParamSet(params, key) {
+    const value = params.get(key);
+    return new Set(value ? value.split(',').map(item => item.trim()).filter(Boolean) : []);
+  }
+
+  function setControlValue(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.value = value == null ? '' : String(value);
+  }
+
+  function setControlChecked(id, checked) {
+    const el = document.getElementById(id);
+    if (el) el.checked = Boolean(checked);
+  }
+
+  function setCheckedValues(selector, values) {
+    const set = values instanceof Set ? values : new Set(values || []);
+    document.querySelectorAll(selector).forEach(el => {
+      el.checked = set.has(el.value);
+    });
+  }
+
+  function numberOrNull(value) {
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function goTo(pageName, { updateHash = true } = {}) {
+    pageName = parseHashTarget(pageName).page;
     if (!VALID_PAGES.includes(pageName)) pageName = 'home';
 
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1077,7 +1135,7 @@
   });
 
   window.addEventListener('hashchange', () => {
-    const h = (window.location.hash || '#home').slice(1);
+    const h = parseHashTarget(window.location.hash || '#home').page;
     goTo(h, { updateHash: false });
   });
 
@@ -1102,6 +1160,102 @@
         const isOpen = group.classList.toggle('open');
         toggle.setAttribute('aria-expanded', String(isOpen));
       });
+    });
+    setupTopMenuKeyboard();
+  }
+
+  function setupTopMenuKeyboard() {
+    document.querySelectorAll('.top-link-menu').forEach(menu => {
+      const trigger = menu.querySelector('.top-link-trigger');
+      const links = Array.from(menu.querySelectorAll('.top-link-menu-panel a'));
+      if (!trigger || !links.length || menu.dataset.keyboardBound) return;
+      menu.dataset.keyboardBound = '1';
+      const openMenu = () => {
+        menu.classList.add('keyboard-open');
+        trigger.setAttribute('aria-expanded', 'true');
+      };
+      const closeMenu = () => {
+        menu.classList.remove('keyboard-open');
+        trigger.setAttribute('aria-expanded', 'false');
+      };
+      const focusLink = index => {
+        openMenu();
+        links[(index + links.length) % links.length].focus();
+      };
+      trigger.setAttribute('aria-haspopup', 'true');
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.addEventListener('keydown', event => {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          focusLink(0);
+        } else if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          focusLink(links.length - 1);
+        } else if (event.key === 'Escape') {
+          closeMenu();
+        }
+      });
+      links.forEach((link, index) => {
+        link.addEventListener('keydown', event => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            focusLink(index + 1);
+          } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            focusLink(index - 1);
+          } else if (event.key === 'Home') {
+            event.preventDefault();
+            focusLink(0);
+          } else if (event.key === 'End') {
+            event.preventDefault();
+            focusLink(links.length - 1);
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            closeMenu();
+            trigger.focus();
+          }
+        });
+        link.addEventListener('click', closeMenu);
+      });
+      menu.addEventListener('focusout', () => {
+        setTimeout(() => {
+          if (!menu.contains(document.activeElement)) closeMenu();
+        }, 0);
+      });
+    });
+  }
+
+  function formatTooltipYield(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    return `${n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')}%`;
+  }
+
+  function setupChartTooltips() {
+    let tooltip = document.getElementById('chartTooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.id = 'chartTooltip';
+      tooltip.className = 'chart-tooltip';
+      tooltip.hidden = true;
+      document.body.appendChild(tooltip);
+    }
+    const move = event => {
+      const target = event.target.closest('[data-chart-tooltip]');
+      if (!target) return;
+      tooltip.textContent = target.dataset.chartTooltip || '';
+      tooltip.hidden = false;
+      const pad = 14;
+      const rect = tooltip.getBoundingClientRect();
+      const left = Math.min(window.innerWidth - rect.width - 8, event.clientX + pad);
+      const top = Math.max(8, event.clientY - rect.height - pad);
+      tooltip.style.left = `${left}px`;
+      tooltip.style.top = `${top}px`;
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseover', move);
+    document.addEventListener('mouseout', event => {
+      if (event.target.closest('[data-chart-tooltip]')) tooltip.hidden = true;
     });
   }
 
@@ -1633,7 +1787,20 @@
             ${excelButton}
           </div>`;
       } else {
-        frame.innerHTML = `<iframe src="${src}" title="${meta.label}"${sandboxAttr}></iframe>`;
+        const loadingId = `viewerLoading-${slot}`;
+        frame.innerHTML = `
+          <div class="viewer-loading" id="${loadingId}">
+            <div class="loading-spinner" aria-hidden="true"></div>
+            <span>Loading ${escapeHtml(meta.label)}&hellip;</span>
+          </div>
+          <iframe src="${src}" title="${meta.label}"${sandboxAttr}></iframe>`;
+        const iframe = frame.querySelector('iframe');
+        const loading = document.getElementById(loadingId);
+        if (iframe && loading) {
+          iframe.addEventListener('load', () => {
+            loading.hidden = true;
+          });
+        }
       }
       sub.textContent = `${file} · Published ${formatTime(currentPackage.publishedAt)}`;
       if (slot === 'dashboard') {
@@ -1809,24 +1976,29 @@
     renderEconomicDetail();
   }
 
-  function renderCurveChart(treasuries) {
-    const curve = document.getElementById('econCurveChart');
+  function renderCurveChart(treasuries, targetId = 'econCurveChart') {
+    const curve = document.getElementById(targetId);
     if (!curve) return;
-    if (!treasuries || !treasuries.length) {
+    const rows = (treasuries || [])
+      .map(row => ({ ...row, yield: Number(row && row.yield) }))
+      .filter(row => Number.isFinite(row.yield));
+    if (!rows.length) {
       curve.innerHTML = '<div class="market-empty small">Treasury curve unavailable.</div>';
       return;
     }
-    const yields = treasuries.map(row => row.yield).filter(n => n != null && !isNaN(n));
+    const yields = rows.map(row => row.yield);
     const min = Math.min.apply(null, yields);
     const max = Math.max.apply(null, yields);
     const range = Math.max(max - min, 0.01);
-    curve.innerHTML = treasuries.map(row => {
+    curve.innerHTML = rows.map(row => {
       const height = 18 + ((row.yield - min) / range) * 72;
+      const label = row.label || row.tenor || 'Treasury';
+      const tooltip = `${label} · ${formatTooltipYield(row.yield)}`;
       return `
-        <div class="curve-bar" title="${escapeHtml(row.label)} ${escapeHtml(formatPercentTile(row.yield, 3))}">
+        <div class="curve-bar" data-chart-tooltip="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}">
           <span style="height:${height.toFixed(1)}%"></span>
           <strong>${escapeHtml(formatPercentTile(row.yield, 2))}</strong>
-          <em>${escapeHtml(row.label)}</em>
+          <em>${escapeHtml(label)}</em>
         </div>
       `;
     }).join('');
@@ -1883,7 +2055,11 @@
 
   async function loadDailyIntelligence() {
     const picksEl = document.getElementById('dailyIntelPicks');
+    const curveEl = document.getElementById('dailyIntelCurveChart');
+    const summaryEl = document.getElementById('dailyIntelSummary');
     if (picksEl) picksEl.innerHTML = '<div class="market-empty">Building rule-based picks&hellip;</div>';
+    if (curveEl) curveEl.innerHTML = '<div class="market-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading Treasury curve&hellip;</span></div>';
+    if (summaryEl) summaryEl.innerHTML = marketSkeletonCards(4);
     try {
       const res = await fetch('/api/daily-intelligence', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1904,31 +2080,11 @@
   }
 
   function renderDailyCurveChart(treasuries) {
-    const curve = document.getElementById('dailyIntelCurveChart');
-    if (!curve) return;
-    if (!treasuries || !treasuries.length) {
-      curve.innerHTML = '<div class="market-empty small">Treasury curve unavailable.</div>';
-      return;
-    }
-    const yields = treasuries.map(row => row.yield).filter(n => n != null && !isNaN(n));
-    if (!yields.length) {
-      curve.innerHTML = '<div class="market-empty small">Treasury curve unavailable.</div>';
-      return;
-    }
-    const min = Math.min.apply(null, yields);
-    const max = Math.max.apply(null, yields);
-    const range = Math.max(max - min, 0.01);
-    curve.innerHTML = treasuries.map(row => {
-      const yieldValue = Number(row.yield);
-      const height = 18 + ((yieldValue - min) / range) * 72;
-      return `
-        <div class="curve-bar" title="${escapeHtml(row.label)} ${escapeHtml(formatPercentTile(row.yield, 3))}">
-          <span style="height:${height.toFixed(1)}%"></span>
-          <strong>${escapeHtml(formatPercentTile(row.yield, 2))}</strong>
-          <em>${escapeHtml(row.label || row.tenor || '')}</em>
-        </div>
-      `;
-    }).join('');
+    renderCurveChart(treasuries, 'dailyIntelCurveChart');
+  }
+
+  function marketSkeletonCards(count) {
+    return Array.from({ length: count }, () => '<div class="market-summary-card skeleton-card"></div>').join('');
   }
 
   function dailySummaryCard(label, value, detail, tone = '') {
@@ -1995,7 +2151,9 @@
     }
 
     const market = data.market || {};
-    const treasuries = market.treasuries || [];
+    const treasuries = (market.treasuries && market.treasuries.length)
+      ? market.treasuries
+      : (economicUpdateData && Array.isArray(economicUpdateData.treasuries) ? economicUpdateData.treasuries : []);
     const marketRows = market.marketData || [];
     const marketRates = market.marketRates || [];
     const two = dailyTreasuryRow(treasuries, '2YR');
@@ -2297,11 +2455,14 @@
     const ratioMap = new Map((data.treasuryRatios || []).map(row => [Number(row.term), row]));
     const dots = rows.map((row, index) => {
       const ratio = ratioMap.get(Number(row.term));
-      const title = `MMD AAA ${row.label} ${rvRateValue(row.aaa)}${ratio ? ` | UST ${rvRateValue(ratio.treasuryYield)} | ${ratio.ratioPct}%` : ''}`;
+      const title = `${row.label} · ${formatTooltipYield(row.aaa)}`;
       const ratioText = ratio ? `<text x="${xFor(index).toFixed(1)}" y="${(yFor(Number(row.aaa)) - 10).toFixed(1)}" class="rv-axis-label mmd-ratio-label" text-anchor="middle">${ratio.ratioPct}%</text>` : '';
+      const cx = xFor(index).toFixed(1);
+      const cy = yFor(Number(row.aaa)).toFixed(1);
       return `
-        <circle cx="${xFor(index).toFixed(1)}" cy="${yFor(Number(row.aaa)).toFixed(1)}" r="${ratio ? 4.5 : 3.2}" fill="#18735A"><title>${escapeHtml(title)}</title></circle>
+        <circle cx="${cx}" cy="${cy}" r="${ratio ? 5.5 : 4.4}" fill="#18735A"></circle>
         ${ratioText}
+        <circle class="chart-hit-point" cx="${cx}" cy="${cy}" r="16" data-chart-tooltip="${escapeHtml(title)}" tabindex="0" aria-label="${escapeHtml(title)}"></circle>
       `;
     }).join('');
 
@@ -2385,7 +2546,13 @@
       const dots = rows.map((row, index) => {
         const value = Number(row[series.key]);
         if (!Number.isFinite(value)) return '';
-        return `<circle cx="${xFor(index).toFixed(1)}" cy="${yFor(value).toFixed(1)}" r="3.5" fill="${series.color}"><title>${escapeHtml(series.label)} ${escapeHtml(row.term)} ${escapeHtml(rvRateValue(value))}</title></circle>`;
+        const label = `${row.term} · ${series.label} · ${formatTooltipYield(value)}`;
+        const cx = xFor(index).toFixed(1);
+        const cy = yFor(value).toFixed(1);
+        return `
+          <circle cx="${cx}" cy="${cy}" r="4.5" fill="${series.color}"></circle>
+          <circle class="chart-hit-point" cx="${cx}" cy="${cy}" r="13" data-chart-tooltip="${escapeHtml(label)}" tabindex="0" aria-label="${escapeHtml(label)}"></circle>
+        `;
       }).join('');
       return `
         <polyline points="${points.join(' ')}" fill="none" stroke="${series.color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></polyline>
@@ -3776,7 +3943,7 @@
         if (e.key === 'Enter') {
           e.preventDefault();
           hideBankRecentDropdown();
-          searchBanks(input.value, { openFirst: true });
+          searchBanks(input.value);
         } else if (e.key === 'Escape') {
           hideBankRecentDropdown();
           clearBankSearchResults();
@@ -3785,7 +3952,7 @@
     }
     if (btn) btn.addEventListener('click', () => {
       hideBankRecentDropdown();
-      searchBanks(input ? input.value : '', { openFirst: true });
+      searchBanks(input ? input.value : '');
     });
     if (upload) upload.addEventListener('change', e => {
       const file = e.target.files && e.target.files[0];
@@ -4630,7 +4797,7 @@
     return data;
   }
 
-  async function searchBanks(query, options = {}) {
+  async function searchBanks(query) {
     const results = document.getElementById('bankSearchResults');
     const q = String(query || '').trim();
     if (!results) return;
@@ -4643,7 +4810,6 @@
       const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=10`, { cache: 'no-store' });
       const data = await readBankJson(res);
       renderBankResults(data.results || []);
-      if (options.openFirst && data.results && data.results[0]) loadBank(data.results[0].id, { collapseResults: true });
     } catch (e) {
       results.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
     }
@@ -6979,6 +7145,7 @@
     const sub = document.getElementById('cdRecapSub');
     const kicker = document.getElementById('cdRecapKicker');
     const grid = document.getElementById('cdRecapStatusGrid');
+    setCdRecapLoadingState();
     if (body) {
       body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--text3)">Loading weekly CD recap&hellip;</td></tr>';
     }
@@ -7028,6 +7195,19 @@
       renderCdRecapCharts(null);
       showToast('Could not load weekly CD recap: ' + err.message, true);
     }
+  }
+
+  function setCdRecapLoadingState() {
+    const grid = document.getElementById('cdRecapStatusGrid');
+    const termChart = document.getElementById('cdTermCountChart');
+    const medianChart = document.getElementById('cdMedianRateChart');
+    const medianLegend = document.getElementById('cdMedianRateLegend');
+    const comparison = document.getElementById('cdRateComparisonTable');
+    if (grid) grid.innerHTML = marketSkeletonCards(4);
+    if (termChart) termChart.innerHTML = '<div class="chart-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading issue counts&hellip;</span></div>';
+    if (medianChart) medianChart.innerHTML = '<div class="chart-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading rate comparison&hellip;</span></div>';
+    if (medianLegend) medianLegend.innerHTML = '<span class="skeleton-pill"></span><span class="skeleton-pill"></span>';
+    if (comparison) comparison.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading rate comparison table&hellip;</span></div>';
   }
 
   function renderCdRecapTable(recap) {
@@ -7327,6 +7507,30 @@
   let treasuryFilters = { search: '', minYield: null, maxMaturity: '', benchmark: '' };
   let treasurySort = { col: 'yield', dir: 'desc' };
 
+  function hydrateTreasuryFiltersFromUrl() {
+    const params = hashParamsForPage('treasury-explorer');
+    if (!params.toString()) return;
+    treasuryFilters = {
+      search: params.get('q') || params.get('search') || '',
+      minYield: numberOrNull(params.get('minYield')),
+      maxMaturity: params.get('maxMaturity') || '',
+      benchmark: params.get('benchmark') || ''
+    };
+    setControlValue('tf-search', treasuryFilters.search);
+    setControlValue('tf-minyield', treasuryFilters.minYield);
+    setControlValue('tf-maxmaturity', treasuryFilters.maxMaturity);
+    setControlValue('tf-benchmark', treasuryFilters.benchmark);
+  }
+
+  function syncTreasuryFiltersToUrl() {
+    replaceHashParams('treasury-explorer', {
+      q: treasuryFilters.search,
+      minYield: treasuryFilters.minYield,
+      maxMaturity: treasuryFilters.maxMaturity,
+      benchmark: treasuryFilters.benchmark
+    });
+  }
+
   async function loadTreasuryNotes() {
     const body = document.getElementById('treasuryExplorerBody');
     const sub = document.getElementById('treasuryExplorerSub');
@@ -7359,6 +7563,7 @@
     }
 
     populateTreasuryFilters();
+    hydrateTreasuryFiltersFromUrl();
     renderTreasuryNotes();
   }
 
@@ -7384,6 +7589,7 @@
   function renderTreasuryNotes() {
     const body = document.getElementById('treasuryExplorerBody');
     if (!treasuryData) return;
+    syncTreasuryFiltersToUrl();
 
     const filtered = applyTreasuryFilters(treasuryData.notes || []);
     sortTreasuryInPlace(filtered);
@@ -7537,6 +7743,45 @@
   };
   let offeringsSort = { col: 'rate', dir: 'desc' };
 
+  function hydrateOfferingsFiltersFromUrl() {
+    const params = hashParamsForPage('explorer');
+    if (!params.toString()) return;
+    offeringsFilters = {
+      search: params.get('q') || params.get('search') || '',
+      term: params.get('term') || '',
+      minRate: numberOrNull(params.get('minRate')),
+      minPrice: numberOrNull(params.get('minPrice')),
+      maxCommission: numberOrNull(params.get('maxCommission')),
+      state: params.get('state') || '',
+      cpnFreq: params.get('cpnFreq') || '',
+      noRestrictions: params.get('noRestrictions') === '1' || params.get('noRestrictions') === 'true',
+      pricedOnly: params.get('pricedOnly') === '1' || params.get('pricedOnly') === 'true'
+    };
+    setControlValue('ef-search', offeringsFilters.search);
+    setControlValue('ef-term', offeringsFilters.term);
+    setControlValue('ef-minrate', offeringsFilters.minRate);
+    setControlValue('ef-minprice', offeringsFilters.minPrice);
+    setControlValue('ef-maxcommission', offeringsFilters.maxCommission);
+    setControlValue('ef-state', offeringsFilters.state);
+    setControlValue('ef-cpn', offeringsFilters.cpnFreq);
+    setControlChecked('ef-noRestrictions', offeringsFilters.noRestrictions);
+    setControlChecked('ef-pricedOnly', offeringsFilters.pricedOnly);
+  }
+
+  function syncOfferingsFiltersToUrl() {
+    replaceHashParams('explorer', {
+      q: offeringsFilters.search,
+      term: offeringsFilters.term,
+      minRate: offeringsFilters.minRate,
+      minPrice: offeringsFilters.minPrice,
+      maxCommission: offeringsFilters.maxCommission,
+      state: offeringsFilters.state,
+      cpnFreq: offeringsFilters.cpnFreq,
+      noRestrictions: offeringsFilters.noRestrictions,
+      pricedOnly: offeringsFilters.pricedOnly
+    });
+  }
+
   async function loadOfferings() {
     const body = document.getElementById('explorerBody');
     const sub = document.getElementById('explorerSub');
@@ -7571,6 +7816,7 @@
     }
 
     populateOfferingsFilters();
+    hydrateOfferingsFiltersFromUrl();
     renderOfferings();
   }
 
@@ -7608,6 +7854,7 @@
   function renderOfferings() {
     const body = document.getElementById('explorerBody');
     if (!offeringsData) return;
+    syncOfferingsFiltersToUrl();
 
     const filtered = applyOfferingsFilters(offeringsData.offerings);
     sortOfferingsInPlace(filtered);
@@ -7833,6 +8080,39 @@
   };
   let muniSort = { col: 'maturity', dir: 'asc' };
 
+  function hydrateMuniFiltersFromUrl() {
+    const params = hashParamsForPage('muni-explorer');
+    if (!params.toString()) return;
+    muniFilters = {
+      search: params.get('q') || params.get('search') || '',
+      section: params.get('section') || '',
+      state: params.get('state') || '',
+      minCoupon: numberOrNull(params.get('minCoupon')),
+      minYtw: numberOrNull(params.get('minYtw')),
+      callable: params.get('callable') || '',
+      rated: params.get('rated') || ''
+    };
+    setControlValue('mf-search', muniFilters.search);
+    setControlValue('mf-section', muniFilters.section);
+    setControlValue('mf-state', muniFilters.state);
+    setControlValue('mf-minCoupon', muniFilters.minCoupon);
+    setControlValue('mf-minYtw', muniFilters.minYtw);
+    setControlValue('mf-callable', muniFilters.callable);
+    setControlValue('mf-rated', muniFilters.rated);
+  }
+
+  function syncMuniFiltersToUrl() {
+    replaceHashParams('muni-explorer', {
+      q: muniFilters.search,
+      section: muniFilters.section,
+      state: muniFilters.state,
+      minCoupon: muniFilters.minCoupon,
+      minYtw: muniFilters.minYtw,
+      callable: muniFilters.callable,
+      rated: muniFilters.rated
+    });
+  }
+
   async function loadMuniOfferings() {
     const body = document.getElementById('muniExplorerBody');
     const sub = document.getElementById('muniExplorerSub');
@@ -7866,6 +8146,7 @@
     }
 
     populateMuniFilters();
+    hydrateMuniFiltersFromUrl();
     renderMuniOfferings();
   }
 
@@ -8048,6 +8329,7 @@
   function renderMuniOfferings() {
     const body = document.getElementById('muniExplorerBody');
     if (!muniData) return;
+    syncMuniFiltersToUrl();
 
     const filtered = applyMuniFilters(muniData.offerings);
     sortMuniInPlace(filtered);
@@ -8422,6 +8704,65 @@
   };
   let agencySort = { col: 'maturity', dir: 'asc' };
 
+  function hydrateAgencyFiltersFromUrl() {
+    const params = hashParamsForPage('agencies');
+    if (!params.toString()) return;
+    agencyFilters = {
+      search: params.get('q') || params.get('search') || '',
+      tickers: hashParamSet(params, 'tickers'),
+      structures: hashParamSet(params, 'structures'),
+      callTypes: hashParamSet(params, 'callTypes'),
+      maturityFrom: params.get('maturityFrom') || null,
+      maturityTo: params.get('maturityTo') || null,
+      nextCallFrom: params.get('nextCallFrom') || null,
+      nextCallTo: params.get('nextCallTo') || null,
+      minCoupon: numberOrNull(params.get('minCoupon')),
+      maxCoupon: numberOrNull(params.get('maxCoupon')),
+      minYtm: numberOrNull(params.get('minYtm')),
+      minYtnc: numberOrNull(params.get('minYtnc')),
+      minPrice: numberOrNull(params.get('minPrice')),
+      maxPrice: numberOrNull(params.get('maxPrice')),
+      minQty: numberOrNull(params.get('minQty'))
+    };
+    setControlValue('af-search', agencyFilters.search);
+    [
+      ['af-matFrom', agencyFilters.maturityFrom],
+      ['af-matTo', agencyFilters.maturityTo],
+      ['af-callFrom', agencyFilters.nextCallFrom],
+      ['af-callTo', agencyFilters.nextCallTo],
+      ['af-minCoupon', agencyFilters.minCoupon],
+      ['af-maxCoupon', agencyFilters.maxCoupon],
+      ['af-minYtm', agencyFilters.minYtm],
+      ['af-minYtnc', agencyFilters.minYtnc],
+      ['af-minPrice', agencyFilters.minPrice],
+      ['af-maxPrice', agencyFilters.maxPrice],
+      ['af-minQty', agencyFilters.minQty]
+    ].forEach(([id, value]) => setControlValue(id, value));
+    setCheckedValues('#af-structures input[type="checkbox"]', agencyFilters.structures);
+    setCheckedValues('#af-tickers input[type="checkbox"]', agencyFilters.tickers);
+    setCheckedValues('#af-callTypes input[type="checkbox"]', agencyFilters.callTypes);
+  }
+
+  function syncAgencyFiltersToUrl() {
+    replaceHashParams('agencies', {
+      q: agencyFilters.search,
+      tickers: agencyFilters.tickers,
+      structures: agencyFilters.structures,
+      callTypes: agencyFilters.callTypes,
+      maturityFrom: agencyFilters.maturityFrom,
+      maturityTo: agencyFilters.maturityTo,
+      nextCallFrom: agencyFilters.nextCallFrom,
+      nextCallTo: agencyFilters.nextCallTo,
+      minCoupon: agencyFilters.minCoupon,
+      maxCoupon: agencyFilters.maxCoupon,
+      minYtm: agencyFilters.minYtm,
+      minYtnc: agencyFilters.minYtnc,
+      minPrice: agencyFilters.minPrice,
+      maxPrice: agencyFilters.maxPrice,
+      minQty: agencyFilters.minQty
+    });
+  }
+
   async function loadAgencies() {
     const body = document.getElementById('agenciesBody');
     const sub = document.getElementById('agenciesSub');
@@ -8458,6 +8799,7 @@
       return;
     }
     populateAgencyFilters();
+    hydrateAgencyFiltersFromUrl();
     renderAgencies();
   }
 
@@ -8671,6 +9013,7 @@
   function renderAgencies() {
     const body = document.getElementById('agenciesBody');
     if (!agencyData) return;
+    syncAgencyFiltersToUrl();
     const filtered = applyAgencyFilters(agencyData.offerings);
     sortAgenciesInPlace(filtered);
     document.getElementById('agenciesStat').textContent = filtered.length;
@@ -8883,6 +9226,65 @@
   };
   let corpSort = { col: 'maturity', dir: 'asc' };
 
+  function hydrateCorpFiltersFromUrl() {
+    const params = hashParamsForPage('corporates');
+    if (!params.toString()) return;
+    corpFilters = {
+      search: params.get('q') || params.get('search') || '',
+      sectors: hashParamSet(params, 'sectors'),
+      paymentRanks: hashParamSet(params, 'paymentRanks'),
+      creditTier: params.get('creditTier') || '',
+      callable: params.get('callable') || '',
+      maturityFrom: params.get('maturityFrom') || null,
+      maturityTo: params.get('maturityTo') || null,
+      nextCallFrom: params.get('nextCallFrom') || null,
+      nextCallTo: params.get('nextCallTo') || null,
+      minCoupon: numberOrNull(params.get('minCoupon')),
+      maxCoupon: numberOrNull(params.get('maxCoupon')),
+      minYtm: numberOrNull(params.get('minYtm')),
+      minPrice: numberOrNull(params.get('minPrice')),
+      maxPrice: numberOrNull(params.get('maxPrice')),
+      minQty: numberOrNull(params.get('minQty'))
+    };
+    setControlValue('cf-search', corpFilters.search);
+    setControlValue('cf-tier', corpFilters.creditTier);
+    setControlValue('cf-callable', corpFilters.callable);
+    [
+      ['cf-matFrom', corpFilters.maturityFrom],
+      ['cf-matTo', corpFilters.maturityTo],
+      ['cf-callFrom', corpFilters.nextCallFrom],
+      ['cf-callTo', corpFilters.nextCallTo],
+      ['cf-minCoupon', corpFilters.minCoupon],
+      ['cf-maxCoupon', corpFilters.maxCoupon],
+      ['cf-minYtm', corpFilters.minYtm],
+      ['cf-minPrice', corpFilters.minPrice],
+      ['cf-maxPrice', corpFilters.maxPrice],
+      ['cf-minQty', corpFilters.minQty]
+    ].forEach(([id, value]) => setControlValue(id, value));
+    setCheckedValues('#cf-sectors input[type="checkbox"]', corpFilters.sectors);
+    setCheckedValues('#cf-ranks input[type="checkbox"]', corpFilters.paymentRanks);
+  }
+
+  function syncCorpFiltersToUrl() {
+    replaceHashParams('corporates', {
+      q: corpFilters.search,
+      sectors: corpFilters.sectors,
+      paymentRanks: corpFilters.paymentRanks,
+      creditTier: corpFilters.creditTier,
+      callable: corpFilters.callable,
+      maturityFrom: corpFilters.maturityFrom,
+      maturityTo: corpFilters.maturityTo,
+      nextCallFrom: corpFilters.nextCallFrom,
+      nextCallTo: corpFilters.nextCallTo,
+      minCoupon: corpFilters.minCoupon,
+      maxCoupon: corpFilters.maxCoupon,
+      minYtm: corpFilters.minYtm,
+      minPrice: corpFilters.minPrice,
+      maxPrice: corpFilters.maxPrice,
+      minQty: corpFilters.minQty
+    });
+  }
+
   async function loadCorporates() {
     const body = document.getElementById('corporatesBody');
     const sub = document.getElementById('corporatesSub');
@@ -8915,6 +9317,7 @@
       return;
     }
     populateCorpFilters();
+    hydrateCorpFiltersFromUrl();
     renderCorporates();
   }
 
@@ -9010,6 +9413,7 @@
   function renderCorporates() {
     const body = document.getElementById('corporatesBody');
     if (!corpData) return;
+    syncCorpFiltersToUrl();
     const filtered = applyCorpFilters(corpData.offerings);
     sortCorpInPlace(filtered);
     document.getElementById('corporatesStat').textContent = filtered.length;
@@ -10081,6 +10485,7 @@
     setupEconomicMarketTool();
     setupNavSearch();
     setupMarketNav();
+    setupChartTooltips();
     setupCdRecap();
     setupTreasuryFilters();
     setupOfferingsFilters();
@@ -10096,8 +10501,7 @@
     setupSidebar();
 
     // Respect a hash on initial load (e.g. bookmarked /#archive)
-    const h = (window.location.hash || '#home').slice(1);
-    const target = VALID_PAGES.includes(h) ? h : 'home';
+    const target = parseHashTarget(window.location.hash || '#home').page;
     goTo(target, { updateHash: false });
   }
 
@@ -10636,6 +11040,7 @@
     }
     mapsState.loading = true;
     if (subtitle) subtitle.textContent = 'Loading bank tear sheet data…';
+    mapsSetLoadingState(true);
     try {
       const res = await fetch('/api/banks/map', { cache: 'no-store' });
       if (!res.ok) {
@@ -10666,10 +11071,32 @@
     } catch (err) {
       if (subtitle) subtitle.textContent = err.message || 'Failed to load bank data';
       const body = document.getElementById('mapsBankBody');
-      if (body) body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--text3)">${escapeHtml(err.message || 'Failed to load')}</td></tr>`;
+      if (body) body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">${escapeHtml(err.message || 'Failed to load')}</td></tr>`;
     } finally {
       mapsState.loading = false;
+      mapsSetLoadingState(false);
     }
+  }
+
+  function mapsSetLoadingState(isLoading) {
+    const plot = document.getElementById('mapsPlot');
+    const body = document.getElementById('mapsBankBody');
+    const count = document.getElementById('mapsRowCount');
+    if (plot) {
+      let overlay = plot.querySelector('.maps-loading-overlay');
+      if (isLoading && !overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'maps-loading-overlay';
+        overlay.innerHTML = '<div class="loading-spinner" aria-hidden="true"></div><span>Loading bank map&hellip;</span>';
+        plot.appendChild(overlay);
+      } else if (!isLoading && overlay) {
+        overlay.remove();
+      }
+    }
+    if (body && isLoading) {
+      body.innerHTML = '<tr><td colspan="8"><div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading banks&hellip;</span></div></td></tr>';
+    }
+    if (count && isLoading) count.textContent = 'Loading…';
   }
 
   function renderMapsSubtitle() {
