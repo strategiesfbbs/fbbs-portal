@@ -4310,6 +4310,7 @@
           ].filter(Boolean).join(' · '))}</em></div>
           <div><span>Buy</span><strong>${escapeHtml(c.offering.label || 'Replacement offering')}</strong><em>${escapeHtml(`${Number(c.offering.yield).toFixed(3)}% YTW · CUSIP ${c.offering.cusip || '—'}`)}</em></div>
         </div>
+        ${c.offering.fitSummary ? `<div class="swap-fit-note">${escapeHtml(c.offering.fitSummary)}</div>` : ''}
         <dl class="swap-card-metrics">
           <div><dt>Pickup</dt><dd>+${Number(c.yieldPickupVsBook).toFixed(2)}%</dd></div>
           <div><dt>Breakeven</dt><dd>${econ.breakevenMonths == null ? '—' : Number(econ.breakevenMonths).toFixed(1) + ' mo'}</dd></div>
@@ -4405,11 +4406,14 @@
           cusip: candidate.offering.cusip,
           description: candidate.offering.label,
           sector: candidate.sector,
-          par: sellRow.par || candidate.held.par,
-          marketPrice: 100,
+          coupon: candidate.offering.coupon,
+          maturity: candidate.offering.maturity,
+          callDate: candidate.offering.callDate,
+          par: candidate.economics && candidate.economics.replacementPar || sellRow.par || candidate.held.par,
+          marketPrice: candidate.offering.price || 100,
           marketYieldYtw: candidate.offering.yield,
           sourceKind: 'daily-package',
-          sourceRef: '_agencies.json',
+          sourceRef: candidate.offering.sourceRef || 'daily-package',
           sourceDate: new Date().toISOString().slice(0, 10)
         })
       });

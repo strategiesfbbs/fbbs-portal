@@ -10122,6 +10122,17 @@ body {
 }
 .swap-card-legs > div em { display: block; font-style: normal; color: #4a5b53; font-size: 11px; margin-top: 2px; }
 
+.swap-fit-note {
+  background: #eef6f2;
+  border-left: 3px solid var(--green);
+  border-radius: 6px;
+  color: #365146;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  padding: 7px 9px;
+}
+
 .swap-card-metrics {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

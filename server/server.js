@@ -2539,24 +2539,199 @@ function loadHoldingsForBank(bank) {
 // the next call is imminent, which would falsely flag every callable as a
 // blockbuster swap. Steady-state yield is what matters for the comparison.
 const SWAP_SECTOR_MAP = {
-  Agency: { rowsKey: 'agencies', type: 'agency', yieldKey: 'ytm' },
-  Treasury: { rowsKey: 'treasuries', type: 'treasury', yieldKey: 'yield' },
-  'Exempt Muni': { rowsKey: 'munis', type: 'muni', yieldKey: 'ytw' },
-  'Taxable Muni': { rowsKey: 'munis', type: 'muni', yieldKey: 'ytw' },
-  CDs: { rowsKey: 'cds', type: 'cd', yieldKey: 'rate' },
-  Corporate: { rowsKey: 'corporates', type: 'corporate', yieldKey: 'ytm' }
+  Agency: { rowsKey: 'agencies', type: 'agency', yieldKey: 'ytm', sourceRef: '_agencies.json' },
+  Treasury: { rowsKey: 'treasuries', type: 'treasury', yieldKey: 'yield', sourceRef: '_treasury_notes.json' },
+  'Exempt Muni': { rowsKey: 'munis', type: 'muni', yieldKey: 'ytw', sourceRef: '_muni_offerings.json' },
+  'Taxable Muni': { rowsKey: 'munis', type: 'muni', yieldKey: 'ytw', sourceRef: '_muni_offerings.json' },
+  CDs: { rowsKey: 'cds', type: 'cd', yieldKey: 'rate', sourceRef: '_offerings.json' },
+  Corporate: { rowsKey: 'corporates', type: 'corporate', yieldKey: 'ytm', sourceRef: '_corporates.json' }
 };
 
-function pickBestOffering(rows, yieldKey, heldCusip) {
+function maturityYear(value) {
+  if (!value) return null;
+  const m = String(value).match(/^(\d{4})-/);
+  if (!m) return null;
+  const year = Number(m[1]);
+  return Number.isFinite(year) ? year : null;
+}
+
+function percentile(values, pct) {
+  const nums = (values || []).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!nums.length) return null;
+  const idx = Math.max(0, Math.min(nums.length - 1, Math.round((nums.length - 1) * pct)));
+  return nums[idx];
+}
+
+function median(values) {
+  const nums = (values || []).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!nums.length) return null;
+  const mid = Math.floor(nums.length / 2);
+  return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+}
+
+function addYearBucket(map, year, amount) {
+  if (!year || !Number.isFinite(amount) || amount <= 0) return;
+  map.set(year, (map.get(year) || 0) + amount);
+}
+
+function ladderGaps(yearBuckets, minYear, maxYear) {
+  if (!(yearBuckets instanceof Map) || !yearBuckets.size || !minYear || !maxYear || maxYear < minYear) return [];
+  const existing = Array.from(yearBuckets.values()).filter(v => v > 0);
+  const typical = median(existing);
+  if (!typical || typical <= 0) return [];
+  const threshold = typical * 0.6;
+  const gaps = [];
+  for (let year = minYear; year <= maxYear; year += 1) {
+    const par = yearBuckets.get(year) || 0;
+    if (par < threshold) gaps.push({ year, par, targetPar: Math.round(typical) });
+  }
+  return gaps;
+}
+
+function buildInvestmentFitProfile(parsedHoldings, asOfDate) {
+  const anchorYear = maturityYear(asOfDate) || new Date().getUTCFullYear();
+  const profile = {
+    asOfDate,
+    cusips: new Set(),
+    yearBuckets: new Map(),
+    gapYears: [],
+    minYear: null,
+    maxYear: null,
+    preferredYears: [],
+    sectors: {}
+  };
+  const allYears = [];
+  for (const [sector, rows] of Object.entries(parsedHoldings && parsedHoldings.sectors || {})) {
+    const sectorProfile = profile.sectors[sector] || {
+      par: 0,
+      count: 0,
+      yearBuckets: new Map(),
+      gapYears: [],
+      callableCount: 0,
+      minYear: null,
+      maxYear: null
+    };
+    for (const row of rows || []) {
+      if (row.cusip) profile.cusips.add(String(row.cusip).toUpperCase());
+      const par = numericValue(row.par) || numericValue(row.marketValue) || 0;
+      const year = maturityYear(row.maturity);
+      sectorProfile.par += par;
+      sectorProfile.count += 1;
+      if (row.callDate || row.nextCall) sectorProfile.callableCount += 1;
+      if (year && year >= anchorYear) {
+        allYears.push(year);
+        addYearBucket(profile.yearBuckets, year, par);
+        addYearBucket(sectorProfile.yearBuckets, year, par);
+        sectorProfile.minYear = sectorProfile.minYear == null ? year : Math.min(sectorProfile.minYear, year);
+        sectorProfile.maxYear = sectorProfile.maxYear == null ? year : Math.max(sectorProfile.maxYear, year);
+      }
+    }
+    sectorProfile.callableShare = sectorProfile.count ? sectorProfile.callableCount / sectorProfile.count : 0;
+    profile.sectors[sector] = sectorProfile;
+  }
+  profile.minYear = percentile(allYears, 0.1);
+  profile.maxYear = percentile(allYears, 0.9);
+  if (profile.minYear && profile.maxYear && profile.minYear === profile.maxYear) {
+    profile.minYear -= 1;
+    profile.maxYear += 1;
+  }
+  profile.gapYears = ladderGaps(profile.yearBuckets, profile.minYear, profile.maxYear);
+  profile.preferredYears = profile.gapYears.map(g => g.year);
+  for (const sectorProfile of Object.values(profile.sectors)) {
+    const minYear = Math.max(sectorProfile.minYear || profile.minYear || 0, profile.minYear || 0) || sectorProfile.minYear;
+    const maxYear = Math.min(sectorProfile.maxYear || profile.maxYear || 0, profile.maxYear || 9999) || sectorProfile.maxYear;
+    sectorProfile.gapYears = ladderGaps(sectorProfile.yearBuckets, minYear, maxYear);
+  }
+  return profile;
+}
+
+function nearestYearDistance(year, years) {
+  if (!year || !Array.isArray(years) || !years.length) return null;
+  return Math.min(...years.map(target => Math.abs(target - year)));
+}
+
+function scoreOfferingFit(row, map, held, sector, fitProfile, yieldValue) {
+  const year = maturityYear(row && row.maturity);
+  const heldYear = maturityYear(held && held.maturity);
+  const sectorProfile = fitProfile && fitProfile.sectors ? fitProfile.sectors[sector] : null;
+  const sectorGapYears = sectorProfile ? (sectorProfile.gapYears || []).map(g => g.year) : [];
+  const portfolioGapYears = fitProfile ? (fitProfile.gapYears || []).map(g => g.year) : [];
+  const reasons = [];
+  let score = 0;
+
+  if (year && sectorGapYears.includes(year)) {
+    score += 70;
+    reasons.push(`fills ${year} ${sector} ladder gap`);
+  } else if (year && portfolioGapYears.includes(year)) {
+    score += 45;
+    reasons.push(`fills ${year} portfolio cash-flow gap`);
+  }
+
+  const gapDistance = nearestYearDistance(year, sectorGapYears.length ? sectorGapYears : portfolioGapYears);
+  if (gapDistance != null && gapDistance > 0 && gapDistance <= 2) {
+    score += 24 - gapDistance * 8;
+    reasons.push(`near a ladder gap`);
+  }
+
+  if (year && heldYear) {
+    const distance = Math.abs(year - heldYear);
+    if (distance === 0) {
+      score += 30;
+      reasons.push(`keeps the ${heldYear} cash-flow slot`);
+    } else if (distance <= 2) {
+      score += 18 - distance * 4;
+      reasons.push(`stays near the sold bond maturity`);
+    } else if (distance >= 6) {
+      score -= Math.min(30, (distance - 5) * 5);
+    }
+  }
+
+  if (year && fitProfile && fitProfile.minYear && fitProfile.maxYear) {
+    if (year >= fitProfile.minYear && year <= fitProfile.maxYear) {
+      score += 12;
+      reasons.push('inside the bank portfolio ladder');
+    } else {
+      score -= 25;
+    }
+  }
+
+  if (map && map.type === 'agency') {
+    const structure = String(row && row.structure || '').toLowerCase();
+    const isCallable = structure.includes('call');
+    const callableShare = sectorProfile ? sectorProfile.callableShare || 0 : 0;
+    if (callableShare >= 0.45 && isCallable) {
+      score += 18;
+      reasons.push('matches callable agency appetite');
+    } else if (callableShare <= 0.25 && isCallable) {
+      score -= 28;
+    } else if (callableShare <= 0.25 && !isCallable) {
+      score += 10;
+      reasons.push('matches bullet agency profile');
+    }
+  }
+
+  if (yieldValue != null) score += yieldValue * 6;
+  return {
+    score,
+    year,
+    summary: reasons.slice(0, 2).join('; ') || 'matches current holdings profile'
+  };
+}
+
+function pickBestOffering(rows, yieldKey, heldCusip, fitContext = {}) {
   let best = null;
-  let bestYld = -Infinity;
+  let bestScore = -Infinity;
   for (const row of rows) {
     if (heldCusip && row.cusip && String(row.cusip).toUpperCase() === heldCusip) continue;
+    if (row.cusip && fitContext.fitProfile && fitContext.fitProfile.cusips && fitContext.fitProfile.cusips.has(String(row.cusip).toUpperCase())) continue;
     const n = numericValue(row[yieldKey]);
     if (n == null || n > 15) continue; // sanity cap — anything above 15% is bad data
-    if (n > bestYld) { best = row; bestYld = n; }
+    if (fitContext.minYield != null && n < fitContext.minYield) continue;
+    const fit = scoreOfferingFit(row, fitContext.map, fitContext.held, fitContext.sector, fitContext.fitProfile, n);
+    const score = fit.score;
+    if (score > bestScore) { best = { row, yld: n, fit, score }; bestScore = score; }
   }
-  return best ? { row: best, yld: bestYld } : null;
+  return best;
 }
 
 function offeringPrice(row, type) {
@@ -2642,6 +2817,7 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   const limit = Math.max(1, parseInt(options.limit, 10) || 5);
   const kept = [];
   const dropped = [];
+  const fitProfile = buildInvestmentFitProfile(parsedHoldings, inventory.asOfDate);
 
   for (const [sector, holdings] of Object.entries(parsedHoldings.sectors)) {
     const map = SWAP_SECTOR_MAP[sector];
@@ -2651,6 +2827,9 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
     const candidateRows = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
       ? inventory.rows.stateMunis
       : rows;
+    const sourceRef = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
+      ? '_muni_offerings.json#stateMunis'
+      : map.sourceRef;
 
     for (const held of holdings) {
       const bookYld = held.bookYieldYtm ?? held.bookYieldYtw;
@@ -2659,7 +2838,13 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       const heldGap = mktYld - bookYld;
       if (heldGap < minHeldYieldGap) continue;
 
-      const pick = pickBestOffering(candidateRows, map.yieldKey, held.cusip ? String(held.cusip).toUpperCase() : null);
+      const pick = pickBestOffering(candidateRows, map.yieldKey, held.cusip ? String(held.cusip).toUpperCase() : null, {
+        fitProfile,
+        held,
+        sector,
+        map,
+        minYield: bookYld + minPickupVsBook
+      });
       if (!pick) continue;
       const pickup = pick.yld - bookYld;
       if (pickup < minPickupVsBook) continue;
@@ -2694,7 +2879,16 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
         offering: {
           label: offeringLabel(pick.row, map.type),
           cusip: pick.row.cusip || '',
-          yield: Number(pick.yld.toFixed(3))
+          yield: Number(pick.yld.toFixed(3)),
+          price: offeringPrice(pick.row, map.type),
+          coupon: pick.row.coupon ?? null,
+          maturity: pick.row.maturity || '',
+          callDate: pick.row.nextCallDate || pick.row.callDate || '',
+          sector: map.type,
+          sourceRef,
+          fitYear: pick.fit && pick.fit.year || null,
+          fitSummary: pick.fit && pick.fit.summary || '',
+          structure: pick.row.structure || ''
         },
         yieldPickupVsBook: Number(pickup.toFixed(2)),
         economics,
@@ -2703,7 +2897,7 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
           hardReason: ruleEval.hardReason,
           warnings: ruleEval.warnings
         },
-        priority: parWeight * pickup + netBenefitScore - breakevenPenalty
+        priority: parWeight * pickup + netBenefitScore - breakevenPenalty + ((pick.fit && pick.fit.score) || 0)
       };
 
       if (ruleEval.hardPass) kept.push(candidate);
