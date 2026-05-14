@@ -344,8 +344,16 @@ function renderProposalHtml(record, opts = {}) {
     summary = s.summary || null;
     source = 'snapshot';
   } else {
-    sells = (record.legs || []).filter(l => l.side === 'sell');
-    buys = (record.legs || []).filter(l => l.side === 'buy');
+    // Skip unfilled rows in the printable artifact — a row with no CUSIP
+    // and no par is an unfinished stub from the editor, not a real leg.
+    const realLeg = l => {
+      if (!l) return false;
+      const cusip = String(l.cusip || '').trim();
+      const par = Number(l.par);
+      return cusip || (Number.isFinite(par) && par > 0);
+    };
+    sells = (record.legs || []).filter(l => l.side === 'sell' && realLeg(l));
+    buys = (record.legs || []).filter(l => l.side === 'buy' && realLeg(l));
     summary = swapMath.swapSummary({
       sells, buys,
       horizonYears: proposal.horizonYears || 3,

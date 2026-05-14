@@ -157,4 +157,35 @@ test('cancelProposal transitions status', () => {
   assert.ok(after.proposal.cancelledAt);
 });
 
+test('isLegUnfilled distinguishes empty stubs from real legs', () => {
+  assert.strictEqual(store.isLegUnfilled({ cusip: '', par: null }), true);
+  assert.strictEqual(store.isLegUnfilled({ cusip: '', par: 0 }), true);
+  assert.strictEqual(store.isLegUnfilled({ cusip: '   ', par: '' }), true);
+  assert.strictEqual(store.isLegUnfilled({ cusip: 'ABC123', par: null }), false, 'cusip alone counts as filled');
+  assert.strictEqual(store.isLegUnfilled({ cusip: '', par: 100000 }), false, 'par alone counts as filled');
+  assert.strictEqual(store.isLegUnfilled({ cusip: 'ABC', par: 1_000_000 }), false);
+});
+
+test('pruneUnfilledLegs removes only empty stubs', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swap-prune-'));
+  const created = store.createProposal(dir, { bankId: 'B', isSubchapterS: false });
+  const id = created.proposal.id;
+  // Three states the user explicitly called out:
+  store.addLeg(dir, id, { side: 'sell', cusip: 'FULLY-FILLED', par: 1_000_000, bookYieldYtm: 3 });
+  store.addLeg(dir, id, { side: 'buy', cusip: 'PARTIAL-DATA', par: 500_000 });   // partial: no yield, has CUSIP+par
+  store.addLeg(dir, id, { side: 'buy' });                                          // pure stub
+  store.addLeg(dir, id, { side: 'buy', cusip: '', par: null });                    // pure stub
+  const beforeCount = store.getProposal(dir, id).legs.length;
+  assert.strictEqual(beforeCount, 4);
+  const removed = store.pruneUnfilledLegs(dir, id);
+  assert.strictEqual(removed, 2, 'should drop both pure stubs, keep the partial');
+  const after = store.getProposal(dir, id).legs;
+  assert.strictEqual(after.length, 2);
+  assert.deepStrictEqual(
+    after.map(l => l.cusip).sort(),
+    ['FULLY-FILLED', 'PARTIAL-DATA']
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 console.log(`swap-store tests: ${passed} passed.`);

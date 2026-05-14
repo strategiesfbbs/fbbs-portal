@@ -10349,6 +10349,19 @@ body {
 .swap-leg-table input[readonly] { background: #f4f8f6; color: #4a5b53; }
 .swap-leg-table tr td:first-child input { min-width: 92px; }
 .swap-leg-empty { text-align: center; color: #4a5b53; font-style: italic; padding: 12px; }
+.swap-leg-unfilled {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
 .swap-leg-actions { width: 28px; text-align: center; }
 .swap-leg-del {
   background: transparent;
