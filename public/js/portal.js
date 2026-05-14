@@ -4646,14 +4646,46 @@
     }
     const d = summary.dollars || {};
     const diff = summary.portfolioDiff || {};
-    const moneyChip = (label, value) => {
-      const formatted = value == null ? '—' : (value < 0 ? `(${Math.abs(value).toLocaleString('en-US')})` : value.toLocaleString('en-US'));
-      return `<div><dt>${escapeHtml(label)}</dt><dd>${formatted}</dd></div>`;
+    // Which metrics legitimately require the OTHER side of the swap. Used to
+    // swap "—" for a contextual hint ("Add a buy leg") so the rep knows the
+    // empty cell isn't a bug. Decisions:
+    //  - Total income, Net interest, Realized G/L: computable from sells
+    //    alone (interest given up, loss harvested). Show actual numbers.
+    //  - Settle adjust, Breakeven, Δ TE Bk Yld, Δ TE Mkt Yld: need both
+    //    sides — replacement proceeds, replacement income, before/after
+    //    yields. Show a hint when the missing side is empty.
+    const hasSells = summary.sells && summary.sells.par > 0;
+    const hasBuys = summary.buys && summary.buys.par > 0;
+    const blockedHint = (needsSells, needsBuys) => {
+      if (needsBuys && !hasBuys) return 'Add a buy leg';
+      if (needsSells && !hasSells) return 'Add a sell leg';
+      return null;
     };
-    const pctChip = (label, value) => {
-      const formatted = value == null ? '—' : value.toFixed(3) + '%';
-      return `<div><dt>${escapeHtml(label)}</dt><dd>${formatted}</dd></div>`;
+    const moneyChip = (label, value, opts = {}) => {
+      const hint = blockedHint(opts.needsSells, opts.needsBuys);
+      let body;
+      if (value != null) {
+        body = value < 0 ? `(${Math.abs(value).toLocaleString('en-US')})` : value.toLocaleString('en-US');
+      } else if (hint) {
+        body = `<span class="swap-summary-hint">${escapeHtml(hint)}</span>`;
+      } else {
+        body = '—';
+      }
+      return `<div><dt>${escapeHtml(label)}</dt><dd>${body}</dd></div>`;
     };
+    const pctChip = (label, value, opts = {}) => {
+      const hint = blockedHint(opts.needsSells, opts.needsBuys);
+      let body;
+      if (value != null) body = value.toFixed(3) + '%';
+      else if (hint) body = `<span class="swap-summary-hint">${escapeHtml(hint)}</span>`;
+      else body = '—';
+      return `<div><dt>${escapeHtml(label)}</dt><dd>${body}</dd></div>`;
+    };
+    const breakevenBody = summary.breakevenMonths != null
+      ? summary.breakevenMonths.toFixed(1) + ' mo'
+      : (hasSells && !hasBuys
+        ? `<span class="swap-summary-hint">Add a buy leg</span>`
+        : '—');
     return `
       <aside class="swap-editor-summary">
         <h4>Live summary</h4>
@@ -4661,11 +4693,11 @@
           ${moneyChip('Total income $', d.totalIncome)}
           ${moneyChip('Net interest $', d.netInterest)}
           ${moneyChip('Realized G/L $', d.realizedGainLoss)}
-          ${moneyChip('Settle adjust $', summary.settleAdjust)}
-          <div><dt>Breakeven</dt><dd>${summary.breakevenMonths == null ? '—' : summary.breakevenMonths.toFixed(1) + ' mo'}</dd></div>
+          ${moneyChip('Settle adjust $', summary.settleAdjust, { needsBuys: true })}
+          <div><dt>Breakeven</dt><dd>${breakevenBody}</dd></div>
           <div><dt>Horizon</dt><dd>${summary.horizonYears == null ? '—' : summary.horizonYears.toFixed(2) + ' yr'}</dd></div>
-          ${pctChip('Δ TE Bk Yld', diff.teBookYield)}
-          ${pctChip('Δ TE Mkt Yld', diff.teMarketYield)}
+          ${pctChip('Δ TE Bk Yld', diff.teBookYield, { needsBuys: true })}
+          ${pctChip('Δ TE Mkt Yld', diff.teMarketYield, { needsBuys: true })}
         </dl>
       </aside>`;
   }

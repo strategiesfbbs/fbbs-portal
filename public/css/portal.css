@@ -10349,6 +10349,14 @@ body {
 .swap-leg-table input[readonly] { background: #f4f8f6; color: #4a5b53; }
 .swap-leg-table tr td:first-child input { min-width: 92px; }
 .swap-leg-empty { text-align: center; color: #4a5b53; font-style: italic; padding: 12px; }
+.swap-summary-hint {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fcd34d;
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0;
+}
 .swap-leg-unfilled {
   display: inline-block;
   margin-left: 8px;
