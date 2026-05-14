@@ -352,8 +352,9 @@ function renderProposalHtml(record, opts = {}) {
       const par = Number(l.par);
       return cusip || (Number.isFinite(par) && par > 0);
     };
-    sells = (record.legs || []).filter(l => l.side === 'sell' && realLeg(l));
-    buys = (record.legs || []).filter(l => l.side === 'buy' && realLeg(l));
+    const enrich = l => swapMath.enrichLegWithComputedFields(l, proposal.settleDate);
+    sells = (record.legs || []).filter(l => l.side === 'sell' && realLeg(l)).map(enrich);
+    buys = (record.legs || []).filter(l => l.side === 'buy' && realLeg(l)).map(enrich);
     summary = swapMath.swapSummary({
       sells, buys,
       horizonYears: proposal.horizonYears || 3,

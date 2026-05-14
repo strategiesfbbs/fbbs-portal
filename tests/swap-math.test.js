@@ -149,6 +149,63 @@ test('defaultTaxRate routes C vs S', () => {
   assert.strictEqual(m.defaultTaxRate({ isSubchapterS: true }), 29.6);
 });
 
+// ---------- Yield / duration from price (CC #2) ----------
+//
+// Standard semi-annual bond identities.
+
+test('yieldFromPriceAndMaturity: par bond returns coupon', () => {
+  const y = m.yieldFromPriceAndMaturity({
+    price: 100, coupon: 5,
+    settleDate: '2026-01-01', maturity: '2031-01-01'
+  });
+  // 5% coupon at par = 5% YTM
+  near(y, 5, 0.05, 'par YTM');
+});
+
+test('yieldFromPriceAndMaturity: discount bond yields above coupon', () => {
+  const y = m.yieldFromPriceAndMaturity({
+    price: 95, coupon: 5,
+    settleDate: '2026-01-01', maturity: '2031-01-01'
+  });
+  // 5 yr 5% coupon at 95 ≈ 6.16% YTM (Bloomberg-canonical fixture)
+  near(y, 6.16, 0.15, 'discount YTM');
+});
+
+test('yieldFromPriceAndMaturity: deep-discount muni mirrors observed market', () => {
+  // Tell City IN WTR REV from SP-2026-0011: 2% coupon, price 76.32, mat 2039-01-01
+  // Settle 2026-05-14. Resulting YTM should be in the low-4s range.
+  const y = m.yieldFromPriceAndMaturity({
+    price: 76.31549835, coupon: 2,
+    settleDate: '2026-05-14', maturity: '2039-01-01'
+  });
+  assert.ok(y > 3.8 && y < 4.6, `expected YTM in 3.8-4.6% range, got ${y}`);
+});
+
+test('yieldFromPriceAndMaturity: returns null on bad inputs', () => {
+  assert.strictEqual(m.yieldFromPriceAndMaturity({ price: 0, coupon: 5, settleDate: '2026-01-01', maturity: '2031-01-01' }), null);
+  assert.strictEqual(m.yieldFromPriceAndMaturity({ price: 100, coupon: 5, settleDate: '2026-01-01', maturity: '2025-01-01' }), null);
+  assert.strictEqual(m.yieldFromPriceAndMaturity({ price: 100, coupon: null, settleDate: '2026-01-01', maturity: '2031-01-01' }), null);
+});
+
+test('modifiedDurationFromYield: par 5yr 5% bond ≈ 4.4 yrs', () => {
+  const d = m.modifiedDurationFromYield({
+    yieldPct: 5, coupon: 5,
+    settleDate: '2026-01-01', maturity: '2031-01-01'
+  });
+  // Canonical: 5yr 5% par bond Macaulay ≈ 4.5 yrs, Modified ≈ 4.39
+  near(d, 4.39, 0.1, 'mod duration');
+});
+
+test('modifiedDurationFromYield: longer bonds have higher duration', () => {
+  const shortDur = m.modifiedDurationFromYield({
+    yieldPct: 5, coupon: 5, settleDate: '2026-01-01', maturity: '2028-01-01'
+  });
+  const longDur = m.modifiedDurationFromYield({
+    yieldPct: 5, coupon: 5, settleDate: '2026-01-01', maturity: '2036-01-01'
+  });
+  assert.ok(longDur > shortDur, `longer bond should have higher duration: ${longDur} vs ${shortDur}`);
+});
+
 // ---------- Per-leg ----------
 
 test('legBookValue / legMarketValue derive from par × price', () => {

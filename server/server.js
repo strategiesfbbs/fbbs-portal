@@ -3631,10 +3631,14 @@ function buildProposalSnapshot(proposalRecord) {
 function withComputedSummary(record) {
   if (!record || !record.proposal) return record;
   const { proposal, legs } = record;
-  const sells = (legs || []).filter(l => l.side === 'sell');
-  const buys = (legs || []).filter(l => l.side === 'buy');
+  // Enrich each leg with derived yield + duration when the source workbook
+  // shipped those blank (40% of muni holdings observed in production).
+  const enrichedLegs = (legs || []).map(leg => swapMath.enrichLegWithComputedFields(leg, proposal.settleDate));
+  const sells = enrichedLegs.filter(l => l.side === 'sell');
+  const buys = enrichedLegs.filter(l => l.side === 'buy');
   return {
     ...record,
+    legs: enrichedLegs,
     computedSummary: swapMath.swapSummary({
       sells, buys,
       horizonYears: proposal.horizonYears || 3,

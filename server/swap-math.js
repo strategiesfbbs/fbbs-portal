@@ -179,6 +179,173 @@ function defaultTaxRate({ isSubchapterS }) {
   return isSubchapterS ? TAX_RATE_SUB_S : TAX_RATE_C_CORP;
 }
 
+// ---------- Yield / duration from price ----------
+//
+// Many parsed portfolio workbooks omit yield-to-maturity and modified
+// duration columns (40% of sampled holdings, 100% for duration as of
+// May 2026). Those values are computable from price + coupon + maturity
+// when the workbook ships them blank. The math:
+//   PV = sum over k=1..N of [(C/f) / (1+y/f)^k] + 100 / (1+y/f)^N
+// is solved for y by bisection (robust; converges in ~25 iters within
+// 1e-6 yield bps).
+//
+// Approximation cap: we don't model irregular coupons, partial periods,
+// or call schedules — fine for an internal portfolio yield, not for
+// pricing OAS-sensitive callables. Skip the call_date entirely; if the
+// rep needs YTC they can type it.
+
+function _bondPV(yieldFrac, couponPerPeriod, periodsRemaining, periodFraction) {
+  // periodFraction is the residual fraction of a period until first coupon
+  // (0..1). For a fresh-issue bond on a coupon date it's 1.0 (full period).
+  // Cash flows: at t = periodFraction, then periodFraction+1, etc.
+  let pv = 0;
+  for (let k = 0; k < periodsRemaining; k++) {
+    const t = periodFraction + k;
+    pv += couponPerPeriod / Math.pow(1 + yieldFrac, t);
+  }
+  // Final par redemption coincides with the last coupon.
+  pv += 100 / Math.pow(1 + yieldFrac, periodFraction + (periodsRemaining - 1));
+  return pv;
+}
+
+function yieldFromPriceAndMaturity({ price, coupon, maturity, settleDate, frequency = 2 }) {
+  const p = num(price);
+  const c = num(coupon);
+  const settle = toDate(settleDate);
+  const mat = toDate(maturity);
+  if (p == null || c == null || !settle || !mat) return null;
+  if (p <= 0 || c < 0) return null;
+  if (mat <= settle) return null;
+  const freq = frequency || 2;
+  const couponPerPeriod = c / freq;
+
+  // Count remaining coupons (semi-annual = every 6 months).
+  // Start from maturity, walk back; count the dates strictly after settle.
+  let periodsRemaining = 0;
+  let lastCouponBeforeSettle = new Date(mat.getTime());
+  // Move back until we cross settle
+  const monthsPerCoupon = 12 / freq;
+  while (lastCouponBeforeSettle > settle) {
+    periodsRemaining++;
+    lastCouponBeforeSettle = new Date(lastCouponBeforeSettle.getTime());
+    lastCouponBeforeSettle.setUTCMonth(lastCouponBeforeSettle.getUTCMonth() - monthsPerCoupon);
+  }
+  if (periodsRemaining < 1) return null;
+  // periodFraction = days from settle to next coupon / days in full period
+  const nextCoupon = new Date(lastCouponBeforeSettle.getTime());
+  nextCoupon.setUTCMonth(nextCoupon.getUTCMonth() + monthsPerCoupon);
+  const fullPeriodDays = (nextCoupon.getTime() - lastCouponBeforeSettle.getTime()) / (1000 * 60 * 60 * 24);
+  const remainingDays = (nextCoupon.getTime() - settle.getTime()) / (1000 * 60 * 60 * 24);
+  const periodFraction = fullPeriodDays > 0 ? Math.max(0, Math.min(1, remainingDays / fullPeriodDays)) : 1;
+
+  // Bisect over yield in [-5%, 30%] annual → [-2.5%, 15%] per period at f=2.
+  let lo = -0.05 / freq;
+  let hi = 0.30 / freq;
+  let yLo = _bondPV(lo, couponPerPeriod, periodsRemaining, periodFraction) - p;
+  let yHi = _bondPV(hi, couponPerPeriod, periodsRemaining, periodFraction) - p;
+  if (yLo * yHi > 0) return null; // root outside bracket; bad data
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    const yMid = _bondPV(mid, couponPerPeriod, periodsRemaining, periodFraction) - p;
+    if (Math.abs(yMid) < 1e-7) return mid * freq * 100;
+    if (yLo * yMid < 0) { hi = mid; yHi = yMid; } else { lo = mid; yLo = yMid; }
+  }
+  return ((lo + hi) / 2) * freq * 100;
+}
+
+// Modified duration from a known yield: weighted-average time to cash flows
+// discounted at that yield, divided by (1 + y/f). Returns years.
+function modifiedDurationFromYield({ yieldPct, coupon, maturity, settleDate, frequency = 2 }) {
+  const y = num(yieldPct);
+  const c = num(coupon);
+  const settle = toDate(settleDate);
+  const mat = toDate(maturity);
+  if (y == null || c == null || !settle || !mat) return null;
+  if (mat <= settle) return null;
+  const freq = frequency || 2;
+  const yieldFrac = (y / 100) / freq;
+  const couponPerPeriod = c / freq;
+
+  let periodsRemaining = 0;
+  let cursor = new Date(mat.getTime());
+  const monthsPerCoupon = 12 / freq;
+  while (cursor > settle) {
+    periodsRemaining++;
+    cursor.setUTCMonth(cursor.getUTCMonth() - monthsPerCoupon);
+  }
+  if (periodsRemaining < 1) return null;
+  const nextCoupon = new Date(cursor.getTime());
+  nextCoupon.setUTCMonth(nextCoupon.getUTCMonth() + monthsPerCoupon);
+  const fullPeriodDays = (nextCoupon.getTime() - cursor.getTime()) / (1000 * 60 * 60 * 24);
+  const remainingDays = (nextCoupon.getTime() - settle.getTime()) / (1000 * 60 * 60 * 24);
+  const periodFraction = fullPeriodDays > 0 ? Math.max(0, Math.min(1, remainingDays / fullPeriodDays)) : 1;
+
+  let weightedPv = 0, totalPv = 0;
+  for (let k = 0; k < periodsRemaining; k++) {
+    const t = periodFraction + k;
+    const pv = couponPerPeriod / Math.pow(1 + yieldFrac, t);
+    weightedPv += t * pv;
+    totalPv += pv;
+  }
+  const tFinal = periodFraction + (periodsRemaining - 1);
+  const parPv = 100 / Math.pow(1 + yieldFrac, tFinal);
+  weightedPv += tFinal * parPv;
+  totalPv += parPv;
+  if (totalPv === 0) return null;
+  const macaulayPeriods = weightedPv / totalPv;
+  const macaulayYears = macaulayPeriods / freq;
+  return macaulayYears / (1 + yieldFrac);
+}
+
+// Enrich a leg with computed yield + duration when the source workbook
+// shipped them blank. Returns a new object — never mutates input.
+//   - bookYieldYtm: derived from bookPrice + coupon + maturity
+//   - marketYieldYtw: derived from marketPrice + coupon + maturity (using YTW
+//     here is an approximation — true YTW requires a call schedule. For
+//     bullets it's identical to YTM.)
+//   - modifiedDuration: derived from the (book/market) yield we just landed
+//
+// `derived` flags on the returned leg tell the renderer which fields were
+// computed vs stored, so the UI can mark them differently if it wants.
+function enrichLegWithComputedFields(leg, settleDate) {
+  if (!leg) return leg;
+  const out = { ...leg, derived: {} };
+  const haveBookYield = leg.bookYieldYtm != null || leg.bookYieldYtw != null;
+  const haveMarketYield = leg.marketYieldYtw != null || leg.marketYieldYtm != null;
+  if (!haveBookYield && leg.bookPrice != null && leg.coupon != null && leg.maturity) {
+    const y = yieldFromPriceAndMaturity({
+      price: leg.bookPrice, coupon: leg.coupon,
+      maturity: leg.maturity, settleDate
+    });
+    if (y != null && Number.isFinite(y)) {
+      out.bookYieldYtm = Number(y.toFixed(4));
+      out.derived.bookYieldYtm = true;
+    }
+  }
+  if (!haveMarketYield && leg.marketPrice != null && leg.coupon != null && leg.maturity) {
+    const y = yieldFromPriceAndMaturity({
+      price: leg.marketPrice, coupon: leg.coupon,
+      maturity: leg.maturity, settleDate
+    });
+    if (y != null && Number.isFinite(y)) {
+      out.marketYieldYtw = Number(y.toFixed(4));
+      out.derived.marketYieldYtw = true;
+    }
+  }
+  if (out.modifiedDuration == null && (out.marketYieldYtw != null || out.marketYieldYtm != null) && leg.coupon != null && leg.maturity) {
+    const yld = out.marketYieldYtw != null ? out.marketYieldYtw : out.marketYieldYtm;
+    const d = modifiedDurationFromYield({
+      yieldPct: yld, coupon: leg.coupon,
+      maturity: leg.maturity, settleDate
+    });
+    if (d != null && Number.isFinite(d)) {
+      out.modifiedDuration = Number(d.toFixed(3));
+      out.derived.modifiedDuration = true;
+    }
+  }
+  return out;
+}
+
 function teYield(yieldPct, taxRatePct) {
   const y = num(yieldPct);
   const t = num(taxRatePct);
@@ -531,6 +698,9 @@ module.exports = {
   inferLastCouponDate,
   // Yield
   teYield,
+  yieldFromPriceAndMaturity,
+  modifiedDurationFromYield,
+  enrichLegWithComputedFields,
   defaultTaxRate,
   TAX_RATE_C_CORP,
   TAX_RATE_SUB_S,
