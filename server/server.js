@@ -3650,13 +3650,17 @@ async function handleSendSwapProposal(req, res, id) {
     if (current.proposal.status !== 'draft') {
       return sendJSON(res, 409, { error: `Proposal is already ${current.proposal.status}` });
     }
-    const sellsCount = current.legs.filter(l => l.side === 'sell').length;
-    const buysCount = current.legs.filter(l => l.side === 'buy').length;
+    // Drop any rows the rep added via "Add sell/buy" but never filled in —
+    // an unfilled stub on the printable artifact looks broken to the bank.
+    const pruned = swapStore.pruneUnfilledLegs(BANK_REPORTS_DIR, id);
+    const refreshed = pruned > 0 ? swapStore.getProposal(BANK_REPORTS_DIR, id) : current;
+    const sellsCount = refreshed.legs.filter(l => l.side === 'sell').length;
+    const buysCount = refreshed.legs.filter(l => l.side === 'buy').length;
     if (!sellsCount || !buysCount) {
-      return sendJSON(res, 400, { error: 'Add at least one sell leg and one buy leg before sending.' });
+      return sendJSON(res, 400, { error: 'Add at least one sell leg and one buy leg with a CUSIP and par before sending.' });
     }
 
-    const snapshot = buildProposalSnapshot(current);
+    const snapshot = buildProposalSnapshot(refreshed);
     let frozen = swapStore.freezeProposal(BANK_REPORTS_DIR, id, snapshot);
 
     // Promote into the Strategies Queue as type 'Bond Swap' so the rest
@@ -3689,9 +3693,10 @@ async function handleSendSwapProposal(req, res, id) {
     appendAuditLog({
       event: 'swap-proposal-send',
       proposalId: id,
-      bankId: current.proposal.bankId,
+      bankId: refreshed.proposal.bankId,
       sells: sellsCount,
       buys: buysCount,
+      prunedLegs: pruned,
       totalIncome: snapshot.summary.dollars.totalIncome,
       strategyId: strategy && strategy.id || frozen.proposal.strategyId || null
     });

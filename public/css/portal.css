@@ -6708,16 +6708,25 @@ body {
   text-align: left;
 }
 
-.reports-left-rail button:hover,
+.reports-left-rail button:hover:not(.is-disabled),
 .reports-left-rail button.active {
   background: #eef6f2;
   border-left-color: var(--green);
   color: var(--green);
 }
 
-.reports-left-rail button:disabled {
+.reports-left-rail button:disabled,
+.reports-left-rail button.is-disabled {
+  background: #f7faf8;
+  border-left-color: transparent;
+  color: var(--text3);
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.62;
+}
+
+.reports-left-rail button.is-disabled:hover {
+  background: #f7faf8;
+  color: var(--text3);
 }
 
 .reports-main {
@@ -6864,6 +6873,16 @@ body {
   color: var(--text);
   font-weight: 900;
   text-decoration: none;
+}
+
+.reports-name-cell {
+  cursor: pointer;
+}
+
+.reports-name-cell:hover a,
+.reports-name-cell:focus-within a {
+  color: var(--green);
+  text-decoration: underline;
 }
 
 .reports-desc {
@@ -7074,6 +7093,12 @@ body {
   font-size: 12px;
   font-style: normal;
   font-weight: 800;
+}
+
+.reports-type-picker button:disabled,
+.reports-type-picker button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .reports-type-picker footer {
@@ -7504,6 +7529,22 @@ body {
   font: inherit;
   min-height: 38px;
   padding: 8px 10px;
+}
+
+.reports-inline-validation {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 8px 10px;
+  text-transform: uppercase;
+}
+
+.reports-inline-validation[hidden] {
+  display: none;
 }
 
 .reports-peer-results,
@@ -10219,11 +10260,14 @@ body {
 
 .swap-editor-meta {
   display: grid;
-  grid-template-columns: 1fr 140px 110px 110px 1.5fr;
+  grid-template-columns: minmax(360px, 2fr) 140px 110px 110px minmax(220px, 1.2fr);
   gap: 10px;
   background: #f4f8f6;
   padding: 12px;
   border-radius: 8px;
+}
+.swap-editor-title-field {
+  min-width: 0;
 }
 .swap-editor-meta label { display: flex; flex-direction: column; gap: 4px; }
 .swap-editor-meta span {
@@ -10242,6 +10286,11 @@ body {
   border-radius: 6px;
   background: #fff;
   resize: vertical;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.swap-editor-title-field input:focus {
+  min-width: min(100%, 680px);
 }
 .swap-editor-meta .swap-editor-notes textarea { min-height: 36px; }
 

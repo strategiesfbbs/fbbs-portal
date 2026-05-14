@@ -68,7 +68,7 @@ function isBlank(value) {
 function money0(value) {
   if (isBlank(value)) return '—';
   const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
+  if (!Number.isFinite(n)) return 'n/a';
   const abs = Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
   return n < 0 ? `(${abs})` : abs;
 }
@@ -76,30 +76,41 @@ function money0(value) {
 function pct3(value) {
   if (isBlank(value)) return '—';
   const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
+  if (!Number.isFinite(n)) return 'n/a';
   return `${n.toFixed(3)}%`;
 }
 
 function price(value) {
   if (isBlank(value)) return '—';
   const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
+  if (!Number.isFinite(n)) return 'n/a';
   return n.toFixed(3);
 }
 
 function num2(value) {
   if (isBlank(value)) return '—';
   const n = Number(value);
-  if (!Number.isFinite(n)) return '—';
+  if (!Number.isFinite(n)) return 'n/a';
   return n.toFixed(2);
 }
 
 const FORMATTERS = { money0, pct3, price, num2 };
 
 function fmtCell(value, fmt) {
+  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'value')) {
+    if (isBlank(value.value)) return value.hasInput ? 'n/a' : '—';
+    value = value.value;
+  }
   if (!fmt) return escapeHtml(value || '');
   const f = FORMATTERS[fmt];
   return f ? f(value) : escapeHtml(value || '');
+}
+
+function computedCell(value, inputs) {
+  return {
+    value,
+    hasInput: (inputs || []).some(v => !isBlank(v))
+  };
 }
 
 function shortDate(value) {
@@ -121,7 +132,8 @@ function longDate(value) {
 // ---------- Data derivation ----------
 
 function deriveLegRow(leg, taxRate) {
-  const par = Number(leg.par) || 0;
+  const parRaw = leg.par;
+  const par = Number(parRaw) || 0;
   const bookPrice = leg.bookPrice;
   const marketPrice = leg.marketPrice;
   const bookValue = leg.bookValue
@@ -132,6 +144,8 @@ function deriveLegRow(leg, taxRate) {
   const proceeds = swapMath.legProceeds({ marketValue, accrued: leg.accrued });
   const bookYield = leg.bookYieldYtm != null ? leg.bookYieldYtm : leg.bookYieldYtw;
   const marketYield = leg.marketYieldYtw != null ? leg.marketYieldYtw : leg.marketYieldYtm;
+  const teBookYield = taxRate != null && bookYield != null ? swapMath.teYield(bookYield, taxRate) : bookYield;
+  const teMarketYield = taxRate != null && marketYield != null ? swapMath.teYield(marketYield, taxRate) : marketYield;
   return {
     cusip: leg.cusip || '',
     sector: leg.sector || '',
@@ -140,17 +154,17 @@ function deriveLegRow(leg, taxRate) {
     maturity: shortDate(leg.maturity),
     callDate: shortDate(leg.callDate),
     par,
-    teBookYield: taxRate != null && bookYield != null ? swapMath.teYield(bookYield, taxRate) : bookYield,
-    teMarketYield: taxRate != null && marketYield != null ? swapMath.teYield(marketYield, taxRate) : marketYield,
+    teBookYield: computedCell(teBookYield, [bookYield, taxRate]),
+    teMarketYield: computedCell(teMarketYield, [marketYield, taxRate]),
     bookPrice,
     marketPrice,
     modifiedDuration: leg.modifiedDuration,
     averageLife: leg.averageLife,
-    bookValue,
-    marketValue,
-    gainLoss,
+    bookValue: computedCell(bookValue, [leg.bookValue, parRaw, bookPrice]),
+    marketValue: computedCell(marketValue, [leg.marketValue, parRaw, marketPrice]),
+    gainLoss: computedCell(gainLoss, [leg.gainLoss, bookValue, marketValue]),
     accrued: leg.accrued,
-    proceeds
+    proceeds: computedCell(proceeds, [marketValue, leg.accrued])
   };
 }
 
@@ -396,6 +410,7 @@ footer.foot { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--r
 footer.foot .offices { letter-spacing: 0.06em; margin-bottom: 4px; }
 footer.foot .badges { font-weight: 800; letter-spacing: 0.08em; }
 footer.foot .disclosure { margin-top: 6px; }
+.notation-note { margin-top: 8px; font-style: italic; }
 .watermark { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-25deg); font-size: 140px; font-weight: 900; color: #92400e; opacity: 0.07; letter-spacing: 0.1em; pointer-events: none; z-index: 0; }
 .print-controls { background: var(--bg-soft); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--rule); font-size: 12px; }
 .print-controls button { background: var(--ink); color: #fff; border: 0; border-radius: 999px; padding: 6px 16px; font-weight: 800; cursor: pointer; }
@@ -442,6 +457,7 @@ footer.foot .disclosure { margin-top: 6px; }
   <footer class="foot">
     <div class="offices">${OFFICES.map(escapeHtml).join(' · ')}</div>
     <div class="badges">FINRA · MEMBER SIPC · MSRB</div>
+    <div class="notation-note">&mdash; = no input. n/a = cannot compute from the supplied inputs.</div>
     <div class="disclosure">For Institutional Use Only. Investments are not FDIC insured, not bank guaranteed &amp; may lose value. Certificate of Deposit investments may qualify for FDIC insurance through the issuing bank. First Bankers' Banc Securities, Inc. is a member of FINRA / SIPC. Copyright &copy; ${new Date().getUTCFullYear()} FBBS, Inc.</div>
   </footer>
 </div>

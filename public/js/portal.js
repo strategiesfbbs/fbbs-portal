@@ -300,6 +300,13 @@
     showToast._t = setTimeout(() => t.classList.remove('show'), 3500);
   }
 
+  function setPeerAnalysisValidation(message) {
+    const validation = document.getElementById('peerAnalysisValidation');
+    if (!validation) return;
+    validation.textContent = message || '';
+    validation.hidden = !message;
+  }
+
   function loadCommissionSettings() {
     try {
       const raw = localStorage.getItem(COMMISSION_STORAGE_KEY);
@@ -3418,8 +3425,10 @@
     const results = document.getElementById('peerAnalysisBankResults');
     const q = String(query || '').trim();
     if (!results) return;
+    setPeerAnalysisValidation('');
     if (q.length < 2) {
       results.innerHTML = '';
+      if (options.openFirst) setPeerAnalysisValidation('Enter at least two characters to find a bank.');
       return;
     }
     results.innerHTML = '<div class="bank-search-empty">Searching banks...</div>';
@@ -3461,6 +3470,7 @@
   async function loadPeerAnalysisBank(bankId) {
     const output = document.getElementById('peerAnalysisOutput');
     if (output) output.innerHTML = '<div class="bank-search-empty">Building peer comparison...</div>';
+    setPeerAnalysisValidation('');
     try {
       const [bankData, peerData] = await Promise.all([
         fetch(`/api/banks/${encodeURIComponent(bankId)}`, { cache: 'no-store' }).then(readBankJson),
@@ -3902,6 +3912,20 @@
     output.querySelector('[data-peer-start-strategy]')?.addEventListener('click', () => openPeerAnalysisTearSheet(true));
   }
 
+  function resetPeerAnalysisBuilder({ keepPeerData = true } = {}) {
+    const peerData = keepPeerData ? peerAnalysisState.peerData : null;
+    peerAnalysisState = { bankData: null, peerData, rows: [], flags: [], period: '', peerGroup: null };
+    const input = document.getElementById('peerAnalysisBankSearchInput');
+    const results = document.getElementById('peerAnalysisBankResults');
+    const output = document.getElementById('peerAnalysisOutput');
+    const exportBtn = document.getElementById('peerAnalysisExportBtn');
+    if (input) input.value = '';
+    if (results) results.innerHTML = '';
+    if (output) output.innerHTML = '<div class="bank-search-empty">Select a bank to generate a peer comparison.</div>';
+    if (exportBtn) exportBtn.disabled = true;
+    setPeerAnalysisValidation('');
+  }
+
   function formatImportedDate(iso) {
     if (!iso) return 'recently';
     try {
@@ -4095,15 +4119,28 @@
       btn.addEventListener('click', () => switchStrategiesTab(btn.dataset.strategiesTab));
     });
     const picker = document.getElementById('swapBankSelect');
-    if (picker) picker.addEventListener('change', () => {
+    const handleBankSelection = () => {
       const id = picker.value || null;
+      if (id === swapBuilderState.bankId) return;
       swapBuilderState.bankId = id;
       swapBuilderState.bankName = id ? picker.options[picker.selectedIndex].textContent : '';
       replaceHashParams('strategies', { tab: 'bond-swap', bank: id || '' });
       if (id) loadSuggestedSwapsForBank(id);
       else renderSwapBuilderEmpty();
       loadRecentSwapProposals(id);
-    });
+    };
+    if (picker) {
+      picker.addEventListener('change', handleBankSelection);
+      picker.addEventListener('input', handleBankSelection);
+      picker.addEventListener('keydown', event => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        const max = picker.options.length - 1;
+        picker.selectedIndex = Math.max(0, Math.min(max, picker.selectedIndex + direction));
+        handleBankSelection();
+      });
+    }
   }
 
   function switchStrategiesTab(tab) {
@@ -4514,7 +4551,7 @@
           </div>
         </header>
         <div class="swap-editor-meta">
-          <label><span>Title</span><input type="text" data-editor-field="title" value="${escapeHtml(proposal.title || '')}" ${isDraft ? '' : 'readonly'}></label>
+          <label class="swap-editor-title-field"><span>Title</span><input type="text" data-editor-field="title" value="${escapeHtml(proposal.title || '')}" title="${escapeHtml(proposal.title || '')}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Settle date</span><input type="date" data-editor-field="settleDate" value="${escapeHtml(proposal.settleDate || '')}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Horizon (yr)</span><input type="number" step="0.25" min="0.25" max="30" data-editor-field="horizonYears" value="${proposal.horizonYears == null ? '' : proposal.horizonYears}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Tax rate (%)</span><input type="number" step="0.1" data-editor-field="taxRate" value="${proposal.taxRate == null ? '' : proposal.taxRate}" ${isDraft ? '' : 'readonly'}></label>
@@ -4554,6 +4591,13 @@
     { key: 'averageLife', label: 'WAL', type: 'number', step: '0.01' }
   ];
 
+  function legIsUnfilled(leg) {
+    if (!leg) return true;
+    const cusip = String(leg.cusip || '').trim();
+    const par = Number(leg.par);
+    return !cusip && (!Number.isFinite(par) || par === 0);
+  }
+
   function renderLegSideTable(side, rows, isDraft) {
     const title = side === 'sell' ? 'Funding Source (Sells)' : 'Investments (Buys)';
     const tag = side === 'sell' ? 'sell' : 'buy';
@@ -4561,9 +4605,13 @@
     const body = rows.length
       ? rows.map(leg => renderLegEditorRow(leg, isDraft)).join('')
       : `<tr><td colspan="${LEG_INPUTS.length + 1}" class="swap-leg-empty">No ${tag} legs yet. ${isDraft ? 'Click "Add ' + tag + '" below to create one.' : ''}</td></tr>`;
+    const unfilledCount = rows.filter(legIsUnfilled).length;
+    const unfilledBadge = unfilledCount > 0
+      ? ` <span class="swap-leg-unfilled" title="Rows with no CUSIP or par; will be dropped before send.">${unfilledCount} unfilled</span>`
+      : '';
     return `
       <section class="swap-editor-side" data-side="${tag}">
-        <header><strong>${escapeHtml(title)} (${rows.length})</strong>
+        <header><strong>${escapeHtml(title)} (${rows.length})${unfilledBadge}</strong>
           ${isDraft ? `<button type="button" class="small-btn" data-add-leg="${tag}">Add ${tag}</button>` : ''}
         </header>
         <table class="swap-leg-table">
@@ -4949,6 +4997,7 @@
     if (peerSearch) {
       let t = null;
       peerSearch.addEventListener('input', () => {
+        setPeerAnalysisValidation('');
         clearTimeout(t);
         t = setTimeout(() => searchPeerAnalysisBanks(peerSearch.value), 180);
       });
@@ -5005,7 +5054,10 @@
     if (averagedImportBtn) averagedImportBtn.addEventListener('click', uploadReportsAveragedSeriesImport);
     if (importBtn) importBtn.addEventListener('click', uploadBondAccountingImport);
     if (bondExport) bondExport.addEventListener('click', exportBondAccountingCsv);
-    if (peerSearchBtn) peerSearchBtn.addEventListener('click', () => searchPeerAnalysisBanks(peerSearch ? peerSearch.value : '', { openFirst: true }));
+    if (peerSearchBtn) peerSearchBtn.addEventListener('click', () => {
+      if (peerSearch) peerSearch.focus();
+      searchPeerAnalysisBanks(peerSearch ? peerSearch.value : '', { openFirst: true });
+    });
     if (peerExport) peerExport.addEventListener('click', exportPeerAnalysisCsv);
     if (peerStageBtn) peerStageBtn.addEventListener('click', () => {
       const hasPeerData = peerAnalysisState.peerData || (bankDataStatus && bankDataStatus.averagedSeries && bankDataStatus.averagedSeries.available);
@@ -5174,6 +5226,23 @@
     return `#reports${clean ? '/' + clean : ''}${qs}`;
   }
 
+  function reportBuildHash(type, reportId, extraParams = {}) {
+    const params = new URLSearchParams();
+    if (reportId) params.set('id', reportId);
+    Object.entries(extraParams).forEach(([key, value]) => {
+      if (value == null || value === '' || value === false) return;
+      params.set(key, String(value));
+    });
+    return reportsHash(`build/${type || 'bank-peer'}`, params.toString());
+  }
+
+  function effectiveReportsRailId(route = reportsRoute()) {
+    const path = route.subpath || '';
+    if (path === 'data' || path === 'data/files') return 'folders-all';
+    if (path.startsWith('build/') || path === 'new') return '';
+    return reportRailItem(reportsActiveRail).id;
+  }
+
   function loadReportsSessionReports() {
     try {
       const parsed = JSON.parse(sessionStorage.getItem('fbbs.reports.sessionReports') || '[]');
@@ -5268,12 +5337,17 @@
 
   function reportsLeftRailHtml() {
     let currentSection = '';
+    const activeRailId = effectiveReportsRailId();
     return `
       <aside class="reports-left-rail" aria-label="Reports navigation">
         ${REPORT_RAIL_ITEMS.map(item => {
           const section = item.section !== currentSection ? (currentSection = item.section, `<h3>${escapeHtml(item.section)}</h3>`) : '';
-          const title = item.disabled ? 'Available in a later phase' : '';
-          return `${section}<button type="button" class="${item.id === reportsActiveRail ? 'active' : ''}" data-reports-rail="${escapeHtml(item.id)}" ${item.disabled ? 'disabled' : ''} title="${escapeHtml(title)}">${escapeHtml(item.label)}</button>`;
+          const title = item.disabled ? 'Coming soon' : '';
+          const cls = [
+            item.id === activeRailId ? 'active' : '',
+            item.disabled ? 'is-disabled' : ''
+          ].filter(Boolean).join(' ');
+          return `${section}<button type="button" class="${escapeHtml(cls)}" data-reports-rail="${escapeHtml(item.id)}" ${item.disabled ? 'aria-disabled="true"' : ''} title="${escapeHtml(title)}">${escapeHtml(item.label)}</button>`;
         }).join('')}
       </aside>
     `;
@@ -5337,7 +5411,7 @@
               const meta = reportTypeMeta(row.type);
               return `
                 <tr data-report-id="${escapeHtml(row.id)}">
-                  <td><a href="#reports/build/${escapeHtml(row.type)}">${escapeHtml(row.name)}</a></td>
+                  <td class="reports-name-cell" data-report-open="${escapeHtml(row.id)}" data-report-type="${escapeHtml(row.type)}"><a href="${escapeHtml(reportBuildHash(row.type, row.id))}">${escapeHtml(row.name)}</a></td>
                   <td><span class="reports-desc">${escapeHtml(row.description || meta.description)}</span></td>
                   <td><span class="reports-type-badge">${escapeHtml(meta.shortName)}</span></td>
                   <td>${escapeHtml(row.folder || 'Personal')}</td>
@@ -5396,7 +5470,7 @@
               </div>
               <footer>
                 <a class="small-btn secondary" href="#reports">Cancel</a>
-                <button type="button" class="small-btn" id="reportsTypeContinueBtn" disabled>Continue</button>
+                <button type="button" class="small-btn" id="reportsTypeContinueBtn" disabled aria-disabled="true">Continue</button>
               </footer>
             </main>
           </div>
@@ -5628,7 +5702,10 @@
     } else if (path.startsWith('build/')) {
       const type = path.split('/')[1] || 'bank-peer';
       app.innerHTML = reportsBuilderHtml(type);
-      if (type === 'bank-peer') mountReportPanel('peerAnalysisBuilderPanel', 'reportsBankPeerMount');
+      if (type === 'bank-peer') {
+        mountReportPanel('peerAnalysisBuilderPanel', 'reportsBankPeerMount');
+        if (!route.params.get('id')) resetPeerAnalysisBuilder();
+      }
       if (type === 'opportunity') mountReportPanel('opportunityReportPanel', 'reportsOpportunityMount');
       if (route.params.get('autorun') === '1') setTimeout(() => runReportBuilder(type), 0);
     } else if (path === 'data/files') {
@@ -5684,14 +5761,20 @@
       }
     });
     document.addEventListener('click', event => {
-      const rail = event.target.closest('[data-reports-rail]');
+      const clickTarget = event.target && event.target.closest ? event.target : event.target?.parentElement;
+      if (!clickTarget) return;
+      const rail = clickTarget.closest('[data-reports-rail]');
       if (rail) {
+        if (rail.getAttribute('aria-disabled') === 'true') {
+          event.preventDefault();
+          return;
+        }
         reportsActiveRail = rail.dataset.reportsRail || 'recent';
         localStorage.setItem('fbbs.reports.lastRail', reportsActiveRail);
         renderReportsWorkspace();
         return;
       }
-      const sorter = event.target.closest('[data-reports-sort]');
+      const sorter = clickTarget.closest('[data-reports-sort]');
       if (sorter) {
         const key = sorter.dataset.reportsSort;
         if (reportsSort.key === key) {
@@ -5702,7 +5785,7 @@
         renderReportsWorkspace();
         return;
       }
-      const fileSorter = event.target.closest('[data-reports-file-sort]');
+      const fileSorter = clickTarget.closest('[data-reports-file-sort]');
       if (fileSorter) {
         const key = fileSorter.dataset.reportsFileSort;
         if (bondAccountingFileSort.key === key) {
@@ -5713,16 +5796,19 @@
         renderReportsFilesTable();
         return;
       }
-      const typeRow = event.target.closest('[data-report-type-select]');
+      const typeRow = clickTarget.closest('[data-report-type-select]');
       if (typeRow) {
         reportsSelectedType = typeRow.dataset.reportTypeSelect || '';
         document.querySelectorAll('.reports-type-row.selected').forEach(row => row.classList.remove('selected'));
         typeRow.classList.add('selected');
         const continueBtn = document.getElementById('reportsTypeContinueBtn');
-        if (continueBtn) continueBtn.disabled = !reportsSelectedType;
+        if (continueBtn) {
+          continueBtn.disabled = !reportsSelectedType;
+          continueBtn.setAttribute('aria-disabled', reportsSelectedType ? 'false' : 'true');
+        }
         return;
       }
-      const continueBtn = event.target.closest('#reportsTypeContinueBtn');
+      const continueBtn = clickTarget.closest('#reportsTypeContinueBtn');
       if (continueBtn && reportsSelectedType) {
         event.preventDefault();
         const recent = JSON.parse(localStorage.getItem('fbbs.reports.recentTypes') || '[]').filter(type => type !== reportsSelectedType);
@@ -5731,16 +5817,22 @@
         window.location.hash = reportsHash(`build/${reportsSelectedType}`);
         return;
       }
-      const runBtn = event.target.closest('[data-reports-run]');
+      const runBtn = clickTarget.closest('[data-reports-run]');
       if (runBtn) {
         runReportBuilder(runBtn.dataset.reportsRun);
         return;
       }
-      const rowAction = event.target.closest('[data-report-action]');
+      const reportOpen = clickTarget.closest('[data-report-open]');
+      if (reportOpen) {
+        event.preventDefault();
+        window.location.hash = reportBuildHash(reportOpen.dataset.reportType || 'bank-peer', reportOpen.dataset.reportOpen || '');
+        return;
+      }
+      const rowAction = clickTarget.closest('[data-report-action]');
       if (rowAction) {
         const action = rowAction.dataset.reportAction;
         if (action === 'run') {
-          window.location.hash = reportsHash(`build/${rowAction.dataset.reportType || 'bank-peer'}`, 'autorun=1');
+          window.location.hash = reportBuildHash(rowAction.dataset.reportType || 'bank-peer', rowAction.closest('tr')?.dataset.reportId || '', { autorun: '1' });
         }
         if (action === 'duplicate') {
           const source = allReportsRows().find(row => row.id === rowAction.dataset.reportId);
@@ -5753,7 +5845,7 @@
         }
         return;
       }
-      if (event.target.closest('#reportsFilesExportBtn')) {
+      if (clickTarget.closest('#reportsFilesExportBtn')) {
         exportBondAccountingCsv();
       }
     });
@@ -5764,6 +5856,7 @@
     if (type === 'bank-peer') {
       const input = document.getElementById('peerAnalysisBankSearchInput');
       const hasBank = peerAnalysisState.bankData && peerAnalysisState.rows && peerAnalysisState.rows.length;
+      setPeerAnalysisValidation('');
       if (!hasBank && input && input.value.trim()) {
         searchPeerAnalysisBanks(input.value, { openFirst: true }).then(() => addSessionReport(type));
       } else if (hasBank) {
@@ -5771,7 +5864,9 @@
         addSessionReport(type);
         showToast(outputFormat === 'csv' ? 'Report ready; use Export Analysis for CSV' : 'Bank Peer Analysis refreshed');
       } else {
-        showToast('Choose a bank before running the report', true);
+        setPeerAnalysisValidation('Choose a bank before running the report.');
+        const inputPanel = document.getElementById('peerAnalysisBankSearchInput');
+        if (inputPanel) inputPanel.focus();
       }
       return;
     }

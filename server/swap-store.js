@@ -547,6 +547,31 @@ function freezeProposal(outputDir, id, snapshotData) {
   return getProposal(outputDir, id);
 }
 
+// A leg counts as "unfilled" if the rep hasn't entered the core identifier
+// (CUSIP) or any par. "Add buy/sell" creates an empty stub row so the rep
+// has somewhere to type — but unfilled rows shouldn't be counted in the
+// printable artifact or summary math.
+function isLegUnfilled(leg) {
+  if (!leg) return true;
+  const cusip = String(leg.cusip || '').trim();
+  const par = Number(leg.par);
+  return !cusip && (!Number.isFinite(par) || par === 0);
+}
+
+function pruneUnfilledLegs(outputDir, proposalId) {
+  const dbPath = ensureSwapDatabase(outputDir);
+  const record = getProposal(outputDir, proposalId);
+  if (!record) return 0;
+  let removed = 0;
+  for (const leg of (record.legs || [])) {
+    if (isLegUnfilled(leg)) {
+      runSqlite(dbPath, `DELETE FROM swap_proposal_legs WHERE id = ${sqlInt(leg.id)} AND proposal_id = ${sqlString(proposalId)};`);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 // Clone a frozen proposal into a new draft so a rep can revise after send
 // or cancel. Copies header fields + legs (with position preserved) into a
 // fresh SP-YYYY-NNNN row. Strategy link is intentionally NOT carried — the
@@ -642,6 +667,8 @@ module.exports = {
   markExecuted,
   cancelProposal,
   cloneProposalToDraft,
+  isLegUnfilled,
+  pruneUnfilledLegs,
   updateProposalStrategyLink,
   // Exposed for tests
   SWAP_STATUSES,
