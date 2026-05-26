@@ -462,6 +462,25 @@ function getStrategyRequestFile(outputDir, strategyId, fileId) {
   };
 }
 
+function deleteStrategyRequest(outputDir, id) {
+  const existing = getStrategyRequest(outputDir, id);
+  if (!existing) return null;
+  const dbPath = ensureStrategyDatabase(outputDir);
+  runSqlite(dbPath, `
+    DELETE FROM strategy_request_files
+    WHERE strategy_id = ${sqlString(existing.id)};
+    DELETE FROM strategy_requests
+    WHERE id = ${sqlString(existing.id)};
+  `);
+  const fileDir = path.resolve(strategyFilesRootForDir(outputDir), existing.id);
+  const root = path.resolve(strategyFilesRootForDir(outputDir));
+  const rel = path.relative(root, fileDir);
+  if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+    fs.rmSync(fileDir, { recursive: true, force: true });
+  }
+  return existing;
+}
+
 module.exports = {
   STRATEGY_DATABASE_FILENAME,
   STRATEGY_FILE_DIRNAME,
@@ -469,6 +488,7 @@ module.exports = {
   STRATEGY_TYPES,
   addStrategyRequestFile,
   createStrategyRequest,
+  deleteStrategyRequest,
   getStrategyRequestFile,
   getStrategyRequest,
   listStrategyRequests,

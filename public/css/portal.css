@@ -8359,6 +8359,14 @@ body {
   padding-top: 8px;
 }
 
+.strategy-danger-btn {
+  color: #9f2f24 !important;
+}
+
+.strategy-danger-btn:hover {
+  background: #fff3f1;
+}
+
 .strategy-edit-panel {
   border-top: 1px solid var(--line);
   display: grid;
@@ -8572,8 +8580,21 @@ body {
 
 .bank-call-report-table {
   border-collapse: collapse;
-  min-width: 1080px;
-  width: 100%;
+  min-width: max(100%, calc(300px + (var(--period-count, 8) * 118px) + (var(--peer-count, 0) * 132px)));
+  table-layout: fixed;
+  width: max(100%, calc(300px + (var(--period-count, 8) * 118px) + (var(--peer-count, 0) * 132px)));
+}
+
+.bank-call-report-label-col {
+  width: 300px;
+}
+
+.bank-call-report-period-col {
+  width: 118px;
+}
+
+.bank-call-report-peer-col {
+  width: 132px;
 }
 
 .bank-call-report-table th,
@@ -8600,7 +8621,6 @@ body {
 .bank-call-report-table td:first-child {
   color: var(--text);
   font-weight: 700;
-  min-width: 285px;
   position: sticky;
   left: 0;
   text-align: left;
@@ -8643,6 +8663,7 @@ body {
   background: var(--surface2, #f6f7fb);
   border-left: 2px solid var(--border, #d8dbe6);
   font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
 }
 
@@ -9111,6 +9132,12 @@ body {
     min-width: 0;
     table-layout: fixed;
     width: 100%;
+  }
+
+  .bank-call-report-label-col,
+  .bank-call-report-period-col,
+  .bank-call-report-peer-col {
+    width: auto;
   }
 
   .bank-call-report-table th,

@@ -21,6 +21,7 @@ const {
   classifyFolderDropFile,
   hasPrivatePathSegment,
   isSameOriginWrite,
+  mapSwapHoldingPosition,
   readPackageDir,
   collectAgencyPackageFiles
 } = require('../server/server');
@@ -52,6 +53,7 @@ const {
 const {
   addStrategyRequestFile,
   createStrategyRequest,
+  deleteStrategyRequest,
   getStrategyRequestFile,
   listStrategyRequests,
   updateStrategyRequest
@@ -753,6 +755,12 @@ function assertStrategyStore() {
 
     const restored = updateStrategyRequest(tmp, request.id, { archived: false });
     assert.strictEqual(restored.isArchived, false);
+
+    const deleted = deleteStrategyRequest(tmp, request.id);
+    assert.strictEqual(deleted.id, request.id);
+    assert.strictEqual(listStrategyRequests(tmp, { archived: 'all' }).requests.length, 0);
+    assert.strictEqual(fs.existsSync(path.dirname(savedFile.path)), false);
+    assert.strictEqual(deleteStrategyRequest(tmp, request.id), null);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -937,6 +945,28 @@ function assertPortfolioParser() {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+function assertSwapHoldingDurationMapping() {
+  const mapped = mapSwapHoldingPosition({
+    cusip: '3130AKYZ3',
+    description: 'FHLB CALLABLE QUARTERLY',
+    maturity: '2029-08-24',
+    effectiveDuration: 3.2,
+    averageLife: 4.1,
+    bookYieldYtw: 1.03,
+    marketYieldYtw: 4.1
+  }, 'Agency');
+
+  assert.strictEqual(mapped.sector, 'Agency');
+  assert.strictEqual(mapped.modifiedDuration, 3.2);
+  assert.strictEqual(mapped.averageLife, 4.1);
+
+  const zeroDuration = mapSwapHoldingPosition({
+    cusip: '912828ZERO',
+    effectiveDuration: 0
+  }, 'Treasury');
+  assert.strictEqual(zeroDuration.modifiedDuration, 0);
 }
 
 function assertCdHistoryWeeklyDedupe() {
@@ -1220,6 +1250,7 @@ function assertReferenceIntakeParsers() {
   assertAveragedSeriesStore();
   assertBondAccountingStore();
   assertPortfolioParser();
+  assertSwapHoldingDurationMapping();
   assertCdHistoryWeeklyDedupe();
   assertCdHistoryResetsOnNewWeek();
   assertWeeklyCdWorksheetImport();

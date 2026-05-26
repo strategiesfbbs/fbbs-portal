@@ -105,6 +105,7 @@ const {
 const {
   addStrategyRequestFile,
   createStrategyRequest,
+  deleteStrategyRequest,
   getStrategyRequestFile,
   listStrategyRequests,
   updateStrategyRequest
@@ -3707,6 +3708,9 @@ async function handleCreateStrategyRequest(req, res) {
 async function handleUpdateStrategyRequest(req, res, id) {
   try {
     const body = await readJsonBody(req);
+    if (body && (body.action === 'delete' || body.delete === true)) {
+      return handleDeleteStrategyRequest(req, res, id);
+    }
     const request = updateStrategyRequest(BANK_REPORTS_DIR, id, body);
     if (!request) return sendJSON(res, 404, { error: 'Strategy request not found' });
     appendAuditLog({
@@ -3720,6 +3724,24 @@ async function handleUpdateStrategyRequest(req, res, id) {
   } catch (err) {
     log('error', 'Strategy request update failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not update strategy request' });
+  }
+}
+
+function handleDeleteStrategyRequest(req, res, id) {
+  try {
+    const request = deleteStrategyRequest(BANK_REPORTS_DIR, id);
+    if (!request) return sendJSON(res, 404, { error: 'Strategy request not found' });
+    appendAuditLog({
+      event: 'strategy-request-delete',
+      strategyId: request.id,
+      bankId: request.bankId,
+      requestType: request.requestType,
+      status: request.status
+    });
+    return sendJSON(res, 200, { success: true, deleted: request });
+  } catch (err) {
+    log('error', 'Strategy request delete failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not delete strategy request' });
   }
 }
 
@@ -4502,6 +4524,31 @@ function handleSwapInventory(res, query) {
   }
 }
 
+function mapSwapHoldingPosition(row, sector) {
+  return {
+    sector,
+    cusip: row.cusip || '',
+    description: row.description || '',
+    coupon: row.coupon || null,
+    maturity: row.maturity || '',
+    callDate: row.callDate || '',
+    par: row.par || 0,
+    bookPrice: row.bookPrice || null,
+    marketPrice: row.marketPrice || null,
+    bookYieldYtm: row.bookYieldYtm || null,
+    bookYieldYtw: row.bookYieldYtw || null,
+    marketYieldYtm: row.marketYieldYtm || null,
+    marketYieldYtw: row.marketYieldYtw || null,
+    // Parser stores the workbook's "Eff. Dur" column as effectiveDuration;
+    // legs carry it under modifiedDuration to match swap-store's schema.
+    modifiedDuration: row.effectiveDuration ?? null,
+    averageLife: row.averageLife || null,
+    gainLoss: row.gainLoss || 0,
+    bookValue: row.bookValue || null,
+    marketValue: row.marketValue || null
+  };
+}
+
 function handleSwapHoldings(res, bankId) {
   const ctx = getSwapBankContext(bankId);
   if (!ctx) return sendJSON(res, 404, { error: 'Bank not found' });
@@ -4509,28 +4556,7 @@ function handleSwapHoldings(res, bankId) {
   const positions = [];
   for (const [sector, rows] of Object.entries(ctx.parsedHoldings.sectors || {})) {
     for (const row of rows) {
-      positions.push({
-        sector,
-        cusip: row.cusip || '',
-        description: row.description || '',
-        coupon: row.coupon || null,
-        maturity: row.maturity || '',
-        callDate: row.callDate || '',
-        par: row.par || 0,
-        bookPrice: row.bookPrice || null,
-        marketPrice: row.marketPrice || null,
-        bookYieldYtm: row.bookYieldYtm || null,
-        bookYieldYtw: row.bookYieldYtw || null,
-        marketYieldYtm: row.marketYieldYtm || null,
-        marketYieldYtw: row.marketYieldYtw || null,
-        // Parser stores the workbook's "Eff. Dur" column as effectiveDuration;
-        // legs carry it under modifiedDuration to match swap-store's schema.
-        modifiedDuration: row.effectiveDuration || null,
-        averageLife: row.averageLife || null,
-        gainLoss: row.gainLoss || 0,
-        bookValue: row.bookValue || null,
-        marketValue: row.marketValue || null
-      });
+      positions.push(mapSwapHoldingPosition(row, sector));
     }
   }
   return sendJSON(res, 200, {
@@ -6050,11 +6076,23 @@ const server = http.createServer(async (req, res) => {
       return await handleUploadStrategyRequestFile(req, res, id);
     }
 
+    const strategyDeleteActionMatch = pathname.match(/^\/api\/strategies\/([^/]+)\/delete$/);
+    if (strategyDeleteActionMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(strategyDeleteActionMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid strategy request ID' });
+      return handleDeleteStrategyRequest(req, res, id);
+    }
+
     const strategyMatch = pathname.match(/^\/api\/strategies\/([^/]+)$/);
     if (strategyMatch && req.method === 'POST') {
       const id = safeDecodeURIComponent(strategyMatch[1]);
       if (!id) return sendJSON(res, 400, { error: 'Invalid strategy request ID' });
       return await handleUpdateStrategyRequest(req, res, id);
+    }
+    if (strategyMatch && req.method === 'DELETE') {
+      const id = safeDecodeURIComponent(strategyMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid strategy request ID' });
+      return handleDeleteStrategyRequest(req, res, id);
     }
 
     if (pathname === '/api/bank-coverage' && req.method === 'GET') {
@@ -6500,5 +6538,6 @@ module.exports = {
   readPackageDir,
   collectAgencyPackageFiles,
   findPackageFileForSlot,
+  mapSwapHoldingPosition,
   startServer
 };

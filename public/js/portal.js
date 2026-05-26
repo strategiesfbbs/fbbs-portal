@@ -6843,6 +6843,9 @@
     board.querySelectorAll('[data-strategy-restore]').forEach(btn => {
       btn.addEventListener('click', () => restoreStrategyRequest(btn.dataset.strategyRestore));
     });
+    board.querySelectorAll('[data-strategy-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteStrategyRequest(btn.dataset.strategyDelete));
+    });
     board.querySelectorAll('[data-strategy-bank]').forEach(btn => {
       btn.addEventListener('click', () => {
         const bankId = btn.dataset.strategyBank;
@@ -6897,6 +6900,7 @@
           ${!row.isArchived && row.status === 'Needs Billed' ? `
             <button type="button" class="text-btn" data-strategy-archive="${escapeHtml(row.id)}" data-strategy-billing="true">Mark Billed + Archive</button>
           ` : ''}
+          <button type="button" class="text-btn strategy-danger-btn" data-strategy-delete="${escapeHtml(row.id)}">Delete</button>
         </div>
         ${renderStrategyEditor(row)}
       </article>
@@ -6958,6 +6962,7 @@
             <div class="strategy-card-actions">
               <button type="button" class="text-btn" data-strategy-cancel="${escapeHtml(row.id)}">Minimize</button>
               <button type="button" class="text-btn" data-strategy-restore="${escapeHtml(row.id)}">Restore</button>
+              <button type="button" class="text-btn strategy-danger-btn" data-strategy-delete="${escapeHtml(row.id)}">Delete</button>
             </div>
           </div>
         ` : ''}
@@ -7207,6 +7212,30 @@
       await loadStrategyNotifications();
       if (currentVisibleStrategyHistoryBankId()) loadBankStrategyHistory(currentVisibleStrategyHistoryBankId());
       showToast('Restored strategy request');
+    } catch (e) {
+      showToast(e.message, true);
+    }
+  }
+
+  async function deleteStrategyRequest(id) {
+    if (!id) return;
+    const row = strategyRequests.find(item => item.id === id);
+    const label = row ? `${row.requestType || 'Strategy request'} for ${row.displayName || 'this bank'}` : 'this strategy request';
+    if (!window.confirm(`Delete ${label}? This permanently removes the request and any attached files.`)) return;
+    try {
+      const res = await fetch(`/api/strategies/${encodeURIComponent(id)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', confirm: true })
+      });
+      await readBankJson(res);
+      strategyRequests = strategyRequests.filter(item => item.id !== id);
+      refreshStrategyCountsFromRows();
+      renderStrategyBoard();
+      await loadStrategies();
+      await loadStrategyNotifications();
+      if (currentVisibleStrategyHistoryBankId()) loadBankStrategyHistory(currentVisibleStrategyHistoryBankId());
+      showToast('Deleted strategy request');
     } catch (e) {
       showToast(e.message, true);
     }
@@ -9239,10 +9268,16 @@
     const peerByKey = (peerComparison && peerComparison.byKey) || {};
     const hasPeer = Object.keys(peerByKey).length > 0;
     const sectionHasPeerRow = hasPeer && rows.some(row => row.key && peerByKey[row.key]);
+    const columnStyle = `--period-count:${visiblePeriods.length};--peer-count:${sectionHasPeerRow ? 1 : 0};`;
     return `
       <section class="bank-section bank-call-report-section">
         <div class="bank-call-report-wrap">
-          <table class="bank-call-report-table${sectionHasPeerRow ? ' has-peer-column' : ''}">
+          <table class="bank-call-report-table${sectionHasPeerRow ? ' has-peer-column' : ''}" style="${columnStyle}">
+            <colgroup>
+              <col class="bank-call-report-label-col">
+              ${visiblePeriods.map(() => '<col class="bank-call-report-period-col">').join('')}
+              ${sectionHasPeerRow ? '<col class="bank-call-report-peer-col">' : ''}
+            </colgroup>
             <thead>
               <tr class="bank-call-report-header-row">
                 <th class="bank-call-report-section-title">${escapeHtml(title)}</th>
