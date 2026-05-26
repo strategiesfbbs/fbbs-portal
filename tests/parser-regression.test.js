@@ -1132,7 +1132,7 @@ FRIDAY  5/8/2026
 }
 
 function assertReferenceIntakeParsers() {
-  const { parseStructuredNotesEmail } = require('../server/structured-notes-store');
+  const { emailCalendarDate, parseStructuredNotesEmail, saveStructuredNotesUpload } = require('../server/structured-notes-store');
   const { parseCdInternalWorkbook } = require('../server/cd-internal-store');
 
   const plain = [
@@ -1169,6 +1169,19 @@ function assertReferenceIntakeParsers() {
   assert.strictEqual(notes[0].cusip, '48130KVE4');
   assert.strictEqual(notes[1].price, 41.1);
   assert.strictEqual(notes[1].structure, 'Zero Coupon');
+  assert.strictEqual(emailCalendarDate('Tue, 26 May 2026 12:52:12 +0000'), '2026-05-26');
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'structured-notes-'));
+  const oldEmail = email.replace('Tue, 12 May 2026 12:00:00 +0000', 'Mon, 25 May 2026 12:00:00 +0000');
+  const daily = saveStructuredNotesUpload(tmp, [
+    { filename: 'old.eml', data: Buffer.from(oldEmail) },
+    { filename: 'today.eml', data: Buffer.from(email.replace('Tue, 12 May 2026 12:00:00 +0000', 'Tue, 26 May 2026 12:00:00 +0000')) }
+  ], { targetDate: '2026-05-26', replace: true });
+  assert.strictEqual(daily.targetDate, '2026-05-26');
+  assert.strictEqual(daily.sources.length, 1);
+  assert.strictEqual(daily.notes.length, 2);
+  assert.strictEqual(daily.sources[0].filename, 'today.eml');
+  assert.strictEqual(daily.notes[0].emailSentDate, '2026-05-26');
 
   const wb = XLSX.utils.book_new();
   const rows = [

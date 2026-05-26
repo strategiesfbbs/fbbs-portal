@@ -38,12 +38,13 @@ function filesDir(baseDir) {
 
 function loadStructuredNotesInventory(baseDir) {
   ensureDir(baseDir);
-  const empty = { uploadedAt: null, sources: [], notes: [], warnings: [] };
+  const empty = { uploadedAt: null, targetDate: null, sources: [], notes: [], warnings: [] };
   if (!fs.existsSync(inventoryPath(baseDir))) return empty;
   try {
     const parsed = JSON.parse(fs.readFileSync(inventoryPath(baseDir), 'utf-8'));
     return {
       uploadedAt: parsed.uploadedAt || null,
+      targetDate: parsed.targetDate || null,
       sources: Array.isArray(parsed.sources) ? parsed.sources : [],
       notes: Array.isArray(parsed.notes) ? parsed.notes : [],
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings : []
@@ -66,6 +67,41 @@ function getStructuredNoteSourceFile(baseDir, fileId) {
   const rel = path.relative(filesDir(baseDir), filePath);
   if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
   return { ...source, path: filePath };
+}
+
+function emailCalendarDate(value) {
+  const text = String(value || '').trim();
+  const monthMap = {
+    jan: '01', january: '01',
+    feb: '02', february: '02',
+    mar: '03', march: '03',
+    apr: '04', april: '04',
+    may: '05',
+    jun: '06', june: '06',
+    jul: '07', july: '07',
+    aug: '08', august: '08',
+    sep: '09', sept: '09', september: '09',
+    oct: '10', october: '10',
+    nov: '11', november: '11',
+    dec: '12', december: '12'
+  };
+  let match = text.match(/\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\b/);
+  if (match) {
+    const month = monthMap[match[2].toLowerCase()];
+    if (month) return `${match[3]}-${month}-${String(Number(match[1])).padStart(2, '0')}`;
+  }
+  match = text.match(/\b([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{4})\b/);
+  if (match) {
+    const month = monthMap[match[1].toLowerCase()];
+    if (month) return `${match[3]}-${month}-${String(Number(match[2])).padStart(2, '0')}`;
+  }
+  match = text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/);
+  if (match) {
+    let year = Number(match[3]);
+    if (year < 100) year += 2000;
+    return `${year}-${String(Number(match[1])).padStart(2, '0')}-${String(Number(match[2])).padStart(2, '0')}`;
+  }
+  return '';
 }
 
 function normalizeDate(value, fallbackYear = new Date().getFullYear()) {
@@ -168,6 +204,7 @@ function makeNote(row, source, summary, attachments, index) {
     emailSubject: summary.subject || '',
     emailFrom: summary.from || '',
     emailDate: summary.date || '',
+    emailSentDate: source.sentDate || emailCalendarDate(summary.date),
     sourceFiles: sourceRef(source),
     createdAt: source.uploadedAt
   };
@@ -218,18 +255,40 @@ function parseStructuredNotesEmail(text, source, warnings = []) {
   return notes;
 }
 
-function saveStructuredNotesUpload(baseDir, uploadFiles) {
+function removeStoredSourceFiles(baseDir, sources) {
+  for (const source of sources || []) {
+    if (!source || !source.storedFilename) continue;
+    const filePath = path.join(filesDir(baseDir), source.storedFilename);
+    const resolved = path.resolve(filePath);
+    const rel = path.relative(filesDir(baseDir), resolved);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
+    try {
+      if (fs.existsSync(resolved)) fs.unlinkSync(resolved);
+    } catch (_) {}
+  }
+}
+
+function saveStructuredNotesUpload(baseDir, uploadFiles, options = {}) {
   ensureDir(baseDir);
   ensureDir(filesDir(baseDir));
 
   const inventory = loadStructuredNotesInventory(baseDir);
   const uploadedAt = new Date().toISOString();
+  const targetDate = String(options.targetDate || '').trim();
+  const replace = Boolean(options.replace);
   const warnings = [];
   const newSources = [];
   const newNotes = [];
 
   for (const file of uploadFiles || []) {
     if (!/\.eml$/i.test(file.filename || '')) continue;
+    const text = file.data.toString('utf8');
+    const summary = emailSummary(text, file.filename);
+    const sentDate = emailCalendarDate(summary.date);
+    if (targetDate && sentDate !== targetDate) {
+      warnings.push(`${file.filename}: skipped because email date ${sentDate || 'unknown'} does not match ${targetDate}.`);
+      continue;
+    }
     const id = crypto.randomUUID();
     const safeName = sanitizeFilename(file.filename);
     const storedFilename = `${id}-${safeName}`;
@@ -240,21 +299,27 @@ function saveStructuredNotesUpload(baseDir, uploadFiles) {
       storedFilename,
       extension: 'eml',
       size: file.data.length,
+      sentDate,
       uploadedAt
     };
     newSources.push(source);
     try {
-      newNotes.push(...parseStructuredNotesEmail(file.data.toString('utf8'), source, warnings));
+      newNotes.push(...parseStructuredNotesEmail(text, source, warnings));
     } catch (err) {
       warnings.push(`${safeName}: ${err.message}`);
     }
   }
 
+  if (replace) {
+    removeStoredSourceFiles(baseDir, inventory.sources);
+  }
+
   const next = {
     uploadedAt,
-    sources: [...newSources, ...inventory.sources],
-    notes: [...newNotes, ...inventory.notes],
-    warnings: [...warnings, ...inventory.warnings].slice(0, 100)
+    targetDate: targetDate || inventory.targetDate || null,
+    sources: replace ? newSources : [...newSources, ...inventory.sources],
+    notes: replace ? newNotes : [...newNotes, ...inventory.notes],
+    warnings: (replace ? warnings : [...warnings, ...inventory.warnings]).slice(0, 100)
   };
   writeInventory(baseDir, next);
   return { ...next, uploadedSources: newSources, uploadedNotes: newNotes, uploadWarnings: warnings };
@@ -262,6 +327,7 @@ function saveStructuredNotesUpload(baseDir, uploadFiles) {
 
 module.exports = {
   getStructuredNoteSourceFile,
+  emailCalendarDate,
   loadStructuredNotesInventory,
   parseStructuredNotesEmail,
   saveStructuredNotesUpload
