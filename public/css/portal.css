@@ -8427,6 +8427,18 @@ body {
   margin-left: 6px;
 }
 
+.bank-peer-sample {
+  color: var(--text3, #7a808f);
+  display: block;
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.bank-peer-sample-low {
+  color: #9f6b00;
+  font-weight: 700;
+}
+
 .bank-peer-signal-favorable .bank-peer-value,
 .bank-peer-signal-favorable .bank-peer-delta {
   color: #1f7a4d;
@@ -8463,6 +8475,12 @@ body {
 .bank-peer-banner-meta {
   color: var(--text3, #7a808f);
   margin-left: auto;
+}
+
+.bank-peer-basis {
+  flex-basis: 100%;
+  color: var(--text2, #4b5563);
+  font-size: 11px;
 }
 
 .bank-peer-banner-empty {
@@ -10785,4 +10803,3 @@ body {
   background: #fff;
   max-width: 280px;
 }
-

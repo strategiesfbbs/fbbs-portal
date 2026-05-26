@@ -3513,7 +3513,10 @@ function getPeerComparisonForBank(bank, options = {}) {
   if (cohortId) {
     const cohort = peerGroupStore.getPeerGroup(BANK_REPORTS_DIR, cohortId);
     if (cohort && !cohort.archivedAt) {
-      const comparison = peerAverages.peerComparisonFromCohort(BANK_REPORTS_DIR, cohort, bankPeriod);
+      const comparison = peerAverages.peerComparisonFromCohort(BANK_REPORTS_DIR, cohort, bankPeriod, {
+        selectionReason: 'Selected by user',
+        selectionBasis: peerAverages.cohortSelectionBasis(cohort, bank)
+      });
       if (comparison) return comparison;
     }
   }
@@ -3522,7 +3525,10 @@ function getPeerComparisonForBank(bank, options = {}) {
   if (cohorts.length) {
     const best = peerAverages.findBestFitCohort(BANK_REPORTS_DIR, bank, cohorts);
     if (best) {
-      const comparison = peerAverages.peerComparisonFromCohort(BANK_REPORTS_DIR, best, bankPeriod);
+      const comparison = peerAverages.peerComparisonFromCohort(BANK_REPORTS_DIR, best, bankPeriod, {
+        selectionReason: 'Best-fit cohort',
+        selectionBasis: peerAverages.cohortSelectionBasis(best, bank)
+      });
       if (comparison) return comparison;
     }
   }
@@ -3537,6 +3543,8 @@ function getPeerComparisonForBank(bank, options = {}) {
     period,
     bankPeriod,
     periodAligned: Boolean(bankPeriod) && period === bankPeriod,
+    selectionReason: 'Legacy FedFis workbook cohort',
+    selectionBasis: [],
     byKey
   };
 }

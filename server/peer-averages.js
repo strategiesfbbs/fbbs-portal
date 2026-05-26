@@ -223,7 +223,7 @@ function computeCohortAverages(outputDir, criteria, requestedPeriod) {
 
 // Build the legacy peer-comparison shape so the tear sheet renderer
 // keeps working unchanged.
-function peerComparisonFromCohort(outputDir, peerGroup, bankPeriod) {
+function peerComparisonFromCohort(outputDir, peerGroup, bankPeriod, options = {}) {
   if (!peerGroup) return null;
   const requested = bankPeriod || null;
   const averages = computeCohortAverages(outputDir, peerGroup.criteria || {}, requested);
@@ -239,8 +239,23 @@ function peerComparisonFromCohort(outputDir, peerGroup, bankPeriod) {
     period: averages.period,
     bankPeriod: bankPeriod || '',
     periodAligned: Boolean(bankPeriod) && averages.period === bankPeriod,
+    selectionReason: options.selectionReason || '',
+    selectionBasis: Array.isArray(options.selectionBasis) ? options.selectionBasis : [],
     byKey: averages.byKey
   };
+}
+
+function cohortSelectionBasis(peerGroup, bank) {
+  const cr = peerGroup && peerGroup.criteria ? peerGroup.criteria : {};
+  const summary = bank && bank.summary ? bank.summary : {};
+  const latest = bank && Array.isArray(bank.periods) ? bank.periods[0] : null;
+  const values = latest && latest.values ? latest.values : {};
+  const parts = [];
+  if (Number.isFinite(cr.assetMin) || Number.isFinite(cr.assetMax)) parts.push('asset size');
+  if (cr.states && cr.states.length && cr.states.includes(String(summary.state || '').toUpperCase())) parts.push('state');
+  if (cr.subchapterS && cr.subchapterS === String(values.subchapterS || '').trim()) parts.push('corporate structure');
+  if (cr.loanMix && cr.loanMix.length) parts.push('loan mix');
+  return parts;
 }
 
 function criteriaSummaryLabels(criteria) {
@@ -332,6 +347,7 @@ function findBestFitCohort(outputDir, bank, allCohorts) {
 module.exports = {
   PEER_METRICS,
   PEER_METRIC_KEYS,
+  cohortSelectionBasis,
   findMatchingBanks,
   computeCohortAverages,
   peerComparisonFromCohort,

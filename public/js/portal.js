@@ -1217,7 +1217,12 @@
       // Failure is non-fatal — the picker just won't render.
       fetch('/api/peer-groups', { cache: 'no-store' })
         .then(r => r.ok ? r.json() : null)
-        .then(data => { if (data && Array.isArray(data.peerGroups)) peerGroupsState.cohorts = data.peerGroups; })
+        .then(data => {
+          if (data && Array.isArray(data.peerGroups)) {
+            peerGroupsState.cohorts = data.peerGroups;
+            if (selectedBank && selectedBank.bank && pageName === 'banks') renderBankProfile();
+          }
+        })
         .catch(() => {});
     }
     if (pageName === 'maps') loadMaps();
@@ -8806,6 +8811,10 @@
     const metricCount = peerComparison.byKey ? Object.keys(peerComparison.byKey).length : 0;
     const metricText = metricCount ? `${formatNumber(metricCount)} peer metrics` : '';
     const periodText = peerComparison.period || group.latestPeriod || '';
+    const basis = Array.isArray(peerComparison.selectionBasis) && peerComparison.selectionBasis.length
+      ? `Matched on ${peerComparison.selectionBasis.join(', ')}`
+      : bits || 'Broad cohort';
+    const reason = peerComparison.selectionReason || '';
     const mismatch = peerComparison.bankPeriod && peerComparison.period && peerComparison.bankPeriod !== peerComparison.period
       ? ` <em class="bank-peer-mismatch">Bank latest ${escapeHtml(peerComparison.bankPeriod)} · peer ${escapeHtml(periodText)}</em>`
       : '';
@@ -8814,6 +8823,7 @@
         <strong>Peer cohort:</strong>
         <span>${escapeHtml(group.label || 'Averaged Series Peer Group')}${bits ? ` — ${escapeHtml(bits)}` : ''}</span>
         <span class="bank-peer-banner-meta">${escapeHtml([populationText, metricText, periodText].filter(Boolean).join(' · '))}${mismatch}</span>
+        <span class="bank-peer-basis">${escapeHtml([reason, basis].filter(Boolean).join(': '))}</span>
         ${renderBankPeerCohortPicker(group)}
       </div>
     `;
@@ -8919,8 +8929,17 @@
         signalLabel = `<span class="bank-peer-delta">${escapeHtml(deltaText)}</span>`;
       }
     }
-    const peerLabelAttr = peer.peerLabel ? ` title="${escapeHtml(peer.peerLabel)}"` : '';
-    return `<td class="bank-peer-col bank-peer-signal-${signal}"${peerLabelAttr}><span class="bank-peer-value">${escapeHtml(peerDisplay)}</span>${signalLabel}</td>`;
+    const sampleSize = Number(peer.sampleSize);
+    const sampleText = Number.isFinite(sampleSize) && sampleSize > 0 ? `n=${formatNumber(sampleSize)}` : '';
+    const sampleLow = Number.isFinite(sampleSize) && sampleSize > 0 && sampleSize < 30;
+    const titleParts = [
+      peer.peerLabel,
+      sampleText ? `Sample ${sampleText}` : '',
+      sampleLow ? 'Low sample size' : ''
+    ].filter(Boolean);
+    const peerLabelAttr = titleParts.length ? ` title="${escapeHtml(titleParts.join(' · '))}"` : '';
+    const sampleLabel = sampleLow ? `<span class="bank-peer-sample bank-peer-sample-low">${escapeHtml(sampleText)}</span>` : '';
+    return `<td class="bank-peer-col bank-peer-signal-${signal}"${peerLabelAttr}><span class="bank-peer-value">${escapeHtml(peerDisplay)}</span>${signalLabel}${sampleLabel}</td>`;
   }
 
   function peerColumnTooltip(peerComparison) {
@@ -8931,6 +8950,8 @@
       group.label,
       criteria.assetRange,
       criteria.region,
+      peerComparison.selectionReason,
+      Array.isArray(peerComparison.selectionBasis) && peerComparison.selectionBasis.length ? `Matched on ${peerComparison.selectionBasis.join(', ')}` : '',
       group.populationCount ? `${formatNumber(group.populationCount)} banks` : '',
       peerComparison.period ? `Peer period: ${peerComparison.period}` : ''
     ].filter(Boolean);
