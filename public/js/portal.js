@@ -89,7 +89,7 @@
   const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'strategies', 'archive', 'upload', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -113,6 +113,7 @@
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
     { page: 'maps', group: 'Banks', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' },
     { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
+    { page: 'peer-groups', group: 'Banks', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
@@ -1212,6 +1213,12 @@
       loadBankStatus();
       loadSavedBanks();
       loadAccountCoverageAccounts();
+      // Quietly populate the cohort picker for tear-sheet "compare against".
+      // Failure is non-fatal — the picker just won't render.
+      fetch('/api/peer-groups', { cache: 'no-store' })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data && Array.isArray(data.peerGroups)) peerGroupsState.cohorts = data.peerGroups; })
+        .catch(() => {});
     }
     if (pageName === 'maps') loadMaps();
     if (pageName === 'reports') {
@@ -1224,6 +1231,7 @@
       const tabFromHash = hashParamsForPage('strategies').get('tab');
       switchStrategiesTab(tabFromHash === 'bond-swap' ? 'bond-swap' : 'queue');
     }
+    if (pageName === 'peer-groups') loadPeerGroups();
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'admin') loadAuditLog();
   }
@@ -5064,6 +5072,380 @@
     }
   }
 
+  // ===========================================================================
+  // Peer Groups page
+  //
+  // User-curated cohorts for tear-sheet peer comparison. Server stores cohort
+  // *definitions* in peer-groups.sqlite; averages are computed live from
+  // bank-data.sqlite per peer-averages.js. This UI is just CRUD + a live
+  // population preview as the rep types filters.
+  // ===========================================================================
+
+  const peerGroupsState = {
+    cohorts: [],
+    selectedId: null,
+    isCreating: false,
+    archiveFilter: '',
+    previewDebounce: null
+  };
+
+  const LOAN_MIX_FIELDS = [
+    { key: 'agSum', label: 'Ag exposure (farmland + ag production)' },
+    { key: 'farmLoansToLoans', label: 'Farmland / Loans' },
+    { key: 'agProdLoansToLoans', label: 'Agricultural Production / Loans' },
+    { key: 'realEstateLoansToLoans', label: 'Real Estate / Loans' },
+    { key: 'ciLoansToLoans', label: 'C&I Loans / Loans' }
+  ];
+
+  const US_STATES = [
+    'AK','AL','AR','AZ','CA','CO','CT','DC','DE','FL','GA','HI','IA','ID','IL',
+    'IN','KS','KY','LA','MA','MD','ME','MI','MN','MO','MS','MT','NC','ND','NE',
+    'NH','NJ','NM','NV','NY','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT',
+    'VA','VT','WA','WI','WV','WY'
+  ];
+
+  function setupPeerGroups() {
+    const newBtn = document.getElementById('peerGroupNewBtn');
+    if (newBtn) newBtn.addEventListener('click', () => startCreatePeerGroup());
+    const archive = document.getElementById('peerGroupsArchiveFilter');
+    if (archive) archive.addEventListener('change', () => {
+      peerGroupsState.archiveFilter = archive.value;
+      loadPeerGroups();
+    });
+  }
+
+  async function loadPeerGroups() {
+    const list = document.getElementById('peerGroupsList');
+    if (!list) return;
+    const filter = peerGroupsState.archiveFilter;
+    const qs = filter === 'all' || filter === 'only' ? '?includeArchived=1' : '';
+    try {
+      const res = await fetch('/api/peer-groups' + qs, { cache: 'no-store' });
+      const data = await res.json();
+      const all = Array.isArray(data.peerGroups) ? data.peerGroups : [];
+      peerGroupsState.cohorts = filter === 'only'
+        ? all.filter(c => c.archivedAt)
+        : (filter === 'all' ? all : all.filter(c => !c.archivedAt));
+      renderPeerGroupsList();
+      if (peerGroupsState.isCreating) {
+        renderPeerGroupBuilder(null);
+      } else if (peerGroupsState.selectedId) {
+        const found = peerGroupsState.cohorts.find(c => c.id === peerGroupsState.selectedId);
+        if (found) renderPeerGroupBuilder(found);
+        else clearPeerGroupDetail();
+      } else {
+        clearPeerGroupDetail();
+      }
+    } catch (err) {
+      list.innerHTML = `<li class="peer-groups-empty">Could not load peer groups: ${escapeHtml(err.message || err)}</li>`;
+    }
+  }
+
+  function renderPeerGroupsList() {
+    const list = document.getElementById('peerGroupsList');
+    if (!list) return;
+    if (!peerGroupsState.cohorts.length) {
+      list.innerHTML = '<li class="peer-groups-empty">No cohorts yet. Click "+ New peer group" to create one.</li>';
+      return;
+    }
+    list.innerHTML = peerGroupsState.cohorts.map(c => {
+      const active = c.id === peerGroupsState.selectedId && !peerGroupsState.isCreating ? ' active' : '';
+      const archivedBadge = c.archivedAt ? ' <span class="peer-groups-archived-pill">Archived</span>' : '';
+      const summary = peerGroupCriteriaSummary(c.criteria || {});
+      return `
+        <li>
+          <button type="button" class="peer-groups-list-item${active}" data-peer-group-id="${escapeHtml(c.id)}">
+            <strong>${escapeHtml(c.name)}${archivedBadge}</strong>
+            <em>${escapeHtml(c.id)}</em>
+            <span>${escapeHtml(summary || 'No filters — every bank')}</span>
+          </button>
+        </li>`;
+    }).join('');
+    list.querySelectorAll('[data-peer-group-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        peerGroupsState.isCreating = false;
+        peerGroupsState.selectedId = btn.dataset.peerGroupId;
+        renderPeerGroupsList();
+        const found = peerGroupsState.cohorts.find(c => c.id === peerGroupsState.selectedId);
+        if (found) renderPeerGroupBuilder(found);
+      });
+    });
+  }
+
+  function peerGroupCriteriaSummary(criteria) {
+    if (!criteria) return '';
+    const parts = [];
+    if (criteria.assetMin || criteria.assetMax) {
+      const fmt = (n) => {
+        if (!Number.isFinite(Number(n))) return '';
+        const v = Number(n);
+        if (v >= 1000000) return '$' + (v / 1000000).toFixed(v % 1000000 === 0 ? 0 : 1) + 'B';
+        if (v >= 1000) return '$' + (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + 'M';
+        return '$' + v + 'K';
+      };
+      const lo = criteria.assetMin ? fmt(criteria.assetMin) : '';
+      const hi = criteria.assetMax ? fmt(criteria.assetMax) : '';
+      if (lo && hi) parts.push(`${lo}–${hi}`);
+      else if (lo) parts.push('≥ ' + lo);
+      else if (hi) parts.push('≤ ' + hi);
+    }
+    if (criteria.states && criteria.states.length) {
+      parts.push(criteria.states.length > 4 ? `${criteria.states.length} states` : criteria.states.join(', '));
+    }
+    if (criteria.subchapterS) parts.push(criteria.subchapterS === 'Yes' ? 'Sub-S' : 'C-corp');
+    if (criteria.loanMix && criteria.loanMix.length) {
+      parts.push(criteria.loanMix.map(r => `${shortLoanMixLabel(r.key)} ${r.op} ${r.value}%`).join(' · '));
+    }
+    return parts.join(' · ');
+  }
+
+  function shortLoanMixLabel(key) {
+    const map = {
+      agSum: 'Ag',
+      farmLoansToLoans: 'Farm',
+      agProdLoansToLoans: 'Ag Prod',
+      realEstateLoansToLoans: 'RE',
+      ciLoansToLoans: 'C&I'
+    };
+    return map[key] || key;
+  }
+
+  function clearPeerGroupDetail() {
+    const detail = document.getElementById('peerGroupsDetail');
+    if (!detail) return;
+    detail.innerHTML = `
+      <div class="peer-groups-empty-state">
+        <h3>Select a cohort or create a new one</h3>
+        <p>Cohorts let you compare a bank against the peer set that actually matches it — size bracket, region, Sub-S vs C-corp, and loan mix. The smallest matching cohort wins on every tear sheet by default; reps can switch on the fly.</p>
+      </div>`;
+  }
+
+  function startCreatePeerGroup() {
+    peerGroupsState.isCreating = true;
+    peerGroupsState.selectedId = null;
+    renderPeerGroupsList();
+    renderPeerGroupBuilder(null);
+  }
+
+  function renderPeerGroupBuilder(cohort) {
+    const detail = document.getElementById('peerGroupsDetail');
+    if (!detail) return;
+    const isCreate = !cohort;
+    const c = cohort || { name: '', description: '', criteria: {}, archivedAt: null, id: '(new)' };
+    const cr = c.criteria || {};
+    const archived = !!c.archivedAt;
+    detail.innerHTML = `
+      <div class="peer-groups-builder">
+        <header>
+          <div>
+            <span class="tool-eyebrow">Peer cohort</span>
+            <h3>${escapeHtml(isCreate ? 'New peer group' : c.name)}</h3>
+            <small>${escapeHtml(c.id || '')}${archived ? ' · Archived' : ''}</small>
+          </div>
+          <div class="peer-groups-builder-actions">
+            ${isCreate || archived ? '' : `<button type="button" class="small-btn" data-pg-archive>Archive</button>`}
+          </div>
+        </header>
+        <div class="peer-groups-form">
+          <label class="peer-groups-row-2"><span>Name</span>
+            <input type="text" id="pgName" value="${escapeHtml(c.name)}" placeholder="e.g. Sub-S ag banks under $500M"></label>
+          <label class="peer-groups-row-2"><span>Description</span>
+            <input type="text" id="pgDescription" value="${escapeHtml(c.description || '')}" placeholder="What this cohort is for"></label>
+
+          <fieldset class="peer-groups-fieldset">
+            <legend>Asset size ($000)</legend>
+            <label><span>Minimum</span>
+              <input type="number" id="pgAssetMin" value="${cr.assetMin == null ? '' : cr.assetMin}" placeholder="e.g. 100000" step="1000"></label>
+            <label><span>Maximum</span>
+              <input type="number" id="pgAssetMax" value="${cr.assetMax == null ? '' : cr.assetMax}" placeholder="e.g. 500000" step="1000"></label>
+            <small>Workbook stores totals in $000 (so $500M = 500000).</small>
+          </fieldset>
+
+          <fieldset class="peer-groups-fieldset">
+            <legend>Geography</legend>
+            <label class="peer-groups-states">
+              <span>States (Cmd/Ctrl-click for multiple; empty = any state)</span>
+              <select id="pgStates" multiple size="8">
+                ${US_STATES.map(s => {
+                  const sel = (cr.states || []).includes(s) ? ' selected' : '';
+                  return `<option value="${s}"${sel}>${s}</option>`;
+                }).join('')}
+              </select>
+            </label>
+          </fieldset>
+
+          <fieldset class="peer-groups-fieldset">
+            <legend>Corporate structure</legend>
+            <div class="peer-groups-radios">
+              <label><input type="radio" name="pgSubS" value="" ${!cr.subchapterS ? 'checked' : ''}> Any</label>
+              <label><input type="radio" name="pgSubS" value="Yes" ${cr.subchapterS === 'Yes' ? 'checked' : ''}> Sub-S</label>
+              <label><input type="radio" name="pgSubS" value="No" ${cr.subchapterS === 'No' ? 'checked' : ''}> C-corp</label>
+            </div>
+          </fieldset>
+
+          <fieldset class="peer-groups-fieldset">
+            <legend>Loan mix filters</legend>
+            <div id="pgLoanMixRows">
+              ${(cr.loanMix || []).map((r, idx) => renderLoanMixRow(r, idx)).join('') || '<div class="peer-groups-loan-empty">No loan-mix filters yet.</div>'}
+            </div>
+            <button type="button" class="small-btn" id="pgAddLoanMix">+ Add filter</button>
+          </fieldset>
+
+          <div class="peer-groups-preview" id="pgPreview">
+            <strong>Population</strong>
+            <span id="pgPreviewCount">—</span>
+            <small id="pgPreviewPeriod"></small>
+          </div>
+
+          <div class="peer-groups-form-actions">
+            ${archived ? '' : `<button type="button" class="publish-btn" id="pgSaveBtn">${isCreate ? 'Create cohort' : 'Save changes'}</button>`}
+            <button type="button" class="small-btn" id="pgCancelBtn">${isCreate ? 'Cancel' : 'Close'}</button>
+          </div>
+        </div>
+      </div>
+    `;
+    bindPeerGroupBuilder(c, isCreate);
+    schedulePeerGroupPreview();
+  }
+
+  function renderLoanMixRow(r, idx) {
+    return `
+      <div class="peer-groups-loan-row" data-loan-idx="${idx}">
+        <select data-pg-loan-key>
+          ${LOAN_MIX_FIELDS.map(f => `<option value="${f.key}" ${f.key === r.key ? 'selected' : ''}>${escapeHtml(f.label)}</option>`).join('')}
+        </select>
+        <select data-pg-loan-op>
+          ${['>=','<=','>','<','='].map(op => `<option value="${op}" ${op === r.op ? 'selected' : ''}>${op}</option>`).join('')}
+        </select>
+        <input type="number" data-pg-loan-value value="${r.value == null ? '' : r.value}" step="0.1" placeholder="%">
+        <button type="button" class="peer-groups-loan-del" data-pg-loan-del="${idx}" title="Remove">&times;</button>
+      </div>`;
+  }
+
+  function bindPeerGroupBuilder(cohort, isCreate) {
+    const detail = document.getElementById('peerGroupsDetail');
+    if (!detail) return;
+    detail.querySelectorAll('input, select').forEach(el => {
+      el.addEventListener('input', schedulePeerGroupPreview);
+      el.addEventListener('change', schedulePeerGroupPreview);
+    });
+    detail.querySelector('#pgAddLoanMix')?.addEventListener('click', () => {
+      const rows = detail.querySelector('#pgLoanMixRows');
+      const empty = rows?.querySelector('.peer-groups-loan-empty');
+      if (empty) empty.remove();
+      const idx = rows ? rows.querySelectorAll('.peer-groups-loan-row').length : 0;
+      const wrap = document.createElement('div');
+      wrap.innerHTML = renderLoanMixRow({ key: 'agSum', op: '>=', value: '' }, idx);
+      const row = wrap.firstElementChild;
+      rows.appendChild(row);
+      row.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('input', schedulePeerGroupPreview);
+        el.addEventListener('change', schedulePeerGroupPreview);
+      });
+      row.querySelector('[data-pg-loan-del]').addEventListener('click', () => { row.remove(); schedulePeerGroupPreview(); });
+    });
+    detail.querySelectorAll('[data-pg-loan-del]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        btn.closest('.peer-groups-loan-row')?.remove();
+        schedulePeerGroupPreview();
+      });
+    });
+    detail.querySelector('#pgSaveBtn')?.addEventListener('click', () => savePeerGroupForm(cohort, isCreate));
+    detail.querySelector('#pgCancelBtn')?.addEventListener('click', () => {
+      peerGroupsState.isCreating = false;
+      peerGroupsState.selectedId = isCreate ? null : cohort.id;
+      if (isCreate) { clearPeerGroupDetail(); renderPeerGroupsList(); }
+      else loadPeerGroups();
+    });
+    detail.querySelector('[data-pg-archive]')?.addEventListener('click', () => archivePeerGroupAction(cohort.id));
+  }
+
+  function readPeerGroupBuilderForm() {
+    const get = (id) => document.getElementById(id);
+    const numOrUndef = (el) => (el && el.value !== '' && Number.isFinite(Number(el.value))) ? Number(el.value) : undefined;
+    const states = Array.from(get('pgStates')?.selectedOptions || []).map(o => o.value);
+    const subS = (Array.from(document.querySelectorAll('input[name="pgSubS"]')).find(r => r.checked) || {}).value || '';
+    const loanMix = Array.from(document.querySelectorAll('.peer-groups-loan-row')).map(row => ({
+      key: row.querySelector('[data-pg-loan-key]')?.value,
+      op: row.querySelector('[data-pg-loan-op]')?.value,
+      value: Number(row.querySelector('[data-pg-loan-value]')?.value)
+    })).filter(r => r.key && r.op && Number.isFinite(r.value));
+    return {
+      name: get('pgName')?.value.trim() || '',
+      description: get('pgDescription')?.value.trim() || '',
+      criteria: {
+        assetMin: numOrUndef(get('pgAssetMin')),
+        assetMax: numOrUndef(get('pgAssetMax')),
+        states,
+        subchapterS: subS || undefined,
+        loanMix
+      }
+    };
+  }
+
+  function schedulePeerGroupPreview() {
+    if (peerGroupsState.previewDebounce) clearTimeout(peerGroupsState.previewDebounce);
+    peerGroupsState.previewDebounce = setTimeout(runPeerGroupPreview, 300);
+  }
+
+  async function runPeerGroupPreview() {
+    const countEl = document.getElementById('pgPreviewCount');
+    const periodEl = document.getElementById('pgPreviewPeriod');
+    if (!countEl) return;
+    countEl.textContent = '…';
+    if (periodEl) periodEl.textContent = '';
+    try {
+      const form = readPeerGroupBuilderForm();
+      const res = await fetch('/api/peer-groups/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ criteria: form.criteria })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Preview failed');
+      countEl.textContent = formatNumber(data.populationCount || 0) + ' banks';
+      if (periodEl) periodEl.textContent = data.period ? `at ${data.period}` : '';
+    } catch (err) {
+      countEl.textContent = '—';
+      if (periodEl) periodEl.textContent = err.message || '';
+    }
+  }
+
+  async function savePeerGroupForm(cohort, isCreate) {
+    const form = readPeerGroupBuilderForm();
+    if (!form.name) { showToast('Name is required', true); return; }
+    try {
+      const url = isCreate ? '/api/peer-groups' : `/api/peer-groups/${encodeURIComponent(cohort.id)}`;
+      const method = isCreate ? 'POST' : 'PATCH';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      showToast(isCreate ? `Created ${data.peerGroup.id}` : 'Saved');
+      peerGroupsState.isCreating = false;
+      peerGroupsState.selectedId = data.peerGroup.id;
+      await loadPeerGroups();
+    } catch (err) {
+      showToast('Save failed: ' + (err.message || err), true);
+    }
+  }
+
+  async function archivePeerGroupAction(id) {
+    if (!confirm('Archive this peer group? Tear sheets will stop picking it as a best fit.')) return;
+    try {
+      const res = await fetch('/api/peer-groups/' + encodeURIComponent(id), { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Archive failed');
+      showToast('Archived');
+      await loadPeerGroups();
+    } catch (err) {
+      showToast('Archive failed: ' + (err.message || err), true);
+    }
+  }
+
   function setupReports() {
     loadReportsSessionReports();
     setupReportsAppEvents();
@@ -7175,6 +7557,9 @@
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
       btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
     });
+    profile.querySelectorAll('[data-cohort-picker]').forEach(select => {
+      select.addEventListener('change', () => handlePeerCohortChange(select));
+    });
     wireStrategyDropZones(profile);
   }
 
@@ -8405,10 +8790,16 @@
     }
     const group = peerComparison.peerGroup;
     const criteria = group.criteria || {};
+    // subchapterS may come pre-formatted ("Sub-S"/"C-corp" from custom
+    // cohorts) or raw ("Yes"/"No" from the legacy FedFis workbook).
+    const subSBit = criteria.subchapterS
+      ? (/^(sub-?s|c-?corp)/i.test(criteria.subchapterS) ? criteria.subchapterS : `Sub-S ${criteria.subchapterS}`)
+      : '';
     const bits = [
       criteria.assetRange,
       criteria.agLoanRange ? `Ag ${criteria.agLoanRange}` : '',
-      criteria.subchapterS ? `Sub-S ${criteria.subchapterS}` : '',
+      subSBit,
+      criteria.loanMix,
       criteria.region
     ].filter(Boolean).join(' · ');
     const populationText = group.populationCount ? `${formatNumber(group.populationCount)} banks` : '';
@@ -8423,8 +8814,47 @@
         <strong>Peer cohort:</strong>
         <span>${escapeHtml(group.label || 'Averaged Series Peer Group')}${bits ? ` — ${escapeHtml(bits)}` : ''}</span>
         <span class="bank-peer-banner-meta">${escapeHtml([populationText, metricText, periodText].filter(Boolean).join(' · '))}${mismatch}</span>
+        ${renderBankPeerCohortPicker(group)}
       </div>
     `;
+  }
+
+  // Per-tear-sheet cohort override. Loads the cohort list lazily on first
+  // render, then refetches /api/banks/:id?cohortId=X to swap in a new
+  // peerComparison and re-render the existing tear sheet. Picker selection
+  // is in-memory (selectedBank.bank) — no persistence, by design: reps swap
+  // cohorts to "what-if" without burning a coverage note.
+  function renderBankPeerCohortPicker(currentGroup) {
+    const list = peerGroupsState.cohorts || [];
+    if (!list.length) return '';
+    const opts = list
+      .filter(c => !c.archivedAt)
+      .map(c => `<option value="${escapeHtml(c.id)}"${currentGroup && c.id === currentGroup.id ? ' selected' : ''}>${escapeHtml(c.name)}</option>`)
+      .join('');
+    if (!opts) return '';
+    return `
+      <span class="bank-peer-cohort-pick">
+        <label>Compare against
+          <select data-cohort-picker>${opts}</select>
+        </label>
+      </span>`;
+  }
+
+  // Side effect: when the cohort picker fires, refetch the bank and replace
+  // peerComparison in selectedBank so call-report sections re-render.
+  async function handlePeerCohortChange(select) {
+    const bankId = selectedBankId();
+    if (!bankId) return;
+    const cohortId = select.value;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}${cohortId ? '?cohortId=' + encodeURIComponent(cohortId) : ''}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Cohort switch failed');
+      selectedBank = data;
+      renderBankProfile();
+    } catch (err) {
+      showToast('Cohort switch failed: ' + (err.message || err), true);
+    }
   }
 
   function renderBankCallReportSection(title, rows, periods, startNumber, peerComparison) {
@@ -11704,6 +12134,8 @@
     body.innerHTML = filtered.map(note => {
       const source = (note.sourceFiles || [])[0];
       const sourceLink = source ? `<a class="source-chip" href="/api/structured-notes/files/${encodeURIComponent(source.id)}" target="_blank" rel="noopener">eml</a>` : '<span class="no-restrict">&mdash;</span>';
+      const priceDisplay = structuredNotePriceDisplay(note);
+      const pricingDisplay = structuredNotePricingDisplay(note);
       return `
         <tr>
           <td class="issuer-cell"><strong>${escapeHtml(note.issuer || 'Issuer')}</strong><div class="mbs-note">${escapeHtml(note.emailSubject || '')}</div></td>
@@ -11712,13 +12144,31 @@
           <td>${escapeHtml(note.coupon || note.structure || '')}<div class="mbs-note">${escapeHtml(note.structure || '')}</div></td>
           <td>${note.maturityDate ? escapeHtml(formatNumericDate(note.maturityDate)) : '<span class="no-restrict">&mdash;</span>'}</td>
           <td>${escapeHtml(note.firstCall || '')}</td>
-          <td style="text-align:right">${note.price == null ? '<span class="no-restrict">&mdash;</span>' : Number(note.price).toFixed(2)}</td>
+          <td style="text-align:right">${priceDisplay ? escapeHtml(priceDisplay) : '<span class="no-restrict">&mdash;</span>'}</td>
           <td class="cusip-cell">${escapeHtml(note.cusip || '')}</td>
-          <td>${escapeHtml(note.pricing || '')}</td>
+          <td>${pricingDisplay ? escapeHtml(pricingDisplay) : '<span class="no-restrict">&mdash;</span>'}</td>
           <td>${sourceLink}</td>
         </tr>
       `;
     }).join('');
+  }
+
+  function structuredNotePriceDisplay(note) {
+    const raw = String(note && note.priceText || '').trim();
+    if (raw) return raw;
+    const price = Number(note && note.price);
+    return isFinite(price) ? price.toFixed(2) : '';
+  }
+
+  function structuredNotePricingDisplay(note) {
+    const raw = String(note && note.pricing || '').trim();
+    if (!raw) return '';
+    const sentYear = String(note.emailSentDate || structuredNotesData?.targetDate || '').match(/^(\d{4})-/)?.[1] || '';
+    return raw.replace(/\b(\d{1,2})\/(\d{1,2})(?!\/)\b/g, (_, month, day) => {
+      const mm = String(Number(month)).padStart(2, '0');
+      const dd = String(Number(day)).padStart(2, '0');
+      return sentYear ? `${mm}/${dd}/${sentYear}` : `${mm}/${dd}`;
+    });
   }
 
   async function loadMarketColor() {
@@ -12279,6 +12729,7 @@
     setupBankSearch();
     setupReports();
     setupStrategies();
+    setupPeerGroups();
     setupCommissionControls();
     setupSidebar();
 

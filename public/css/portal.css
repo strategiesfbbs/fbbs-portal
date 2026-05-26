@@ -10483,3 +10483,306 @@ body {
   text-align: center;
   border-radius: 8px;
 }
+
+/* ================================================================
+   Peer Groups page
+   ================================================================ */
+.peer-groups-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  margin-top: 18px;
+}
+.peer-groups-list-panel {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.peer-groups-list-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--racing-green);
+  color: #fff;
+}
+.peer-groups-list-head strong {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.peer-groups-list-head select {
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid rgba(255,255,255,0.4);
+  border-radius: 4px;
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+.peer-groups-list-head select option { color: #0f1f17; }
+.peer-groups-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: calc(100vh - 240px);
+  overflow-y: auto;
+}
+.peer-groups-list li {
+  border-bottom: 1px solid var(--line);
+}
+.peer-groups-list li:last-child { border-bottom: 0; }
+.peer-groups-list-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.peer-groups-list-item:hover { background: #f4f8f6; }
+.peer-groups-list-item.active { background: #e6f0eb; }
+.peer-groups-list-item strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+}
+.peer-groups-list-item em {
+  display: inline-block;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text3);
+  margin-top: 2px;
+}
+.peer-groups-list-item span {
+  display: block;
+  font-size: 11px;
+  color: var(--text2);
+  margin-top: 4px;
+}
+.peer-groups-archived-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #f1f3f1;
+  color: #4a5b53;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.peer-groups-empty {
+  padding: 14px 12px;
+  color: var(--text3);
+  font-style: italic;
+}
+
+.peer-groups-detail {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 320px;
+}
+.peer-groups-empty-state {
+  padding: 30px;
+  color: var(--text2);
+}
+.peer-groups-empty-state h3 { margin: 0 0 8px; font-size: 16px; }
+.peer-groups-empty-state p { margin: 0; max-width: 640px; }
+
+.peer-groups-builder header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  background: var(--racing-green);
+  color: #fff;
+  border-radius: 8px 8px 0 0;
+}
+.peer-groups-builder header h3 { margin: 4px 0 0; font-size: 18px; color: #fff; }
+.peer-groups-builder header small { color: #cbe4d3; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; }
+.peer-groups-builder-actions { display: flex; gap: 6px; }
+
+.peer-groups-form {
+  padding: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+.peer-groups-form label.peer-groups-row-2 {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.peer-groups-form label span {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--text2);
+}
+.peer-groups-form input[type="text"],
+.peer-groups-form input[type="number"] {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+  border: 1px solid #d4ddd8;
+  border-radius: 5px;
+}
+.peer-groups-form small {
+  color: var(--text3);
+  font-size: 11px;
+}
+.peer-groups-fieldset {
+  border: 1px solid #dde6e0;
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+}
+.peer-groups-fieldset legend {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+.peer-groups-fieldset small {
+  grid-column: 1 / -1;
+}
+.peer-groups-fieldset label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.peer-groups-states {
+  grid-column: 1 / -1;
+}
+.peer-groups-states select {
+  width: 100%;
+  padding: 6px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12px;
+  border: 1px solid #d4ddd8;
+  border-radius: 5px;
+}
+.peer-groups-radios {
+  display: flex;
+  gap: 18px;
+  grid-column: 1 / -1;
+}
+.peer-groups-radios label {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.peer-groups-loan-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) 70px 90px 28px;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+  grid-column: 1 / -1;
+}
+.peer-groups-loan-row select,
+.peer-groups-loan-row input {
+  font-size: 12px;
+  padding: 5px 7px;
+  border: 1px solid #d4ddd8;
+  border-radius: 4px;
+}
+.peer-groups-loan-del {
+  background: transparent;
+  border: 0;
+  color: #8a1f1f;
+  font-size: 18px;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0;
+}
+.peer-groups-loan-del:hover { background: #fbecec; }
+.peer-groups-loan-empty {
+  grid-column: 1 / -1;
+  color: var(--text3);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.peer-groups-preview {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  background: #f4f8f6;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+.peer-groups-preview strong {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+.peer-groups-preview span {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--racing-green);
+  font-variant-numeric: tabular-nums;
+}
+.peer-groups-preview small {
+  color: var(--text3);
+  font-size: 11px;
+}
+
+.peer-groups-form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* Tear-sheet "Compare against" cohort picker in the peer banner.
+   Wraps to its own line since .bank-peer-banner-meta already uses
+   margin-left: auto. */
+.bank-peer-cohort-pick {
+  flex-basis: 100%;
+  display: inline-flex;
+  align-items: center;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border, #d8dbe6);
+  margin-top: 4px;
+}
+.bank-peer-cohort-pick label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--text2);
+}
+.bank-peer-cohort-pick select {
+  font: inherit;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 4px 8px;
+  border: 1px solid #d4ddd8;
+  border-radius: 4px;
+  background: #fff;
+  max-width: 280px;
+}
+
