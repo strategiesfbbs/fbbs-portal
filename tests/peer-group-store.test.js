@@ -26,6 +26,7 @@ if (!sqliteAvailable()) {
 
 const store = require('../server/peer-group-store');
 const peerAverages = require('../server/peer-averages');
+const coverageStore = require('../server/bank-coverage-store');
 
 let passed = 0;
 let failed = 0;
@@ -169,6 +170,15 @@ try {
   ok('peer percentOf excludes zero denominator',
     largeDepositPeer && largeDepositPeer.sampleSize === 2,
     largeDepositPeer ? `got ${largeDepositPeer.sampleSize}` : 'missing metric');
+
+  // --- Saved preferred peer cohort ---
+  ok('preferred peer missing by default', coverageStore.getPreferredPeerGroup(tmpDir, 'B1') === null);
+  const preference = coverageStore.setPreferredPeerGroup(tmpDir, 'B1', 'PG-0004');
+  ok('preferred peer saves cohort id', preference && preference.peerGroupId === 'PG-0004');
+  const updatedPreference = coverageStore.setPreferredPeerGroup(tmpDir, 'B1', 'PG-0003');
+  ok('preferred peer updates existing row', updatedPreference && updatedPreference.peerGroupId === 'PG-0003');
+  coverageStore.removePreferredPeerGroup(tmpDir, 'B1');
+  ok('preferred peer removes cleanly', coverageStore.getPreferredPeerGroup(tmpDir, 'B1') === null);
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }

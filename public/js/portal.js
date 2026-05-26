@@ -7600,6 +7600,9 @@
     profile.querySelectorAll('[data-cohort-picker]').forEach(select => {
       select.addEventListener('change', () => handlePeerCohortChange(select));
     });
+    profile.querySelectorAll('[data-save-peer-preference]').forEach(btn => {
+      btn.addEventListener('click', savePeerCohortPreference);
+    });
     wireStrategyDropZones(profile);
   }
 
@@ -8422,6 +8425,7 @@
       const data = await readBankJson(res);
       selectedBankAccountStatus = data.accountStatus || selectedBankAccountStatus || defaultBankAccountStatus();
       selectedTearSheetCoverage = data.saved || getSavedBankById(bankId);
+      if (selectedBank && selectedBank.bank) selectedBank.bank.peerPreference = data.peerPreference || null;
     } catch (e) {
       selectedTearSheetCoverage = getSavedBankById(bankId);
     }
@@ -8434,6 +8438,9 @@
       const data = await readBankJson(res);
       if (data.accountStatus) selectedBankAccountStatus = data.accountStatus;
       selectedBankCoverage = data.saved || getSavedBankById(bankId);
+      if (selectedBank && selectedBank.bank && String(selectedBank.bank.id) === String(bankId)) {
+        selectedBank.bank.peerPreference = data.peerPreference || null;
+      }
       selectedBankNotes = Array.isArray(data.notes) ? data.notes : [];
       if (options.renderDetail) renderCoverageDetail();
       else {
@@ -8846,6 +8853,9 @@
     const metricCount = peerComparison.byKey ? Object.keys(peerComparison.byKey).length : 0;
     const metricText = metricCount ? `${formatNumber(metricCount)} peer metrics` : '';
     const periodText = peerComparison.period || group.latestPeriod || '';
+    const confidence = peerComparison.confidence || {};
+    const confidenceLevel = confidence.level || 'Medium';
+    const confidenceReason = Array.isArray(confidence.reasons) ? confidence.reasons.join(' · ') : '';
     const basis = Array.isArray(peerComparison.selectionBasis) && peerComparison.selectionBasis.length
       ? `Matched on ${peerComparison.selectionBasis.join(', ')}`
       : bits || 'Broad cohort';
@@ -8857,6 +8867,7 @@
       <div class="bank-peer-banner">
         <strong>Peer cohort:</strong>
         <span>${escapeHtml(group.label || 'Averaged Series Peer Group')}${bits ? ` — ${escapeHtml(bits)}` : ''}</span>
+        <span class="bank-peer-confidence bank-peer-confidence-${escapeHtml(confidenceLevel.toLowerCase())}" title="${escapeHtml(confidenceReason)}">${escapeHtml(confidenceLevel)} confidence</span>
         <span class="bank-peer-banner-meta">${escapeHtml([populationText, metricText, periodText].filter(Boolean).join(' · '))}${mismatch}</span>
         <span class="bank-peer-basis">${escapeHtml([reason, basis].filter(Boolean).join(': '))}</span>
         ${renderBankPeerCohortPicker(group)}
@@ -8872,6 +8883,11 @@
   function renderBankPeerCohortPicker(currentGroup) {
     const list = peerGroupsState.cohorts || [];
     if (!list.length) return '';
+    const preferredId = selectedBank && selectedBank.bank && selectedBank.bank.peerPreference
+      ? String(selectedBank.bank.peerPreference.peerGroupId || '')
+      : '';
+    const currentId = currentGroup && currentGroup.id ? String(currentGroup.id) : '';
+    const isPreferred = preferredId && currentId && preferredId === currentId;
     const opts = list
       .filter(c => !c.archivedAt)
       .map(c => `<option value="${escapeHtml(c.id)}"${currentGroup && c.id === currentGroup.id ? ' selected' : ''}>${escapeHtml(c.name)}</option>`)
@@ -8882,6 +8898,7 @@
         <label>Compare against
           <select data-cohort-picker>${opts}</select>
         </label>
+        <button type="button" class="text-btn bank-peer-save-btn" data-save-peer-preference ${isPreferred ? 'disabled aria-disabled="true"' : ''}>${isPreferred ? 'Preferred' : 'Save as preferred'}</button>
       </span>`;
   }
 
@@ -8899,6 +8916,32 @@
       renderBankProfile();
     } catch (err) {
       showToast('Cohort switch failed: ' + (err.message || err), true);
+    }
+  }
+
+  async function savePeerCohortPreference() {
+    const bankId = selectedBankId();
+    const peer = selectedBank && selectedBank.bank ? selectedBank.bank.peerComparison : null;
+    const cohortId = peer && peer.peerGroup ? peer.peerGroup.id : '';
+    if (!bankId || !cohortId) return showToast('No peer cohort selected', true);
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/peer-preference`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cohortId })
+      });
+      const data = await readBankJson(res);
+      if (selectedBank && selectedBank.bank) {
+        selectedBank.bank.peerPreference = data.peerPreference || { bankId, peerGroupId: cohortId };
+        if (selectedBank.bank.peerComparison) {
+          selectedBank.bank.peerComparison.selectionReason = 'Preferred cohort';
+          selectedBank.bank.peerComparison.preferredPeerGroupId = cohortId;
+        }
+      }
+      renderBankProfile();
+      showToast('Saved preferred peer cohort');
+    } catch (err) {
+      showToast('Could not save preferred peer cohort: ' + (err.message || err), true);
     }
   }
 

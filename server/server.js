@@ -85,10 +85,12 @@ const {
 const {
   addBankNote,
   getBankCoverage,
+  getPreferredPeerGroup,
   getSavedBankCoverageMap,
   listSavedBanks,
   removeBankNote,
   removeSavedBank,
+  setPreferredPeerGroup,
   upsertSavedBank
 } = require('./bank-coverage-store');
 const {
@@ -2041,13 +2043,23 @@ function getBankById(id) {
     if (!data || !data.bank || !data.bank.summary) return data;
     const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, [data.bank.id]);
     const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, [data.bank.id]);
+    const preferredPeer = getPreferredPeerGroup(BANK_REPORTS_DIR, data.bank.id);
+    const preferredComparison = preferredPeer && preferredPeer.peerGroupId
+      ? getPeerComparisonForBank(data.bank, {
+          cohortId: preferredPeer.peerGroupId,
+          preferredPeerGroupId: preferredPeer.peerGroupId,
+          selectionReason: 'Preferred cohort'
+        })
+      : null;
+    const peerComparison = preferredComparison || getPeerComparisonForBank(data.bank);
     return cacheSet(bankDetailCache, bankId, {
       ...data,
       bank: {
         ...data.bank,
         summary: enrichBankSummary(data.bank.summary, statuses, coverageMap),
         bondAccounting: getBondAccountingForBank(BANK_REPORTS_DIR, data.bank.id),
-        peerComparison: getPeerComparisonForBank(data.bank)
+        peerPreference: preferredPeer,
+        peerComparison
       }
     });
   } catch (err) {
@@ -3519,10 +3531,10 @@ function getPeerComparisonForBank(bank, options = {}) {
     const cohort = peerGroupStore.getPeerGroup(BANK_REPORTS_DIR, cohortId);
     if (cohort && !cohort.archivedAt) {
       const comparison = peerAverages.peerComparisonFromCohort(BANK_REPORTS_DIR, cohort, bankPeriod, {
-        selectionReason: 'Selected by user',
+        selectionReason: options.selectionReason || 'Selected by user',
         selectionBasis: peerAverages.cohortSelectionBasis(cohort, bank)
       });
-      if (comparison) return comparison;
+      if (comparison) return decoratePeerComparison(comparison, options);
     }
   }
 
@@ -3534,7 +3546,7 @@ function getPeerComparisonForBank(bank, options = {}) {
         selectionReason: 'Best-fit cohort',
         selectionBasis: peerAverages.cohortSelectionBasis(best, bank)
       });
-      if (comparison) return comparison;
+      if (comparison) return decoratePeerComparison(comparison, options);
     }
   }
 
@@ -3543,7 +3555,7 @@ function getPeerComparisonForBank(bank, options = {}) {
   if (!index) return null;
   const period = index.periods.includes(bankPeriod) ? bankPeriod : (index.periods[0] || '');
   const byKey = index.byPeriod.get(period) || {};
-  return {
+  return decoratePeerComparison({
     peerGroup: index.peerGroup,
     period,
     bankPeriod,
@@ -3551,6 +3563,33 @@ function getPeerComparisonForBank(bank, options = {}) {
     selectionReason: 'Legacy FedFis workbook cohort',
     selectionBasis: [],
     byKey
+  }, options);
+}
+
+function decoratePeerComparison(comparison, options = {}) {
+  if (!comparison) return comparison;
+  const samples = Object.values(comparison.byKey || {})
+    .map(row => Number(row && row.sampleSize))
+    .filter(n => Number.isFinite(n) && n > 0);
+  const minSampleSize = samples.length ? Math.min(...samples) : null;
+  const population = Number(comparison.peerGroup && comparison.peerGroup.populationCount) || 0;
+  const periodAligned = comparison.periodAligned !== false;
+  let level = 'High';
+  const reasons = [];
+  if (population > 0) reasons.push(`${population.toLocaleString('en-US')} banks`);
+  if (minSampleSize != null) reasons.push(`smallest metric n=${minSampleSize.toLocaleString('en-US')}`);
+  else reasons.push('metric samples not reported');
+  reasons.push(periodAligned ? 'period aligned' : 'period mismatch');
+  if (/legacy/i.test(comparison.selectionReason || '')) reasons.push('legacy workbook cohort');
+  if (!periodAligned || (population > 0 && population < 30) || (minSampleSize != null && minSampleSize < 30)) {
+    level = 'Low';
+  } else if (/legacy/i.test(comparison.selectionReason || '') || population < 100 || minSampleSize == null || minSampleSize < 100) {
+    level = 'Medium';
+  }
+  return {
+    ...comparison,
+    preferredPeerGroupId: options.preferredPeerGroupId || '',
+    confidence: { level, reasons, populationCount: population || null, minSampleSize }
   };
 }
 
@@ -5745,7 +5784,8 @@ const server = http.createServer(async (req, res) => {
       const coverageMap = coverage.saved ? new Map([[String(bankId), coverage.saved]]) : new Map();
       return sendJSON(res, 200, {
         ...coverage,
-        accountStatus: summary ? effectiveAccountStatus(summary, statuses, coverageMap) : null
+        accountStatus: summary ? effectiveAccountStatus(summary, statuses, coverageMap) : null,
+        peerPreference: getPreferredPeerGroup(BANK_REPORTS_DIR, bankId)
       });
     }
 
@@ -5766,6 +5806,26 @@ const server = http.createServer(async (req, res) => {
       appendAuditLog({ event: 'bank-note-remove', noteId });
       invalidateBankCaches();
       return sendJSON(res, 200, { success: true });
+    }
+
+    const bankPeerPreferenceMatch = pathname.match(/^\/api\/banks\/([^/]+)\/peer-preference$/);
+    if (bankPeerPreferenceMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankPeerPreferenceMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      const summary = getBankSummaryForCoverage(bankId);
+      if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+      try {
+        const body = await readJsonBody(req);
+        const cohortId = String(body && body.cohortId || '').trim();
+        const cohort = peerGroupStore.getPeerGroup(BANK_REPORTS_DIR, cohortId);
+        if (!cohort || cohort.archivedAt) return sendJSON(res, 404, { error: 'Peer group not found' });
+        const peerPreference = setPreferredPeerGroup(BANK_REPORTS_DIR, bankId, cohortId);
+        appendAuditLog({ event: 'bank-peer-preference-save', bankId, peerGroupId: cohortId });
+        invalidateBankCaches();
+        return sendJSON(res, 200, { peerPreference });
+      } catch (err) {
+        return sendJSON(res, 400, { error: err.message || 'Could not save peer preference' });
+      }
     }
 
     // --- Peer groups (user-curated cohorts) ---
@@ -5931,7 +5991,7 @@ const server = http.createServer(async (req, res) => {
         if (overridden) {
           return sendJSON(res, 200, {
             ...data,
-            bank: { ...data.bank, peerComparison: overridden }
+            bank: { ...data.bank, peerComparison: overridden, peerPreference: getPreferredPeerGroup(BANK_REPORTS_DIR, data.bank.id) }
           });
         }
       }

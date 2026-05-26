@@ -76,6 +76,12 @@ function ensureCoverageDatabase(outputDir) {
       updated_at TEXT NOT NULL,
       FOREIGN KEY (bank_id) REFERENCES bank_coverage(bank_id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS bank_peer_preferences (
+      bank_id TEXT PRIMARY KEY,
+      peer_group_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_bank_coverage_priority ON bank_coverage(priority, next_action_date);
     CREATE INDEX IF NOT EXISTS idx_bank_notes_bank_created ON bank_notes(bank_id, created_at DESC);
   `);
@@ -326,15 +332,62 @@ function removeBankNote(outputDir, noteId) {
   return { success: true };
 }
 
+function getPreferredPeerGroup(outputDir, bankId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    SELECT
+      bank_id AS bankId,
+      peer_group_id AS peerGroupId,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM bank_peer_preferences
+    WHERE bank_id = ${sqlString(String(bankId || ''))}
+    LIMIT 1;
+  `);
+  return rows.length ? {
+    bankId: rows[0].bankId,
+    peerGroupId: rows[0].peerGroupId,
+    createdAt: rows[0].createdAt || '',
+    updatedAt: rows[0].updatedAt || ''
+  } : null;
+}
+
+function setPreferredPeerGroup(outputDir, bankId, peerGroupId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const cleanBankId = cleanText(bankId, 80);
+  const cleanPeerGroupId = cleanText(peerGroupId, 80);
+  if (!cleanBankId) throw new Error('Bank ID is required');
+  if (!cleanPeerGroupId) throw new Error('Peer group ID is required');
+  const existing = getPreferredPeerGroup(outputDir, cleanBankId);
+  const now = new Date().toISOString();
+  runSqlite(dbPath, `
+    INSERT INTO bank_peer_preferences (bank_id, peer_group_id, created_at, updated_at)
+    VALUES (${sqlString(cleanBankId)}, ${sqlString(cleanPeerGroupId)}, ${sqlString(existing ? existing.createdAt : now)}, ${sqlString(now)})
+    ON CONFLICT(bank_id) DO UPDATE SET
+      peer_group_id = excluded.peer_group_id,
+      updated_at = excluded.updated_at;
+  `);
+  return getPreferredPeerGroup(outputDir, cleanBankId);
+}
+
+function removePreferredPeerGroup(outputDir, bankId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  runSqlite(dbPath, `DELETE FROM bank_peer_preferences WHERE bank_id = ${sqlString(String(bankId || ''))};`);
+  return { success: true };
+}
+
 module.exports = {
   COVERAGE_DATABASE_FILENAME,
   addBankNote,
   coverageDatabasePathForDir,
   ensureCoverageDatabase,
   getBankCoverage,
+  getPreferredPeerGroup,
   getSavedBankCoverageMap,
   listSavedBanks,
   removeBankNote,
+  removePreferredPeerGroup,
   removeSavedBank,
+  setPreferredPeerGroup,
   upsertSavedBank
 };
