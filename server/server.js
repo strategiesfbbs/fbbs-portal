@@ -4523,7 +4523,9 @@ function handleSwapHoldings(res, bankId) {
         bookYieldYtw: row.bookYieldYtw || null,
         marketYieldYtm: row.marketYieldYtm || null,
         marketYieldYtw: row.marketYieldYtw || null,
-        modifiedDuration: row.modifiedDuration || null,
+        // Parser stores the workbook's "Eff. Dur" column as effectiveDuration;
+        // legs carry it under modifiedDuration to match swap-store's schema.
+        modifiedDuration: row.effectiveDuration || null,
         averageLife: row.averageLife || null,
         gainLoss: row.gainLoss || 0,
         bookValue: row.bookValue || null,
