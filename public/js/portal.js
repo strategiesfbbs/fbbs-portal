@@ -178,18 +178,57 @@
     'Wire Transfer'
   ];
   const PEER_ANALYSIS_METRICS = [
-    { key: 'loansToDeposits', label: 'Loans / Deposits', type: 'percent', section: 'Funding', higherIsBetter: null, peerLabels: [/loans?\s*\/\s*deposits?/i, /loans?.*deposits?/i] },
-    { key: 'liquidAssetsToAssets', label: 'Liquid Assets / Assets', type: 'percent', section: 'Liquidity', higherIsBetter: true, peerLabels: [/liquid assets?.*assets/i] },
-    { key: 'wholesaleFundingReliance', label: 'Reliance on Wholesale Funding', type: 'percent', section: 'Funding', higherIsBetter: false, peerLabels: [/wholesale funding/i] },
-    { key: 'securitiesToAssets', label: 'Securities / Assets', type: 'percent', section: 'Portfolio', higherIsBetter: true, peerLabels: [/securities.*assets/i, /total securities.*\/.*assets/i] },
-    { key: 'yieldOnSecurities', label: 'Yield on Securities', type: 'percent', section: 'Portfolio', higherIsBetter: true, peerLabels: [/yield on securities/i] },
-    { key: 'netInterestMargin', label: 'Net Interest Margin', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/net interest margin/i] },
+    { key: 'totalAssets', label: 'Total Assets', type: 'money', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total assets/i] },
+    { key: 'afsTotal', label: 'Total Securities AFS-FV', type: 'money', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total securities\s*\(afs-fv\)/i] },
+    { key: 'htmTotal', label: 'Total Securities HTM-FV', type: 'money', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total securities\s*\(htm-fv\)/i] },
+    { key: 'securitiesToAssets', label: 'Securities / Assets', type: 'percent', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total securities\s*\/\s*total assets/i, /securities.*assets/i] },
+    { key: 'totalLoans', label: 'Total Loans & Leases', type: 'money', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total loans.*leases/i] },
+    { key: 'loansToAssets', label: 'Loans / Assets', type: 'percent', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total loans\s*\/\s*assets/i] },
+    { key: 'totalDeposits', label: 'Total Deposits', type: 'money', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total deposits/i] },
+    { key: 'loansToDeposits', label: 'Loans / Deposits', type: 'percent', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/loans?\s*\/\s*deposits?/i, /loans?.*deposits?/i] },
+    { key: 'totalBorrowings', label: 'Total Borrowings', type: 'money', section: 'Balance Sheet', higherIsBetter: null, peerLabels: [/^total borrowings/i] },
+    { key: 'realEstateLoansToLoans', label: 'Real Estate Loans / Loans', type: 'percent', section: 'Loan Mix', higherIsBetter: null, peerLabels: [/^real estate loans\s*\/\s*loans/i] },
+    { key: 'farmLoansToLoans', label: 'Farmland / Loans', type: 'percent', section: 'Loan Mix', higherIsBetter: null, peerLabels: [/^farmland.*\/\s*loans/i] },
+    { key: 'agProdLoansToLoans', label: 'Agricultural Production / Loans', type: 'percent', section: 'Loan Mix', higherIsBetter: null, peerLabels: [/^agricultural prod.*\/\s*loans/i] },
+    { key: 'ciLoansToLoans', label: 'C&I Loans / Loans', type: 'percent', section: 'Loan Mix', higherIsBetter: null, peerLabels: [/^total c\s*&\s*i loans\s*\/\s*loans/i, /^total c and i loans\s*\/\s*loans/i] },
+    { key: 'totalEquityCapital', label: 'Total Equity Capital', type: 'money', section: 'Capital', higherIsBetter: null, peerLabels: [/^total equity capital/i] },
+    { key: 'tier1Capital', label: 'Tier 1 Capital', type: 'money', section: 'Capital', higherIsBetter: null, peerLabels: [/^tier 1 capital/i] },
+    { key: 'tier1RiskBasedRatio', label: 'Tier 1 Risk-Based Ratio', type: 'percent', section: 'Capital', higherIsBetter: true, peerLabels: [/^tier 1.*risk/i] },
+    { key: 'riskBasedCapitalRatio', label: 'Risk-Based Capital Ratio', type: 'percent', section: 'Capital', higherIsBetter: true, peerLabels: [/^risk based capital ratio/i] },
+    { key: 'tangibleEquityToAssets', label: 'Tangible Equity / Assets', type: 'percent', section: 'Capital', higherIsBetter: true, peerLabels: [/^tang equity\s*\/\s*tang assets/i] },
+    { key: 'leverageRatio', label: 'Leverage Ratio', type: 'percent', section: 'Capital', higherIsBetter: true, peerLabels: [/^leverage ratio/i] },
+    { key: 'dividendsDeclared', label: 'Dividends Declared', type: 'money', section: 'Capital', higherIsBetter: null, peerLabels: [/^total dividends declared/i] },
+    { key: 'dividendsToNetIncome', label: 'Dividends / Net Income', type: 'percent', section: 'Capital', higherIsBetter: null, peerLabels: [/^common divis declared\s*\/\s*net inc/i] },
     { key: 'roa', label: 'ROA', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/^roa\b/i, /return on assets/i, /return on avg/i] },
+    { key: 'roe', label: 'ROE', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/^roe\b/i, /return on equity/i] },
+    { key: 'yieldOnEarningAssets', label: 'Yield on Earning Assets', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/^yield on earning assets/i] },
+    { key: 'yieldOnLoans', label: 'Yield on Loans', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/^yield on loans/i] },
+    { key: 'yieldOnSecurities', label: 'Yield on Securities', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/yield on securities/i] },
+    { key: 'netInterestMargin', label: 'Net Interest Margin', type: 'percent', section: 'Profitability', higherIsBetter: true, peerLabels: [/net interest margin/i] },
     { key: 'efficiencyRatio', label: 'Efficiency Ratio', type: 'percent', section: 'Profitability', higherIsBetter: false, peerLabels: [/efficiency ratio/i] },
-    { key: 'tier1RiskBasedRatio', label: 'Tier 1 Risk-Based Ratio', type: 'percent', section: 'Capital', higherIsBetter: true, peerLabels: [/tier 1.*risk/i] },
+    { key: 'costOfFunds', label: 'Cost of Funds', type: 'percent', section: 'Profitability', higherIsBetter: false, peerLabels: [/^cost of funds/i] },
+    { key: 'netIncome', label: 'Net Income', type: 'money', section: 'Profitability', higherIsBetter: null, peerLabels: [/^net income/i] },
+    { key: 'depositsPerFte', label: 'Deposits / FTE', type: 'money', section: 'Profitability', higherIsBetter: null, peerLabels: [/^deposits\s*\/\s*fte/i] },
+    { key: 'realizedGainLossSecurities', label: 'Realized Gain/Loss on Securities', type: 'money', section: 'Profitability', higherIsBetter: null, peerLabels: [/^realized gain\/loss on securities/i] },
     { key: 'texasRatio', label: 'Texas Ratio', type: 'percent', section: 'Credit', higherIsBetter: false, peerLabels: [/texas ratio/i] },
+    { key: 'llrToLoans', label: 'Loan Loss Reserves / Loans', type: 'percent', section: 'Credit', higherIsBetter: true, peerLabels: [/^loan loss reserves\s*\/\s*loans/i] },
     { key: 'nplsToLoans', label: 'NPLs / Loans', type: 'percent', section: 'Credit', higherIsBetter: false, peerLabels: [/npls?.*loans/i, /nonperforming.*loans/i] },
-    { key: 'longTermAssetsToAssets', label: 'Long-Term Assets / Assets', type: 'percent', section: 'ALM', higherIsBetter: false, peerLabels: [/long.?term assets?.*assets/i] }
+    { key: 'loanLossReserve', label: 'Loan & Lease Loss Reserve', type: 'money', section: 'Credit', higherIsBetter: null, peerLabels: [/^loan\s*&\s*lease loss reserve/i] },
+    { key: 'loanLossProvision', label: 'Loan Loss Provision', type: 'money', section: 'Credit', higherIsBetter: false, peerLabels: [/^provision for loan\s*&\s*lease losses/i] },
+    { key: 'netChargeoffsToAvgLoans', label: 'Net Chargeoffs / Avg Loans', type: 'percent', section: 'Credit', higherIsBetter: false, peerLabels: [/^net chargeoffs\s*\/\s*avg loans/i] },
+    { key: 'largeDepositsToDeposits', label: 'Deposits > $250K / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^total dep with bal > \$?250k\s*\/\s*deposits/i] },
+    { key: 'nonInterestBearingDeposits', label: 'Non-Interest Bearing Deposits / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: true, peerLabels: [/^non-int bearing dep\s*\/\s*deposits/i] },
+    { key: 'brokeredDepositsToDeposits', label: 'Brokered Deposits / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^brokered deposits\s*\/\s*deposits/i] },
+    { key: 'jumboTimeDeposits', label: 'Jumbo Time Deposits / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^jumbo time dep\s*\/\s*dom deposits/i] },
+    { key: 'publicFunds', label: 'Public Funds / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: null, peerLabels: [/^public funds\s*\/\s*dom deposits/i] },
+    { key: 'netNonCoreFundingDependence', label: 'Net NonCore Funding Dependence', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^net noncore funding dependence/i] },
+    { key: 'wholesaleFundingReliance', label: 'Reliance on Wholesale Funding', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/wholesale funding/i] },
+    { key: 'longTermAssetsToAssets', label: 'Long-Term Assets / Assets', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/long.?term assets?.*assets/i] },
+    { key: 'liquidAssetsToAssets', label: 'Liquid Assets / Assets', type: 'percent', section: 'Liquidity', higherIsBetter: true, peerLabels: [/liquid assets?.*assets/i] },
+    { key: 'avgIntBearingFundsToAssets', label: 'Avg Interest-Bearing Funds / Avg Assets', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^avg int bear funds\s*\/\s*avg assets/i] },
+    { key: 'intEarnAssetsToFunds', label: 'Interest-Earning Assets / Interest-Bearing Funds', type: 'percent', section: 'Liquidity', higherIsBetter: true, peerLabels: [/^int earn assets\s*\/\s*int bear funds/i] },
+    { key: 'pledgedSecuritiesToSecurities', label: 'Pledged Securities / Securities', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^pledged securities\s*\(bv\)/i, /^pledged securites\s*\/\s*securities/i, /^pledged securities\s*\/\s*securities/i] },
+    { key: 'securitiesFvToBv', label: 'Securities FV / BV', type: 'percent', section: 'Liquidity', higherIsBetter: true, peerLabels: [/^securities\s*\(fv\)\s*\/\s*securities\s*\(bv\)/i] }
   ];
   const STRATEGY_TYPES = ['Bond Swap', 'Muni BCIS', 'THO Report', 'CECL Analysis', 'Miscellaneous'];
   const STRATEGY_STATUSES = ['Open', 'In Progress', 'Needs Billed', 'Completed'];
@@ -4559,7 +4598,7 @@
           <label><span>Settle date</span><input type="date" data-editor-field="settleDate" value="${escapeHtml(proposal.settleDate || '')}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Horizon (yr)</span><input type="number" step="0.25" min="0.25" max="30" data-editor-field="horizonYears" value="${proposal.horizonYears == null ? '' : proposal.horizonYears}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Tax rate (%)</span><input type="number" step="0.1" data-editor-field="taxRate" value="${proposal.taxRate == null ? '' : proposal.taxRate}" ${isDraft ? '' : 'readonly'}></label>
-          <label class="swap-editor-notes"><span>Notes</span><textarea data-editor-field="notes" rows="1" ${isDraft ? '' : 'readonly'}>${escapeHtml(proposal.notes || '')}</textarea></label>
+          <label class="swap-editor-notes"><span>Notes</span><textarea data-editor-field="notes" rows="2" ${isDraft ? '' : 'readonly'}>${escapeHtml(proposal.notes || '')}</textarea></label>
         </div>
         ${renderLegSideTable('sell', sells, isDraft)}
         ${renderLegSideTable('buy', buys, isDraft)}
@@ -4588,11 +4627,11 @@
     { key: 'coupon', label: 'Cpn', type: 'number', step: '0.001' },
     { key: 'maturity', label: 'Maturity', type: 'date' },
     { key: 'par', label: 'Par', type: 'number', step: '1' },
-    { key: 'bookPrice', label: 'Bk Px', type: 'number', step: '0.001' },
+    { key: 'bookPrice', label: 'Bk Px', type: 'number', step: '0.001', secondary: true },
     { key: 'marketPrice', label: 'Mkt Px', type: 'number', step: '0.001' },
-    { key: 'bookYieldYtm', label: 'Bk YTM %', type: 'number', step: '0.001' },
+    { key: 'bookYieldYtm', label: 'Bk YTM %', type: 'number', step: '0.001', secondary: true },
     { key: 'marketYieldYtw', label: 'Mkt YTW %', type: 'number', step: '0.001' },
-    { key: 'averageLife', label: 'WAL', type: 'number', step: '0.01' }
+    { key: 'averageLife', label: 'WAL', type: 'number', step: '0.01', secondary: true }
   ];
 
   function legIsUnfilled(leg) {
@@ -4605,18 +4644,24 @@
   function renderLegSideTable(side, rows, isDraft) {
     const title = side === 'sell' ? 'Funding Source (Sells)' : 'Investments (Buys)';
     const tag = side === 'sell' ? 'sell' : 'buy';
-    const heads = LEG_INPUTS.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+    const heads = LEG_INPUTS.map(c => `<th${c.secondary ? ' class="swap-leg-secondary"' : ''}>${escapeHtml(c.label)}</th>`).join('');
     const body = rows.length
       ? rows.map(leg => renderLegEditorRow(leg, isDraft)).join('')
-      : `<tr><td colspan="${LEG_INPUTS.length + 1}" class="swap-leg-empty">No ${tag} legs yet. ${isDraft ? 'Click "Add ' + tag + '" below to create one.' : ''}</td></tr>`;
+      : `<tr><td colspan="${LEG_INPUTS.length + 1}" class="swap-leg-empty">No ${tag} legs yet. ${isDraft ? 'Use the buttons above to add one.' : ''}</td></tr>`;
     const unfilledCount = rows.filter(legIsUnfilled).length;
     const unfilledBadge = unfilledCount > 0
       ? ` <span class="swap-leg-unfilled" title="Rows with no CUSIP or par; will be dropped before send.">${unfilledCount} unfilled</span>`
       : '';
+    const addButtons = !isDraft ? '' : (side === 'buy'
+      ? `<div class="swap-leg-add-group">
+           <button type="button" class="small-btn" data-add-leg="${tag}">Add buy</button>
+           <button type="button" class="small-btn" data-add-leg-hypothetical="${tag}" title="Add a CUSIP-less leg priced at par — type a yield and par to test a swap.">Add hypothetical</button>
+         </div>`
+      : `<button type="button" class="small-btn" data-add-leg="${tag}">Add ${tag}</button>`);
     return `
       <section class="swap-editor-side" data-side="${tag}">
         <header><strong>${escapeHtml(title)} (${rows.length})${unfilledBadge}</strong>
-          ${isDraft ? `<button type="button" class="small-btn" data-add-leg="${tag}">Add ${tag}</button>` : ''}
+          ${addButtons}
         </header>
         <table class="swap-leg-table">
           <thead><tr>${heads}<th></th></tr></thead>
@@ -4636,7 +4681,8 @@
       const listAttr = col.key === 'cusip' && isDraft
         ? ` list="${side === 'sell' ? 'swapHoldingsDatalist' : 'swapInventoryDatalist'}"`
         : '';
-      return `<td><input type="${col.type}" data-leg-field="${col.key}"${step}${listAttr} value="${escapeHtml(value)}" ${readonly}></td>`;
+      const tdClass = col.secondary ? ' class="swap-leg-secondary"' : '';
+      return `<td${tdClass}><input type="${col.type}" data-leg-field="${col.key}"${step}${listAttr} value="${escapeHtml(value)}" ${readonly}></td>`;
     }).join('');
     const del = isDraft
       ? `<button type="button" class="swap-leg-del" data-del-leg="${leg.id}" title="Remove leg">&times;</button>`
@@ -4719,6 +4765,9 @@
     });
     body.querySelectorAll('[data-add-leg]').forEach(btn => {
       btn.addEventListener('click', () => addEmptyLeg(btn.dataset.addLeg));
+    });
+    body.querySelectorAll('[data-add-leg-hypothetical]').forEach(btn => {
+      btn.addEventListener('click', addHypotheticalBuyLeg);
     });
     body.querySelectorAll('[data-del-leg]').forEach(btn => {
       btn.addEventListener('click', () => deleteLeg(Number(btn.dataset.delLeg)));
@@ -4805,7 +4854,23 @@
     if (!id || !legId) return;
     const field = input.dataset.legField;
     const value = input.type === 'number' ? (input.value === '' ? null : Number(input.value)) : input.value;
-    patchLeg(id, legId, { [field]: value });
+    const patch = { [field]: value };
+    // Hypothetical-buy convenience: an at-par bond has coupon == yield. When
+    // the rep types a yield into a CUSIP-less, par-priced row and hasn't
+    // entered a coupon yet, mirror it so duration and accrued can compute.
+    if (field === 'marketYieldYtw' && value != null) {
+      const tr = input.closest('tr[data-leg-id]');
+      const cusipInput = tr && tr.querySelector('input[data-leg-field="cusip"]');
+      const couponInput = tr && tr.querySelector('input[data-leg-field="coupon"]');
+      const mktPxInput = tr && tr.querySelector('input[data-leg-field="marketPrice"]');
+      const isHypothetical = cusipInput && !cusipInput.value.trim()
+        && mktPxInput && Number(mktPxInput.value) === 100;
+      if (isHypothetical && couponInput && couponInput.value === '') {
+        patch.coupon = value;
+        couponInput.value = value;
+      }
+    }
+    patchLeg(id, legId, patch);
   }
 
   let proposalPatchTimer = null;
@@ -4859,14 +4924,15 @@
     if (fresh) summaryNode.replaceWith(fresh);
   }
 
-  async function addEmptyLeg(side) {
+  async function addEmptyLeg(side, presets = null) {
     const id = swapBuilderState.proposalId;
     if (!id) return;
     try {
+      const body = { side, sourceKind: 'manual', ...(presets || {}) };
       const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/legs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ side, sourceKind: 'manual' })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Add leg failed');
@@ -4875,6 +4941,14 @@
     } catch (err) {
       showToast('Could not add leg: ' + (err.message || err), true);
     }
+  }
+
+  async function addHypotheticalBuyLeg() {
+    return addEmptyLeg('buy', {
+      description: 'Hypothetical buy',
+      marketPrice: 100,
+      sourceKind: 'manual'
+    });
   }
 
   async function deleteLeg(legId) {
@@ -4973,7 +5047,10 @@
           <a href="#strategies?tab=bond-swap&bank=${encodeURIComponent(p.bankId || '')}&proposal=${encodeURIComponent(p.id)}" data-open-proposal="${escapeHtml(p.id)}">
             <strong>${escapeHtml(p.id)}</strong>
             <span>${escapeHtml(p.title || 'Bond Swap')}</span>
-            <em>${escapeHtml(p.status)} · ${escapeHtml(p.updatedAt ? p.updatedAt.slice(0, 10) : '')}</em>
+            <em>
+              <span class="swap-status-pill ${escapeHtml(p.status || 'draft')}">${escapeHtml(p.status || 'draft')}</span>
+              ${escapeHtml(p.updatedAt ? p.updatedAt.slice(0, 10) : '')}
+            </em>
           </a>
         </li>`).join('');
       list.querySelectorAll('[data-open-proposal]').forEach(a => {
@@ -8166,16 +8243,16 @@
 
   function bankBalanceSheetRows() {
     return [
-      { label: 'Total Assets ($000)', value: values => formatCallReportValue(values.totalAssets, 'money') },
-      { label: 'Total Securities (AFS-FV) ($000/ %)', value: values => formatCallReportMoneyShare(values.afsTotal, values.afsTotal) },
-      { label: 'Total Securities (HTM-FV) ($000/ %)', value: values => formatCallReportMoneyShare(values.htmTotal, values.htmTotal) },
-      { label: 'Total Securities / Total Assets (%)', key: 'securitiesToAssets', value: values => formatCallReportValue(values.securitiesToAssets, 'percent') },
-      { label: 'Total Loans & Leases (HFI, HFS) ($000)', value: values => formatCallReportValue(values.totalLoans, 'money') },
-      { label: 'Total Loans / Assets (%)', value: values => formatCallReportValue(values.loansToAssets, 'percent') },
-      { label: 'Total Deposits ($000)', value: values => formatCallReportValue(values.totalDeposits, 'money') },
-      { label: 'Loans / Deposits (%)', key: 'loansToDeposits', value: values => formatCallReportValue(values.loansToDeposits, 'percent') },
+      { label: 'Total Assets ($000)', key: 'totalAssets', type: 'money', value: values => formatCallReportValue(values.totalAssets, 'money') },
+      { label: 'Total Securities (AFS-FV) ($000/ %)', key: 'afsTotal', type: 'money', value: values => formatCallReportMoneyShare(values.afsTotal, values.afsTotal) },
+      { label: 'Total Securities (HTM-FV) ($000/ %)', key: 'htmTotal', type: 'money', value: values => formatCallReportMoneyShare(values.htmTotal, values.htmTotal) },
+      { label: 'Total Securities / Total Assets (%)', key: 'securitiesToAssets', type: 'percent', value: values => formatCallReportValue(values.securitiesToAssets, 'percent') },
+      { label: 'Total Loans & Leases (HFI, HFS) ($000)', key: 'totalLoans', type: 'money', value: values => formatCallReportValue(values.totalLoans, 'money') },
+      { label: 'Total Loans / Assets (%)', key: 'loansToAssets', type: 'percent', value: values => formatCallReportValue(values.loansToAssets, 'percent') },
+      { label: 'Total Deposits ($000)', key: 'totalDeposits', type: 'money', value: values => formatCallReportValue(values.totalDeposits, 'money') },
+      { label: 'Loans / Deposits (%)', key: 'loansToDeposits', type: 'percent', value: values => formatCallReportValue(values.loansToDeposits, 'percent') },
       { label: 'Have Fiduciary Assets? (Yes/No)', value: values => Number(values.fiduciaryAssets || 0) > 0 ? 'Yes' : 'No' },
-      { label: 'Total Borrowings ($000)', value: values => formatCallReportValue(values.totalBorrowings, 'money') }
+      { label: 'Total Borrowings ($000)', key: 'totalBorrowings', type: 'money', value: values => formatCallReportValue(values.totalBorrowings, 'money') }
     ];
   }
 
@@ -8208,6 +8285,8 @@
       { label: 'Total Consumer Loans / Loans (%)', key: 'consumerLoansToLoans' }
     ].map(row => ({
       label: row.label,
+      key: row.key,
+      type: 'percent',
       value: values => formatCallReportValue(values[row.key], 'percent')
     }));
   }
@@ -8236,8 +8315,26 @@
       { number: 44, label: 'Efficiency Ratio (FTE) (%)', key: 'efficiencyRatio', type: 'percent' },
       { number: 45, label: 'Cost of Funds (%)', key: 'costOfFunds', type: 'percent' },
       { number: 46, label: 'Net Income ($000)', key: 'netIncome', type: 'money' },
+      {
+        number: 55,
+        label: 'Deposits / FTE ($000)',
+        key: 'depositsPerFte',
+        type: 'money',
+        bankPeerValue: values => {
+          const deposits = Number(values.totalDeposits);
+          const fte = Number(values.fullTimeEmployees);
+          return isFinite(deposits) && isFinite(fte) && fte !== 0 ? deposits / fte : null;
+        },
+        value: values => {
+          const deposits = Number(values.totalDeposits);
+          const fte = Number(values.fullTimeEmployees);
+          return isFinite(deposits) && isFinite(fte) && fte !== 0
+            ? formatCallReportValue(deposits / fte, 'money')
+            : '-';
+        }
+      },
       { number: 56, label: 'Realized Gain/Loss on Securities ($000)', key: 'realizedGainLossSecurities', type: 'money' }
-    ].map(callReportFieldRow);
+    ].map(row => row.value ? row : callReportFieldRow(row));
   }
 
   function bankAssetQualityRows() {
@@ -8256,6 +8353,9 @@
       {
         number: 63,
         label: 'Total Dep with Bal > $250K / Deposits (%)',
+        key: 'largeDepositsToDeposits',
+        type: 'percent',
+        bankPeerValue: values => bankNumericShare(values.largeDepositsToDeposits, values.totalDeposits),
         value: values => {
           const pct = bankNumericShare(values.largeDepositsToDeposits, values.totalDeposits);
           return pct == null ? '-' : formatCallReportValue(pct, 'percent');
@@ -8274,6 +8374,9 @@
       {
         number: 74,
         label: 'Pledged Securities (BV) ($000/ %)',
+        key: 'pledgedSecuritiesToSecurities',
+        type: 'percent',
+        bankPeerValue: values => bankNumericShare(values.pledgedSecurities, sumBankValues(values, ['afsTotal', 'htmTotal'])),
         value: values => formatCallReportMoneyShare(values.pledgedSecurities, sumBankValues(values, ['afsTotal', 'htmTotal']))
       },
       { number: 76, label: 'Securities (FV) / Securities (BV) (%)', key: 'securitiesFvToBv', type: 'percent' }
@@ -8285,6 +8388,7 @@
       number: row.number,
       label: row.label,
       key: row.key,
+      type: row.type,
       value: values => formatCallReportValue(values[row.key], row.type)
     };
   }
@@ -8308,6 +8412,8 @@
       criteria.region
     ].filter(Boolean).join(' · ');
     const populationText = group.populationCount ? `${formatNumber(group.populationCount)} banks` : '';
+    const metricCount = peerComparison.byKey ? Object.keys(peerComparison.byKey).length : 0;
+    const metricText = metricCount ? `${formatNumber(metricCount)} peer metrics` : '';
     const periodText = peerComparison.period || group.latestPeriod || '';
     const mismatch = peerComparison.bankPeriod && peerComparison.period && peerComparison.bankPeriod !== peerComparison.period
       ? ` <em class="bank-peer-mismatch">Bank latest ${escapeHtml(peerComparison.bankPeriod)} · peer ${escapeHtml(periodText)}</em>`
@@ -8316,7 +8422,7 @@
       <div class="bank-peer-banner">
         <strong>Peer cohort:</strong>
         <span>${escapeHtml(group.label || 'Averaged Series Peer Group')}${bits ? ` — ${escapeHtml(bits)}` : ''}</span>
-        <span class="bank-peer-banner-meta">${escapeHtml([populationText, periodText].filter(Boolean).join(' · '))}${mismatch}</span>
+        <span class="bank-peer-banner-meta">${escapeHtml([populationText, metricText, periodText].filter(Boolean).join(' · '))}${mismatch}</span>
       </div>
     `;
   }
@@ -8359,8 +8465,15 @@
       return '<td class="bank-peer-col bank-peer-cell-empty">—</td>';
     }
     const peerValue = Number(peer.peerValue);
-    const peerDisplay = formatCallReportNumber(peerValue, 2);
-    const bankValueRaw = latestPeriod && latestPeriod.values ? latestPeriod.values[row.key] : null;
+    const peerDisplay = row.type === 'money'
+      ? formatCallReportValue(peerValue, 'money')
+      : row.type === 'percent'
+        ? `${formatCallReportValue(peerValue, 'percent')}%`
+        : formatCallReportNumber(peerValue, 2);
+    const latestValues = latestPeriod && latestPeriod.values ? latestPeriod.values : {};
+    const bankValueRaw = typeof row.bankPeerValue === 'function'
+      ? row.bankPeerValue(latestValues)
+      : latestValues[row.key];
     const bankValue = bankValueRaw == null || bankValueRaw === '' ? null : Number(bankValueRaw);
     let signal = 'neutral';
     let signalLabel = '';
@@ -8370,7 +8483,9 @@
         const favorable = peer.higherIsBetter ? delta > 0 : delta < 0;
         signal = favorable ? 'favorable' : 'watch';
         const arrow = delta > 0 ? '▲' : '▼';
-        const deltaText = `${arrow} ${formatCallReportNumber(Math.abs(delta), 2)}`;
+        const deltaText = row.type === 'money'
+          ? `${arrow} ${formatCallReportValue(Math.abs(delta), 'money')}`
+          : `${arrow} ${formatCallReportNumber(Math.abs(delta), 2)}`;
         signalLabel = `<span class="bank-peer-delta">${escapeHtml(deltaText)}</span>`;
       }
     }
