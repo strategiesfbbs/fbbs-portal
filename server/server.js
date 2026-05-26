@@ -115,6 +115,8 @@ const {
 const swapMath = require('./swap-math');
 const swapStore = require('./swap-store');
 const { renderProposalHtml } = require('./swap-render');
+const peerGroupStore = require('./peer-group-store');
+const peerAverages = require('./peer-averages');
 
 // ---------- Config ----------
 
@@ -3499,11 +3501,35 @@ function invalidatePeerComparisonCache() {
   peerComparisonCache = null;
 }
 
-function getPeerComparisonForBank(bank) {
-  const index = getPeerComparisonIndex();
-  if (!index) return null;
+// Pick a peer cohort for `bank`. Priority: explicit cohortId > best-fit
+// match from user-defined cohorts > legacy FedFis AVERAGED_SERIES.
+// Returns the same shape the tear sheet renderer has always consumed:
+// { peerGroup, period, bankPeriod, periodAligned, byKey }.
+function getPeerComparisonForBank(bank, options = {}) {
   const latest = bank && Array.isArray(bank.periods) ? bank.periods[0] : null;
   const bankPeriod = latest && latest.period ? latest.period : '';
+  const cohortId = options.cohortId ? String(options.cohortId).trim() : '';
+
+  if (cohortId) {
+    const cohort = peerGroupStore.getPeerGroup(BANK_REPORTS_DIR, cohortId);
+    if (cohort && !cohort.archivedAt) {
+      const comparison = peerAverages.peerComparisonFromCohort(BANK_REPORTS_DIR, cohort, bankPeriod);
+      if (comparison) return comparison;
+    }
+  }
+
+  const cohorts = peerGroupStore.listPeerGroups(BANK_REPORTS_DIR);
+  if (cohorts.length) {
+    const best = peerAverages.findBestFitCohort(BANK_REPORTS_DIR, bank, cohorts);
+    if (best) {
+      const comparison = peerAverages.peerComparisonFromCohort(BANK_REPORTS_DIR, best, bankPeriod);
+      if (comparison) return comparison;
+    }
+  }
+
+  // Fallback: legacy FedFis workbook averages (single cohort).
+  const index = getPeerComparisonIndex();
+  if (!index) return null;
   const period = index.periods.includes(bankPeriod) ? bankPeriod : (index.periods[0] || '');
   const byKey = index.byPeriod.get(period) || {};
   return {
@@ -4653,9 +4679,10 @@ function ingestFolderDropReferences(scan) {
   if (cdInternalFiles.length) {
     result.cdInternal = saveCdInternalUpload(CD_INTERNAL_DIR, cdInternalFiles);
   }
-  if (structuredEmails.length) {
-    result.structuredNotes = saveStructuredNotesUpload(STRUCTURED_NOTES_DIR, structuredEmails);
-  }
+  result.structuredNotes = saveStructuredNotesUpload(STRUCTURED_NOTES_DIR, structuredEmails, {
+    targetDate: scan.date,
+    replace: true
+  });
   if (marketEmails.length) {
     result.marketColor = saveMarketColorUpload(MARKET_COLOR_DIR, marketEmails);
   }
@@ -5728,6 +5755,89 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { success: true });
     }
 
+    // --- Peer groups (user-curated cohorts) ---
+    if (pathname === '/api/peer-groups' && req.method === 'GET') {
+      peerGroupStore.seedDefaultPeerGroups(BANK_REPORTS_DIR);
+      const includeArchived = query.get('includeArchived') === '1';
+      return sendJSON(res, 200, {
+        peerGroups: peerGroupStore.listPeerGroups(BANK_REPORTS_DIR, { includeArchived })
+      });
+    }
+
+    if (pathname === '/api/peer-groups' && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        const created = peerGroupStore.createPeerGroup(BANK_REPORTS_DIR, body);
+        appendAuditLog({ event: 'peer-group-create', id: created.id, name: created.name });
+        return sendJSON(res, 201, { peerGroup: created });
+      } catch (err) {
+        return sendJSON(res, 400, { error: err.message || 'Could not create peer group' });
+      }
+    }
+
+    if (pathname === '/api/peer-groups/preview' && req.method === 'POST') {
+      // Population-count preview while the rep builds criteria, without
+      // creating a row. Cheap query — just COUNT(*).
+      try {
+        const body = await readJsonBody(req);
+        const criteria = peerGroupStore.normalizeCriteria(body && body.criteria);
+        const result = peerAverages.findMatchingBanks(BANK_REPORTS_DIR, criteria, body && body.period);
+        return sendJSON(res, 200, {
+          period: result.period,
+          populationCount: result.count
+        });
+      } catch (err) {
+        return sendJSON(res, 400, { error: err.message || 'Preview failed' });
+      }
+    }
+
+    const peerGroupAveragesMatch = pathname.match(/^\/api\/peer-groups\/([^/]+)\/averages$/);
+    if (peerGroupAveragesMatch && req.method === 'GET') {
+      const id = safeDecodeURIComponent(peerGroupAveragesMatch[1]);
+      const cohort = peerGroupStore.getPeerGroup(BANK_REPORTS_DIR, id);
+      if (!cohort) return sendJSON(res, 404, { error: 'Peer group not found' });
+      const period = query.get('period') || null;
+      const averages = peerAverages.computeCohortAverages(BANK_REPORTS_DIR, cohort.criteria, period);
+      return sendJSON(res, 200, {
+        peerGroup: cohort,
+        period: averages.period,
+        populationCount: averages.populationCount,
+        byKey: averages.byKey
+      });
+    }
+
+    const peerGroupMatch = pathname.match(/^\/api\/peer-groups\/([^/]+)$/);
+    if (peerGroupMatch && req.method === 'GET') {
+      const id = safeDecodeURIComponent(peerGroupMatch[1]);
+      const cohort = peerGroupStore.getPeerGroup(BANK_REPORTS_DIR, id);
+      if (!cohort) return sendJSON(res, 404, { error: 'Peer group not found' });
+      return sendJSON(res, 200, { peerGroup: cohort });
+    }
+
+    if (peerGroupMatch && req.method === 'PATCH') {
+      const id = safeDecodeURIComponent(peerGroupMatch[1]);
+      try {
+        const body = await readJsonBody(req);
+        const updated = peerGroupStore.updatePeerGroup(BANK_REPORTS_DIR, id, body);
+        appendAuditLog({ event: 'peer-group-update', id, name: updated.name });
+        return sendJSON(res, 200, { peerGroup: updated });
+      } catch (err) {
+        const status = /not found/i.test(err.message) ? 404 : 400;
+        return sendJSON(res, status, { error: err.message || 'Could not update peer group' });
+      }
+    }
+
+    if (peerGroupMatch && req.method === 'DELETE') {
+      const id = safeDecodeURIComponent(peerGroupMatch[1]);
+      try {
+        const archived = peerGroupStore.archivePeerGroup(BANK_REPORTS_DIR, id);
+        appendAuditLog({ event: 'peer-group-archive', id, name: archived.name });
+        return sendJSON(res, 200, { peerGroup: archived });
+      } catch (err) {
+        return sendJSON(res, /not found/i.test(err.message) ? 404 : 500, { error: err.message });
+      }
+    }
+
     if (pathname === '/api/bank-account-status' && req.method === 'POST') {
       return await handleSaveBankAccountStatus(req, res);
     }
@@ -5800,6 +5910,18 @@ const server = http.createServer(async (req, res) => {
       const id = pathname.slice('/api/banks/'.length);
       const data = getBankById(id);
       if (!data) return sendJSON(res, 404, { error: 'Bank not found' });
+      // Optional cohort override — recompute peer comparison from the
+      // requested cohort instead of returning the cached best-fit result.
+      const cohortId = query.get('cohortId');
+      if (cohortId && data.bank) {
+        const overridden = getPeerComparisonForBank(data.bank, { cohortId });
+        if (overridden) {
+          return sendJSON(res, 200, {
+            ...data,
+            bank: { ...data.bank, peerComparison: overridden }
+          });
+        }
+      }
       return sendJSON(res, 200, data);
     }
 
