@@ -62,7 +62,7 @@
   let reportsSelectedType = '';
   let reportsSessionReports = [];
   let reportsAppEventsBound = false;
-  let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false };
+  let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0 };
   let selectedFiles = {
     dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -3538,6 +3538,11 @@
     });
   }
 
+  function peerAnalysisSelectedBankId() {
+    const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
+    return bank && bank.id ? bank.id : '';
+  }
+
   async function loadPeerAnalysisBank(bankId) {
     const output = document.getElementById('peerAnalysisOutput');
     if (output) output.innerHTML = '<div class="bank-search-empty">Building peer comparison...</div>';
@@ -5771,6 +5776,17 @@
     return reportsHash(`build/${type || 'bank-peer'}`, params.toString());
   }
 
+  function openBankReportBuilder(type, bankId = selectedBankId(), options = {}) {
+    if (!bankId) {
+      showToast('Choose a bank before building a report', true);
+      return;
+    }
+    window.location.hash = reportBuildHash(type, '', {
+      bankId,
+      autorun: options.autorun === false ? '' : '1'
+    });
+  }
+
   function effectiveReportsRailId(route = reportsRoute()) {
     const path = route.subpath || '';
     if (path === 'data' || path === 'data/files') return 'folders-all';
@@ -6205,14 +6221,23 @@
       return '<div class="bank-search-empty">Loading banks with matched portfolio files...</div>';
     }
     if (!portfolioReviewState.banks.length) {
-      return '<div class="bank-search-empty">No matched portfolio files are available yet. Import bond-accounting files under Data Sources first.</div>';
+      return portfolioReviewState.search
+        ? '<div class="bank-search-empty">No banks with matched portfolio files match that search.</div>'
+        : '<div class="bank-search-empty">No matched portfolio files are available yet. Import bond-accounting files under Data Sources first.</div>';
     }
-    return portfolioReviewState.banks.slice(0, 80).map(bank => `
-      <button type="button" class="reports-peer-result ${portfolioReviewState.selectedBankId === bank.id ? 'selected' : ''}" data-portfolio-bank="${escapeHtml(bank.id)}">
-        <strong>${escapeHtml(bank.name || 'Bank')}</strong>
-        <span>${escapeHtml(portfolioReviewMetaLine(bank))}</span>
-      </button>
-    `).join('');
+    const visible = portfolioReviewState.banks.slice(0, 80);
+    return `
+      <div class="portfolio-review-result-meta">
+        ${escapeHtml(formatNumber(portfolioReviewState.banks.length))} matched bank${portfolioReviewState.banks.length === 1 ? '' : 's'}${portfolioReviewState.loading ? ' · refreshing...' : ''}
+      </div>
+      ${visible.map(bank => `
+        <button type="button" class="reports-peer-result ${portfolioReviewState.selectedBankId === bank.id ? 'selected' : ''}" data-portfolio-bank="${escapeHtml(bank.id)}">
+          <strong>${escapeHtml(bank.name || 'Bank')}</strong>
+          <span>${escapeHtml(portfolioReviewMetaLine(bank))}</span>
+        </button>
+      `).join('')}
+      ${portfolioReviewState.banks.length > visible.length ? `<div class="bank-search-empty">Showing first ${escapeHtml(formatNumber(visible.length))}; narrow the search to find more.</div>` : ''}
+    `;
   }
 
   function portfolioReviewPanelHtml() {
@@ -6230,24 +6255,48 @@
     `;
   }
 
-  async function loadPortfolioReviewBanks(query = '') {
+  function restorePortfolioReviewSearchFocus(selectionStart, selectionEnd) {
+    const input = document.getElementById('portfolioReviewBankSearchInput');
+    if (!input) return;
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(
+      Number.isFinite(selectionStart) ? Math.min(selectionStart, end) : end,
+      Number.isFinite(selectionEnd) ? Math.min(selectionEnd, end) : end
+    );
+  }
+
+  async function loadPortfolioReviewBanks(query = '', options = {}) {
+    const requestId = (portfolioReviewState.searchRequestId || 0) + 1;
+    const activeInput = document.getElementById('portfolioReviewBankSearchInput');
+    const shouldRestoreFocus = options.restoreFocus || (activeInput && document.activeElement === activeInput);
+    const selectionStart = activeInput ? activeInput.selectionStart : null;
+    const selectionEnd = activeInput ? activeInput.selectionEnd : null;
+    portfolioReviewState.searchRequestId = requestId;
     portfolioReviewState.search = query || '';
     portfolioReviewState.loading = true;
     renderPortfolioReviewMount();
+    if (shouldRestoreFocus) restorePortfolioReviewSearchFocus(selectionStart, selectionEnd);
     try {
       const qs = query ? `?q=${encodeURIComponent(query)}` : '';
       const res = await fetch(`/api/portfolio-review/eligible-banks${qs}`, { cache: 'no-store' });
       const data = await readBankJson(res);
+      if (requestId !== portfolioReviewState.searchRequestId) return;
       portfolioReviewState.banks = Array.isArray(data.banks) ? data.banks : [];
-      if (!portfolioReviewState.selectedBankId && portfolioReviewState.banks[0]) {
+      if (options.preferredBankId) {
+        portfolioReviewState.selectedBankId = options.preferredBankId;
+      } else if (!portfolioReviewState.selectedBankId && portfolioReviewState.banks[0]) {
         portfolioReviewState.selectedBankId = portfolioReviewState.banks[0].id;
       }
     } catch (e) {
+      if (requestId !== portfolioReviewState.searchRequestId) return;
       portfolioReviewState.banks = [];
       showToast(e.message, true);
     } finally {
+      if (requestId !== portfolioReviewState.searchRequestId) return;
       portfolioReviewState.loading = false;
       renderPortfolioReviewMount();
+      if (shouldRestoreFocus) restorePortfolioReviewSearchFocus(selectionStart, selectionEnd);
     }
   }
 
@@ -6465,9 +6514,13 @@
     const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
     const latest = bank && bank.periods && bank.periods[0] ? bank.periods[0] : {};
     const values = latest.values || {};
-    const subject = type === 'bank-peer' && (values.name || bank?.summary?.displayName)
-      ? ` - ${values.name || bank.summary.displayName}`
-      : '';
+    const peerSubject = values.name || (bank && bank.summary && bank.summary.displayName);
+    const portfolioSubject = portfolioReviewState.review && portfolioReviewState.review.bankName;
+    const subject = type === 'bank-peer' && peerSubject
+      ? ` - ${peerSubject}`
+      : type === 'portfolio-peer' && portfolioSubject
+        ? ` - ${portfolioSubject}`
+        : '';
     reportsSessionReports.unshift({
       id: `session-${Date.now()}`,
       name: `${meta.name}${subject} - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
@@ -6502,17 +6555,52 @@
       app.innerHTML = reportsHomeHtml() + reportTypePickerHtml();
     } else if (path.startsWith('build/')) {
       const type = path.split('/')[1] || 'bank-peer';
+      const bankId = route.params.get('bankId') || '';
+      const autorun = route.params.get('autorun') === '1';
+      let handledAutorun = false;
       app.innerHTML = reportsBuilderHtml(type);
       if (type === 'bank-peer') {
         mountReportPanel('peerAnalysisBuilderPanel', 'reportsBankPeerMount');
-        if (!route.params.get('id')) resetPeerAnalysisBuilder();
+        if (bankId) {
+          const sameBank = peerAnalysisSelectedBankId() === bankId;
+          if (!sameBank) {
+            resetPeerAnalysisBuilder();
+            handledAutorun = autorun;
+            loadPeerAnalysisBank(bankId).then(() => {
+              if (autorun && peerAnalysisSelectedBankId() === bankId) addSessionReport(type);
+            });
+          } else {
+            renderPeerAnalysis();
+            if (autorun) {
+              addSessionReport(type);
+              handledAutorun = true;
+            }
+          }
+        } else if (!route.params.get('id')) {
+          resetPeerAnalysisBuilder();
+        }
       }
       if (type === 'portfolio-peer') {
         renderPortfolioReviewMount();
-        if (!portfolioReviewState.banks.length && !portfolioReviewState.loading) loadPortfolioReviewBanks();
+        if (bankId) {
+          const needsFreshBankList = portfolioReviewState.search
+            || !portfolioReviewState.banks.length
+            || !portfolioReviewState.banks.some(bank => bank.id === bankId);
+          portfolioReviewState.search = '';
+          portfolioReviewState.selectedBankId = bankId;
+          if (needsFreshBankList) {
+            loadPortfolioReviewBanks('', { preferredBankId: bankId });
+          }
+          if (autorun) {
+            handledAutorun = true;
+            runPortfolioReview(bankId);
+          }
+        } else if (!portfolioReviewState.banks.length && !portfolioReviewState.loading) {
+          loadPortfolioReviewBanks();
+        }
       }
       if (type === 'opportunity') mountReportPanel('opportunityReportPanel', 'reportsOpportunityMount');
-      if (route.params.get('autorun') === '1') setTimeout(() => runReportBuilder(type), 0);
+      if (autorun && !handledAutorun) setTimeout(() => runReportBuilder(type), 0);
     } else if (path === 'data/files') {
       app.innerHTML = reportsDataHtml(true);
       renderReportsFilesTable();
@@ -6559,6 +6647,15 @@
       if (target.id === 'portfolioReviewBankSearchInput') {
         clearTimeout(portfolioReviewState.searchTimer);
         portfolioReviewState.searchTimer = setTimeout(() => loadPortfolioReviewBanks(target.value || ''), 250);
+      }
+    });
+    document.addEventListener('keydown', event => {
+      const target = event.target;
+      if (!target) return;
+      if (target.id === 'portfolioReviewBankSearchInput' && event.key === 'Enter') {
+        event.preventDefault();
+        const firstBank = portfolioReviewState.banks && portfolioReviewState.banks[0];
+        if (firstBank) runPortfolioReview(firstBank.id);
       }
     });
     document.addEventListener('change', event => {
@@ -7866,6 +7963,8 @@
             <button type="button" class="small-btn bank-action-btn" id="bankStatusSaveBtn">Save Status</button>
             <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Bank</button>
             <button type="button" class="small-btn bank-action-btn" id="bankStrategyToggleBtn">Strategy Request</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankPeerReportBtn">Peer Report</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankPortfolioReportBtn">Portfolio Review</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
             <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
           </div>
@@ -7901,6 +8000,8 @@
     const statusSelect = document.getElementById('bankTearSheetStatus');
     const strategySubmitBtn = document.getElementById('bankStrategySubmitBtn');
     const strategyCancelBtn = document.getElementById('bankStrategyCancelBtn');
+    const peerReportBtn = document.getElementById('bankPeerReportBtn');
+    const portfolioReportBtn = document.getElementById('bankPortfolioReportBtn');
     const printBtn = document.getElementById('bankPrintBtn');
     const exportBtn = document.getElementById('bankExportBtn');
     if (saveBtn) saveBtn.addEventListener('click', saveCurrentBankCoverage);
@@ -7908,6 +8009,8 @@
     if (strategyToggleBtn) strategyToggleBtn.addEventListener('click', toggleBankStrategyRequestPanel);
     if (strategySubmitBtn) strategySubmitBtn.addEventListener('click', submitCurrentBankStrategyRequest);
     if (strategyCancelBtn) strategyCancelBtn.addEventListener('click', hideBankStrategyRequestPanel);
+    if (peerReportBtn) peerReportBtn.addEventListener('click', () => openBankReportBuilder('bank-peer'));
+    if (portfolioReportBtn) portfolioReportBtn.addEventListener('click', () => openBankReportBuilder('portfolio-peer'));
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
