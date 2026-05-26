@@ -10245,7 +10245,18 @@ body {
 }
 .swap-recent a:hover { background: #f4f8f6; }
 .swap-recent strong { font-family: ui-monospace, SFMono-Regular, monospace; }
-.swap-recent em { font-style: normal; color: #4a5b53; font-size: 11px; }
+.swap-recent em {
+  font-style: normal;
+  color: #4a5b53;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.swap-recent em .swap-status-pill {
+  font-size: 9px;
+  padding: 2px 8px;
+}
 
 /* ---- Inline editor ---- */
 .swap-editor {
@@ -10328,19 +10339,31 @@ body {
   background: #fff;
   border: 1px solid #dde6e0;
   border-radius: 8px;
-  padding: 10px 12px;
+  overflow: hidden;
 }
 .swap-editor-side header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 6px;
+  background: var(--racing-green);
+  color: #fff;
+  padding: 7px 12px;
 }
 .swap-editor-side header strong {
   font-size: 12px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: #4a5b53;
+  color: #fff;
+  font-weight: 700;
+}
+.swap-editor-side > table,
+.swap-editor-side > .swap-leg-table {
+  margin: 6px 10px 8px;
+  width: calc(100% - 20px);
+}
+.swap-leg-add-group {
+  display: inline-flex;
+  gap: 6px;
 }
 
 .swap-leg-table {
@@ -10378,6 +10401,17 @@ body {
 }
 .swap-leg-table input[readonly] { background: #f4f8f6; color: #4a5b53; }
 .swap-leg-table tr td:first-child input { min-width: 92px; }
+.swap-leg-table th.swap-leg-secondary,
+.swap-leg-table td.swap-leg-secondary input {
+  color: #7c8e85;
+}
+.swap-leg-table td.swap-leg-secondary input {
+  background: #fafcfa;
+  font-size: 11px;
+}
+.swap-leg-table th.swap-leg-secondary {
+  font-size: 9px;
+}
 .swap-leg-empty { text-align: center; color: #4a5b53; font-style: italic; padding: 12px; }
 .swap-summary-hint {
   font-size: 11px;
