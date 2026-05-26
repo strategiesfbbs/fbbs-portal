@@ -25,6 +25,7 @@ if (!sqliteAvailable()) {
 }
 
 const store = require('../server/peer-group-store');
+const peerAverages = require('../server/peer-averages');
 
 let passed = 0;
 let failed = 0;
@@ -32,6 +33,10 @@ function ok(label, cond, detail) {
   if (cond) { passed++; return; }
   failed++;
   console.error(`FAIL ${label}${detail ? ' — ' + detail : ''}`);
+}
+
+function sqlString(value) {
+  return `'${String(value == null ? '' : value).replace(/'/g, "''")}'`;
 }
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-peer-test-'));
@@ -117,6 +122,53 @@ try {
   ok('seed creates defaults', seeded.length >= 4, `got ${seeded.length}`);
   const reseed = store.seedDefaultPeerGroups(tmpDir);
   ok('seed is idempotent', reseed.length === 0);
+
+  // --- Peer average denominator metrics ---
+  // Some tear-sheet fields are stored as raw dollars but displayed as
+  // percentages of another field. Peer averages must compute the same
+  // ratio before averaging, or the credibility column can show impossible
+  // values such as 70,000%.
+  const dbPath = path.join(tmpDir, 'bank-data.sqlite');
+  childProcess.execFileSync('sqlite3', [dbPath, `
+    CREATE TABLE banks (
+      id TEXT PRIMARY KEY,
+      total_assets REAL,
+      state TEXT,
+      summary_json TEXT,
+      detail_json TEXT
+    );
+  `]);
+  const insertBank = (id, totalAssets, largeDeposits, totalDeposits) => {
+    const period = {
+      period: '2026Q1',
+      values: {
+        totalAssets,
+        largeDepositsToDeposits: largeDeposits,
+        totalDeposits
+      }
+    };
+    childProcess.execFileSync('sqlite3', [dbPath, `
+      INSERT INTO banks (id, total_assets, state, summary_json, detail_json)
+      VALUES (
+        ${sqlString(id)},
+        ${Number(totalAssets)},
+        'IL',
+        ${sqlString(JSON.stringify({ period: '2026Q1' }))},
+        ${sqlString(JSON.stringify({ periods: [period] }))}
+      );
+    `]);
+  };
+  insertBank('B1', 100000, 100, 1000);
+  insertBank('B2', 200000, 75, 500);
+  insertBank('B3', 300000, 999, 0);
+  const averages = peerAverages.computeCohortAverages(tmpDir, {}, '2026Q1');
+  const largeDepositPeer = averages.byKey.largeDepositsToDeposits;
+  ok('peer percentOf averages ratio not raw amount',
+    largeDepositPeer && Math.abs(largeDepositPeer.peerValue - 12.5) < 0.0001,
+    largeDepositPeer ? `got ${largeDepositPeer.peerValue}` : 'missing metric');
+  ok('peer percentOf excludes zero denominator',
+    largeDepositPeer && largeDepositPeer.sampleSize === 2,
+    largeDepositPeer ? `got ${largeDepositPeer.sampleSize}` : 'missing metric');
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }

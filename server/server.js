@@ -3367,15 +3367,15 @@ function invalidateMapBankCache() {
 // The peerLabels regex set mirrors PEER_ANALYSIS_METRICS in public/js/portal.js —
 // keep the two in sync when adding metrics.
 const PEER_TEAR_SHEET_METRICS = [
-  { key: 'totalAssets', higherIsBetter: null, peerLabels: [/^total assets/i] },
-  { key: 'afsTotal', higherIsBetter: null, peerLabels: [/^total securities\s*\(afs-fv\)/i] },
-  { key: 'htmTotal', higherIsBetter: null, peerLabels: [/^total securities\s*\(htm-fv\)/i] },
-  { key: 'securitiesToAssets', higherIsBetter: null, peerLabels: [/^total securities\s*\/\s*total assets/i, /securities.*assets/i] },
-  { key: 'totalLoans', higherIsBetter: null, peerLabels: [/^total loans.*leases/i] },
-  { key: 'loansToAssets', higherIsBetter: null, peerLabels: [/^total loans\s*\/\s*assets/i] },
-  { key: 'totalDeposits', higherIsBetter: null, peerLabels: [/^total deposits/i] },
-  { key: 'loansToDeposits', higherIsBetter: null, peerLabels: [/loans?\s*\/\s*deposits?/i, /loans?.*deposits?/i] },
-  { key: 'totalBorrowings', higherIsBetter: null, peerLabels: [/^total borrowings/i] },
+  { key: 'totalAssets', type: 'money', higherIsBetter: null, peerLabels: [/^total assets/i] },
+  { key: 'afsTotal', type: 'money', higherIsBetter: null, peerLabels: [/^total securities\s*\(afs-fv\)/i] },
+  { key: 'htmTotal', type: 'money', higherIsBetter: null, peerLabels: [/^total securities\s*\(htm-fv\)/i] },
+  { key: 'securitiesToAssets', type: 'percent', higherIsBetter: null, peerLabels: [/^total securities\s*\/\s*total assets/i, /securities.*assets/i] },
+  { key: 'totalLoans', type: 'money', higherIsBetter: null, peerLabels: [/^total loans.*leases/i] },
+  { key: 'loansToAssets', type: 'percent', higherIsBetter: null, peerLabels: [/^total loans\s*\/\s*assets/i] },
+  { key: 'totalDeposits', type: 'money', higherIsBetter: null, peerLabels: [/^total deposits/i] },
+  { key: 'loansToDeposits', type: 'percent', higherIsBetter: null, peerLabels: [/loans?\s*\/\s*deposits?/i, /loans?.*deposits?/i] },
+  { key: 'totalBorrowings', type: 'money', higherIsBetter: null, peerLabels: [/^total borrowings/i] },
   { key: 'realEstateLoansToLoans', higherIsBetter: null, peerLabels: [/^real estate loans\s*\/\s*loans/i] },
   { key: 'farmLoansToLoans', higherIsBetter: null, peerLabels: [/^farmland.*\/\s*loans/i] },
   { key: 'agProdLoansToLoans', higherIsBetter: null, peerLabels: [/^agricultural prod.*\/\s*loans/i] },
@@ -3422,9 +3422,14 @@ const PEER_TEAR_SHEET_METRICS = [
 
 let peerComparisonCache = null;
 
-function peerSeriesNumericValue(seriesRow) {
+function peerSeriesNumericValue(seriesRow, config = {}) {
   if (!seriesRow) return null;
-  for (const field of ['percent', 'value', 'amount']) {
+  const fields = config.type === 'money'
+    ? ['amount', 'value', 'percent']
+    : config.type === 'percent'
+      ? ['percent', 'value', 'amount']
+      : ['value', 'percent', 'amount'];
+  for (const field of fields) {
     const raw = seriesRow[field];
     if (raw === null || raw === undefined || raw === '') continue;
     const n = Number(raw);
@@ -3460,7 +3465,7 @@ function buildPeerComparisonIndex() {
       const metric = metrics.find(m => config.peerLabels.some(re => re.test(cleanLabel(m.label))));
       if (!metric) continue;
       const seriesRow = seriesByMetricAndPeriod.get(`${metric.key}|${period}`);
-      const peerValue = peerSeriesNumericValue(seriesRow);
+      const peerValue = peerSeriesNumericValue(seriesRow, config);
       if (peerValue == null) continue;
       byKey[config.key] = {
         peerValue,

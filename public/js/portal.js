@@ -217,7 +217,7 @@
     { key: 'loanLossReserve', label: 'Loan & Lease Loss Reserve', type: 'money', section: 'Credit', higherIsBetter: null, peerLabels: [/^loan\s*&\s*lease loss reserve/i] },
     { key: 'loanLossProvision', label: 'Loan Loss Provision', type: 'money', section: 'Credit', higherIsBetter: false, peerLabels: [/^provision for loan\s*&\s*lease losses/i] },
     { key: 'netChargeoffsToAvgLoans', label: 'Net Chargeoffs / Avg Loans', type: 'percent', section: 'Credit', higherIsBetter: false, peerLabels: [/^net chargeoffs\s*\/\s*avg loans/i] },
-    { key: 'largeDepositsToDeposits', label: 'Deposits > $250K / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^total dep with bal > \$?250k\s*\/\s*deposits/i] },
+    { key: 'largeDepositsToDeposits', label: 'Deposits > $250K / Deposits', type: 'percent', denominatorKey: 'totalDeposits', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^total dep with bal > \$?250k\s*\/\s*deposits/i] },
     { key: 'nonInterestBearingDeposits', label: 'Non-Interest Bearing Deposits / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: true, peerLabels: [/^non-int bearing dep\s*\/\s*deposits/i] },
     { key: 'brokeredDepositsToDeposits', label: 'Brokered Deposits / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^brokered deposits\s*\/\s*deposits/i] },
     { key: 'jumboTimeDeposits', label: 'Jumbo Time Deposits / Deposits', type: 'percent', section: 'Liquidity', higherIsBetter: false, peerLabels: [/^jumbo time dep\s*\/\s*dom deposits/i] },
@@ -3346,11 +3346,12 @@
 
     const bondMeta = bankDataStatus && bankDataStatus.bondAccounting ? bankDataStatus.bondAccounting : {};
     if (bondMeta.available) {
-      const text = `${formatNumber(bondMeta.matchedCount || 0)} matched portfolio files · ${formatNumber(bondMeta.pCodeMatchedCount || 0)} P-code only · ${formatNumber(bondMeta.unmatchedCount || 0)} unmatched · imported ${formatImportedDate(bondMeta.importedAt)}`;
+      const counts = bondAccountingReviewCounts(bondMeta);
+      const text = `${formatNumber(counts.matched)} matched portfolio files · ${formatNumber(counts.pCodeOnly)} P-code only · ${formatNumber(counts.unmatchedPCode)} unmatched P-code · imported ${formatImportedDate(bondMeta.importedAt)}`;
       if (reportsBondAccountingStatus) reportsBondAccountingStatus.textContent = text;
       if (reportsBondAccountingCardStatus) reportsBondAccountingCardStatus.textContent = `${formatNumber(bondMeta.matchedCount || 0)} matched files`;
       if (reportsBondAccountingCard) reportsBondAccountingCard.classList.add('report-card-ready');
-      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.toggle('report-card-warning', Boolean(bondMeta.unmatchedCount));
+      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.toggle('report-card-warning', Boolean(counts.needsReview));
       if (reportsBondAccountingStageBtn) reportsBondAccountingStageBtn.disabled = false;
     } else {
       const text = bondMeta.error || 'Bond accounting portfolios have not been imported yet.';
@@ -3388,6 +3389,22 @@
     if (row.status === 'needs-bank-data-match') return 'P-code only';
     if (row.status === 'unmatched-pcode') return 'Unmatched P-code';
     return row.status || 'Unmatched';
+  }
+
+  function bondAccountingReviewCounts(source) {
+    const pCodeOnly = Number(source && source.pCodeMatchedCount) || 0;
+    let unmatchedPCode = 0;
+    if (source && Array.isArray(source.matches)) {
+      unmatchedPCode = source.matches.filter(row => row.status === 'unmatched-pcode').length;
+    } else {
+      unmatchedPCode = Math.max(0, (Number(source && source.unmatchedCount) || 0) - pCodeOnly);
+    }
+    return {
+      matched: Number(source && source.matchedCount) || 0,
+      pCodeOnly,
+      unmatchedPCode,
+      needsReview: pCodeOnly + unmatchedPCode
+    };
   }
 
   function bondAccountingSearchText(row) {
@@ -3442,7 +3459,8 @@
     const rows = filteredBondAccountingRows();
     if (status) {
       const filteredText = rows.length === allRows.length ? '' : ` · showing ${formatNumber(rows.length)} filtered`;
-      status.textContent = `Last import: ${formatNumber(bondAccountingManifest.matchedCount || 0)} matched, ${formatNumber(bondAccountingManifest.pCodeMatchedCount || 0)} P-code only, ${formatNumber(bondAccountingManifest.unmatchedCount || 0)} unmatched${filteredText}.`;
+      const counts = bondAccountingReviewCounts(bondAccountingManifest);
+      status.textContent = `Last import: ${formatNumber(counts.matched)} matched, ${formatNumber(counts.pCodeOnly)} P-code only, ${formatNumber(counts.unmatchedPCode)} unmatched P-code${filteredText}.`;
     }
     renderBondAccountingStats(rows);
     if (!rows.length) {
@@ -3546,12 +3564,29 @@
     return (config.peerLabels || []).some(re => re.test(label));
   }
 
-  function peerSeriesValue(seriesRow) {
+  function peerSeriesValue(seriesRow, config = {}) {
     if (!seriesRow) return null;
-    if (seriesRow.percent !== null && seriesRow.percent !== '' && Number.isFinite(Number(seriesRow.percent))) return Number(seriesRow.percent);
-    if (seriesRow.value !== null && seriesRow.value !== '' && Number.isFinite(Number(seriesRow.value))) return Number(seriesRow.value);
-    if (seriesRow.amount !== null && seriesRow.amount !== '' && Number.isFinite(Number(seriesRow.amount))) return Number(seriesRow.amount);
+    const order = config.type === 'money'
+      ? ['amount', 'value', 'percent']
+      : config.type === 'percent'
+        ? ['percent', 'value', 'amount']
+        : ['value', 'percent', 'amount'];
+    for (const field of order) {
+      const raw = seriesRow[field];
+      if (raw !== null && raw !== '' && Number.isFinite(Number(raw))) return Number(raw);
+    }
     return null;
+  }
+
+  function peerBankMetricValue(values, config = {}) {
+    if (!values || !config.key) return null;
+    if (config.denominatorKey) {
+      return bankNumericShare(values[config.key], values[config.denominatorKey]);
+    }
+    const raw = values[config.key];
+    if (raw === null || raw === '') return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
   }
 
   function buildPeerAnalysis() {
@@ -3568,9 +3603,8 @@
     const rows = PEER_ANALYSIS_METRICS.map(config => {
       const metric = metrics.find(row => peerMetricMatches(row, config));
       const seriesRow = metric ? series.find(row => row.metricKey === metric.key && row.period === period) : null;
-      const rawBankValue = values[config.key];
-      const bankValue = rawBankValue !== null && rawBankValue !== '' ? Number(rawBankValue) : NaN;
-      const peerValue = peerSeriesValue(seriesRow);
+      const bankValue = peerBankMetricValue(values, config);
+      const peerValue = peerSeriesValue(seriesRow, config);
       const delta = Number.isFinite(bankValue) && Number.isFinite(peerValue) ? bankValue - peerValue : null;
       return {
         ...config,
@@ -5821,11 +5855,12 @@
     const averagedMeta = averaged.metadata || {};
     const averagedDataset = averaged.dataset || {};
     const bond = bankDataStatus && bankDataStatus.bondAccounting ? bankDataStatus.bondAccounting : {};
+    const bondCounts = bondAccountingReviewCounts(bond);
     const peerText = averaged.available
       ? `Peer averages: ${escapeHtml(averagedMeta.latestPeriod || 'latest')} · imported ${escapeHtml(formatImportedDate(averagedMeta.importedAt))} · ${escapeHtml(formatNumber(averagedDataset.metricCount || averagedMeta.metricCount || 0))} metrics · ${escapeHtml(formatNumber(averagedDataset.seriesRowCount || averagedMeta.seriesRowCount || 0))} peer rows`
       : 'Peer averages: —';
     const bondText = bond.available
-      ? `Portfolio files: ${escapeHtml(formatNumber(bond.matchedCount || 0))} matched · ${escapeHtml(formatNumber(bond.pCodeMatchedCount || 0))} P-code only · ${escapeHtml(formatNumber(bond.unmatchedCount || 0))} unmatched`
+      ? `Portfolio files: ${escapeHtml(formatNumber(bondCounts.matched))} matched · ${escapeHtml(formatNumber(bondCounts.pCodeOnly))} P-code only · ${escapeHtml(formatNumber(bondCounts.unmatchedPCode))} unmatched P-code`
       : 'Portfolio files: —';
     return `
       <div class="reports-freshness">

@@ -74,7 +74,7 @@ const PEER_METRICS = [
   { key: 'loanLossReserve', label: 'Loan & Lease Loss Reserve', type: 'money', higherIsBetter: null },
   { key: 'loanLossProvision', label: 'Loan Loss Provision', type: 'money', higherIsBetter: false },
   { key: 'netChargeoffsToAvgLoans', label: 'Net Chargeoffs / Avg Loans', type: 'percent', higherIsBetter: false },
-  { key: 'largeDepositsToDeposits', label: 'Deposits > $250K / Deposits', type: 'percent', higherIsBetter: false },
+  { key: 'largeDepositsToDeposits', label: 'Deposits > $250K / Deposits', type: 'percent', denominatorKey: 'totalDeposits', higherIsBetter: false },
   { key: 'nonInterestBearingDeposits', label: 'Non-Interest Bearing Deposits / Deposits', type: 'percent', higherIsBetter: true },
   { key: 'brokeredDepositsToDeposits', label: 'Brokered Deposits / Deposits', type: 'percent', higherIsBetter: false },
   { key: 'jumboTimeDeposits', label: 'Jumbo Time Deposits / Deposits', type: 'percent', higherIsBetter: false },
@@ -89,6 +89,15 @@ const PEER_METRICS = [
 ];
 
 const PEER_METRIC_KEYS = PEER_METRICS.map(m => m.key);
+
+function metricSqlExpression(metric, periodAlias) {
+  const path = `'$.values.${metric.key}'`;
+  const valueExpr = `CAST(json_extract(${periodAlias}.value, ${path}) AS REAL)`;
+  if (!metric.denominatorKey) return valueExpr;
+  const denomPath = `'$.values.${metric.denominatorKey}'`;
+  const denomExpr = `CAST(json_extract(${periodAlias}.value, ${denomPath}) AS REAL)`;
+  return `CASE WHEN ${valueExpr} IS NOT NULL AND ${denomExpr} IS NOT NULL AND ${denomExpr} != 0 THEN (${valueExpr} / ${denomExpr}) * 100 ELSE NULL END`;
+}
 
 // ---------------------------------------------------------------------------
 // SQL fragments from criteria.
@@ -178,8 +187,7 @@ function computeCohortAverages(outputDir, criteria, requestedPeriod) {
   // per cohort/period. AVG ignores NULLs; we count finite samples per key
   // with SUM(CASE ...).
   const projects = PEER_METRICS.map(m => {
-    const path = `'$.values.${m.key}'`;
-    const expr = `CAST(json_extract(p.value, ${path}) AS REAL)`;
+    const expr = metricSqlExpression(m, 'p');
     return [
       `AVG(${expr}) AS avg_${m.key}`,
       `SUM(CASE WHEN ${expr} IS NOT NULL THEN 1 ELSE 0 END) AS n_${m.key}`
