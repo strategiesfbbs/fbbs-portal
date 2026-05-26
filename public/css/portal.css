@@ -7169,6 +7169,112 @@ body {
   z-index: 4;
 }
 
+.custom-report-builder {
+  display: grid;
+  gap: 14px;
+}
+
+.custom-report-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.custom-report-grid label,
+.custom-report-columns label,
+.custom-report-toggles label {
+  color: var(--text2);
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.custom-report-grid input,
+.custom-report-grid select {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.custom-report-toggles {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+}
+
+.custom-report-toggles label,
+.custom-report-columns label {
+  align-items: center;
+  display: flex;
+  font-weight: 700;
+}
+
+.custom-report-columns {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.custom-report-columns summary {
+  color: var(--green);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.custom-report-columns > div {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.custom-report-columns fieldset {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+}
+
+.custom-report-columns legend {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 4px;
+}
+
+.custom-report-summary {
+  align-items: center;
+  background: #f8faf8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.custom-report-summary strong {
+  color: var(--text);
+}
+
+.custom-report-table {
+  min-width: 1120px;
+}
+
+.custom-report-table td {
+  white-space: nowrap;
+}
+
 .reports-data-grid {
   display: grid;
   gap: 14px;
@@ -11108,6 +11214,11 @@ body {
 }
 
 @media (max-width: 760px) {
+  .custom-report-grid,
+  .custom-report-columns > div {
+    grid-template-columns: 1fr;
+  }
+
   .portfolio-review-head,
   .portfolio-review-screen-head {
     display: grid;

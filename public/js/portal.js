@@ -61,8 +61,21 @@
   let reportsSort = { key: 'lastRunAt', dir: 'desc' };
   let reportsSelectedType = '';
   let reportsSessionReports = [];
+  let savedReportDefinitions = [];
   let reportsAppEventsBound = false;
   let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0 };
+  let customBankReportState = {
+    loading: false,
+    dataset: null,
+    fields: [],
+    rows: [],
+    lastRunAt: null,
+    definitionId: '',
+    name: '',
+    filters: { search: '', states: '', statuses: '', minAssets: '', maxAssets: '', peerWatchOnly: false, savedOnly: false, portfolioOnly: false },
+    selectedColumns: ['displayName', 'city', 'state', 'certNumber', 'accountStatusLabel', 'totalAssets', 'totalDeposits', 'securitiesToAssets', 'loansToDeposits', 'yieldOnSecurities', 'netInterestMargin'],
+    sort: { key: 'totalAssets', dir: 'desc' }
+  };
   let selectedFiles = {
     dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -236,6 +249,14 @@
   const STRATEGY_STATUSES = ['Open', 'In Progress', 'Needs Billed', 'Completed'];
   const STRATEGY_PRIORITIES = ['1', '2', '3', '4', '5'];
   const REPORT_TYPE_META = {
+    'custom-bank': {
+      slug: 'custom-bank',
+      name: 'Custom Bank List',
+      shortName: 'Bank List',
+      category: 'Bank Intelligence',
+      folder: 'Coverage',
+      description: 'Build a reusable bank list from call-report fields, account status, peer gaps, and report availability.'
+    },
     'bank-peer': {
       slug: 'bank-peer',
       name: 'Bank Peer Analysis',
@@ -270,14 +291,45 @@
     }
   };
   const REPORT_FIXTURES = [
+    { id: 'fixture-custom-bank', name: 'Custom Bank List - Coverage Pipeline', type: 'custom-bank', folder: 'Coverage', description: REPORT_TYPE_META['custom-bank'].description, lastRunAt: '2026-05-14T09:10:00.000Z', lastRunBy: 'You', pinned: true },
     { id: 'fixture-bank-peer', name: 'Bank Peer Analysis - Coverage Baseline', type: 'bank-peer', folder: 'Coverage', description: REPORT_TYPE_META['bank-peer'].description, lastRunAt: '2026-05-13T08:15:00.000Z', lastRunBy: 'You', pinned: true },
     { id: 'fixture-opportunity', name: 'Midwest Opportunity Scan', type: 'opportunity', folder: 'Sales Strategy', description: REPORT_TYPE_META.opportunity.description, lastRunAt: '2026-05-12T15:40:00.000Z', lastRunBy: 'You', pinned: false },
     { id: 'fixture-portfolio', name: 'Portfolio Review Workbench - Matched Files', type: 'portfolio-peer', folder: 'Portfolio Reviews', description: REPORT_TYPE_META['portfolio-peer'].description, lastRunAt: '2026-05-12T10:05:00.000Z', lastRunBy: 'You', pinned: false },
     { id: 'fixture-coverage', name: 'Coverage Book - Saved Banks', type: 'coverage', folder: 'Coverage', description: REPORT_TYPE_META.coverage.description, lastRunAt: '2026-05-11T16:25:00.000Z', lastRunBy: 'You', pinned: false }
   ];
+  const SAVED_REPORTS_STORAGE_KEY = 'fbbs.reports.savedDefinitions';
+  const CUSTOM_BANK_REPORT_COLUMNS = [
+    { key: 'displayName', label: 'Bank', type: 'text', section: 'Details' },
+    { key: 'city', label: 'City', type: 'text', section: 'Details' },
+    { key: 'state', label: 'State', type: 'text', section: 'Details' },
+    { key: 'county', label: 'County', type: 'text', section: 'Details' },
+    { key: 'certNumber', label: 'Cert', type: 'text', section: 'Details' },
+    { key: 'accountStatusLabel', label: 'Status', type: 'text', section: 'Coverage' },
+    { key: 'coverageOwner', label: 'Owner', type: 'text', section: 'Coverage' },
+    { key: 'portfolioAvailable', label: 'Portfolio File', type: 'boolean', section: 'Reports' },
+    { key: 'totalAssets', label: 'Assets', type: 'money', section: 'Balance Sheet' },
+    { key: 'totalDeposits', label: 'Deposits', type: 'money', section: 'Balance Sheet' },
+    { key: 'totalEquityCapital', label: 'Equity Capital', type: 'money', section: 'Balance Sheet' },
+    { key: 'afsTotal', label: 'AFS Securities', type: 'money', section: 'Securities' },
+    { key: 'htmTotal', label: 'HTM Securities', type: 'money', section: 'Securities' },
+    { key: 'securitiesToAssets', label: 'Securities / Assets', type: 'percent', section: 'Securities' },
+    { key: 'loansToAssets', label: 'Loans / Assets', type: 'percent', section: 'Loans' },
+    { key: 'loansToDeposits', label: 'Loans / Deposits', type: 'percent', section: 'Liquidity' },
+    { key: 'yieldOnSecurities', label: 'Yield on Securities', type: 'percent', section: 'Profitability' },
+    { key: 'netInterestMargin', label: 'NIM', type: 'percent', section: 'Profitability' },
+    { key: 'costOfFunds', label: 'Cost of Funds', type: 'percent', section: 'Profitability' },
+    { key: 'tier1RiskBasedRatio', label: 'Tier 1 RBC', type: 'percent', section: 'Capital' },
+    { key: 'texasRatio', label: 'Texas Ratio', type: 'percent', section: 'Credit' },
+    { key: 'peerDelta_securitiesToAssets', label: 'Securities Gap', type: 'percent', section: 'Peer Gaps' },
+    { key: 'peerDelta_yieldOnSecurities', label: 'Securities Yield Gap', type: 'percent', section: 'Peer Gaps' },
+    { key: 'peerDelta_netInterestMargin', label: 'NIM Gap', type: 'percent', section: 'Peer Gaps' },
+    { key: 'peerDelta_liquidAssetsToAssets', label: 'Liquid Assets Gap', type: 'percent', section: 'Peer Gaps' },
+    { key: 'peerDelta_longTermAssetsToAssets', label: 'Long-Term Assets Gap', type: 'percent', section: 'Peer Gaps' }
+  ];
   const REPORT_RAIL_ITEMS = [
     { id: 'recent', section: 'REPORTS', label: 'Recent' },
     { id: 'created', section: 'REPORTS', label: 'Created by Me' },
+    { id: 'saved-views', section: 'REPORTS', label: 'Saved Views' },
     { id: 'pinned', section: 'REPORTS', label: 'Pinned' },
     { id: 'subscribed', section: 'REPORTS', label: 'Subscribed', disabled: true },
     { id: 'all', section: 'REPORTS', label: 'All Reports' },
@@ -5493,6 +5545,7 @@
 
   function setupReports() {
     loadReportsSessionReports();
+    loadSavedReportDefinitions();
     setupReportsAppEvents();
     const averagedInput = document.getElementById('reportsAveragedSeriesWorkbookInput');
     const averagedImportBtn = document.getElementById('reportsAveragedSeriesImportBtn');
@@ -5811,9 +5864,36 @@
     }
   }
 
+  function loadSavedReportDefinitions() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(SAVED_REPORTS_STORAGE_KEY) || '[]');
+      savedReportDefinitions = Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      savedReportDefinitions = [];
+    }
+  }
+
+  function saveSavedReportDefinitions() {
+    localStorage.setItem(SAVED_REPORTS_STORAGE_KEY, JSON.stringify(savedReportDefinitions.slice(0, 100)));
+  }
+
+  function savedReportRows() {
+    return savedReportDefinitions.map(def => ({
+      id: def.id,
+      name: def.name || 'Saved Bank List',
+      type: def.type || 'custom-bank',
+      folder: def.folder || 'Saved Views',
+      description: def.description || reportTypeMeta(def.type || 'custom-bank').description,
+      lastRunAt: def.updatedAt || def.createdAt,
+      lastRunBy: 'You',
+      pinned: Boolean(def.pinned),
+      savedDefinition: true
+    }));
+  }
+
   function allReportsRows() {
     const seen = new Set();
-    return [...reportsSessionReports, ...REPORT_FIXTURES].filter(row => {
+    return [...reportsSessionReports, ...savedReportRows(), ...REPORT_FIXTURES].filter(row => {
       if (!row || seen.has(row.id)) return false;
       seen.add(row.id);
       return true;
@@ -5853,6 +5933,7 @@
     const active = reportRailItem(reportsActiveRail);
     const search = reportsSearchQuery.trim().toLowerCase();
     let rows = allReportsRows();
+    if (active.id === 'saved-views') rows = rows.filter(row => row.savedDefinition);
     if (active.id === 'pinned') rows = rows.filter(row => row.pinned);
     if (active.folder) rows = rows.filter(row => row.folder === active.folder);
     if (search) {
@@ -6031,7 +6112,318 @@
     `;
   }
 
+  function savedReportDefinitionById(id) {
+    return savedReportDefinitions.find(def => def.id === id) || null;
+  }
+
+  function customBankColumnDefs() {
+    const datasetFields = customBankReportState.fields || [];
+    const seen = new Set();
+    return CUSTOM_BANK_REPORT_COLUMNS.map(col => {
+      const field = datasetFields.find(f => f.key === col.key);
+      seen.add(col.key);
+      return field ? { ...col, label: col.label || field.label, type: col.type || field.type } : col;
+    }).concat(datasetFields
+      .filter(field => field && field.key && !seen.has(field.key))
+      .map(field => ({ key: field.key, label: field.label || field.key, type: field.type || 'text', section: field.section || 'Other' }))
+    );
+  }
+
+  function customBankColumnDef(key) {
+    return customBankColumnDefs().find(col => col.key === key) || { key, label: key, type: 'text', section: 'Other' };
+  }
+
+  function customBankReportValue(row, key) {
+    if (!row) return '';
+    if (key === 'accountStatusLabel') return row.accountStatusLabel || (row.accountStatus && row.accountStatus.status) || 'Open';
+    if (key === 'coverageOwner') return row.coverageOwner || (row.accountStatus && row.accountStatus.owner) || '';
+    if (key === 'portfolioAvailable') return row.portfolioAvailable ? 'Yes' : 'No';
+    return row[key];
+  }
+
+  function formatCustomBankReportValue(row, key) {
+    const def = customBankColumnDef(key);
+    const value = customBankReportValue(row, key);
+    if (def.type === 'money') return formatCallReportValue(value, 'money');
+    if (def.type === 'percent') return value == null || value === '' || isNaN(value) ? '—' : `${Number(value).toFixed(2)}%`;
+    if (def.type === 'boolean') return value === true || value === 'Yes' ? 'Yes' : 'No';
+    return value == null || value === '' ? '—' : String(value);
+  }
+
+  function numberFromInput(value) {
+    const clean = String(value || '').replace(/[$,]/g, '').trim();
+    if (!clean) return null;
+    const n = Number(clean);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function normalizeCustomBankReportRows(banks) {
+    const portfolioCerts = new Set();
+    const portfolioNames = new Set();
+    const matches = bondAccountingManifest && Array.isArray(bondAccountingManifest.matches) ? bondAccountingManifest.matches : [];
+    matches.forEach(row => {
+      if (row.certNumber) portfolioCerts.add(String(row.certNumber));
+      if (row.bankDisplayName) portfolioNames.add(String(row.bankDisplayName).toLowerCase());
+    });
+    return (Array.isArray(banks) ? banks : []).map(row => {
+      const accountStatus = row.accountStatus || {};
+      const name = row.displayName || row.name || '';
+      const cert = row.certNumber == null ? '' : String(row.certNumber);
+      return {
+        ...row,
+        displayName: name,
+        accountStatusLabel: row.accountStatusLabel || accountStatus.status || 'Open',
+        coverageOwner: accountStatus.owner || '',
+        portfolioAvailable: portfolioCerts.has(cert) || portfolioNames.has(String(name).toLowerCase())
+      };
+    });
+  }
+
+  function customBankReportHasPeerWatch(row) {
+    return ['peerDelta_yieldOnSecurities', 'peerDelta_netInterestMargin', 'peerDelta_liquidAssetsToAssets', 'peerDelta_securitiesToAssets']
+      .some(key => {
+        const value = Number(row[key]);
+        if (!Number.isFinite(value)) return false;
+        if (key === 'peerDelta_securitiesToAssets') return value < -3;
+        return value < -0.15;
+      });
+  }
+
+  function filteredCustomBankRows() {
+    const filters = customBankReportState.filters;
+    const search = String(filters.search || '').trim().toLowerCase();
+    const states = new Set(String(filters.states || '').toUpperCase().split(/[\s,]+/).filter(Boolean));
+    const statuses = new Set(String(filters.statuses || '').split(',').map(s => s.trim()).filter(Boolean));
+    const minAssets = numberFromInput(filters.minAssets);
+    const maxAssets = numberFromInput(filters.maxAssets);
+    const rows = (customBankReportState.rows || []).filter(row => {
+      if (search) {
+        const haystack = [row.displayName, row.city, row.state, row.county, row.certNumber, row.coverageOwner, row.accountStatusLabel].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
+      if (states.size && !states.has(String(row.state || '').toUpperCase())) return false;
+      if (statuses.size && !statuses.has(row.accountStatusLabel || 'Open')) return false;
+      const assets = Number(row.totalAssets);
+      if (minAssets != null && (!Number.isFinite(assets) || assets < minAssets * 1000)) return false;
+      if (maxAssets != null && (!Number.isFinite(assets) || assets > maxAssets * 1000)) return false;
+      if (filters.savedOnly && !(row.accountStatus && row.accountStatus.isCoverageSaved)) return false;
+      if (filters.portfolioOnly && !row.portfolioAvailable) return false;
+      if (filters.peerWatchOnly && !customBankReportHasPeerWatch(row)) return false;
+      return true;
+    });
+    const sort = customBankReportState.sort || {};
+    const key = sort.key || 'totalAssets';
+    const dir = sort.dir === 'asc' ? 1 : -1;
+    const sortDef = customBankColumnDef(key);
+    return rows.slice().sort((a, b) => {
+      const av = customBankReportValue(a, key);
+      const bv = customBankReportValue(b, key);
+      const an = Number(av);
+      const bn = Number(bv);
+      if (['money', 'percent', 'number'].includes(sortDef.type)) {
+        const aOk = Number.isFinite(an);
+        const bOk = Number.isFinite(bn);
+        if (aOk && bOk) return (an - bn) * dir;
+        if (aOk) return -1;
+        if (bOk) return 1;
+        return 0;
+      }
+      return String(av || '').localeCompare(String(bv || '')) * dir;
+    });
+  }
+
+  function customBankReportFieldControl(field) {
+    const filters = customBankReportState.filters;
+    const checked = name => filters[name] ? 'checked' : '';
+    if (field === 'status') {
+      const options = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
+      const selected = new Set(String(filters.statuses || '').split(',').filter(Boolean));
+      return `
+        <label>Status
+          <select id="customBankStatusFilter" multiple size="5">
+            ${options.map(opt => `<option value="${escapeHtml(opt)}" ${selected.has(opt) ? 'selected' : ''}>${escapeHtml(opt)}</option>`).join('')}
+          </select>
+        </label>
+      `;
+    }
+    if (field === 'toggles') {
+      return `
+        <div class="custom-report-toggles">
+          <label><input type="checkbox" id="customBankSavedOnly" ${checked('savedOnly')}> Saved banks only</label>
+          <label><input type="checkbox" id="customBankPortfolioOnly" ${checked('portfolioOnly')}> Has portfolio file</label>
+          <label><input type="checkbox" id="customBankPeerWatchOnly" ${checked('peerWatchOnly')}> Peer watch gaps</label>
+        </div>
+      `;
+    }
+    return '';
+  }
+
+  function customBankReportColumnPickerHtml() {
+    const selected = new Set(customBankReportState.selectedColumns || []);
+    const groups = {};
+    customBankColumnDefs().forEach(col => {
+      groups[col.section || 'Other'] = groups[col.section || 'Other'] || [];
+      groups[col.section || 'Other'].push(col);
+    });
+    return Object.entries(groups).map(([section, cols]) => `
+      <fieldset>
+        <legend>${escapeHtml(section)}</legend>
+        ${cols.map(col => `
+          <label>
+            <input type="checkbox" data-custom-bank-column="${escapeHtml(col.key)}" ${selected.has(col.key) ? 'checked' : ''}>
+            ${escapeHtml(col.label)}
+          </label>
+        `).join('')}
+      </fieldset>
+    `).join('');
+  }
+
+  function customBankReportBuilderHtml() {
+    const filters = customBankReportState.filters;
+    const rows = filteredCustomBankRows();
+    const source = customBankReportState.dataset || {};
+    const peer = source.peerComparison || {};
+    const selectedColumns = customBankReportState.selectedColumns || [];
+    return `
+      <div class="custom-report-builder">
+        <div class="custom-report-grid">
+          <label>Search
+            <input type="search" id="customBankSearchInput" placeholder="Bank, city, cert, owner..." value="${escapeHtml(filters.search || '')}">
+          </label>
+          <label>States
+            <input type="text" id="customBankStatesInput" placeholder="MO, IL, AR..." value="${escapeHtml(filters.states || '')}">
+          </label>
+          <label>Min assets ($MM)
+            <input type="number" id="customBankMinAssetsInput" min="0" step="1" value="${escapeHtml(filters.minAssets || '')}">
+          </label>
+          <label>Max assets ($MM)
+            <input type="number" id="customBankMaxAssetsInput" min="0" step="1" value="${escapeHtml(filters.maxAssets || '')}">
+          </label>
+          ${customBankReportFieldControl('status')}
+          ${customBankReportFieldControl('toggles')}
+        </div>
+        <details class="custom-report-columns">
+          <summary>Columns (${escapeHtml(formatNumber(selectedColumns.length))})</summary>
+          <div>${customBankReportColumnPickerHtml()}</div>
+        </details>
+        <div class="custom-report-summary">
+          <strong>${escapeHtml(formatNumber(rows.length))} banks</strong>
+          <span>${escapeHtml(source.latestPeriod ? `Call report ${source.latestPeriod}` : 'Run the report to load bank data')}${peer.period ? escapeHtml(` · Peer ${peer.period}`) : ''}</span>
+          <span>${escapeHtml(customBankReportState.lastRunAt ? `Generated ${new Date(customBankReportState.lastRunAt).toLocaleString()}` : '')}</span>
+        </div>
+        <div id="customBankReportOutput">${customBankReportOutputHtml(rows)}</div>
+      </div>
+    `;
+  }
+
+  function customBankReportOutputHtml(rows) {
+    if (customBankReportState.loading) {
+      return '<div class="bank-search-empty">Building custom bank report...</div>';
+    }
+    if (!customBankReportState.dataset) {
+      return '<div class="bank-search-empty">Choose filters and run the report.</div>';
+    }
+    if (!rows.length) {
+      return '<div class="bank-search-empty">No banks match the current report setup.</div>';
+    }
+    const columns = (customBankReportState.selectedColumns || []).map(customBankColumnDef);
+    const top = rows.slice(0, 250);
+    const header = col => `<button type="button" data-custom-bank-sort="${escapeHtml(col.key)}">${escapeHtml(col.label)}${customBankReportState.sort.key === col.key ? (customBankReportState.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>`;
+    return `
+      <div class="reports-list-wrap custom-report-table-wrap">
+        <table class="reports-list custom-report-table">
+          <thead><tr>${columns.map(col => `<th>${header(col)}</th>`).join('')}<th></th></tr></thead>
+          <tbody>
+            ${top.map(row => `
+              <tr>
+                ${columns.map(col => `<td>${escapeHtml(formatCustomBankReportValue(row, col.key))}</td>`).join('')}
+                <td><button type="button" class="text-btn" data-custom-bank-open="${escapeHtml(row.id)}">Open</button></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+      ${rows.length > top.length ? `<div class="opp-more">Showing first ${escapeHtml(formatNumber(top.length))} of ${escapeHtml(formatNumber(rows.length))}. Tighten filters or export CSV for all rows.</div>` : ''}
+    `;
+  }
+
+  function resetCustomBankReportFromDefinition(def) {
+    if (!def) return;
+    customBankReportState.definitionId = def.id || '';
+    customBankReportState.name = def.name || '';
+    customBankReportState.filters = { ...customBankReportState.filters, ...(def.filters || {}) };
+    customBankReportState.selectedColumns = Array.isArray(def.columns) && def.columns.length ? def.columns.slice() : customBankReportState.selectedColumns;
+    customBankReportState.sort = def.sort || customBankReportState.sort;
+  }
+
+  function renderCustomBankReportMount() {
+    const mount = document.getElementById('reportsCustomBankMount');
+    if (!mount) return;
+    mount.innerHTML = customBankReportBuilderHtml();
+  }
+
+  async function runCustomBankReport() {
+    customBankReportState.loading = true;
+    renderCustomBankReportMount();
+    try {
+      const [data, manifest] = await Promise.all([
+        fetch('/api/banks/map', { cache: 'no-store' }).then(readBankJson),
+        bondAccountingManifest ? Promise.resolve(bondAccountingManifest) : fetch('/api/banks/bond-accounting', { cache: 'no-store' }).then(readBankJson).catch(() => null)
+      ]);
+      if (manifest) bondAccountingManifest = manifest;
+      customBankReportState.dataset = data;
+      customBankReportState.fields = Array.isArray(data.fields) ? data.fields : [];
+      customBankReportState.rows = normalizeCustomBankReportRows(data.banks || []);
+      customBankReportState.lastRunAt = new Date().toISOString();
+      addSessionReport('custom-bank');
+      showToast('Custom bank report ready');
+    } catch (e) {
+      showToast(e.message, true);
+    } finally {
+      customBankReportState.loading = false;
+      renderCustomBankReportMount();
+    }
+  }
+
+  function exportCustomBankReportCsv() {
+    const rows = filteredCustomBankRows();
+    if (!rows.length) return showToast('No report rows to export', true);
+    const cols = (customBankReportState.selectedColumns || []).map(customBankColumnDef);
+    const csvRows = rows.map(row => cols.map(col => formatCustomBankReportValue(row, col.key)));
+    const stamp = (customBankReportState.dataset && customBankReportState.dataset.latestPeriod) || new Date().toISOString().slice(0, 10);
+    downloadCsv(`custom_bank_report_${stamp}.csv`, [cols.map(col => col.label), ...csvRows]);
+    showToast(`Exported ${formatNumber(rows.length)} banks`);
+  }
+
+  function saveCustomBankReportDefinition() {
+    const defaultName = customBankReportState.name || `Custom Bank List - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+    const name = window.prompt('Name this saved view', defaultName);
+    if (!name) return;
+    const now = new Date().toISOString();
+    const id = customBankReportState.definitionId || `saved-${Date.now()}`;
+    const next = {
+      id,
+      name: name.trim(),
+      type: 'custom-bank',
+      folder: 'Saved Views',
+      description: 'Custom bank list saved from the report builder.',
+      filters: { ...customBankReportState.filters },
+      columns: customBankReportState.selectedColumns.slice(),
+      sort: { ...customBankReportState.sort },
+      createdAt: (savedReportDefinitionById(id) || {}).createdAt || now,
+      updatedAt: now,
+      pinned: true
+    };
+    savedReportDefinitions = [next, ...savedReportDefinitions.filter(def => def.id !== id)];
+    customBankReportState.definitionId = id;
+    customBankReportState.name = next.name;
+    saveSavedReportDefinitions();
+    showToast('Saved report view');
+    renderReportsWorkspace();
+  }
+
   function builderFieldHtml(type) {
+    if (type === 'custom-bank') return '<div id="reportsCustomBankMount"></div>';
     if (type === 'bank-peer') return '<div id="reportsBankPeerMount"></div>';
     if (type === 'portfolio-peer') return '<div id="reportsPortfolioReviewMount"></div>';
     if (type === 'opportunity') return '<div id="reportsOpportunityMount"></div>';
@@ -6059,7 +6451,9 @@
           </section>
           <section class="reports-builder-section">
             <h4>Filters &amp; Grouping</h4>
-            ${type === 'opportunity' ? '<p class="reports-muted">Min flags, state, and saved-only filters are in the scan panel above.</p>' : '<p class="reports-muted">No additional filters for this report type yet.</p>'}
+            ${type === 'custom-bank'
+              ? '<p class="reports-muted">Filters, column selection, and sorting are managed in the custom builder above.</p>'
+              : type === 'opportunity' ? '<p class="reports-muted">Min flags, state, and saved-only filters are in the scan panel above.</p>' : '<p class="reports-muted">No additional filters for this report type yet.</p>'}
           </section>
           <section class="reports-builder-section">
             <h4>Output</h4>
@@ -6072,8 +6466,8 @@
           </section>
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
-            <button type="button" class="small-btn secondary" disabled title="Available in Phase 1">Save As</button>
-            <button type="button" class="small-btn secondary" disabled title="Available in Phase 1">Save</button>
+            <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Available in Phase 1"'}>Save View</button>
+            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Use the report panel export when available"'}>Export CSV</button>
             <button type="button" class="small-btn secondary" disabled title="Available in Phase 3">Save &amp; Schedule</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
@@ -6516,11 +6910,14 @@
     const values = latest.values || {};
     const peerSubject = values.name || (bank && bank.summary && bank.summary.displayName);
     const portfolioSubject = portfolioReviewState.review && portfolioReviewState.review.bankName;
+    const customSubject = type === 'custom-bank' && customBankReportState.rows && customBankReportState.rows.length
+      ? ` - ${formatNumber(filteredCustomBankRows().length)} banks`
+      : '';
     const subject = type === 'bank-peer' && peerSubject
       ? ` - ${peerSubject}`
       : type === 'portfolio-peer' && portfolioSubject
         ? ` - ${portfolioSubject}`
-        : '';
+        : customSubject;
     reportsSessionReports.unshift({
       id: `session-${Date.now()}`,
       name: `${meta.name}${subject} - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
@@ -6559,6 +6956,11 @@
       const autorun = route.params.get('autorun') === '1';
       let handledAutorun = false;
       app.innerHTML = reportsBuilderHtml(type);
+      if (type === 'custom-bank') {
+        const reportId = route.params.get('id') || '';
+        if (reportId) resetCustomBankReportFromDefinition(savedReportDefinitionById(reportId));
+        renderCustomBankReportMount();
+      }
       if (type === 'bank-peer') {
         mountReportPanel('peerAnalysisBuilderPanel', 'reportsBankPeerMount');
         if (bankId) {
@@ -6648,6 +7050,21 @@
         clearTimeout(portfolioReviewState.searchTimer);
         portfolioReviewState.searchTimer = setTimeout(() => loadPortfolioReviewBanks(target.value || ''), 250);
       }
+      if (['customBankSearchInput', 'customBankStatesInput', 'customBankMinAssetsInput', 'customBankMaxAssetsInput'].includes(target.id)) {
+        const keyById = {
+          customBankSearchInput: 'search',
+          customBankStatesInput: 'states',
+          customBankMinAssetsInput: 'minAssets',
+          customBankMaxAssetsInput: 'maxAssets'
+        };
+        customBankReportState.filters[keyById[target.id]] = target.value || '';
+        renderCustomBankReportMount();
+        const nextInput = document.getElementById(target.id);
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+        }
+      }
     });
     document.addEventListener('keydown', event => {
       const target = event.target;
@@ -6664,6 +7081,31 @@
       if (target.id === 'reportsFilesStatusFilter') {
         bondAccountingFilters.status = target.value || '';
         renderReportsFilesTable();
+      }
+      if (target.id === 'customBankStatusFilter') {
+        customBankReportState.filters.statuses = Array.from(target.selectedOptions || []).map(opt => opt.value).join(',');
+        renderCustomBankReportMount();
+      }
+      if (target.id === 'customBankSavedOnly') {
+        customBankReportState.filters.savedOnly = Boolean(target.checked);
+        renderCustomBankReportMount();
+      }
+      if (target.id === 'customBankPortfolioOnly') {
+        customBankReportState.filters.portfolioOnly = Boolean(target.checked);
+        renderCustomBankReportMount();
+      }
+      if (target.id === 'customBankPeerWatchOnly') {
+        customBankReportState.filters.peerWatchOnly = Boolean(target.checked);
+        renderCustomBankReportMount();
+      }
+      if (target.matches && target.matches('[data-custom-bank-column]')) {
+        const key = target.dataset.customBankColumn;
+        const selected = new Set(customBankReportState.selectedColumns || []);
+        if (target.checked) selected.add(key);
+        else selected.delete(key);
+        customBankReportState.selectedColumns = [...selected];
+        if (!customBankReportState.selectedColumns.length) customBankReportState.selectedColumns = ['displayName'];
+        renderCustomBankReportMount();
       }
     });
     document.addEventListener('click', event => {
@@ -6728,6 +7170,33 @@
         runReportBuilder(runBtn.dataset.reportsRun);
         return;
       }
+      const saveViewBtn = clickTarget.closest('[data-reports-save-view]');
+      if (saveViewBtn && saveViewBtn.dataset.reportsSaveView === 'custom-bank') {
+        saveCustomBankReportDefinition();
+        return;
+      }
+      const exportBtn = clickTarget.closest('[data-reports-export]');
+      if (exportBtn && exportBtn.dataset.reportsExport === 'custom-bank') {
+        exportCustomBankReportCsv();
+        return;
+      }
+      const customSort = clickTarget.closest('[data-custom-bank-sort]');
+      if (customSort) {
+        const key = customSort.dataset.customBankSort;
+        if (customBankReportState.sort.key === key) {
+          customBankReportState.sort.dir = customBankReportState.sort.dir === 'asc' ? 'desc' : 'asc';
+        } else {
+          customBankReportState.sort = { key, dir: 'asc' };
+        }
+        renderCustomBankReportMount();
+        return;
+      }
+      const customOpen = clickTarget.closest('[data-custom-bank-open]');
+      if (customOpen) {
+        goTo('banks');
+        loadBank(customOpen.dataset.customBankOpen, { collapseResults: true });
+        return;
+      }
       const reportOpen = clickTarget.closest('[data-report-open]');
       if (reportOpen) {
         event.preventDefault();
@@ -6775,6 +7244,14 @@
 
   function runReportBuilder(type) {
     const outputFormat = (document.querySelector('input[name="reportsOutputFormat"]:checked') || {}).value || 'view';
+    if (type === 'custom-bank') {
+      if (outputFormat === 'csv' && customBankReportState.dataset) {
+        exportCustomBankReportCsv();
+        return;
+      }
+      runCustomBankReport();
+      return;
+    }
     if (type === 'bank-peer') {
       const input = document.getElementById('peerAnalysisBankSearchInput');
       const hasBank = peerAnalysisState.bankData && peerAnalysisState.rows && peerAnalysisState.rows.length;
