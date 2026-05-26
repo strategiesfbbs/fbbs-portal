@@ -7018,14 +7018,14 @@
     const values = latest.values || {};
     const recentPeriods = (bank.periods || []).slice(0, 8);
     const accountStatus = currentBankAccountStatus();
+    const locationLine = [values.city, values.state].filter(Boolean).join(', ');
+    const countyLabel = String(values.county || '').replace(/,.*$/, '').replace(/\s+county$/i, '').trim();
     const details = [
       ['Account Name', values.name || bank.summary.name],
-      ['Parent Account', values.parentName],
       ['Phone', values.phone],
       ['Website', values.website],
-      ['City', values.city],
-      ['State', values.state],
-      ['Address 1 County', values.county],
+      ['Location', locationLine],
+      ['County', countyLabel],
       ['Fiduciary Assets ($000)', formatBankValue(values.fiduciaryAssets, 'money')],
       ['Cert Number', values.certNumber],
       ['Primary Regulator', values.primaryRegulator],
@@ -7034,8 +7034,7 @@
       ['Number of Offices', formatBankValue(values.numberOfOffices, 'number')],
       ['Affiliate', accountStatus.affiliate],
       ['Affiliate Status', accountStatus.affiliateStatus],
-      ['Affiliate Rep', accountStatus.affiliateRep],
-      ['SNL Institution Key', values.id]
+      ['Affiliate Rep', accountStatus.affiliateRep]
     ];
 
     profile.innerHTML = `
@@ -7072,8 +7071,10 @@
       ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38, bank.peerComparison)}
       ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
       ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
-      ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
-      ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
+      <div class="bank-services-pair">
+        ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
+        ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
+      </div>
       ${renderBankStrategyHistoryPanel()}
       ${renderBankUploadedFilesPanel(bank)}
     `;
@@ -8102,17 +8103,16 @@
       ['Section', 'Metric', 'Period', 'Value']
     ];
 
+    const exportCounty = String(values.county || '').replace(/,.*$/, '').replace(/\s+county$/i, '').trim();
+    const exportLocation = [values.city, values.state].filter(Boolean).join(', ');
     const detailRows = [
       ['Details', 'Account Name', latest.period || '', values.name || bank.summary.name || ''],
-      ['Details', 'Parent Account', latest.period || '', values.parentName || ''],
       ['Details', 'Phone', latest.period || '', values.phone || ''],
       ['Details', 'Website', latest.period || '', values.website || ''],
-      ['Details', 'City', latest.period || '', values.city || ''],
-      ['Details', 'State', latest.period || '', values.state || ''],
-      ['Details', 'Address 1 County', latest.period || '', values.county || ''],
+      ['Details', 'Location', latest.period || '', exportLocation],
+      ['Details', 'County', latest.period || '', exportCounty],
       ['Details', 'Cert Number', latest.period || '', values.certNumber || ''],
-      ['Details', 'Primary Regulator', latest.period || '', values.primaryRegulator || ''],
-      ['Details', 'SNL Institution Key', latest.period || '', values.id || bank.id || '']
+      ['Details', 'Primary Regulator', latest.period || '', values.primaryRegulator || '']
     ];
     rows.push(...detailRows);
 

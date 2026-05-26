@@ -6471,6 +6471,18 @@ body {
   padding: 9px 12px;
 }
 
+.bank-services-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  margin-top: 18px;
+}
+
+.bank-services-pair .bank-service-section {
+  margin-top: 0;
+}
+
 .bank-service-section {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -6479,25 +6491,27 @@ body {
 
 .bank-service-section .bank-section-title {
   border-radius: 0;
+  font-size: 12px;
+  padding: 7px 10px;
 }
 
 .bank-service-count {
   align-items: center;
   border-bottom: 1px solid var(--line);
   display: flex;
-  gap: 12px;
-  padding: 12px;
+  gap: 10px;
+  padding: 7px 10px;
 }
 
 .bank-service-count span {
   color: var(--text3);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
 }
 
 .bank-service-count strong {
   color: var(--text);
-  font-size: 18px;
+  font-size: 15px;
 }
 
 .bank-service-grid {
@@ -6509,8 +6523,8 @@ body {
   align-items: center;
   border-bottom: 1px solid var(--line);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
-  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  min-height: 28px;
 }
 
 .bank-service-row:nth-child(odd) {
@@ -6519,8 +6533,9 @@ body {
 
 .bank-service-row span:first-child {
   color: var(--text);
-  font-size: 13px;
-  padding: 9px 12px;
+  font-size: 11.5px;
+  padding: 4px 8px;
+  line-height: 1.2;
 }
 
 .bank-service-check,
@@ -6532,7 +6547,7 @@ body {
 
 .bank-service-check {
   color: var(--green);
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 900;
 }
 
@@ -6541,8 +6556,8 @@ body {
   border-radius: 4px;
   content: "";
   display: block;
-  height: 14px;
-  width: 14px;
+  height: 11px;
+  width: 11px;
 }
 
 .bank-coverage-section {
