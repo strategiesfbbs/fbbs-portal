@@ -8314,18 +8314,9 @@ body {
   text-align: left;
 }
 
-.bank-call-report-section .bank-section-title {
-  background: var(--racing-green);
-  border-radius: 4px 4px 0 0;
-  color: #fff;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .bank-call-report-wrap {
   border: 1px solid var(--line);
-  border-top: 0;
+  border-radius: 4px;
   overflow-x: auto;
 }
 
@@ -8345,10 +8336,14 @@ body {
   white-space: nowrap;
 }
 
-.bank-call-report-table th {
-  background: #f6f8f6;
-  color: var(--text2);
-  font-weight: 800;
+.bank-call-report-table thead th {
+  background: var(--racing-green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-bottom-color: var(--racing-green);
+  border-right-color: rgba(255, 255, 255, 0.18);
 }
 
 .bank-call-report-table th:first-child,
@@ -8363,8 +8358,12 @@ body {
   z-index: 1;
 }
 
-.bank-call-report-table th:first-child {
-  background: #eef3ef;
+.bank-call-report-table thead th:first-child {
+  background: var(--racing-green);
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   z-index: 2;
 }
 
@@ -8843,9 +8842,14 @@ body {
     min-width: 12px;
   }
 
-  .bank-call-report-section .bank-section-title {
-    font-size: 7.5px;
-    padding: 3px 5px;
+  .bank-call-report-table thead th {
+    font-size: 6.8px;
+    letter-spacing: 0.01em;
+  }
+
+  .bank-call-report-table thead th:first-child {
+    font-size: 7px;
+    letter-spacing: 0.03em;
   }
 }
 

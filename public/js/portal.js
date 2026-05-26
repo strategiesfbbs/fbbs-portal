@@ -8329,12 +8329,11 @@
     const sectionHasPeerRow = hasPeer && rows.some(row => row.key && peerByKey[row.key]);
     return `
       <section class="bank-section bank-call-report-section">
-        <div class="bank-section-title">${escapeHtml(title)}</div>
         <div class="bank-call-report-wrap">
           <table class="bank-call-report-table${sectionHasPeerRow ? ' has-peer-column' : ''}">
             <thead>
-              <tr>
-                <th>End of Period Date</th>
+              <tr class="bank-call-report-header-row">
+                <th class="bank-call-report-section-title">${escapeHtml(title)}</th>
                 ${visiblePeriods.map(period => `<th>${escapeHtml(formatCallReportPeriod(period))}</th>`).join('')}
                 ${sectionHasPeerRow ? `<th class="bank-peer-col" title="${escapeHtml(peerColumnTooltip(peerComparison))}">Peer Avg</th>` : ''}
               </tr>
