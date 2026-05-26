@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 const WIRP_DIRNAME = 'wirp';
 const WIRP_WORKBOOK_FILENAME = 'current-wirp-forward-rates.xlsx';

@@ -112,7 +112,7 @@ Important constraints:
 
 - Plain Node.js.
 - No build step.
-- Only two npm dependencies: `pdf-parse` and `xlsx`.
+- Only one npm dependency: `pdf-parse`. Excel parsing uses the pinned vendored SheetJS build in `vendor/sheetjs/xlsx-0.20.3/` through `server/xlsx.js`.
 - Filesystem-as-database for the daily package.
 - SQLite is used for bank tear sheets, coverage, account statuses, and strategy queues.
 - No app-level auth.

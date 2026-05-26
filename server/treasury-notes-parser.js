@@ -1,6 +1,6 @@
 'use strict';
 
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 const COL_ALIASES = {
   description: ['Description', 'Security', 'Security Description', 'Issue', 'Name', 'Treasury', 'Treasury Note', 'Treasury Notes'],

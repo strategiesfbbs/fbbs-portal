@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { extractPdfText } = require('../server/pdf-text');
-const XLSX = require('xlsx');
+const XLSX = require('../server/xlsx');
 
 const { parseCdOffersText, parseCdOffersWorkbook } = require('../server/cd-offers-parser');
 const { parseBrokeredCdRateSheetText } = require('../server/brokered-cd-parser');

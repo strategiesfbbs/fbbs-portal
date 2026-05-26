@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 const {
   ensureCdHistoryDir,

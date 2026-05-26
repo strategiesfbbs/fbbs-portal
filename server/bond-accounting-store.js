@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 const BOND_ACCOUNTING_DIRNAME = 'bond-accounting';
 const BOND_ACCOUNTING_MANIFEST_FILENAME = 'manifest.json';

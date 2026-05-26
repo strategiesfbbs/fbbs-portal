@@ -20,7 +20,7 @@
 
 'use strict';
 
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 // Known coupon frequency phrases, longest first so we match greedily.
 const COUPON_FREQS = [

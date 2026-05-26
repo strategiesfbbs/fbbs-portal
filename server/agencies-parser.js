@@ -39,7 +39,7 @@
 
 'use strict';
 
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 // ----- Column-name aliases -----
 // Keys are CANONICAL; values are arrays of header strings seen in the wild

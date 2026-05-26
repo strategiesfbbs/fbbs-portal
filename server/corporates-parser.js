@@ -43,7 +43,7 @@
 
 'use strict';
 
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 const COL_ALIASES = {
   moodysRating:   ['Moody',        'Moodys', "Moody's"],

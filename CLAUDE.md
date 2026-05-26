@@ -10,7 +10,7 @@ Read `docs/company-portal-context.md` when brainstorming portal direction, Sales
 
 ## Constraints to weigh against any change
 
-- **Two npm deps only** (`pdf-parse`, `xlsx`). This is a deliberate choice — every new dependency makes deployment harder for a non-developer to babysit. Justify additions; prefer Node built-ins or shelling out to tools that exist on every box (e.g. `sqlite3`, `unzip`).
+- **One npm dep only** (`pdf-parse`). Excel parsing uses a pinned vendored SheetJS build at `vendor/sheetjs/xlsx-0.20.3/` via `server/xlsx.js` because the public npm `xlsx` package is stuck on a vulnerable 0.18.x line. This small dependency footprint is deliberate — every new dependency makes deployment harder for a non-developer to babysit. Justify additions; prefer Node built-ins or shelling out to tools that exist on every box (e.g. `sqlite3`, `unzip`).
 - **No built-in auth.** Trusted-LAN model. Production answer is IIS Windows Authentication. Don't add app-level auth without checking — the deployment story changes.
 - **Plain Node, no build step.** No Webpack/Babel/TypeScript. The portal must start with `npm install && npm start` on a fresh machine. The launchers (`start-portal.bat`, `start-portal.command`) assume this.
 - **Filesystem-as-database for the daily package.** No DB for the document package; archive/restore is `mv`-ing folders. Bank tear sheets are the one exception (SQLite).
@@ -153,7 +153,7 @@ Every mutating route writes to `data/audit.log`.
 
 Routes outside `/current/` and `/archive/` ship a strict Content-Security-Policy: `default-src 'self'`, `script-src 'self'`, `connect-src` defaults to `'self'`. CDN script tags and runtime fetches to other origins are blocked, including subtle ones like Plotly's topojson load (`cdn.plot.ly/usa_110m.json`).
 
-If a feature needs a JS library or static asset (Plotly, Leaflet, geo data, fonts), download a pinned version into `public/vendor/<name>-<version>.<ext>` and serve from `'self'`. Do NOT widen the CSP. The "two npm deps" rule covers npm only — vendored static assets in `public/vendor/` are fine, but call them out in the commit message and keep them version-pinned.
+If a feature needs a JS library or static asset (Plotly, Leaflet, geo data, fonts), download a pinned version into `public/vendor/<name>-<version>.<ext>` and serve from `'self'`. Do NOT widen the CSP. The "one npm dep" rule covers npm only — vendored static assets in `public/vendor/` are fine, but call them out in the commit message and keep them version-pinned. Server-side vendored libraries should be pinned under `vendor/<name>/<version>/` with a small wrapper module.
 
 ## US Bank Map page
 
@@ -170,6 +170,6 @@ The `/maps` SPA tab renders a Plotly choropleth + filterable bank list. It is in
 ## Things to leave alone unless asked
 
 - The launchers' UX (`start-portal.{bat,command}`). They're tuned for non-developers double-clicking from Finder/Explorer.
-- The "two deps only" footprint — `pdf-parse` + `xlsx`. If you need a third, raise it explicitly.
+- The dependency footprint — npm should stay at `pdf-parse` only; SheetJS stays vendored and pinned. If you need another npm package, raise it explicitly.
 - The README's deployment options (A/B/C). They've been validated against the IT team's posture.
 - The data folder layout. Anything that breaks `/api/archive` or the Explorer date-routing breaks the bookmarks people have already saved.

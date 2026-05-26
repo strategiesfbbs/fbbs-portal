@@ -12,7 +12,7 @@ Internal web app for publishing the daily FBBS document package:
 - **Agencies** (Excel — bullets + callables) — parsed into a **searchable Agencies Explorer**
 - **Corporates** (Excel) — parsed into a **searchable Corporates Explorer**
 
-Built on Node.js with two npm dependencies (`pdf-parse` for PDF text extraction, `xlsx` for Excel parsing). Runs the same way on a laptop, a dedicated workstation, or behind IIS.
+Built on Node.js with one npm dependency (`pdf-parse` for PDF text extraction). Excel parsing uses a pinned vendored SheetJS build in `vendor/sheetjs/xlsx-0.20.3/`. Runs the same way on a laptop, a dedicated workstation, or behind IIS.
 
 ---
 
@@ -467,7 +467,7 @@ This portal has **no built-in authentication**, matching your current "trusted i
 - **`/api/agencies`** endpoint (current + archived by date)
 - Filename date sniffing extended to handle 2-digit year patterns like `04_24_26`
 - Upload handler now supports multi-file slots alongside single-file slots, maintaining backward compatibility for all existing daily-package slots
-- Two npm dependencies now: `pdf-parse` and `xlsx` (both stable, no native deps)
+- Dependency footprint: `pdf-parse` remains the only npm dependency; Excel parsing uses the vendored SheetJS wrapper in `server/xlsx.js`
 
 ### v1.2 — muni offerings
 

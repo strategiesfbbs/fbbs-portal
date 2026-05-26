@@ -94,7 +94,7 @@ function toNumber(value) {
 }
 
 function findHeaderRow(sheet) {
-  const XLSX = require('xlsx');
+  const XLSX = require('./xlsx');
   const range = sheet['!ref'] ? XLSX.utils.decode_range(sheet['!ref']) : null;
   if (!range) return null;
   // Walk rows; header is the row containing "Cusip" in column B (or A-D).
@@ -111,7 +111,7 @@ function findHeaderRow(sheet) {
 
 function parseSectorSheet(sheet, sectorName) {
   if (!sheet) return [];
-  const XLSX = require('xlsx');
+  const XLSX = require('./xlsx');
   const headerRow = findHeaderRow(sheet);
   if (!headerRow) return [];
   const range = XLSX.utils.decode_range(sheet['!ref']);
@@ -189,7 +189,7 @@ const TOTAL_LABEL_MAP = {
 
 function parseLinkedDataTotals(sheet) {
   if (!sheet) return null;
-  const XLSX = require('xlsx');
+  const XLSX = require('./xlsx');
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   const totals = {};
   for (const row of rows) {
@@ -222,7 +222,7 @@ function parseAsOfDate(wb) {
 }
 
 function parsePortfolioWorkbook(filePath) {
-  const XLSX = require('xlsx');
+  const XLSX = require('./xlsx');
   const wb = XLSX.readFile(filePath);
   const sectors = {};
   const sectorCounts = {};

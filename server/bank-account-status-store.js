@@ -3,7 +3,7 @@
 const childProcess = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const XLSX = require('xlsx');
+const XLSX = require('./xlsx');
 
 const ACCOUNT_STATUS_DATABASE_FILENAME = 'bank-account-statuses.sqlite';
 const ACCOUNT_STATUS_WORKBOOK_FILENAMES = ['current-bank-services.xlsx', 'current-bank-account-statuses.xlsb'];
