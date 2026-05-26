@@ -62,6 +62,7 @@
   let reportsSelectedType = '';
   let reportsSessionReports = [];
   let reportsAppEventsBound = false;
+  let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false };
   let selectedFiles = {
     dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
@@ -245,11 +246,11 @@
     },
     'portfolio-peer': {
       slug: 'portfolio-peer',
-      name: 'Portfolio Peer Review',
-      shortName: 'Portfolio Peer',
+      name: 'Portfolio Review Workbench',
+      shortName: 'Portfolio Review',
       category: 'Portfolio',
       folder: 'Portfolio Reviews',
-      description: 'Blend matched portfolio reports with call-report context to review yield, mix, duration, unrealized loss, and concentrations.'
+      description: 'Turn matched bond-accounting files into portfolio metrics, screens, flags, and current-inventory swap ideas.'
     },
     opportunity: {
       slug: 'opportunity',
@@ -271,7 +272,7 @@
   const REPORT_FIXTURES = [
     { id: 'fixture-bank-peer', name: 'Bank Peer Analysis - Coverage Baseline', type: 'bank-peer', folder: 'Coverage', description: REPORT_TYPE_META['bank-peer'].description, lastRunAt: '2026-05-13T08:15:00.000Z', lastRunBy: 'You', pinned: true },
     { id: 'fixture-opportunity', name: 'Midwest Opportunity Scan', type: 'opportunity', folder: 'Sales Strategy', description: REPORT_TYPE_META.opportunity.description, lastRunAt: '2026-05-12T15:40:00.000Z', lastRunBy: 'You', pinned: false },
-    { id: 'fixture-portfolio', name: 'Portfolio Peer Review - Matched Files', type: 'portfolio-peer', folder: 'Portfolio Reviews', description: REPORT_TYPE_META['portfolio-peer'].description, lastRunAt: '2026-05-12T10:05:00.000Z', lastRunBy: 'You', pinned: false },
+    { id: 'fixture-portfolio', name: 'Portfolio Review Workbench - Matched Files', type: 'portfolio-peer', folder: 'Portfolio Reviews', description: REPORT_TYPE_META['portfolio-peer'].description, lastRunAt: '2026-05-12T10:05:00.000Z', lastRunBy: 'You', pinned: false },
     { id: 'fixture-coverage', name: 'Coverage Book - Saved Banks', type: 'coverage', folder: 'Coverage', description: REPORT_TYPE_META.coverage.description, lastRunAt: '2026-05-11T16:25:00.000Z', lastRunBy: 'You', pinned: false }
   ];
   const REPORT_RAIL_ITEMS = [
@@ -6016,7 +6017,7 @@
 
   function builderFieldHtml(type) {
     if (type === 'bank-peer') return '<div id="reportsBankPeerMount"></div>';
-    if (type === 'portfolio-peer') return '<p class="reports-muted">Portfolio review uses the matched bond-accounting files managed under Data Sources.</p><a class="text-btn" href="#reports/data/files">Open matched files</a>';
+    if (type === 'portfolio-peer') return '<div id="reportsPortfolioReviewMount"></div>';
     if (type === 'opportunity') return '<div id="reportsOpportunityMount"></div>';
     return '<p class="reports-muted">Coverage Book will use saved banks, statuses, notes, strategy requests, and latest call-report availability.</p>';
   }
@@ -6194,6 +6195,271 @@
     `;
   }
 
+  function portfolioReviewMetaLine(bank) {
+    return [bank.city, bank.state, bank.certNumber ? `Cert ${bank.certNumber}` : '', bank.reportDate ? `Portfolio ${bank.reportDate}` : '', bank.accountStatus]
+      .filter(Boolean).join(' · ');
+  }
+
+  function portfolioReviewBankOptions() {
+    if (portfolioReviewState.loading && !portfolioReviewState.banks.length) {
+      return '<div class="bank-search-empty">Loading banks with matched portfolio files...</div>';
+    }
+    if (!portfolioReviewState.banks.length) {
+      return '<div class="bank-search-empty">No matched portfolio files are available yet. Import bond-accounting files under Data Sources first.</div>';
+    }
+    return portfolioReviewState.banks.slice(0, 80).map(bank => `
+      <button type="button" class="reports-peer-result ${portfolioReviewState.selectedBankId === bank.id ? 'selected' : ''}" data-portfolio-bank="${escapeHtml(bank.id)}">
+        <strong>${escapeHtml(bank.name || 'Bank')}</strong>
+        <span>${escapeHtml(portfolioReviewMetaLine(bank))}</span>
+      </button>
+    `).join('');
+  }
+
+  function portfolioReviewPanelHtml() {
+    return `
+      <section class="portfolio-review-tool">
+        <div class="reports-peer-search">
+          <input type="search" id="portfolioReviewBankSearchInput" placeholder="Search banks with matched bond-accounting files..." value="${escapeHtml(portfolioReviewState.search || '')}" autocomplete="off">
+          <button type="button" class="small-btn" id="portfolioReviewRefreshBanksBtn">Refresh</button>
+        </div>
+        <div class="portfolio-review-picker" id="portfolioReviewBankResults">${portfolioReviewBankOptions()}</div>
+        <div class="portfolio-review-output" id="portfolioReviewOutput">
+          ${portfolioReviewState.review ? portfolioReviewHtml(portfolioReviewState.review) : '<div class="bank-search-empty">Select a bank to build a portfolio review from its latest matched bond-accounting file.</div>'}
+        </div>
+      </section>
+    `;
+  }
+
+  async function loadPortfolioReviewBanks(query = '') {
+    portfolioReviewState.search = query || '';
+    portfolioReviewState.loading = true;
+    renderPortfolioReviewMount();
+    try {
+      const qs = query ? `?q=${encodeURIComponent(query)}` : '';
+      const res = await fetch(`/api/portfolio-review/eligible-banks${qs}`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      portfolioReviewState.banks = Array.isArray(data.banks) ? data.banks : [];
+      if (!portfolioReviewState.selectedBankId && portfolioReviewState.banks[0]) {
+        portfolioReviewState.selectedBankId = portfolioReviewState.banks[0].id;
+      }
+    } catch (e) {
+      portfolioReviewState.banks = [];
+      showToast(e.message, true);
+    } finally {
+      portfolioReviewState.loading = false;
+      renderPortfolioReviewMount();
+    }
+  }
+
+  function renderPortfolioReviewMount() {
+    const mount = document.getElementById('reportsPortfolioReviewMount');
+    if (!mount) return;
+    mount.innerHTML = portfolioReviewPanelHtml();
+  }
+
+  async function runPortfolioReview(bankId) {
+    const id = bankId || portfolioReviewState.selectedBankId;
+    if (!id) {
+      showToast('Choose a bank with a matched portfolio file first', true);
+      return;
+    }
+    portfolioReviewState.selectedBankId = id;
+    const output = document.getElementById('portfolioReviewOutput');
+    if (output) output.innerHTML = '<div class="bank-search-empty">Building portfolio review...</div>';
+    try {
+      const res = await fetch(`/api/portfolio-review?bankId=${encodeURIComponent(id)}&limit=8`, { cache: 'no-store' });
+      portfolioReviewState.review = await readBankJson(res);
+      portfolioReviewState.screen = 'topLosses';
+      renderPortfolioReviewMount();
+      addSessionReport('portfolio-peer');
+      showToast('Portfolio review ready');
+    } catch (e) {
+      if (output) output.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+      showToast(e.message, true);
+    }
+  }
+
+  function portfolioMetricTile(label, value, detail, tone = '') {
+    return `
+      <div class="portfolio-review-tile ${escapeHtml(tone)}">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value || '—')}</strong>
+        <em>${escapeHtml(detail || '')}</em>
+      </div>
+    `;
+  }
+
+  function formatReviewYield(value) {
+    return value == null || isNaN(value) ? '—' : `${Number(value).toFixed(2)}%`;
+  }
+
+  function portfolioReviewHtml(data) {
+    if (!data || data.available === false) {
+      return `<div class="bank-search-empty">${escapeHtml(data && data.notice || 'No portfolio review available for this bank.')}</div>`;
+    }
+    const summary = data.summary || {};
+    const gainTone = (summary.gainLoss || 0) < 0 ? 'warn' : 'good';
+    const selectedScreen = portfolioReviewState.screen || 'topLosses';
+    const screenRows = data.screens && Array.isArray(data.screens[selectedScreen]) ? data.screens[selectedScreen] : [];
+    const screenDefs = [
+      ['topLosses', 'Top Losses'],
+      ['yieldReset', 'Yield Reset'],
+      ['lowYield', 'Low Book Yield'],
+      ['durationWatch', 'Duration'],
+      ['callableWatch', 'Callable/Premium']
+    ];
+    return `
+      <article class="portfolio-review-card">
+        <header class="portfolio-review-head">
+          <div>
+            <span class="tool-eyebrow">Portfolio Review</span>
+            <h3>${escapeHtml(data.bankName || 'Selected bank')}</h3>
+            <p>${escapeHtml([data.city, data.state, data.certNumber ? `Cert ${data.certNumber}` : '', data.reportDate ? `Portfolio ${data.reportDate}` : '', data.inventoryDate ? `Inventory ${data.inventoryDate}` : ''].filter(Boolean).join(' · '))}</p>
+          </div>
+          <div class="portfolio-review-actions">
+            <a class="text-btn" href="#strategies">Open Strategies</a>
+            <a class="text-btn" href="#reports/data/files">Matched Files</a>
+          </div>
+        </header>
+        <div class="portfolio-review-tiles">
+          ${portfolioMetricTile('Market Value', formatMoney(summary.marketValue), `${formatNumber(summary.positions)} positions`)}
+          ${portfolioMetricTile('Unrealized G/L', formatMoney(summary.gainLoss), formatPercentTile(summary.gainLossPct, 2), gainTone)}
+          ${portfolioMetricTile('Book Yield', formatReviewYield(summary.bookYield), `Market ${formatReviewYield(summary.marketYield)}`)}
+          ${portfolioMetricTile('WAL / Duration', [summary.weightedAverageLife != null ? summary.weightedAverageLife.toFixed(2) : null, summary.effectiveDuration != null ? summary.effectiveDuration.toFixed(2) : null].filter(Boolean).join(' / ') || '—', 'Weighted average')}
+          ${portfolioMetricTile('Call Report', formatReviewYield(summary.yieldOnSecurities), `NIM ${formatReviewYield(summary.netInterestMargin)} · COF ${formatReviewYield(summary.costOfFunds)}`)}
+          ${portfolioMetricTile('Tax Lens', data.isSubchapterS ? 'S-Corp' : 'C-Corp', `${formatReviewYield(data.taxRate)} assumed tax rate`)}
+        </div>
+        <section class="portfolio-review-section">
+          <h4>Credibility Flags</h4>
+          <div class="portfolio-review-flags">
+            ${(data.flags || []).map(flag => `
+              <div class="reports-peer-flag ${flag.severity === 'High' ? 'high' : ''}">
+                <strong>${escapeHtml(flag.type || 'Flag')}</strong>
+                <span>${escapeHtml(flag.text || '')}</span>
+              </div>
+            `).join('')}
+          </div>
+        </section>
+        <section class="portfolio-review-section portfolio-review-two-col">
+          <div>
+            <h4>Sector Mix</h4>
+            ${portfolioSectorTable(data.sectors || [])}
+          </div>
+          <div>
+            <h4>Maturity Ladder</h4>
+            ${portfolioLadderHtml(data.ladder || [])}
+          </div>
+        </section>
+        <section class="portfolio-review-section">
+          <div class="portfolio-review-screen-head">
+            <h4>Holdings Screens</h4>
+            <div class="portfolio-review-tabs">
+              ${screenDefs.map(([key, label]) => `<button type="button" class="${key === selectedScreen ? 'active' : ''}" data-portfolio-screen="${escapeHtml(key)}">${escapeHtml(label)}</button>`).join('')}
+            </div>
+          </div>
+          ${portfolioHoldingsTable(screenRows)}
+        </section>
+        <section class="portfolio-review-section">
+          <h4>Current-Inventory Swap Ideas</h4>
+          ${portfolioSwapIdeasHtml(data.swapIdeas || [])}
+        </section>
+        <section class="portfolio-review-section">
+          <h4>Assumptions</h4>
+          <div class="portfolio-review-assumptions">
+            ${(data.assumptions || []).map(item => `<span>${escapeHtml(item)}</span>`).join('')}
+          </div>
+        </section>
+      </article>
+    `;
+  }
+
+  function portfolioSectorTable(rows) {
+    if (!rows.length) return '<div class="bank-search-empty">No sector rows parsed.</div>';
+    return `
+      <div class="reports-list-wrap compact">
+        <table class="reports-list portfolio-review-table">
+          <thead><tr><th>Sector</th><th>MV</th><th>Share</th><th>Book Yld</th><th>G/L</th></tr></thead>
+          <tbody>${rows.map(row => `
+            <tr>
+              <td><strong>${escapeHtml(row.sector || 'Other')}</strong><span>${escapeHtml(formatNumber(row.count || 0))} positions</span></td>
+              <td>${escapeHtml(formatMoney(row.marketValue))}</td>
+              <td>${escapeHtml(formatPercentTile(row.marketShare, 1))}</td>
+              <td>${escapeHtml(formatReviewYield(row.bookYield))}</td>
+              <td class="${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">${escapeHtml(formatMoney(row.gainLoss))}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function portfolioLadderHtml(rows) {
+    if (!rows.length) return '<div class="bank-search-empty">No dated maturities parsed.</div>';
+    const max = Math.max(...rows.map(row => row.marketValue || row.par || 0), 1);
+    return `
+      <div class="portfolio-ladder">
+        ${rows.map(row => {
+          const width = Math.max(4, Math.round(((row.marketValue || row.par || 0) / max) * 100));
+          return `
+            <div class="portfolio-ladder-row">
+              <span>${escapeHtml(row.year)}</span>
+              <div><i style="width:${width}%"></i></div>
+              <strong>${escapeHtml(formatMoney(row.marketValue || row.par))}</strong>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function portfolioHoldingsTable(rows) {
+    if (!rows.length) return '<div class="bank-search-empty">No positions match this screen.</div>';
+    return `
+      <div class="reports-list-wrap">
+        <table class="reports-list portfolio-review-table">
+          <thead><tr><th>CUSIP</th><th>Description</th><th>Sector</th><th>Mat/Call</th><th>Par</th><th>Book/Market Yld</th><th>G/L</th><th>Dur/WAL</th></tr></thead>
+          <tbody>${rows.map(row => `
+            <tr>
+              <td><code>${escapeHtml(row.cusip || '')}</code></td>
+              <td><strong>${escapeHtml(row.description || 'Holding')}</strong><span>${escapeHtml(row.classification || '')}</span></td>
+              <td>${escapeHtml(row.sector || '')}</td>
+              <td>${escapeHtml([row.maturity, row.nextCall ? `Call ${row.nextCall}` : ''].filter(Boolean).join(' / '))}</td>
+              <td>${escapeHtml(formatMoney(row.par))}</td>
+              <td>${escapeHtml(`${formatReviewYield(row.bookYield)} / ${formatReviewYield(row.marketYield)}`)}</td>
+              <td class="${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">${escapeHtml(formatMoney(row.gainLoss))}<br><small>${escapeHtml(formatPercentTile(row.gainLossPct, 2))}</small></td>
+              <td>${escapeHtml([row.effectiveDuration != null ? row.effectiveDuration.toFixed(2) : '', row.averageLife != null ? row.averageLife.toFixed(2) : ''].filter(Boolean).join(' / '))}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function portfolioSwapIdeasHtml(rows) {
+    if (!rows.length) {
+      return '<div class="bank-search-empty">No current-inventory swap ideas passed the hard breakeven/maturity rule today.</div>';
+    }
+    return `
+      <div class="portfolio-swap-grid">
+        ${rows.map(row => `
+          <article class="portfolio-swap-card">
+            <span>${escapeHtml(row.sector || 'Swap')}</span>
+            <strong>Sell ${escapeHtml(row.held && row.held.cusip || '')}</strong>
+            <p>${escapeHtml(row.held && row.held.description || '')}</p>
+            <div class="portfolio-swap-card-metrics">
+              <b>${escapeHtml(formatReviewYield(row.held && row.held.bookYield))} book</b>
+              <b>${escapeHtml(formatReviewYield(row.offering && row.offering.yield))} buy</b>
+              <b>${escapeHtml(formatMoney(row.economics && row.economics.annualIncomePickup))} annual pickup</b>
+              <b>${row.economics && row.economics.breakevenMonths != null ? escapeHtml(`${row.economics.breakevenMonths}mo breakeven`) : 'No loss breakeven'}</b>
+            </div>
+            <em>Buy: ${escapeHtml(row.offering && row.offering.label || '')}</em>
+            ${(row.rule && row.rule.warnings || []).length ? `<small>${escapeHtml(row.rule.warnings.join(' · '))}</small>` : ''}
+          </article>
+        `).join('')}
+      </div>
+    `;
+  }
+
   function addSessionReport(type) {
     const meta = reportTypeMeta(type);
     const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
@@ -6241,6 +6507,10 @@
         mountReportPanel('peerAnalysisBuilderPanel', 'reportsBankPeerMount');
         if (!route.params.get('id')) resetPeerAnalysisBuilder();
       }
+      if (type === 'portfolio-peer') {
+        renderPortfolioReviewMount();
+        if (!portfolioReviewState.banks.length && !portfolioReviewState.loading) loadPortfolioReviewBanks();
+      }
       if (type === 'opportunity') mountReportPanel('opportunityReportPanel', 'reportsOpportunityMount');
       if (route.params.get('autorun') === '1') setTimeout(() => runReportBuilder(type), 0);
     } else if (path === 'data/files') {
@@ -6285,6 +6555,10 @@
         document.querySelectorAll('.reports-type-row').forEach(row => {
           row.hidden = query && !row.textContent.toLowerCase().includes(query);
         });
+      }
+      if (target.id === 'portfolioReviewBankSearchInput') {
+        clearTimeout(portfolioReviewState.searchTimer);
+        portfolioReviewState.searchTimer = setTimeout(() => loadPortfolioReviewBanks(target.value || ''), 250);
       }
     });
     document.addEventListener('change', event => {
@@ -6383,6 +6657,22 @@
       if (clickTarget.closest('#reportsFilesExportBtn')) {
         exportBondAccountingCsv();
       }
+      const portfolioBank = clickTarget.closest('[data-portfolio-bank]');
+      if (portfolioBank) {
+        runPortfolioReview(portfolioBank.dataset.portfolioBank);
+        return;
+      }
+      const portfolioScreen = clickTarget.closest('[data-portfolio-screen]');
+      if (portfolioScreen) {
+        portfolioReviewState.screen = portfolioScreen.dataset.portfolioScreen || 'topLosses';
+        renderPortfolioReviewMount();
+        return;
+      }
+      if (clickTarget.closest('#portfolioReviewRefreshBanksBtn')) {
+        const input = document.getElementById('portfolioReviewBankSearchInput');
+        loadPortfolioReviewBanks(input ? input.value : '');
+        return;
+      }
     });
   }
 
@@ -6410,9 +6700,7 @@
       return;
     }
     if (type === 'portfolio-peer') {
-      addSessionReport(type);
-      window.location.hash = reportsHash('data/files');
-      showToast('Portfolio files opened for review');
+      runPortfolioReview();
       return;
     }
     if (type === 'coverage') {

@@ -7710,6 +7710,241 @@ body {
   font-weight: 900;
 }
 
+.portfolio-review-tool {
+  display: grid;
+  gap: 14px;
+}
+
+.portfolio-review-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.portfolio-review-picker .reports-peer-result.selected {
+  border-color: #2f7d5a;
+  background: #f0f8f4;
+}
+
+.portfolio-review-output {
+  display: grid;
+  gap: 14px;
+}
+
+.portfolio-review-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 18px;
+  display: grid;
+  gap: 18px;
+}
+
+.portfolio-review-head,
+.portfolio-review-screen-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.portfolio-review-head h3 {
+  margin: 4px 0;
+  font-size: 1.35rem;
+}
+
+.portfolio-review-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.portfolio-review-actions,
+.portfolio-review-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.portfolio-review-tabs button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.portfolio-review-tabs button.active {
+  background: var(--black, #0f1f17);
+  color: #fff;
+  border-color: var(--black, #0f1f17);
+}
+
+.portfolio-review-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.portfolio-review-tile {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 5px;
+  min-height: 96px;
+}
+
+.portfolio-review-tile span,
+.portfolio-review-tile em {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-style: normal;
+}
+
+.portfolio-review-tile strong {
+  font-size: 1.25rem;
+}
+
+.portfolio-review-tile.warn {
+  border-color: #d9a198;
+  background: #fff8f7;
+}
+
+.portfolio-review-tile.good {
+  border-color: #9fceb5;
+  background: #f3fbf6;
+}
+
+.portfolio-review-section {
+  display: grid;
+  gap: 10px;
+}
+
+.portfolio-review-section h4 {
+  margin: 0;
+  font-size: 0.96rem;
+}
+
+.portfolio-review-flags {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.portfolio-review-flags .reports-peer-flag.high {
+  border-color: #d9a198;
+  background: #fff8f7;
+}
+
+.portfolio-review-two-col {
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  align-items: start;
+}
+
+.reports-list-wrap.compact {
+  max-height: 430px;
+  overflow: auto;
+}
+
+.portfolio-review-table td span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.portfolio-ladder {
+  display: grid;
+  gap: 8px;
+}
+
+.portfolio-ladder-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 92px;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+.portfolio-ladder-row div {
+  height: 10px;
+  background: #eef1ed;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.portfolio-ladder-row i {
+  display: block;
+  height: 100%;
+  background: #2f7d5a;
+  border-radius: inherit;
+}
+
+.portfolio-ladder-row strong {
+  text-align: right;
+  font-size: 0.78rem;
+}
+
+.portfolio-swap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.portfolio-swap-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.portfolio-swap-card span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.portfolio-swap-card strong,
+.portfolio-swap-card p,
+.portfolio-swap-card em,
+.portfolio-swap-card small {
+  margin: 0;
+}
+
+.portfolio-swap-card p,
+.portfolio-swap-card em,
+.portfolio-swap-card small {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-style: normal;
+}
+
+.portfolio-swap-card-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.portfolio-swap-card-metrics b {
+  background: #f6f7f4;
+  border-radius: 6px;
+  padding: 7px;
+  font-size: 0.78rem;
+}
+
+.portfolio-review-assumptions {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
 .reports-match-list {
   display: grid;
   gap: 10px;
@@ -10837,4 +11072,24 @@ body {
 .bank-peer-save-btn[disabled] {
   cursor: default;
   opacity: 0.65;
+}
+
+@media (max-width: 760px) {
+  .portfolio-review-head,
+  .portfolio-review-screen-head {
+    display: grid;
+  }
+
+  .portfolio-review-actions,
+  .portfolio-review-tabs {
+    justify-content: flex-start;
+  }
+
+  .portfolio-review-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-ladder-row {
+    grid-template-columns: 44px 1fr 82px;
+  }
 }

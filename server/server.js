@@ -3791,6 +3791,303 @@ function getSwapBankContext(bankId) {
   return { bank, summary, parsedHoldings, inventory };
 }
 
+// Strict numeric coercion for the portfolio review path.
+// Unlike numericValue() above, this returns null for null/''/undefined
+// instead of coercing them to 0. The sector parser leaves yield/duration
+// columns as null when the source sheet lacks them (Treasuries, Exempt Munis),
+// and numericValue's 0-default would make those rows look like 0% bonds —
+// which then poison weighted averages and the Low-Book-Yield screen.
+function nullableNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function flattenPortfolioHoldings(parsedHoldings) {
+  const positions = [];
+  for (const [sector, rows] of Object.entries(parsedHoldings && parsedHoldings.sectors || {})) {
+    for (const row of rows || []) {
+      const bookYield = nullableNumber(row.bookYieldYtm ?? row.bookYieldYtw);
+      const marketYield = nullableNumber(row.marketYieldYtw ?? row.marketYieldYtm);
+      const bookValue = nullableNumber(row.bookValue);
+      const marketValue = nullableNumber(row.marketValue);
+      const rawGainLoss = nullableNumber(row.gainLoss);
+      const derivedGainLoss = rawGainLoss != null
+        ? rawGainLoss
+        : (bookValue != null && marketValue != null ? marketValue - bookValue : null);
+      positions.push({
+        sector,
+        cusip: row.cusip || '',
+        description: row.description || '',
+        coupon: nullableNumber(row.coupon),
+        maturity: row.maturity || '',
+        nextCall: row.nextCall || row.callDate || '',
+        classification: row.classification || '',
+        par: nullableNumber(row.par) || 0,
+        bookValue,
+        marketValue,
+        gainLoss: derivedGainLoss,
+        gainLossPct: bookValue && derivedGainLoss != null ? (derivedGainLoss / bookValue) * 100 : null,
+        bookPrice: nullableNumber(row.bookPrice),
+        marketPrice: nullableNumber(row.marketPrice),
+        bookYield,
+        marketYield,
+        yieldGap: bookYield != null && marketYield != null ? marketYield - bookYield : null,
+        averageLife: nullableNumber(row.averageLife),
+        effectiveDuration: nullableNumber(row.effectiveDuration),
+        oasBp: nullableNumber(row.oasBp ?? row.spreadBp),
+        callable: Boolean(row.nextCall || row.callDate)
+      });
+    }
+  }
+  return positions;
+}
+
+function weightedAverage(rows, valueKey, weightKey = 'marketValue') {
+  let weighted = 0;
+  let weights = 0;
+  for (const row of rows || []) {
+    const value = nullableNumber(row[valueKey]);
+    const weight = nullableNumber(row[weightKey]);
+    if (value == null || weight == null || weight <= 0) continue;
+    weighted += value * weight;
+    weights += weight;
+  }
+  return weights > 0 ? weighted / weights : null;
+}
+
+function topPortfolioRows(rows, predicate, scoreFn, limit = 8) {
+  return (rows || [])
+    .filter(predicate)
+    .map(row => ({ row, score: scoreFn(row) }))
+    .filter(item => Number.isFinite(item.score))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(item => item.row);
+}
+
+function buildPortfolioSectorRows(positions, totalMarketValue) {
+  const sectors = new Map();
+  for (const row of positions || []) {
+    const key = row.sector || 'Other';
+    const current = sectors.get(key) || { sector: key, count: 0, par: 0, bookValue: 0, marketValue: 0, gainLoss: 0, rows: [] };
+    current.count += 1;
+    current.par += numericValue(row.par) || 0;
+    current.bookValue += numericValue(row.bookValue) || 0;
+    current.marketValue += numericValue(row.marketValue) || 0;
+    current.gainLoss += numericValue(row.gainLoss) || 0;
+    current.rows.push(row);
+    sectors.set(key, current);
+  }
+  return Array.from(sectors.values()).map(row => ({
+    sector: row.sector,
+    count: row.count,
+    par: Math.round(row.par),
+    bookValue: Math.round(row.bookValue),
+    marketValue: Math.round(row.marketValue),
+    gainLoss: Math.round(row.gainLoss),
+    marketShare: totalMarketValue ? row.marketValue / totalMarketValue * 100 : null,
+    bookYield: weightedAverage(row.rows, 'bookYield'),
+    marketYield: weightedAverage(row.rows, 'marketYield'),
+    averageLife: weightedAverage(row.rows, 'averageLife'),
+    effectiveDuration: weightedAverage(row.rows, 'effectiveDuration')
+  })).sort((a, b) => (b.marketValue || 0) - (a.marketValue || 0));
+}
+
+function buildPortfolioLadder(positions, anchorDate) {
+  const currentYear = new Date().getUTCFullYear();
+  const anchorYear = maturityYear(anchorDate) || currentYear;
+  const buckets = new Map();
+  for (const row of positions || []) {
+    const year = maturityYear(row.maturity);
+    if (!year || year < anchorYear) continue;
+    const existing = buckets.get(year) || { year, par: 0, marketValue: 0, count: 0 };
+    existing.par += numericValue(row.par) || 0;
+    existing.marketValue += numericValue(row.marketValue) || 0;
+    existing.count += 1;
+    buckets.set(year, existing);
+  }
+  return Array.from(buckets.values())
+    .sort((a, b) => a.year - b.year)
+    .slice(0, 16)
+    .map(row => ({ ...row, par: Math.round(row.par), marketValue: Math.round(row.marketValue) }));
+}
+
+function buildPortfolioReviewFlags(positions, sectors, summary, profile) {
+  const flags = [];
+  const totalMarketValue = summary.marketValue || 0;
+  const lossTotal = positions.reduce((acc, row) => acc + Math.min(numericValue(row.gainLoss) || 0, 0), 0);
+  const lossCount = positions.filter(row => (numericValue(row.gainLoss) || 0) < 0).length;
+  if (lossCount) {
+    flags.push({
+      type: 'Unrealized loss',
+      severity: Math.abs(lossTotal) >= totalMarketValue * 0.05 ? 'High' : 'Medium',
+      text: `${lossCount} position${lossCount === 1 ? '' : 's'} carry an unrealized loss; review tax-loss or income-pickup swaps before adding new exposure.`
+    });
+  }
+  if (summary.bookYield != null && summary.marketYield != null && summary.marketYield - summary.bookYield >= 0.75) {
+    flags.push({
+      type: 'Yield reset',
+      severity: 'High',
+      text: `Market yield is ${(summary.marketYield - summary.bookYield).toFixed(2)} points above book yield on the parsed portfolio.`
+    });
+  }
+  for (const sector of sectors.slice(0, 4)) {
+    if (sector.marketShare != null && sector.marketShare >= 30) {
+      flags.push({
+        type: 'Concentration',
+        severity: sector.marketShare >= 45 ? 'High' : 'Medium',
+        text: `${sector.sector} is ${sector.marketShare.toFixed(1)}% of market value; confirm policy limits and cash-flow intent.`
+      });
+    }
+  }
+  const callableCount = positions.filter(row => row.callable).length;
+  if (positions.length && callableCount / positions.length >= 0.35) {
+    flags.push({
+      type: 'Optionality',
+      severity: 'Medium',
+      text: `${callableCount} callable position${callableCount === 1 ? '' : 's'} on file; review extension/call risk before recommending more callables.`
+    });
+  }
+  const longDuration = positions.filter(row => (numericValue(row.effectiveDuration) || 0) >= 5).length;
+  if (longDuration) {
+    flags.push({
+      type: 'Rate risk',
+      severity: longDuration >= 8 ? 'High' : 'Medium',
+      text: `${longDuration} position${longDuration === 1 ? '' : 's'} show duration of 5+; run rate-shock discussion if liquidity is tight.`
+    });
+  }
+  if (profile && Array.isArray(profile.gapYears) && profile.gapYears.length) {
+    flags.push({
+      type: 'Ladder gap',
+      severity: 'Low',
+      text: `Potential cash-flow gaps around ${profile.gapYears.slice(0, 4).map(g => g.year).join(', ')} based on current maturity ladder.`
+    });
+  }
+  if (!flags.length) {
+    flags.push({
+      type: 'No standout',
+      severity: 'Low',
+      text: 'No single portfolio pressure point dominates the parsed holdings; use the workbench to screen by sector, yield, and loss.'
+    });
+  }
+  return flags.slice(0, 8);
+}
+
+function buildPortfolioReview(bankId, query) {
+  const ctx = getSwapBankContext(bankId);
+  if (!ctx) return null;
+  const { bank, summary, parsedHoldings, inventory } = ctx;
+  const { values } = latestBankValues(bank);
+  if (!parsedHoldings) {
+    return {
+      available: false,
+      bankId,
+      bankName: summary.displayName || summary.name || 'Bank',
+      notice: 'No parsed bond-accounting portfolio is available for this bank.'
+    };
+  }
+
+  const positions = flattenPortfolioHoldings(parsedHoldings);
+  const totals = parsedHoldings.totals || {};
+  const aggregate = parsedHoldings.aggregates || {};
+  const summaryMarket = nullableNumber(totals.marketValue) ?? nullableNumber(aggregate.marketValue) ?? positions.reduce((acc, row) => acc + (nullableNumber(row.marketValue) || 0), 0);
+  const summaryBook = nullableNumber(totals.bookValue) ?? nullableNumber(aggregate.bookValue) ?? positions.reduce((acc, row) => acc + (nullableNumber(row.bookValue) || 0), 0);
+  const summaryPar = nullableNumber(totals.par) ?? nullableNumber(aggregate.par) ?? positions.reduce((acc, row) => acc + (nullableNumber(row.par) || 0), 0);
+  const summaryGainLoss = nullableNumber(totals.unrealizedGainLoss) ?? nullableNumber(aggregate.gainLoss) ?? (summaryMarket - summaryBook);
+  const reviewSummary = {
+    positions: positions.length,
+    par: Math.round(summaryPar || 0),
+    bookValue: Math.round(summaryBook || 0),
+    marketValue: Math.round(summaryMarket || 0),
+    gainLoss: Math.round(summaryGainLoss || 0),
+    gainLossPct: summaryBook ? summaryGainLoss / summaryBook * 100 : null,
+    bookYield: nullableNumber(totals.bookYieldYtw) ?? weightedAverage(positions, 'bookYield'),
+    marketYield: nullableNumber(totals.marketYieldYtw) ?? weightedAverage(positions, 'marketYield'),
+    taxEquivalentBookYield: nullableNumber(totals.taxEqBookYieldYtw),
+    taxEquivalentMarketYield: nullableNumber(totals.taxEqMarketYieldYtw),
+    weightedCoupon: nullableNumber(totals.weightedCoupon) ?? weightedAverage(positions, 'coupon', 'par'),
+    weightedAverageLife: nullableNumber(totals.weightedAverageLife) ?? weightedAverage(positions, 'averageLife'),
+    effectiveDuration: weightedAverage(positions, 'effectiveDuration'),
+    yieldOnSecurities: numericValue(values.yieldOnSecurities),
+    netInterestMargin: numericValue(values.netInterestMargin),
+    costOfFunds: numericValue(values.costOfFunds),
+    securitiesToAssets: numericValue(values.securitiesToAssets)
+  };
+  const sectors = buildPortfolioSectorRows(positions, reviewSummary.marketValue);
+  const profile = buildInvestmentFitProfile(parsedHoldings, inventory.asOfDate || parsedHoldings.asOfDate || new Date().toISOString().slice(0, 10));
+  const rules = {
+    breakevenSoftCapMonths: parseInt(query.get('breakevenSoftCap'), 10)
+      || swapMath.DEFAULT_FBBS_RULES.breakevenSoftCapMonths,
+    maturitySoftFloorMonths: parseInt(query.get('maturitySoftFloor'), 10)
+      || swapMath.DEFAULT_FBBS_RULES.maturitySoftFloorMonths
+  };
+  const candidates = findSwapCandidates(parsedHoldings, inventory, {
+    includeRejected: true,
+    rules,
+    limit: parseInt(query.get('limit'), 10) || 8
+  });
+
+  const topLosses = topPortfolioRows(positions, row => (nullableNumber(row.gainLoss) || 0) < 0, row => Math.abs(nullableNumber(row.gainLoss) || 0), 10);
+  const lossPct = topPortfolioRows(positions, row => (nullableNumber(row.gainLossPct) || 0) < -2, row => Math.abs(nullableNumber(row.gainLossPct) || 0), 10);
+  const yieldReset = topPortfolioRows(positions, row => (nullableNumber(row.yieldGap) || 0) >= 0.75, row => nullableNumber(row.yieldGap) || 0, 10);
+  const lowYield = topPortfolioRows(positions, row => {
+    const yld = nullableNumber(row.bookYield);
+    return yld != null && yld < Math.max(3, (reviewSummary.bookYield || 0) - 0.5);
+  }, row => 10 - (nullableNumber(row.bookYield) || 0), 10);
+  const durationWatch = topPortfolioRows(positions, row => (nullableNumber(row.effectiveDuration) || nullableNumber(row.averageLife) || 0) >= 5, row => nullableNumber(row.effectiveDuration) || nullableNumber(row.averageLife) || 0, 10);
+  const callableWatch = topPortfolioRows(positions, row => row.callable || (nullableNumber(row.marketPrice) || 0) >= 102, row => (nullableNumber(row.marketPrice) || 100) + (row.callable ? 10 : 0), 10);
+
+  return {
+    available: true,
+    bankId,
+    bankName: summary.displayName || summary.name || 'Bank',
+    city: summary.city || '',
+    state: summary.state || '',
+    certNumber: summary.certNumber || '',
+    accountStatus: summary.accountStatus ? summary.accountStatus.status : '',
+    isSubchapterS: summary.subchapterS === 'Yes',
+    taxRate: summary.subchapterS === 'Yes' ? 29.6 : 21,
+    reportDate: parsedHoldings.asOfDate || '',
+    inventoryDate: inventory.asOfDate || '',
+    sourceFile: parsedHoldings.sourceFile || '',
+    summary: reviewSummary,
+    flags: buildPortfolioReviewFlags(positions, sectors, reviewSummary, profile),
+    sectors,
+    ladder: buildPortfolioLadder(positions, parsedHoldings.asOfDate || inventory.asOfDate),
+    screens: {
+      topLosses,
+      lossPct,
+      yieldReset,
+      lowYield,
+      durationWatch,
+      callableWatch
+    },
+    swapIdeas: candidates.kept || [],
+    rejectedSwapIdeas: candidates.dropped || [],
+    rules,
+    assumptions: [
+      'Uses the latest matched bond-accounting portfolio workbook for the selected bank.',
+      'Call-report context comes from the latest uploaded quarterly bank data.',
+      'Swap ideas compare parsed holdings against today’s portal inventory and apply the existing FBBS hard rule: the held bond cannot mature before breakeven.',
+      'Internal strategy screen only; desk review still controls final recommendation and client language.'
+    ]
+  };
+}
+
+function handlePortfolioReview(res, query) {
+  const bankId = String(query.get('bankId') || '').trim();
+  if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
+  try {
+    const review = buildPortfolioReview(bankId, query);
+    if (!review) return sendJSON(res, 404, { error: 'Bank not found' });
+    return sendJSON(res, 200, review);
+  } catch (err) {
+    log('error', `Portfolio review failed for ${bankId}:`, err.message);
+    return sendJSON(res, 500, { error: err.message || 'Could not build portfolio review' });
+  }
+}
+
 async function handleCreateSwapProposal(req, res) {
   try {
     const body = await readJsonBody(req);
@@ -5579,6 +5876,20 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/cd-internal' && req.method === 'GET') {
       return sendJSON(res, 200, loadCdInternalInventory(CD_INTERNAL_DIR));
+    }
+
+    if (pathname === '/api/portfolio-review/eligible-banks' && req.method === 'GET') {
+      const q = String(query.get('q') || '').trim().toLowerCase();
+      const banks = listSwapEligibleBanks().filter(row => {
+        if (!q) return true;
+        return [row.name, row.city, row.state, row.certNumber, row.accountStatus]
+          .filter(Boolean).join(' ').toLowerCase().includes(q);
+      });
+      return sendJSON(res, 200, { banks });
+    }
+
+    if (pathname === '/api/portfolio-review' && req.method === 'GET') {
+      return handlePortfolioReview(res, query);
     }
 
     const mbsCmoFileMatch = pathname.match(/^\/api\/mbs-cmo\/files\/([^/]+)$/);
