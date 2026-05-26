@@ -6963,6 +6963,15 @@ body {
   color: var(--green);
 }
 
+.reports-row-menu button.reports-danger-action {
+  color: #9f2d2d;
+}
+
+.reports-row-menu button.reports-danger-action:hover {
+  background: #fff1f1;
+  color: #7f1f1f;
+}
+
 .reports-empty {
   align-items: center;
   background: #fff;

@@ -62,6 +62,7 @@
   let reportsSelectedType = '';
   let reportsSessionReports = [];
   let savedReportDefinitions = [];
+  let hiddenReportIds = [];
   let reportsAppEventsBound = false;
   let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0 };
   let customBankReportState = {
@@ -298,6 +299,7 @@
     { id: 'fixture-coverage', name: 'Coverage Book - Saved Banks', type: 'coverage', folder: 'Coverage', description: REPORT_TYPE_META.coverage.description, lastRunAt: '2026-05-11T16:25:00.000Z', lastRunBy: 'You', pinned: false }
   ];
   const SAVED_REPORTS_STORAGE_KEY = 'fbbs.reports.savedDefinitions';
+  const HIDDEN_REPORTS_STORAGE_KEY = 'fbbs.reports.hiddenRows';
   const CUSTOM_BANK_REPORT_COLUMNS = [
     { key: 'displayName', label: 'Bank', type: 'text', section: 'Details' },
     { key: 'city', label: 'City', type: 'text', section: 'Details' },
@@ -5546,6 +5548,7 @@
   function setupReports() {
     loadReportsSessionReports();
     loadSavedReportDefinitions();
+    loadHiddenReportIds();
     setupReportsAppEvents();
     const averagedInput = document.getElementById('reportsAveragedSeriesWorkbookInput');
     const averagedImportBtn = document.getElementById('reportsAveragedSeriesImportBtn');
@@ -5877,6 +5880,19 @@
     localStorage.setItem(SAVED_REPORTS_STORAGE_KEY, JSON.stringify(savedReportDefinitions.slice(0, 100)));
   }
 
+  function loadHiddenReportIds() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(HIDDEN_REPORTS_STORAGE_KEY) || '[]');
+      hiddenReportIds = Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch (e) {
+      hiddenReportIds = [];
+    }
+  }
+
+  function saveHiddenReportIds() {
+    localStorage.setItem(HIDDEN_REPORTS_STORAGE_KEY, JSON.stringify([...new Set(hiddenReportIds)].slice(0, 100)));
+  }
+
   function savedReportRows() {
     return savedReportDefinitions.map(def => ({
       id: def.id,
@@ -5893,11 +5909,32 @@
 
   function allReportsRows() {
     const seen = new Set();
+    const hidden = new Set(hiddenReportIds);
     return [...reportsSessionReports, ...savedReportRows(), ...REPORT_FIXTURES].filter(row => {
       if (!row || seen.has(row.id)) return false;
+      if (hidden.has(row.id)) return false;
       seen.add(row.id);
       return true;
     });
+  }
+
+  function deleteReportRow(reportId) {
+    const id = String(reportId || '');
+    const row = allReportsRows().find(item => item.id === id);
+    if (!row) return showToast('Report not found', true);
+    if (!window.confirm(`Delete "${row.name}" from Reports?`)) return;
+    const beforeSessions = reportsSessionReports.length;
+    const beforeSaved = savedReportDefinitions.length;
+    reportsSessionReports = reportsSessionReports.filter(item => item.id !== id);
+    savedReportDefinitions = savedReportDefinitions.filter(item => item.id !== id);
+    if (reportsSessionReports.length !== beforeSessions) saveReportsSessionReports();
+    if (savedReportDefinitions.length !== beforeSaved) saveSavedReportDefinitions();
+    if (reportsSessionReports.length === beforeSessions && savedReportDefinitions.length === beforeSaved) {
+      hiddenReportIds = [...new Set([...hiddenReportIds, id])];
+      saveHiddenReportIds();
+    }
+    renderReportsWorkspace();
+    showToast('Deleted report');
   }
 
   function reportRailItem(id) {
@@ -6058,7 +6095,7 @@
                       <button type="button" data-report-action="duplicate" data-report-id="${escapeHtml(row.id)}">Duplicate</button>
                       <button type="button" disabled title="Available in Phase 2">Edit</button>
                       <button type="button" disabled title="Available in Phase 3">Subscribe</button>
-                      <button type="button" disabled title="Available in Phase 2">Delete</button>
+                      <button type="button" class="reports-danger-action" data-report-action="delete" data-report-id="${escapeHtml(row.id)}">Delete</button>
                     </details>
                   </td>
                 </tr>
@@ -7217,6 +7254,9 @@
             renderReportsWorkspace();
             showToast('Duplicated report');
           }
+        }
+        if (action === 'delete') {
+          deleteReportRow(rowAction.dataset.reportId || rowAction.closest('tr')?.dataset.reportId || '');
         }
         return;
       }
