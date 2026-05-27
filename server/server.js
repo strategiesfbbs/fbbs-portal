@@ -4327,6 +4327,219 @@ function buildPortfolioReviewFlags(positions, sectors, summary, profile) {
   return flags.slice(0, 8);
 }
 
+function findScenarioByShock(analytics, shock) {
+  const rows = analytics && Array.isArray(analytics.scenarioSummary) ? analytics.scenarioSummary : [];
+  return rows.find(row => Number(row.shock) === shock) || null;
+}
+
+function findInvestmentsKrd(analytics) {
+  const rows = analytics && Array.isArray(analytics.keyRateDuration) ? analytics.keyRateDuration : [];
+  return rows.find(row => /^investments$/i.test(row.label || '')) || rows[0] || null;
+}
+
+function findPeerAllocationOutliers(analytics, limit = 3) {
+  const rows = analytics && Array.isArray(analytics.peerReview) ? analytics.peerReview : [];
+  return rows
+    .map(row => {
+      const allocation = nullableNumber(row.allocationPct);
+      const peer = nullableNumber(row.peerAllocationPct);
+      return {
+        sector: row.sector || '',
+        allocationPct: allocation,
+        peerAllocationPct: peer,
+        gapPct: allocation != null && peer != null ? allocation - peer : null
+      };
+    })
+    .filter(row => row.gapPct != null)
+    .sort((a, b) => Math.abs(b.gapPct) - Math.abs(a.gapPct))
+    .slice(0, limit);
+}
+
+function addPortfolioAction(actions, action) {
+  if (!action || !action.id || actions.some(existing => existing.id === action.id)) return;
+  actions.push(action);
+}
+
+function buildPortfolioDecisionLayer({ positions, sectors, summary, analytics, swapIdeas, bankName, reportDate }) {
+  const base = findScenarioByShock(analytics, 0);
+  const up300 = findScenarioByShock(analytics, 300);
+  const down300 = findScenarioByShock(analytics, -300);
+  const investmentsKrd = findInvestmentsKrd(analytics);
+  const peerOutliers = findPeerAllocationOutliers(analytics);
+  const topSector = sectors && sectors[0] ? sectors[0] : null;
+  const actions = [];
+  const priorities = [];
+  const commentary = [];
+
+  const lossPct = nullableNumber(summary.gainLossPct);
+  if (summary.gainLoss < 0) {
+    priorities.push({
+      tone: lossPct != null && lossPct <= -5 ? 'High' : 'Medium',
+      title: 'Unrealized loss review',
+      detail: `${Math.abs(lossPct || 0).toFixed(2)}% book-value loss creates a swap/tax-loss review opportunity before adding new exposure.`
+    });
+  }
+  if (summary.marketYield != null && summary.bookYield != null && summary.marketYield - summary.bookYield >= 0.75) {
+    priorities.push({
+      tone: 'High',
+      title: 'Yield reset opportunity',
+      detail: `Market yield is ${(summary.marketYield - summary.bookYield).toFixed(2)} points above book yield; screen low-book-yield holdings first.`
+    });
+  }
+  if (up300 && nullableNumber(up300.priceChangePct) != null && up300.priceChangePct <= -8) {
+    priorities.push({
+      tone: up300.priceChangePct <= -12 ? 'High' : 'Medium',
+      title: 'Rate-shock exposure',
+      detail: `THC scenario shows ${up300.priceChangePct.toFixed(2)}% price change in a +300 bp shock.`
+    });
+  }
+  if (investmentsKrd && investmentsKrd.values && nullableNumber(investmentsKrd.values['Eff. Dur']) >= 4.5) {
+    priorities.push({
+      tone: nullableNumber(investmentsKrd.values['Eff. Dur']) >= 6 ? 'High' : 'Medium',
+      title: 'Duration concentration',
+      detail: `THC key-rate duration shows ${Number(investmentsKrd.values['Eff. Dur']).toFixed(2)} effective duration on investments.`
+    });
+  }
+  if (topSector && topSector.marketShare >= 35) {
+    priorities.push({
+      tone: topSector.marketShare >= 50 ? 'High' : 'Medium',
+      title: `${topSector.sector} concentration`,
+      detail: `${topSector.sector} is ${topSector.marketShare.toFixed(1)}% of portfolio market value.`
+    });
+  }
+
+  const firstSwap = Array.isArray(swapIdeas) ? swapIdeas[0] : null;
+  if (firstSwap) {
+    addPortfolioAction(actions, {
+      id: 'bond-swap',
+      type: 'strategy',
+      label: 'Create Bond Swap Request',
+      requestType: 'Bond Swap',
+      priority: '2',
+      summary: `Portfolio swap review: ${firstSwap.held && firstSwap.held.cusip || 'candidate holding'}`,
+      comments: [
+        `Portfolio review for ${bankName || 'selected bank'}${reportDate ? ` (${reportDate})` : ''}.`,
+        `Candidate: sell ${firstSwap.held && firstSwap.held.cusip || 'current holding'} and review replacement ${firstSwap.offering && firstSwap.offering.label || 'from current inventory'}.`,
+        firstSwap.economics && firstSwap.economics.annualIncomePickup != null ? `Estimated annual income pickup: ${Math.round(firstSwap.economics.annualIncomePickup).toLocaleString('en-US')}.` : '',
+        firstSwap.economics && firstSwap.economics.breakevenMonths != null ? `Breakeven: ${firstSwap.economics.breakevenMonths} months.` : '',
+        'Desk review required before client language.'
+      ].filter(Boolean).join('\n'),
+      product: 'Bond Swap'
+    });
+  } else if (summary.gainLoss < 0 || (summary.marketYield != null && summary.bookYield != null && summary.marketYield - summary.bookYield >= 0.75)) {
+    addPortfolioAction(actions, {
+      id: 'bond-swap-screen',
+      type: 'strategy',
+      label: 'Create Swap Screen Request',
+      requestType: 'Bond Swap',
+      priority: '3',
+      summary: 'Portfolio swap screen from THC review',
+      comments: 'Run a desk-reviewed bond swap screen using the latest matched THC portfolio workbook and current inventory.',
+      product: 'Bond Swap'
+    });
+  }
+
+  if (up300 && nullableNumber(up300.priceChangePct) != null && up300.priceChangePct <= -8) {
+    addPortfolioAction(actions, {
+      id: 'alm-irr',
+      type: 'strategy',
+      label: 'Create ALM / IRR Request',
+      requestType: 'THO Report',
+      priority: up300.priceChangePct <= -12 ? '2' : '3',
+      summary: 'ALM / IRR review from THC scenario exposure',
+      comments: `THC scenario analytics show ${up300.priceChangePct.toFixed(2)}% price change in +300 bp shock. Review EVE/EaR sensitivity and assumptions.`,
+      product: 'ALM / IRR'
+    });
+  }
+
+  const muniSector = (sectors || []).find(row => /muni/i.test(row.sector || ''));
+  if (muniSector && muniSector.marketShare >= 20) {
+    addPortfolioAction(actions, {
+      id: 'muni-bcis',
+      type: 'strategy',
+      label: 'Create Muni BCIS Request',
+      requestType: 'Muni BCIS',
+      priority: muniSector.marketShare >= 35 ? '2' : '3',
+      summary: 'Muni BCIS review from portfolio mix',
+      comments: `${muniSector.sector} represents ${muniSector.marketShare.toFixed(1)}% of market value. Review credit surveillance, BQ/TEY, and replacement needs.`,
+      product: 'Muni Credit / BCIS'
+    });
+  }
+
+  addPortfolioAction(actions, {
+    id: 'portfolio-accounting',
+    type: 'product-fit',
+    label: 'Flag Portfolio Accounting Fit',
+    product: 'Portfolio Accounting',
+    summary: 'Matched THC portfolio workbook available',
+    comments: `Portfolio accounting fit flagged from the ${reportDate || 'latest'} matched workbook.`
+  });
+
+  if (summary.positions) {
+    commentary.push(`${bankName || 'This bank'} has ${summary.positions.toLocaleString('en-US')} parsed holdings with ${summary.marketValue ? `$${Math.round(summary.marketValue).toLocaleString('en-US')} market value` : 'market value on file'}.`);
+  }
+  if (summary.gainLoss != null) {
+    commentary.push(`The portfolio is ${summary.gainLoss < 0 ? 'underwater' : 'above book'} by ${Math.abs(summary.gainLossPct || 0).toFixed(2)}% of book value, so the first conversation should be framed around review and repositioning rather than generic product pitching.`);
+  }
+  if (base || up300 || down300) {
+    commentary.push(`THC scenario rows are available${base ? ` with base market value ${Math.round(base.marketValue || 0).toLocaleString('en-US')}` : ''}; use them to support ALM/rate-risk talking points.`);
+  }
+  if (peerOutliers.length) {
+    const top = peerOutliers[0];
+    commentary.push(`Peer review shows the largest allocation gap in ${top.sector}: ${top.allocationPct.toFixed(1)}% versus peer ${top.peerAllocationPct.toFixed(1)}%.`);
+  }
+  if (!commentary.length) {
+    commentary.push('The matched THC workbook is available, but the parsed metrics do not point to a single dominant pressure point yet.');
+  }
+
+  return {
+    commentary,
+    priorities: priorities.slice(0, 5),
+    peerOutliers,
+    scenario: {
+      base,
+      up300,
+      down300,
+      effectiveDuration: investmentsKrd && investmentsKrd.values ? nullableNumber(investmentsKrd.values['Eff. Dur']) : null
+    },
+    actions: actions.slice(0, 5)
+  };
+}
+
+function buildPortfolioOpportunityRows(decisionLayer, sectors, swapIdeas) {
+  const rows = [];
+  (decisionLayer.priorities || []).forEach(priority => {
+    rows.push({
+      type: priority.title,
+      severity: priority.tone,
+      evidence: priority.detail,
+      nextStep: /duration|rate|ALM|IRR/i.test(priority.title)
+        ? 'Open ALM / IRR request'
+        : /muni/i.test(priority.title)
+          ? 'Open Muni BCIS request'
+          : 'Open swap screen'
+    });
+  });
+  (swapIdeas || []).slice(0, 2).forEach(row => {
+    rows.push({
+      type: 'Specific swap candidate',
+      severity: 'High',
+      evidence: `Sell ${row.held && row.held.cusip || 'holding'}; estimated pickup ${row.economics && row.economics.annualIncomePickup != null ? Math.round(row.economics.annualIncomePickup).toLocaleString('en-US') : 'available in screen'}.`,
+      nextStep: 'Create Bond Swap Request'
+    });
+  });
+  const topSector = sectors && sectors[0];
+  if (topSector) {
+    rows.push({
+      type: 'Portfolio mix conversation',
+      severity: topSector.marketShare >= 45 ? 'Medium' : 'Low',
+      evidence: `${topSector.sector} is ${topSector.marketShare != null ? topSector.marketShare.toFixed(1) : '—'}% of market value.`,
+      nextStep: 'Confirm policy limits and reinvestment intent'
+    });
+  }
+  return rows.slice(0, 7);
+}
+
 function buildPortfolioReview(bankId, query) {
   const ctx = getSwapBankContext(bankId);
   if (!ctx) return null;
@@ -4390,6 +4603,16 @@ function buildPortfolioReview(bankId, query) {
   }, row => 10 - (nullableNumber(row.bookYield) || 0), 10);
   const durationWatch = topPortfolioRows(positions, row => (nullableNumber(row.effectiveDuration) || nullableNumber(row.averageLife) || 0) >= 5, row => nullableNumber(row.effectiveDuration) || nullableNumber(row.averageLife) || 0, 10);
   const callableWatch = topPortfolioRows(positions, row => row.callable || (nullableNumber(row.marketPrice) || 0) >= 102, row => (nullableNumber(row.marketPrice) || 100) + (row.callable ? 10 : 0), 10);
+  const analytics = parsedHoldings.analytics || {};
+  const decisionLayer = buildPortfolioDecisionLayer({
+    positions,
+    sectors,
+    summary: reviewSummary,
+    analytics,
+    swapIdeas: candidates.kept || [],
+    bankName: summary.displayName || summary.name || 'Bank',
+    reportDate: parsedHoldings.asOfDate || ''
+  });
 
   return {
     available: true,
@@ -4408,7 +4631,9 @@ function buildPortfolioReview(bankId, query) {
     flags: buildPortfolioReviewFlags(positions, sectors, reviewSummary, profile),
     sectors,
     ladder: buildPortfolioLadder(positions, parsedHoldings.asOfDate || inventory.asOfDate),
-    analytics: parsedHoldings.analytics || {},
+    analytics,
+    decisionLayer,
+    opportunities: buildPortfolioOpportunityRows(decisionLayer, sectors, candidates.kept || []),
     screens: {
       topLosses,
       lossPct,
