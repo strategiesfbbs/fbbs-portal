@@ -4642,6 +4642,7 @@ function buildPortfolioReview(bankId, query) {
       durationWatch,
       callableWatch
     },
+    holdings: positions,
     swapIdeas: candidates.kept || [],
     rejectedSwapIdeas: candidates.dropped || [],
     rules,

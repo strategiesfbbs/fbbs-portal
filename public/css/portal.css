@@ -8733,6 +8733,70 @@ body {
   color: #fff;
 }
 
+.portfolio-holdings-browser {
+  border: 1px solid #d6e1da;
+  border-radius: 8px;
+  background: #fbfdfb;
+  padding: 14px;
+}
+
+.portfolio-review-screen-head p {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin: 4px 0 0;
+}
+
+#portfolioHoldingsSearchInput {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  min-height: 38px;
+  min-width: min(360px, 100%);
+  padding: 8px 10px;
+}
+
+.portfolio-holdings-sector-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.portfolio-holdings-sector-tabs button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 0.78rem;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
+.portfolio-holdings-sector-tabs button.active {
+  background: var(--racing-green);
+  border-color: var(--racing-green);
+  color: #fff;
+}
+
+.portfolio-holdings-sector-tabs em {
+  background: rgba(15, 31, 23, 0.08);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-style: normal;
+  padding: 2px 6px;
+}
+
+.portfolio-holdings-sector-tabs button.active em {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .portfolio-analytics-section {
   border-top: 1px solid var(--border);
   padding-top: 4px;
@@ -8837,6 +8901,23 @@ body {
   text-transform: uppercase;
   top: 0;
   z-index: 1;
+}
+
+.portfolio-holdings-table th button {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: inherit;
+  padding: 0;
+  text-align: inherit;
+  text-transform: inherit;
+}
+
+.portfolio-holdings-table.is-browser {
+  min-width: 1180px;
 }
 
 .portfolio-holdings-table tbody td {

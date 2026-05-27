@@ -91,7 +91,7 @@
   let savedReportDefinitions = [];
   let hiddenReportIds = [];
   let reportsAppEventsBound = false;
-  let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0 };
+  let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
   let customBankReportState = {
     loading: false,
     dataset: null,
@@ -7309,6 +7309,9 @@
       const res = await fetch(`/api/portfolio-review?bankId=${encodeURIComponent(id)}&limit=8`, { cache: 'no-store' });
       portfolioReviewState.review = await readBankJson(res);
       portfolioReviewState.screen = 'topLosses';
+      portfolioReviewState.holdingSector = 'All';
+      portfolioReviewState.holdingSearch = '';
+      portfolioReviewState.holdingSort = { key: 'marketValue', dir: 'desc' };
       renderPortfolioReviewMount();
       addSessionReport('portfolio-peer');
       showToast('Portfolio review ready');
@@ -7392,6 +7395,7 @@
             ${portfolioLadderHtml(data.ladder || [])}
           </div>
         </section>
+        ${portfolioHoldingsBrowserHtml(data)}
         <section class="portfolio-review-section">
           <div class="portfolio-review-screen-head">
             <h4>Holdings Screens</h4>
@@ -7654,28 +7658,141 @@
     `;
   }
 
-  function portfolioHoldingsTable(rows) {
+  function portfolioHoldingSortValue(row, key) {
+    if (!row) return '';
+    if (key === 'description') return String(row.description || row.cusip || '').toLowerCase();
+    if (key === 'sector') return String(row.sector || '').toLowerCase();
+    if (key === 'maturity') return row.maturity || row.nextCall || '';
+    if (key === 'coupon') return Number(row.coupon);
+    if (key === 'marketPrice') return Number(row.marketPrice);
+    if (key === 'par') return Number(row.par);
+    if (key === 'marketYield') return Number(row.marketYield);
+    if (key === 'effectiveDuration') return Number(row.effectiveDuration);
+    if (key === 'averageLife') return Number(row.averageLife);
+    if (key === 'gainLoss') return Number(row.gainLoss);
+    return Number(row.marketValue);
+  }
+
+  function portfolioFilteredHoldings(data) {
+    const rows = Array.isArray(data && data.holdings) ? data.holdings.slice() : [];
+    const sector = portfolioReviewState.holdingSector || 'All';
+    const query = String(portfolioReviewState.holdingSearch || '').trim().toLowerCase();
+    const sort = portfolioReviewState.holdingSort || { key: 'marketValue', dir: 'desc' };
+    return rows
+      .filter(row => sector === 'All' || String(row.sector || 'Other') === sector)
+      .filter(row => {
+        if (!query) return true;
+        return [
+          row.cusip,
+          row.description,
+          row.sector,
+          row.classification,
+          row.maturity,
+          row.nextCall
+        ].some(value => String(value || '').toLowerCase().includes(query));
+      })
+      .sort((a, b) => {
+        const av = portfolioHoldingSortValue(a, sort.key);
+        const bv = portfolioHoldingSortValue(b, sort.key);
+        const aNum = typeof av === 'number' && Number.isFinite(av);
+        const bNum = typeof bv === 'number' && Number.isFinite(bv);
+        let result;
+        if (aNum || bNum) {
+          result = (aNum ? av : -Infinity) - (bNum ? bv : -Infinity);
+        } else {
+          result = String(av || '').localeCompare(String(bv || ''));
+        }
+        return sort.dir === 'asc' ? result : -result;
+      });
+  }
+
+  function portfolioHoldingSectorTabs(data) {
+    const rows = Array.isArray(data && data.holdings) ? data.holdings : [];
+    const counts = new Map();
+    rows.forEach(row => counts.set(row.sector || 'Other', (counts.get(row.sector || 'Other') || 0) + 1));
+    const sectors = [['All', rows.length]].concat(Array.from(counts.entries()).sort((a, b) => b[1] - a[1]));
+    const active = portfolioReviewState.holdingSector || 'All';
+    return `
+      <div class="portfolio-holdings-sector-tabs">
+        ${sectors.map(([sector, count]) => `
+          <button type="button" class="${sector === active ? 'active' : ''}" data-portfolio-sector="${escapeHtml(sector)}">
+            <span>${escapeHtml(sector)}</span>
+            <em>${escapeHtml(formatNumber(count))}</em>
+          </button>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function portfolioHoldingsBrowserHtml(data) {
+    const allRows = Array.isArray(data && data.holdings) ? data.holdings : [];
+    if (!allRows.length) return '';
+    const rows = portfolioFilteredHoldings(data);
+    const marketValue = rows.reduce((sum, row) => sum + (Number(row.marketValue) || 0), 0);
+    const par = rows.reduce((sum, row) => sum + (Number(row.par) || 0), 0);
+    return `
+      <section class="portfolio-review-section portfolio-holdings-browser">
+        <div class="portfolio-review-screen-head">
+          <div>
+            <h4>Holdings Browser</h4>
+            <p>${escapeHtml(formatNumber(rows.length))} of ${escapeHtml(formatNumber(allRows.length))} positions · ${escapeHtml(formatMoney(marketValue))} market value · ${escapeHtml(formatMoney(par))} par</p>
+          </div>
+          <input type="search" id="portfolioHoldingsSearchInput" value="${escapeHtml(portfolioReviewState.holdingSearch || '')}" placeholder="Search CUSIP, description, sector..." autocomplete="off">
+        </div>
+        ${portfolioHoldingSectorTabs(data)}
+        ${portfolioHoldingsTable(rows, { browser: true })}
+      </section>
+    `;
+  }
+
+  function portfolioHoldingSortHeader(key, label, numeric = false) {
+    const sort = portfolioReviewState.holdingSort || {};
+    const active = sort.key === key;
+    const marker = active ? (sort.dir === 'asc' ? ' asc' : ' desc') : '';
+    return `<th class="${numeric ? 'num' : ''}"><button type="button" data-portfolio-holding-sort="${escapeHtml(key)}">${escapeHtml(label + marker)}</button></th>`;
+  }
+
+  function portfolioHoldingsTable(rows, options = {}) {
     if (!rows.length) return '<div class="bank-search-empty">No positions match this screen.</div>';
+    const browser = Boolean(options.browser);
     return `
       <div class="reports-list-wrap portfolio-holdings-wrap">
-        <table class="reports-list portfolio-review-table portfolio-holdings-table">
+        <table class="reports-list portfolio-review-table portfolio-holdings-table ${browser ? 'is-browser' : ''}">
           <thead>
             <tr>
-              <th>CUSIP</th>
-              <th>Description</th>
-              <th>Sector</th>
-              <th>Mat / Call</th>
-              <th class="num">Par</th>
-              <th class="num">Book Yld</th>
-              <th class="num">Mkt Yld</th>
-              <th class="num">G/L</th>
-              <th class="num">Dur</th>
-              <th class="num">WAL</th>
+              ${browser ? portfolioHoldingSortHeader('marketPrice', 'Price', true) : '<th>CUSIP</th>'}
+              ${browser ? portfolioHoldingSortHeader('par', 'Par', true) : '<th>Description</th>'}
+              ${browser ? portfolioHoldingSortHeader('sector', 'Sector') : '<th>Sector</th>'}
+              ${browser ? '<th>CUSIP</th>' : '<th>Mat / Call</th>'}
+              ${browser ? portfolioHoldingSortHeader('description', 'Description') : '<th class="num">Par</th>'}
+              ${browser ? portfolioHoldingSortHeader('maturity', 'Maturity') : '<th class="num">Book Yld</th>'}
+              ${browser ? portfolioHoldingSortHeader('coupon', 'CPN', true) : '<th class="num">Mkt Yld</th>'}
+              ${browser ? portfolioHoldingSortHeader('effectiveDuration', 'Eff. Dur', true) : '<th class="num">G/L</th>'}
+              ${browser ? portfolioHoldingSortHeader('averageLife', 'WAL', true) : '<th class="num">Dur</th>'}
+              ${browser ? portfolioHoldingSortHeader('marketYield', 'Yield', true) : '<th class="num">WAL</th>'}
+              ${browser ? portfolioHoldingSortHeader('gainLoss', 'G/L', true) : ''}
             </tr>
           </thead>
           <tbody>${rows.map(row => {
             const matCall = [row.maturity, row.nextCall ? `Call ${row.nextCall}` : ''].filter(Boolean).join(' / ');
-            return `
+            return browser ? `
+            <tr>
+              <td class="num">${row.marketPrice != null ? escapeHtml(Number(row.marketPrice).toFixed(3)) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num">${escapeHtml(formatMoney(row.par))}</td>
+              <td>${escapeHtml(row.sector || '')}<span>${escapeHtml(row.classification || '')}</span></td>
+              <td><code>${escapeHtml(row.cusip || '')}</code></td>
+              <td><strong>${escapeHtml(row.description || 'Holding')}</strong>${row.nextCall ? `<span>Next call ${escapeHtml(row.nextCall)}</span>` : ''}</td>
+              <td>${row.maturity ? escapeHtml(row.maturity) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num">${row.coupon != null ? escapeHtml(formatPercentTile(row.coupon, 2)) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num">${row.effectiveDuration != null ? escapeHtml(row.effectiveDuration.toFixed(2)) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num">${row.averageLife != null ? escapeHtml(row.averageLife.toFixed(2)) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num">${escapeHtml(formatReviewYield(row.marketYield))}</td>
+              <td class="num ${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">
+                ${escapeHtml(formatMoney(row.gainLoss))}
+                <small>${escapeHtml(formatPercentTile(row.gainLossPct, 2))}</small>
+              </td>
+            </tr>
+          ` : `
             <tr>
               <td><code>${escapeHtml(row.cusip || '')}</code></td>
               <td><strong>${escapeHtml(row.description || 'Holding')}</strong><span>${escapeHtml(row.classification || '')}</span></td>
@@ -7918,6 +8035,15 @@
         clearTimeout(portfolioReviewState.searchTimer);
         portfolioReviewState.searchTimer = setTimeout(() => loadPortfolioReviewBanks(target.value || ''), 250);
       }
+      if (target.id === 'portfolioHoldingsSearchInput') {
+        portfolioReviewState.holdingSearch = target.value || '';
+        renderPortfolioReviewMount();
+        const nextInput = document.getElementById('portfolioHoldingsSearchInput');
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+        }
+      }
       if (['customBankSearchInput', 'customBankStatesInput', 'customBankMinAssetsInput', 'customBankMaxAssetsInput'].includes(target.id)) {
         const keyById = {
           customBankSearchInput: 'search',
@@ -8102,6 +8228,23 @@
       const portfolioScreen = clickTarget.closest('[data-portfolio-screen]');
       if (portfolioScreen) {
         portfolioReviewState.screen = portfolioScreen.dataset.portfolioScreen || 'topLosses';
+        renderPortfolioReviewMount();
+        return;
+      }
+      const portfolioSector = clickTarget.closest('[data-portfolio-sector]');
+      if (portfolioSector) {
+        portfolioReviewState.holdingSector = portfolioSector.dataset.portfolioSector || 'All';
+        renderPortfolioReviewMount();
+        return;
+      }
+      const portfolioHoldingSort = clickTarget.closest('[data-portfolio-holding-sort]');
+      if (portfolioHoldingSort) {
+        const key = portfolioHoldingSort.dataset.portfolioHoldingSort || 'marketValue';
+        const current = portfolioReviewState.holdingSort || {};
+        portfolioReviewState.holdingSort = {
+          key,
+          dir: current.key === key && current.dir === 'desc' ? 'asc' : 'desc'
+        };
         renderPortfolioReviewMount();
         return;
       }
