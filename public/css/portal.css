@@ -7098,6 +7098,79 @@ body {
   padding: 5px 8px;
 }
 
+.bank-snapshot-card {
+  gap: 12px;
+}
+
+.bank-snapshot-title {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: space-between;
+}
+
+.bank-snapshot-title span {
+  color: var(--text3);
+  font-size: 12px;
+}
+
+.bank-snapshot-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.bank-snapshot-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-width: 0;
+  overflow: auto;
+}
+
+.bank-snapshot-table-wrap h5 {
+  background: #f7f9f7;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  margin: 0;
+  padding: 9px 10px;
+}
+
+.bank-snapshot-table {
+  border-collapse: collapse;
+  min-width: 520px;
+  width: 100%;
+}
+
+.bank-snapshot-table th,
+.bank-snapshot-table td {
+  border-bottom: 1px solid var(--line);
+  color: var(--text2);
+  font-size: 11px;
+  padding: 8px 9px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bank-snapshot-table th:first-child,
+.bank-snapshot-table td:first-child {
+  color: var(--text);
+  font-weight: 800;
+  min-width: 160px;
+  text-align: left;
+}
+
+.bank-snapshot-table th {
+  color: var(--green);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bank-snapshot-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .bank-services-pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -10242,7 +10315,8 @@ body {
     flex-direction: column;
   }
   .bank-intel-grid,
-  .bank-intel-portfolio-body {
+  .bank-intel-portfolio-body,
+  .bank-snapshot-grid {
     grid-template-columns: 1fr;
   }
   .bank-intel-peer-table div {

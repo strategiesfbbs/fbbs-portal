@@ -9453,6 +9453,138 @@
     `;
   }
 
+  function bankInsightNumber(values, keys) {
+    const list = Array.isArray(keys) ? keys : [keys];
+    let total = 0;
+    let found = false;
+    list.forEach(key => {
+      const value = intelligenceNumber(values && values[key]);
+      if (value !== null) {
+        total += value;
+        found = true;
+      }
+    });
+    return found ? total : null;
+  }
+
+  function bankInsightValue(values, row) {
+    if (!values || !row) return null;
+    if (row.shareOf) {
+      const numerator = bankInsightNumber(values, row.keys || row.key);
+      const denominator = bankInsightNumber(values, row.shareOf);
+      return numerator !== null && denominator ? numerator / denominator * 100 : null;
+    }
+    return bankInsightNumber(values, row.keys || row.key);
+  }
+
+  function formatBankInsightValue(value, type) {
+    if (value === null || value === undefined || value === '') return '-';
+    if (type === 'money') return formatCallReportValue(value, 'money');
+    if (type === 'percent') return formatCallReportValue(value, 'percent');
+    return formatCallReportValue(value, type);
+  }
+
+  function renderBankSnapshotSection(section, periods) {
+    const rows = (section.rows || []).map(row => {
+      const values = periods.map(period => bankInsightValue(period.values || {}, row));
+      const hasValue = values.some(value => value !== null && value !== undefined && value !== '');
+      return hasValue ? { ...row, values } : null;
+    }).filter(Boolean);
+    if (!rows.length) return '';
+    return `
+      <div class="bank-snapshot-table-wrap">
+        <h5>${escapeHtml(section.title)}</h5>
+        <table class="bank-snapshot-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              ${periods.map(period => `<th>${escapeHtml(period.period || period.endDate || '')}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `
+              <tr>
+                <td>${escapeHtml(row.label)}</td>
+                ${row.values.map(value => `<td>${escapeHtml(formatBankInsightValue(value, row.type))}</td>`).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function renderBankPerformanceSnapshot(recentPeriods) {
+    const periods = (recentPeriods || []).slice(0, 5).reverse();
+    if (!periods.length) return '';
+    const securitiesTotalKeys = ['afsTotal', 'htmTotal'];
+    const sections = [
+      {
+        title: 'Investments',
+        rows: [
+          { label: 'Total Securities', keys: securitiesTotalKeys, type: 'money' },
+          { label: 'Securities / Assets', key: 'securitiesToAssets', type: 'percent' },
+          { label: 'US Agencies / Corps', keys: ['afsAgencyCorp', 'htmAgencyCorp'], shareOf: securitiesTotalKeys, type: 'percent' },
+          { label: 'Municipals', keys: ['afsMunis', 'htmMunis'], shareOf: securitiesTotalKeys, type: 'percent' },
+          { label: 'MBS / Structured', keys: ['afsAllMbs', 'htmAllMbs', 'afsOtherDebt', 'htmOtherDebt'], shareOf: securitiesTotalKeys, type: 'percent' },
+          { label: 'Yield on Securities', key: 'yieldOnSecurities', type: 'percent' },
+          { label: 'Securities FV / BV', key: 'securitiesFvToBv', type: 'percent' },
+          { label: 'Pledged Securities / Securities', keys: ['pledgedSecurities'], shareOf: securitiesTotalKeys, type: 'percent' }
+        ]
+      },
+      {
+        title: 'Balance Sheet Mix',
+        rows: [
+          { label: 'Total Assets', key: 'totalAssets', type: 'money' },
+          { label: 'Total Loans', key: 'totalLoans', type: 'money' },
+          { label: 'Total Deposits', key: 'totalDeposits', type: 'money' },
+          { label: 'Loans / Assets', key: 'loansToAssets', type: 'percent' },
+          { label: 'Loans / Deposits', key: 'loansToDeposits', type: 'percent' },
+          { label: 'Liquid Assets / Assets', key: 'liquidAssetsToAssets', type: 'percent' },
+          { label: 'Brokered Deposits / Deposits', key: 'brokeredDepositsToDeposits', type: 'percent' },
+          { label: 'Non-Interest Bearing Deposits', key: 'nonInterestBearingDeposits', type: 'percent' }
+        ]
+      },
+      {
+        title: 'Earnings & Credit',
+        rows: [
+          { label: 'Net Interest Margin', key: 'netInterestMargin', type: 'percent' },
+          { label: 'Cost of Funds', key: 'costOfFunds', type: 'percent' },
+          { label: 'Yield on Loans', key: 'yieldOnLoans', type: 'percent' },
+          { label: 'ROA', key: 'roa', type: 'percent' },
+          { label: 'ROE', key: 'roe', type: 'percent' },
+          { label: 'Efficiency Ratio', key: 'efficiencyRatio', type: 'percent' },
+          { label: 'NPLs / Loans', key: 'nplsToLoans', type: 'percent' },
+          { label: 'Loan Loss Reserves / Loans', key: 'llrToLoans', type: 'percent' }
+        ]
+      },
+      {
+        title: 'Capital',
+        rows: [
+          { label: 'Total Equity Capital', key: 'totalEquityCapital', type: 'money' },
+          { label: 'Tier 1 Capital', key: 'tier1Capital', type: 'money' },
+          { label: 'Tier 1 Risk-Based Ratio', key: 'tier1RiskBasedRatio', type: 'percent' },
+          { label: 'Total RBC Ratio', key: 'riskBasedCapitalRatio', type: 'percent' },
+          { label: 'Leverage Ratio', key: 'leverageRatio', type: 'percent' },
+          { label: 'Tangible Equity / Assets', key: 'tangibleEquityToAssets', type: 'percent' }
+        ]
+      }
+    ];
+    const rendered = sections.map(section => renderBankSnapshotSection(section, periods)).filter(Boolean).join('');
+    if (!rendered) return '';
+    return `
+      <div class="bank-intel-card bank-intel-card-wide bank-snapshot-card">
+        <div class="bank-snapshot-title">
+          <h4>THC-Style Bank Snapshot</h4>
+          <span>Latest five call-report periods arranged like the Bank Tearsheet export.</span>
+        </div>
+        <div class="bank-snapshot-grid">
+          ${rendered}
+        </div>
+      </div>
+    `;
+  }
+
   function renderBankMixBar(values) {
     const loans = Math.max(0, intelligenceNumber(values.loansToAssets) || 0);
     const securities = Math.max(0, intelligenceNumber(values.securitiesToAssets) || 0);
@@ -9559,6 +9691,7 @@
             <h4>Peer Analytics</h4>
             ${renderBankIntelligencePeerRows(bank, values)}
           </div>
+          ${renderBankPerformanceSnapshot(recentPeriods)}
           <div class="bank-intel-card">
             ${renderIntelligenceBreakdown('Securities Mix', [
               { label: 'Agencies / Corporates', amount: agenciesTotal },
