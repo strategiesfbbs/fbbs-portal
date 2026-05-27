@@ -6610,13 +6610,24 @@ body {
 }
 
 .bank-profile-head {
-  align-items: center;
+  align-items: flex-start;
   border-bottom: 1px solid var(--line);
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  gap: 18px;
+  gap: 14px 18px;
   margin-bottom: 16px;
   padding-bottom: 16px;
+}
+
+.bank-profile-head > div:first-child {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.bank-profile-head > .bank-profile-tools {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .bank-account-coverage-summary {
