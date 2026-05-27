@@ -1685,6 +1685,11 @@
     closeRepPanel();
     renderRepPicker();
     await loadMyWork();
+    if (parseHashTarget(window.location.hash || '#home').page === 'views') {
+      savedViewsState.selectedResult = null;
+      await loadSavedViewSummaries();
+      if (savedViewsState.selectedId) openSavedView(savedViewsState.selectedId);
+    }
   }
 
   function renderRepPicker() {

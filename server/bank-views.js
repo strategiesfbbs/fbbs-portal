@@ -237,9 +237,10 @@ function runBankView({ outputDir, viewId, rep, limit }) {
   if (view.requiresRep && !rep) {
     return {
       view,
-      rows: [],
-      columns: [],
+      rows: [{ message: 'Pick a rep before opening this view.' }],
+      columns: ['message'],
       rowKind: 'bank',
+      count: 0,
       meta: { requiresRep: true }
     };
   }
@@ -309,11 +310,15 @@ const CSV_COLUMN_LABELS = {
   refType: 'Source',
   amount: 'Amount',
   enqueuedAt: 'Enqueued At',
-  billedAt: 'Billed At'
+  billedAt: 'Billed At',
+  message: 'Message'
 };
 
 function viewToCsvRows(viewResult) {
   if (!viewResult) return [['No data']];
+  if (viewResult.meta && viewResult.meta.requiresRep) {
+    return [['Message'], ['Pick a rep before exporting this view.']];
+  }
   const cols = viewResult.columns || [];
   const header = cols.map(c => CSV_COLUMN_LABELS[c] || c);
   const body = (viewResult.rows || []).map(row => cols.map(c => row[c] == null ? '' : row[c]));

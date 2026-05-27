@@ -947,7 +947,10 @@ function updateBillingItem(outputDir, id, input = {}) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const existing = getBillingItem(outputDir, id);
   if (!existing) throw new Error('Billing item not found');
-  const state = input.state && BILLING_STATES.has(input.state) ? input.state : existing.state;
+  if (input.state && !BILLING_STATES.has(input.state)) {
+    throw new Error(`Unknown billing state: ${input.state}`);
+  }
+  const state = input.state || existing.state;
   const amount = input.amount !== undefined ? input.amount : existing.amount;
   const notes = input.notes !== undefined ? (cleanText(input.notes, 2000) || '') : existing.notes;
   const now = new Date().toISOString();

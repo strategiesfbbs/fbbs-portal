@@ -3949,6 +3949,32 @@ async function handleCreateStrategyRequest(req, res) {
       refType: 'strategy',
       refId: request && request.id
     });
+    if (request && request.status === 'Needs Billed') {
+      const queued = enqueueBilling(BANK_REPORTS_DIR, {
+        refType: 'strategy',
+        refId: request.id,
+        bankId: request.bankId,
+        certNumber: request.certNumber,
+        summary: `${request.requestType}: ${request.summary || request.displayName}`.slice(0, 500)
+      });
+      if (queued) {
+        appendAuditLog({
+          event: 'billing-enqueue',
+          billingId: queued.id,
+          refType: queued.refType,
+          refId: queued.refId,
+          bankId: queued.bankId
+        });
+        logBankActivity(req, {
+          bankId: request.bankId,
+          certNumber: request.certNumber,
+          kind: 'billing',
+          summary: `Queued for billing · ${request.requestType}`,
+          refType: 'billing',
+          refId: queued.id
+        });
+      }
+    }
     return sendJSON(res, 200, { request });
   } catch (err) {
     log('error', 'Strategy request create failed:', err.message);
