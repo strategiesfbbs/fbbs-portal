@@ -17,6 +17,8 @@ const SECTOR_SHEETS = [
   'Corporate', 'Exempt Muni', 'Taxable Muni', 'SBA', 'ABS', 'Other'
 ];
 
+const PARSED_PORTFOLIO_SCHEMA_VERSION = 2;
+
 // Map common header-cell variants to canonical field names. THC's templates
 // embed newlines and trailing spaces — normalize and match loosely.
 const HEADER_MAP = {
@@ -398,6 +400,7 @@ function parsePortfolioWorkbook(filePath) {
     if (h.cusip) cusipIndex[h.cusip.toUpperCase()] = { sector: h.sector, par: h.par, bookYield: h.bookYieldYtm ?? h.bookYieldYtw };
   }
   return {
+    schemaVersion: PARSED_PORTFOLIO_SCHEMA_VERSION,
     parsedAt: new Date().toISOString(),
     asOfDate,
     sourceFile: path.basename(filePath),
@@ -420,6 +423,16 @@ function holdingsCachePath(portfolioXlsmPath) {
   return path.join(path.dirname(portfolioXlsmPath), path.basename(portfolioXlsmPath, path.extname(portfolioXlsmPath)) + '.holdings.json');
 }
 
+function parsedPortfolioCacheIsFresh(cached) {
+  return cached
+    && cached.schemaVersion === PARSED_PORTFOLIO_SCHEMA_VERSION
+    && cached.analytics
+    && Array.isArray(cached.analytics.scenarioSummary)
+    && Array.isArray(cached.analytics.totalReturn)
+    && Array.isArray(cached.analytics.peerReview)
+    && Array.isArray(cached.analytics.keyRateDuration);
+}
+
 function loadParsedPortfolio(portfolioXlsmPath, options = {}) {
   if (!fs.existsSync(portfolioXlsmPath)) return null;
   const cachePath = holdingsCachePath(portfolioXlsmPath);
@@ -428,7 +441,8 @@ function loadParsedPortfolio(portfolioXlsmPath, options = {}) {
     const cacheStat = fs.statSync(cachePath);
     if (cacheStat.mtimeMs >= srcStat.mtimeMs) {
       try {
-        return JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        if (parsedPortfolioCacheIsFresh(cached)) return cached;
       } catch (_) {
         // fall through and rebuild
       }

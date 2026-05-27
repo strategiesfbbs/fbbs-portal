@@ -9307,7 +9307,7 @@
       <div class="bank-intel-analytics">
         <h5>Scenario Readout</h5>
         <div class="bank-intel-analytics-grid">
-          ${base ? intelligenceMetricTile('Base EVE Proxy', formatMoney(base.marketValue), `G/L ${formatMoney(base.gainLoss)}`) : ''}
+          ${base ? intelligenceMetricTile('Base Market Value', formatMoney(base.marketValue), `G/L ${formatMoney(base.gainLoss)}`) : ''}
           ${up300 ? intelligenceMetricTile('+300 bp Shock', formatMoney(up300.marketValue), `Price ${formatPercentTile(up300.priceChangePct, 2)}`, (up300.gainLoss || 0) < 0 ? 'warn' : '') : ''}
           ${down300 ? intelligenceMetricTile('-300 bp Shock', formatMoney(down300.marketValue), `Price ${formatPercentTile(down300.priceChangePct, 2)}`) : ''}
           ${investments ? intelligenceMetricTile('Key Rate Duration', investments.values && investments.values['Eff. Dur'] != null ? Number(investments.values['Eff. Dur']).toFixed(2) : '—', 'Investments total') : ''}

@@ -894,7 +894,7 @@ function assertBondAccountingStore() {
 }
 
 function assertPortfolioParser() {
-  const { parsePortfolioWorkbook } = require('../server/portfolio-parser');
+  const { holdingsCachePath, loadParsedPortfolio, parsePortfolioWorkbook } = require('../server/portfolio-parser');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-portfolio-parser-'));
   const filePath = path.join(tmp, 'sample.xlsm');
   try {
@@ -986,6 +986,17 @@ function assertPortfolioParser() {
     assert.strictEqual(parsed.analytics.peerReview[0].peerAllocationPct, 42.5);
     assert.strictEqual(parsed.analytics.keyRateDuration[0].label, 'Investments');
     assert.strictEqual(parsed.analytics.keyRateDuration[0].values['Eff. Dur'], 3.2);
+
+    const cachePath = holdingsCachePath(filePath);
+    const stale = { ...parsed };
+    delete stale.schemaVersion;
+    delete stale.analytics;
+    fs.writeFileSync(cachePath, JSON.stringify(stale));
+    const future = new Date(Date.now() + 60000);
+    fs.utimesSync(cachePath, future, future);
+    const rebuilt = loadParsedPortfolio(filePath);
+    assert.strictEqual(rebuilt.schemaVersion, parsed.schemaVersion);
+    assert.strictEqual(rebuilt.analytics.scenarioSummary.length, 3);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
