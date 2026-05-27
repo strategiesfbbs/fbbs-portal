@@ -6144,6 +6144,35 @@ body {
   border-color: #cfe0d9;
 }
 
+.bank-assistant-details {
+  border: 1px solid #cfe0d9;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bank-assistant-details summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+}
+
+.bank-assistant-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.bank-assistant-details summary em {
+  color: var(--text3);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.bank-assistant-details[open] summary {
+  border-bottom: 1px solid #cfe0d9;
+}
+
 .bank-assistant-head,
 .bank-assistant-card-head,
 .bank-assistant-note-head,
@@ -6155,6 +6184,7 @@ body {
 }
 
 .bank-assistant-head {
+  padding: 12px 12px 0;
   margin-bottom: 12px;
 }
 
@@ -6183,6 +6213,7 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
+  padding: 0 12px;
 }
 
 .bank-assistant-prompt.active,
@@ -6199,6 +6230,7 @@ body {
 .bank-assistant-output {
   display: grid;
   gap: 12px;
+  padding: 0 12px 12px;
   transition: opacity 0.15s ease;
 }
 

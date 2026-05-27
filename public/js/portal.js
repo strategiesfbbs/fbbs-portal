@@ -9471,7 +9471,6 @@
         </div>
       </div>
       ${renderAccountDetailsSummary(values, accountStatus)}
-      ${renderBankAssistantPanel()}
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
       ${renderBankContactsPanel()}
@@ -9485,6 +9484,7 @@
       ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38, bank.peerComparison)}
       ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
       ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
+      ${renderBankAssistantPanel()}
       ${renderBankIntelligencePanel(bank, values, recentPeriods)}
       <div class="bank-services-pair">
         ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
@@ -10196,10 +10196,13 @@
 
   function renderBankAssistantPanel() {
     return `
-      <section class="bank-section bank-assistant-section" id="bankAssistantPanel">
+      <details class="bank-section bank-assistant-section bank-assistant-details" id="bankAssistantPanel">
+        <summary class="bank-section-title">
+          <span>Sales Assistant</span>
+          <em>Open / close</em>
+        </summary>
         <div class="bank-assistant-head">
           <div>
-            <div class="bank-section-title">Sales Assistant</div>
             <p>Reads this bank's latest call report, coverage status, strategy history, and today's offering inventory — and tells you who to call, what to pitch, and why.</p>
           </div>
           <span class="bank-assistant-badge">Internal</span>
@@ -10216,7 +10219,7 @@
             <span>Short, internal — built from this bank's latest filings and today's parsed inventory. Not for client use.</span>
           </div>
         </div>
-      </section>
+      </details>
     `;
   }
 
