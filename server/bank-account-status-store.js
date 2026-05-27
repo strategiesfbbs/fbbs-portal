@@ -262,6 +262,18 @@ function countBankAccountStatuses(outputDir, options = {}) {
   return rows.length ? Number(rows[0].count || 0) : 0;
 }
 
+function listDistinctAccountOwners(outputDir) {
+  const dbPath = ensureAccountStatusDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    SELECT owner AS owner, COUNT(*) AS count
+    FROM bank_account_statuses
+    WHERE owner IS NOT NULL AND owner <> ''
+    GROUP BY owner
+    ORDER BY count DESC, owner COLLATE NOCASE ASC;
+  `);
+  return rows.map(row => ({ owner: row.owner || '', count: Number(row.count || 0) }));
+}
+
 function writeAccountStatusMetadata(outputDir, metadata) {
   const dbPath = ensureAccountStatusDatabase(outputDir);
   runSqlite(dbPath, `
@@ -642,6 +654,7 @@ module.exports = {
   getBankAccountStatusImportStatus,
   getBankAccountStatuses,
   listBankAccountStatuses,
+  listDistinctAccountOwners,
   importBankAccountStatusWorkbook,
   normalizeCert,
   normalizeStatus,

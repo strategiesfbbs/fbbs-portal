@@ -43,9 +43,20 @@
   let activeBankWorkspaceView = 'tear-sheet';
   let bankAssistantLastResponse = null;
   const bankAssistantCache = new Map();
+  const bankIntelligenceCache = new Map();
+  let bankIntelligenceRequestId = 0;
   let strategyRequests = [];
   let strategyCounts = {};
   let strategyNotifications = { requests: [], counts: {} };
+  let meState = {
+    rep: null,
+    knownReps: [],
+    work: null,
+    repsLoaded: false,
+    workLoading: false,
+    panelOpen: false,
+    searchQuery: ''
+  };
   let selectedBankStrategyHistory = [];
   let mbsCmoData = null;
   let structuredNotesData = null;
@@ -1588,6 +1599,349 @@
     renderHomeTileMarkets();
     renderHomeTileDaily();
     renderHomeTileStrategies();
+    renderMyWork();
+  }
+
+  // ============ My Work (rep identity) ============
+
+  async function loadMe() {
+    try {
+      const res = await fetch('/api/me', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      meState.rep = data.rep || null;
+    } catch (e) {
+      console.error('Failed to load /api/me:', e);
+      meState.rep = null;
+    }
+    renderRepPicker();
+    await loadMyWork();
+  }
+
+  async function loadKnownReps() {
+    if (meState.repsLoaded) return;
+    try {
+      const res = await fetch('/api/me/reps', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      meState.knownReps = Array.isArray(data.reps) ? data.reps : [];
+      meState.repsLoaded = true;
+    } catch (e) {
+      console.error('Failed to load /api/me/reps:', e);
+      meState.knownReps = [];
+    }
+    renderRepPickerList();
+  }
+
+  async function loadMyWork() {
+    if (meState.workLoading) return;
+    meState.workLoading = true;
+    try {
+      const res = await fetch('/api/me/work', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      meState.work = await res.json();
+    } catch (e) {
+      console.error('Failed to load /api/me/work:', e);
+      meState.work = null;
+    } finally {
+      meState.workLoading = false;
+    }
+    renderMyWork();
+  }
+
+  async function setRepOverride(rep) {
+    try {
+      const body = rep
+        ? { username: rep.username, displayName: rep.displayName }
+        : { username: null };
+      const res = await fetch('/api/me/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      meState.rep = data.rep || null;
+    } catch (e) {
+      console.error('Failed to set rep override:', e);
+    }
+    closeRepPanel();
+    renderRepPicker();
+    await loadMyWork();
+  }
+
+  function renderRepPicker() {
+    const nameEl = document.getElementById('repPickerName');
+    const hintEl = document.getElementById('repPickerHint');
+    const trigger = document.getElementById('repPickerTrigger');
+    if (!nameEl || !trigger) return;
+    const rep = meState.rep;
+    if (rep) {
+      nameEl.textContent = rep.displayName || rep.username;
+      trigger.classList.add('is-set');
+      if (hintEl) {
+        const sourceLabel = rep.source === 'iis'
+          ? 'Detected from Windows login'
+          : rep.source === 'env'
+            ? 'Default from FBBS_DEFAULT_REP'
+            : 'Manual override';
+        hintEl.textContent = sourceLabel;
+      }
+    } else {
+      nameEl.textContent = 'Set rep';
+      trigger.classList.remove('is-set');
+      if (hintEl) hintEl.textContent = 'No rep selected. My Work tiles stay empty until one is set.';
+    }
+  }
+
+  function renderRepPickerList() {
+    const listEl = document.getElementById('repPickerList');
+    if (!listEl) return;
+    const q = (meState.searchQuery || '').toLowerCase().trim();
+    const reps = meState.knownReps || [];
+    const filtered = q
+      ? reps.filter(r => (r.displayName || '').toLowerCase().includes(q) || (r.username || '').toLowerCase().includes(q))
+      : reps;
+    if (!filtered.length) {
+      listEl.innerHTML = '<li class="rep-picker-empty">No reps found. Import the account-statuses workbook first.</li>';
+      return;
+    }
+    const currentUsername = meState.rep && meState.rep.username ? meState.rep.username : '';
+    listEl.innerHTML = filtered.slice(0, 60).map(rep => {
+      const isCurrent = rep.username === currentUsername;
+      return `
+        <li>
+          <button type="button" class="rep-picker-item${isCurrent ? ' is-current' : ''}"
+                  data-rep-username="${escapeHtml(rep.username)}"
+                  data-rep-display="${escapeHtml(rep.displayName || rep.username)}">
+            <span class="rep-picker-item-name">${escapeHtml(rep.displayName || rep.username)}</span>
+            <span class="rep-picker-item-count">${formatNumber(rep.count || 0)}</span>
+          </button>
+        </li>
+      `;
+    }).join('');
+  }
+
+  function openRepPanel() {
+    const panel = document.getElementById('repPickerPanel');
+    const trigger = document.getElementById('repPickerTrigger');
+    if (!panel || !trigger) return;
+    panel.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    meState.panelOpen = true;
+    loadKnownReps();
+    const searchEl = document.getElementById('repPickerSearch');
+    if (searchEl) {
+      searchEl.value = '';
+      meState.searchQuery = '';
+      setTimeout(() => searchEl.focus(), 0);
+    }
+  }
+
+  function closeRepPanel() {
+    const panel = document.getElementById('repPickerPanel');
+    const trigger = document.getElementById('repPickerTrigger');
+    if (panel) panel.hidden = true;
+    if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    meState.panelOpen = false;
+  }
+
+  function setupRepPicker() {
+    const trigger = document.getElementById('repPickerTrigger');
+    const panel = document.getElementById('repPickerPanel');
+    const search = document.getElementById('repPickerSearch');
+    const clearBtn = document.getElementById('repPickerClear');
+    const listEl = document.getElementById('repPickerList');
+    if (!trigger || !panel) return;
+
+    trigger.addEventListener('click', evt => {
+      evt.stopPropagation();
+      if (meState.panelOpen) closeRepPanel();
+      else openRepPanel();
+    });
+
+    document.addEventListener('click', evt => {
+      if (!meState.panelOpen) return;
+      const wrapper = document.getElementById('repPicker');
+      if (wrapper && !wrapper.contains(evt.target)) closeRepPanel();
+    });
+
+    if (search) {
+      search.addEventListener('input', evt => {
+        meState.searchQuery = evt.target.value || '';
+        renderRepPickerList();
+      });
+    }
+
+    if (listEl) {
+      listEl.addEventListener('click', evt => {
+        const btn = evt.target.closest('[data-rep-username]');
+        if (!btn) return;
+        const username = btn.getAttribute('data-rep-username');
+        const displayName = btn.getAttribute('data-rep-display') || username;
+        setRepOverride({ username, displayName });
+      });
+    }
+
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => setRepOverride(null));
+    }
+  }
+
+  function renderMyWork() {
+    const section = document.getElementById('myWorkSection');
+    if (!section) return;
+    const heading = document.getElementById('myWorkHeading');
+    const sub = document.getElementById('myWorkSub');
+    const grid = document.getElementById('myWorkGrid');
+    const recents = document.getElementById('myWorkRecents');
+    const work = meState.work || null;
+    const rep = work && work.rep ? work.rep : meState.rep;
+
+    if (!rep) {
+      if (heading) heading.textContent = 'Pick a rep to personalize.';
+      if (sub) sub.textContent = 'Choose your name in the top bar (“Acting as”) to surface your accounts, prospects, open strategies, and overdue follow-ups.';
+      if (grid) grid.hidden = true;
+      if (recents) recents.hidden = true;
+      return;
+    }
+
+    const displayName = rep.displayName || rep.username;
+    if (heading) heading.textContent = `Acting as ${displayName}.`;
+    if (sub) {
+      const sourceLabel = rep.source === 'iis'
+        ? `Detected from Windows login (${rep.username}). Use the top bar to override.`
+        : rep.source === 'env'
+          ? 'Loaded from FBBS_DEFAULT_REP. Use the top bar to override.'
+          : 'Manual override active. Use the top bar to change or clear.';
+      sub.textContent = sourceLabel;
+    }
+    if (grid) grid.hidden = false;
+
+    const clients = (work && work.myClients) || { count: 0, recent: [] };
+    const prospects = (work && work.myProspects) || { count: 0, recent: [] };
+    const strategies = (work && work.myOpenStrategies) || { count: 0, recent: [], byStatus: {} };
+    const overdue = (work && work.myOverdueFollowups) || { count: 0, items: [] };
+
+    setMyWorkNum('clients', clients.count);
+    setMyWorkList('clients', clients.recent, row => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(row.displayName || 'Bank')}</span>
+          <span class="my-work-list-meta">${escapeHtml([row.city, row.state].filter(Boolean).join(', '))}</span>
+        </button>
+      </li>
+    `);
+
+    setMyWorkNum('prospects', prospects.count);
+    setMyWorkList('prospects', prospects.recent, row => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(row.displayName || 'Bank')}</span>
+          <span class="my-work-list-meta">${escapeHtml([row.city, row.state].filter(Boolean).join(', '))}</span>
+        </button>
+      </li>
+    `);
+
+    setMyWorkNum('strategies', strategies.count);
+    const stratBy = strategies.byStatus || {};
+    const stratParts = [];
+    if (stratBy['Open']) stratParts.push(`<strong>${formatNumber(stratBy['Open'])}</strong> open`);
+    if (stratBy['In Progress']) stratParts.push(`<strong>${formatNumber(stratBy['In Progress'])}</strong> in progress`);
+    if (stratBy['Needs Billed']) stratParts.push(`<strong>${formatNumber(stratBy['Needs Billed'])}</strong> needs billed`);
+    const stratDetail = document.querySelector('[data-mywork-detail="strategies"]');
+    if (stratDetail) stratDetail.innerHTML = stratParts.join(' &middot; ');
+    setMyWorkList('strategies', strategies.recent, row => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-strategy="${escapeHtml(row.id)}" data-mywork-bank="${escapeHtml(row.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(row.displayName || 'Bank')}</span>
+          <span class="my-work-list-meta">${escapeHtml(row.requestType)} &middot; ${escapeHtml(row.status)}</span>
+        </button>
+      </li>
+    `);
+
+    setMyWorkNum('overdue', overdue.count);
+    setMyWorkList('overdue', overdue.items, row => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(row.displayName || 'Bank')}</span>
+          <span class="my-work-list-meta">Due ${escapeHtml(row.nextActionDate || '')}</span>
+        </button>
+      </li>
+    `);
+
+    const recentItems = (work && work.recentlyTouched) || [];
+    if (recents) {
+      if (!recentItems.length) {
+        recents.hidden = true;
+      } else {
+        recents.hidden = false;
+        const list = document.getElementById('myWorkRecentList');
+        if (list) {
+          list.innerHTML = recentItems.map(item => {
+            const meta = [item.city, item.state].filter(Boolean).join(', ');
+            const when = item.at ? formatRelativeAt(item.at) : '';
+            return `
+              <li>
+                <button type="button" class="my-work-recent-link" data-mywork-bank="${escapeHtml(item.bankId)}"${item.strategyId ? ` data-mywork-strategy="${escapeHtml(item.strategyId)}"` : ''}>
+                  <span class="my-work-recent-kind">${escapeHtml(item.kind === 'strategy' ? 'Strategy' : 'Account')}</span>
+                  <span class="my-work-recent-name">${escapeHtml(item.displayName || 'Bank')}</span>
+                  <span class="my-work-recent-meta">${escapeHtml(item.detail || '')}${meta ? ` &middot; ${escapeHtml(meta)}` : ''}${when ? ` &middot; ${escapeHtml(when)}` : ''}</span>
+                </button>
+              </li>
+            `;
+          }).join('');
+        }
+      }
+    }
+  }
+
+  function setMyWorkNum(key, value) {
+    const el = document.querySelector(`[data-mywork-num="${key}"]`);
+    if (el) el.textContent = formatNumber(Number(value || 0));
+  }
+
+  function setMyWorkList(key, items, renderItem) {
+    const el = document.querySelector(`[data-mywork-list="${key}"]`);
+    if (!el) return;
+    if (!items || !items.length) {
+      el.innerHTML = '<li class="my-work-list-empty">None.</li>';
+      return;
+    }
+    el.innerHTML = items.map(renderItem).join('');
+  }
+
+  function formatRelativeAt(iso) {
+    if (!iso) return '';
+    const ms = Date.now() - new Date(iso).getTime();
+    if (!Number.isFinite(ms) || ms < 0) return iso.slice(0, 10);
+    const minutes = Math.floor(ms / 60000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return iso.slice(0, 10);
+  }
+
+  function setupMyWorkClicks() {
+    const section = document.getElementById('myWorkSection');
+    if (!section) return;
+    section.addEventListener('click', evt => {
+      const btn = evt.target.closest('[data-mywork-bank]');
+      if (!btn) return;
+      const bankId = btn.getAttribute('data-mywork-bank');
+      const strategyId = btn.getAttribute('data-mywork-strategy');
+      if (strategyId) {
+        goTo('strategies');
+        return;
+      }
+      if (bankId) {
+        goTo('banks');
+        if (typeof loadBank === 'function') loadBank(bankId, { collapseResults: true });
+      }
+    });
   }
 
   function setHomeTilePulse(numId, labelId, footId, opts) {
@@ -8496,6 +8850,7 @@
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
       ${renderBankPeerBanner(bank.peerComparison)}
+      ${renderBankIntelligencePanel(bank, values, recentPeriods)}
       ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
       ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13, bank.peerComparison)}
       ${renderBankCallReportSection('Loan Composition', bankLoanCompositionRows(), recentPeriods, 26, bank.peerComparison)}
@@ -8531,6 +8886,7 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
+    loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
       btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
     });
@@ -8541,6 +8897,266 @@
       btn.addEventListener('click', savePeerCohortPreference);
     });
     wireStrategyDropZones(profile);
+  }
+
+  function intelligenceNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function intelligencePeer(bank, key) {
+    return bank && bank.peerComparison && bank.peerComparison.byKey
+      ? bank.peerComparison.byKey[key]
+      : null;
+  }
+
+  function formatIntelligenceDelta(delta, type = 'percent') {
+    const n = intelligenceNumber(delta);
+    if (n === null) return '—';
+    const prefix = n > 0 ? '+' : n < 0 ? '-' : '';
+    const abs = Math.abs(n);
+    return type === 'money'
+      ? `${prefix}${formatMoney(abs, 0)}`
+      : `${prefix}${abs.toFixed(2)} pts`;
+  }
+
+  function intelligenceMetricTile(label, value, detail, tone = '') {
+    return `
+      <div class="bank-intel-tile ${escapeHtml(tone)}">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value || '—')}</strong>
+        <em>${escapeHtml(detail || '')}</em>
+      </div>
+    `;
+  }
+
+  function renderBankIntelligencePeerRows(bank, values) {
+    const rows = [
+      ['Securities / Assets', 'securitiesToAssets', 'percent'],
+      ['Loans / Assets', 'loansToAssets', 'percent'],
+      ['Loans / Deposits', 'loansToDeposits', 'percent'],
+      ['Yield on Securities', 'yieldOnSecurities', 'percent'],
+      ['NIM', 'netInterestMargin', 'percent'],
+      ['Liquid Assets / Assets', 'liquidAssetsToAssets', 'percent']
+    ].map(([label, key, type]) => {
+      const peer = intelligencePeer(bank, key);
+      const current = intelligenceNumber(values[key]);
+      const peerValue = peer ? intelligenceNumber(peer.peerValue) : null;
+      const delta = peer ? intelligenceNumber(peer.delta) : null;
+      return { label, key, type, current, peerValue, delta };
+    }).filter(row => row.current !== null || row.peerValue !== null);
+    if (!rows.length) {
+      return '<div class="bank-search-empty">Peer averages are not available for this bank yet.</div>';
+    }
+    return `
+      <div class="bank-intel-peer-table">
+        ${rows.map(row => `
+          <div>
+            <span>${escapeHtml(row.label)}</span>
+            <strong>${escapeHtml(formatBankValue(row.current, row.type))}</strong>
+            <em>Peer ${escapeHtml(formatBankValue(row.peerValue, row.type))} · ${escapeHtml(formatIntelligenceDelta(row.delta, row.type))}</em>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function renderBankMixBar(values) {
+    const loans = Math.max(0, intelligenceNumber(values.loansToAssets) || 0);
+    const securities = Math.max(0, intelligenceNumber(values.securitiesToAssets) || 0);
+    const liquid = Math.max(0, intelligenceNumber(values.liquidAssetsToAssets) || 0);
+    const known = loans + securities + liquid;
+    const other = Math.max(0, 100 - known);
+    const rows = [
+      ['Loans', loans, 'loan'],
+      ['Securities', securities, 'securities'],
+      ['Liquid Assets', liquid, 'liquid'],
+      ['Other', other, 'other']
+    ].filter(([, value]) => value > 0);
+    return `
+      <div class="bank-intel-mix">
+        <div class="bank-intel-mix-bar" aria-label="Current balance sheet mix">
+          ${rows.map(([label, value, cls]) => `<span class="${escapeHtml(cls)}" style="width:${Math.max(2, Math.min(100, value)).toFixed(2)}%" title="${escapeHtml(label)} ${escapeHtml(formatPercentTile(value, 2))}"></span>`).join('')}
+        </div>
+        <div class="bank-intel-mix-legend">
+          ${rows.map(([label, value, cls]) => `<span><i class="${escapeHtml(cls)}"></i>${escapeHtml(label)} ${escapeHtml(formatPercentTile(value, 1))}</span>`).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderIntelligenceBreakdown(title, rows, total) {
+    const cleaned = rows
+      .map(row => ({ ...row, amount: intelligenceNumber(row.amount) || 0 }))
+      .filter(row => row.amount > 0)
+      .sort((a, b) => b.amount - a.amount);
+    if (!cleaned.length) return '';
+    return `
+      <div class="bank-intel-breakdown">
+        <h4>${escapeHtml(title)}</h4>
+        ${cleaned.slice(0, 8).map(row => {
+          const pct = total ? row.amount / total * 100 : 0;
+          return `
+            <div class="bank-intel-breakdown-row">
+              <span>${escapeHtml(row.label)}</span>
+              <div><i style="width:${Math.max(3, Math.min(100, pct)).toFixed(2)}%"></i></div>
+              <strong>${escapeHtml(formatPercentTile(pct, 1))}</strong>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function renderBankIntelligencePanel(bank, values, recentPeriods) {
+    const latest = recentPeriods && recentPeriods[0] ? recentPeriods[0] : null;
+    const prior = recentPeriods && recentPeriods[1] ? recentPeriods[1] : null;
+    const priorValues = prior && prior.values ? prior.values : {};
+    const securitiesTotal = (intelligenceNumber(values.afsTotal) || 0) + (intelligenceNumber(values.htmTotal) || 0);
+    const mbsTotal = sumBankValues(values, ['afsAllMbs', 'htmAllMbs'])
+      || sumBankValues(values, ['afsPassThroughRmbs', 'afsOtherRmbs', 'htmPassThroughRmbs', 'htmOtherRmbs']);
+    const muniTotal = sumBankValues(values, ['afsMunis', 'htmMunis']);
+    const agenciesTotal = sumBankValues(values, ['afsAgencyCorp', 'htmAgencyCorp']);
+    const treasuryTotal = sumBankValues(values, ['afsTreasury', 'htmTreasury']);
+    const otherSecurities = Math.max(0, securitiesTotal - [mbsTotal, muniTotal, agenciesTotal, treasuryTotal].reduce((sum, value) => sum + (value || 0), 0));
+    const loansTotal = intelligenceNumber(values.totalLoans) || 0;
+    const loanRows = [
+      { label: 'Real Estate', pct: intelligenceNumber(values.realEstateLoansToLoans) },
+      { label: 'C&I', pct: intelligenceNumber(values.ciLoansToLoans) },
+      { label: 'Farm / Ag', pct: (intelligenceNumber(values.farmLoansToLoans) || 0) + (intelligenceNumber(values.agProdLoansToLoans) || 0) },
+      { label: 'Consumer', pct: intelligenceNumber(values.consumerLoansToLoans) }
+    ].filter(row => row.pct != null && row.pct > 0);
+    const loanKnown = loanRows.reduce((sum, row) => sum + row.pct, 0);
+    if (loanKnown < 100 && loanKnown > 0) loanRows.push({ label: 'Other Loans', pct: Math.max(0, 100 - loanKnown) });
+    const qoqAssets = intelligenceNumber(values.totalAssets) !== null && intelligenceNumber(priorValues.totalAssets) !== null
+      ? intelligenceNumber(values.totalAssets) - intelligenceNumber(priorValues.totalAssets)
+      : null;
+    const qoqDeposits = intelligenceNumber(values.totalDeposits) !== null && intelligenceNumber(priorValues.totalDeposits) !== null
+      ? intelligenceNumber(values.totalDeposits) - intelligenceNumber(priorValues.totalDeposits)
+      : null;
+    const portfolioMeta = bank && bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
+    const peerLabel = bank && bank.peerComparison && bank.peerComparison.peerGroup ? bank.peerComparison.peerGroup.label : '';
+    return `
+      <section class="bank-section bank-intelligence-section">
+        <div class="bank-section-title">Performance & Portfolio Intelligence</div>
+        <div class="bank-intel-head">
+          <div>
+            <strong>${escapeHtml(latest && latest.period ? `Latest call report ${latest.period}` : 'Latest call report')}</strong>
+            <span>${escapeHtml(peerLabel ? `Peer cohort: ${peerLabel}` : 'Peer cohort appears after averaged-series import.')}</span>
+          </div>
+          <div class="bank-intel-actions">
+            <button type="button" class="text-btn" data-bank-assistant-action="call">AI Call Prep</button>
+            <button type="button" class="text-btn" id="bankIntelPortfolioReportBtn">Open Portfolio Review</button>
+          </div>
+        </div>
+        <div class="bank-intel-grid">
+          <div class="bank-intel-card bank-intel-card-wide">
+            <h4>Current Balance Sheet Mix</h4>
+            ${renderBankMixBar(values)}
+          </div>
+          <div class="bank-intel-card">
+            <h4>Snapshot</h4>
+            <div class="bank-intel-tiles">
+              ${intelligenceMetricTile('Assets', formatBankValue(values.totalAssets, 'money'), qoqAssets === null ? 'QoQ unavailable' : `QoQ ${formatIntelligenceDelta(qoqAssets, 'money')}`)}
+              ${intelligenceMetricTile('Deposits', formatBankValue(values.totalDeposits, 'money'), qoqDeposits === null ? 'QoQ unavailable' : `QoQ ${formatIntelligenceDelta(qoqDeposits, 'money')}`)}
+              ${intelligenceMetricTile('Securities / Assets', formatBankValue(values.securitiesToAssets, 'percent'), `Peer ${formatBankValue(intelligencePeer(bank, 'securitiesToAssets') && intelligencePeer(bank, 'securitiesToAssets').peerValue, 'percent')}`)}
+              ${intelligenceMetricTile('Loans / Deposits', formatBankValue(values.loansToDeposits, 'percent'), `Peer ${formatBankValue(intelligencePeer(bank, 'loansToDeposits') && intelligencePeer(bank, 'loansToDeposits').peerValue, 'percent')}`)}
+            </div>
+          </div>
+          <div class="bank-intel-card">
+            <h4>Peer Analytics</h4>
+            ${renderBankIntelligencePeerRows(bank, values)}
+          </div>
+          <div class="bank-intel-card">
+            ${renderIntelligenceBreakdown('Securities Mix', [
+              { label: 'Agencies / Corporates', amount: agenciesTotal },
+              { label: 'Municipals', amount: muniTotal },
+              { label: 'MBS / Structured', amount: mbsTotal },
+              { label: 'Treasuries', amount: treasuryTotal },
+              { label: 'Other', amount: otherSecurities }
+            ], securitiesTotal) || '<h4>Securities Mix</h4><div class="bank-search-empty">No securities mix available.</div>'}
+          </div>
+          <div class="bank-intel-card">
+            ${renderIntelligenceBreakdown('Loan Mix', loanRows.map(row => ({ label: row.label, amount: loansTotal ? loansTotal * row.pct / 100 : row.pct })), loansTotal || 100) || '<h4>Loan Mix</h4><div class="bank-search-empty">No loan mix available.</div>'}
+          </div>
+          <div class="bank-intel-card bank-intel-card-wide">
+            <h4>THC Portfolio Feed</h4>
+            <div id="bankPortfolioIntelligenceMount" class="bank-intel-portfolio">
+              ${portfolioMeta
+                ? `<div class="bank-search-empty">Loading matched THC portfolio workbook summary for ${escapeHtml(formatShortDate(portfolioMeta.latestReportDate || ''))}...</div>`
+                : '<div class="bank-search-empty">No THC bond-accounting workbook is matched to this bank yet.</div>'}
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+  }
+
+  async function loadBankIntelligence(bankId) {
+    const requestId = ++bankIntelligenceRequestId;
+    const mount = document.getElementById('bankPortfolioIntelligenceMount');
+    const portfolioBtn = document.getElementById('bankIntelPortfolioReportBtn');
+    if (portfolioBtn) portfolioBtn.addEventListener('click', () => openBankReportBuilder('portfolio-peer'));
+    const bank = selectedBank && selectedBank.bank && String(selectedBank.bank.id) === String(bankId) ? selectedBank.bank : null;
+    if (!mount || !bank || !bank.bondAccounting || !bank.bondAccounting.available) return;
+    try {
+      let data = bankIntelligenceCache.get(String(bankId));
+      if (!data) {
+        const res = await fetch(`/api/portfolio-review?bankId=${encodeURIComponent(bankId)}&limit=4`, { cache: 'no-store' });
+        data = await readBankJson(res);
+        bankIntelligenceCache.set(String(bankId), data);
+      }
+      if (requestId !== bankIntelligenceRequestId) return;
+      mount.innerHTML = renderBankPortfolioIntelligence(data);
+    } catch (err) {
+      if (requestId !== bankIntelligenceRequestId) return;
+      mount.innerHTML = `<div class="bank-search-empty">${escapeHtml(err.message || 'Could not load portfolio intelligence.')}</div>`;
+    }
+  }
+
+  function renderBankPortfolioIntelligence(data) {
+    if (!data || data.available === false) {
+      return `<div class="bank-search-empty">${escapeHtml(data && data.notice || 'No parsed portfolio workbook is available.')}</div>`;
+    }
+    const summary = data.summary || {};
+    const topFlags = Array.isArray(data.flags) ? data.flags.slice(0, 4) : [];
+    const topLosses = data.screens && Array.isArray(data.screens.topLosses) ? data.screens.topLosses.slice(0, 4) : [];
+    return `
+      <div class="bank-intel-portfolio-grid">
+        ${intelligenceMetricTile('Market Value', formatMoney(summary.marketValue), `${formatNumber(summary.positions)} positions`)}
+        ${intelligenceMetricTile('Unrealized G/L', formatMoney(summary.gainLoss), formatPercentTile(summary.gainLossPct, 2), (summary.gainLoss || 0) < 0 ? 'warn' : 'good')}
+        ${intelligenceMetricTile('Book Yield', formatReviewYield(summary.bookYield), `Market ${formatReviewYield(summary.marketYield)}`)}
+        ${intelligenceMetricTile('WAL / Duration', [summary.weightedAverageLife != null ? summary.weightedAverageLife.toFixed(2) : '', summary.effectiveDuration != null ? summary.effectiveDuration.toFixed(2) : ''].filter(Boolean).join(' / ') || '—', 'Weighted average')}
+      </div>
+      <div class="bank-intel-portfolio-body">
+        <div>
+          <h5>Review Flags</h5>
+          <div class="bank-intel-flag-list">
+            ${topFlags.length ? topFlags.map(flag => `
+              <span class="${flag.severity === 'High' ? 'high' : ''}">
+                <strong>${escapeHtml(flag.type || 'Flag')}</strong>
+                <em>${escapeHtml(flag.text || '')}</em>
+              </span>
+            `).join('') : '<div class="bank-search-empty">No portfolio flags surfaced.</div>'}
+          </div>
+        </div>
+        <div>
+          <h5>Largest Loss Positions</h5>
+          ${topLosses.length ? `
+            <div class="bank-intel-loss-list">
+              ${topLosses.map(row => `
+                <div>
+                  <span>${escapeHtml(row.cusip || '')}</span>
+                  <strong>${escapeHtml(row.description || 'Holding')}</strong>
+                  <em>${escapeHtml([formatMoney(row.gainLoss), formatPercentTile(row.gainLossPct, 2), row.sector].filter(Boolean).join(' · '))}</em>
+                </div>
+              `).join('')}
+            </div>
+          ` : '<div class="bank-search-empty">No loss positions parsed.</div>'}
+        </div>
+      </div>
+    `;
   }
 
   function renderBankUploadedFilesPanel(bank) {
@@ -13750,6 +14366,9 @@
     loadStrategyNotifications();
     loadBankStatus();
     loadArchive();
+    setupRepPicker();
+    setupMyWorkClicks();
+    loadMe();
     setupHome();
     setupHomePolish();
     setupUpload();

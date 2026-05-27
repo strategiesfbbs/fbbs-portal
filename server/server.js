@@ -100,8 +100,16 @@ const {
   getBankAccountStatuses,
   importBankAccountStatusWorkbook,
   listBankAccountStatuses,
+  listDistinctAccountOwners,
   upsertBankAccountStatus
 } = require('./bank-account-status-store');
+const {
+  aggregateRepsFromOwnerStrings,
+  buildRepOverrideCookie,
+  clearRepOverrideCookieHeader,
+  ownerStringContainsRep,
+  resolveRequestRep
+} = require('./rep-identity');
 const {
   addStrategyRequestFile,
   createStrategyRequest,
@@ -5689,6 +5697,187 @@ async function publishPackageFiles(files, res, options = {}) {
   });
 }
 
+// ---------- Rep identity / My Work ----------
+
+function sendJSONWithHeaders(res, status, data, extraHeaders) {
+  const body = JSON.stringify(data);
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+    ...(extraHeaders || {})
+  };
+  res.writeHead(status, headers);
+  res.end(body);
+}
+
+function summarizeRepBank(row) {
+  return {
+    bankId: row.bankId || '',
+    displayName: row.displayName || row.legalName || '',
+    city: row.city || '',
+    state: row.state || '',
+    certNumber: row.certNumber || '',
+    status: row.status || '',
+    owner: row.owner || '',
+    updatedAt: row.updatedAt || ''
+  };
+}
+
+function summarizeRepStrategy(row) {
+  return {
+    id: row.id,
+    bankId: row.bankId,
+    displayName: row.displayName || '',
+    city: row.city || '',
+    state: row.state || '',
+    requestType: row.requestType || '',
+    status: row.status || '',
+    priority: row.priority || '',
+    assignedTo: row.assignedTo || '',
+    requestedBy: row.requestedBy || '',
+    summary: row.summary || '',
+    updatedAt: row.updatedAt || '',
+    createdAt: row.createdAt || ''
+  };
+}
+
+function buildMyWorkResponse(rep) {
+  // Build a "no rep set" envelope so the client can render a prompt without crashing.
+  if (!rep) {
+    return {
+      rep: null,
+      myClients: { count: 0, recent: [] },
+      myProspects: { count: 0, recent: [] },
+      myOpenStrategies: { count: 0, recent: [], byStatus: { Open: 0, 'In Progress': 0, 'Needs Billed': 0 } },
+      myOverdueFollowups: { count: 0, items: [] },
+      recentlyTouched: []
+    };
+  }
+
+  const accountRows = listBankAccountStatuses(BANK_REPORTS_DIR, { limit: 1000, sort: 'updated' }) || [];
+  const myAccounts = accountRows.filter(row => ownerStringContainsRep(row.owner, rep));
+  const myClients = myAccounts.filter(row => row.status === 'Client');
+  const myProspects = myAccounts.filter(row => row.status === 'Prospect');
+
+  const strategyResult = listStrategyRequests(BANK_REPORTS_DIR, { archived: '' }) || { requests: [], counts: {} };
+  const openStatuses = new Set(['Open', 'In Progress', 'Needs Billed']);
+  const myStrategies = (strategyResult.requests || []).filter(req => {
+    if (!openStatuses.has(req.status)) return false;
+    return (
+      ownerStringContainsRep(req.assignedTo, rep) ||
+      ownerStringContainsRep(req.requestedBy, rep)
+    );
+  });
+  const stratByStatus = { Open: 0, 'In Progress': 0, 'Needs Billed': 0 };
+  myStrategies.forEach(req => {
+    if (stratByStatus[req.status] !== undefined) stratByStatus[req.status] += 1;
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
+  const myOverdue = savedBanks.filter(row => {
+    if (!ownerStringContainsRep(row.owner, rep)) return false;
+    if (!row.nextActionDate) return false;
+    return String(row.nextActionDate).slice(0, 10) < today;
+  });
+
+  // Recently touched: union of my accounts + my strategies, sorted by updatedAt desc.
+  const touchedEntries = [];
+  myAccounts.slice(0, 50).forEach(row => {
+    touchedEntries.push({
+      kind: 'account',
+      at: row.updatedAt || '',
+      bankId: row.bankId,
+      displayName: row.displayName || row.legalName || '',
+      city: row.city || '',
+      state: row.state || '',
+      detail: row.status ? `Status: ${row.status}` : ''
+    });
+  });
+  myStrategies.slice(0, 50).forEach(req => {
+    touchedEntries.push({
+      kind: 'strategy',
+      at: req.updatedAt || req.createdAt || '',
+      bankId: req.bankId,
+      displayName: req.displayName,
+      city: req.city || '',
+      state: req.state || '',
+      detail: `${req.requestType} · ${req.status}`,
+      strategyId: req.id
+    });
+  });
+  touchedEntries.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+  const recentlyTouched = touchedEntries.slice(0, 8);
+
+  return {
+    rep,
+    myClients: {
+      count: myClients.length,
+      recent: myClients.slice(0, 5).map(summarizeRepBank)
+    },
+    myProspects: {
+      count: myProspects.length,
+      recent: myProspects.slice(0, 5).map(summarizeRepBank)
+    },
+    myOpenStrategies: {
+      count: myStrategies.length,
+      recent: myStrategies.slice(0, 5).map(summarizeRepStrategy),
+      byStatus: stratByStatus
+    },
+    myOverdueFollowups: {
+      count: myOverdue.length,
+      items: myOverdue.slice(0, 8).map(row => ({
+        bankId: row.bankId,
+        displayName: row.displayName,
+        city: row.city || '',
+        state: row.state || '',
+        nextActionDate: row.nextActionDate,
+        priority: row.priority,
+        status: row.status
+      }))
+    },
+    recentlyTouched
+  };
+}
+
+function listKnownReps() {
+  try {
+    const distinct = listDistinctAccountOwners(BANK_REPORTS_DIR) || [];
+    return aggregateRepsFromOwnerStrings(distinct);
+  } catch (err) {
+    log('warn', 'listKnownReps failed:', err.message);
+    return [];
+  }
+}
+
+async function handleMeOverride(req, res) {
+  try {
+    const body = await readJsonBody(req, 8 * 1024);
+    const username = body && body.username !== undefined ? body.username : undefined;
+    const displayName = body && body.displayName ? String(body.displayName) : '';
+    if (username === null || username === '') {
+      return sendJSONWithHeaders(res, 200, { rep: null, cleared: true }, {
+        'Set-Cookie': clearRepOverrideCookieHeader()
+      });
+    }
+    if (!username) {
+      return sendJSON(res, 400, { error: 'username is required' });
+    }
+    const trimmed = String(username).trim().slice(0, 120);
+    if (!trimmed) return sendJSON(res, 400, { error: 'username is required' });
+    const cookieValue = displayName ? `${displayName}|${trimmed}` : trimmed;
+    appendAuditLog({ event: 'me-override', username: trimmed });
+    return sendJSONWithHeaders(res, 200, {
+      rep: { username: trimmed.toLowerCase().replace(/\s+/g, ''), displayName: displayName || trimmed, source: 'cookie' }
+    }, {
+      'Set-Cookie': buildRepOverrideCookie(cookieValue)
+    });
+  } catch (err) {
+    return sendJSON(res, 400, { error: err.message || 'Could not set rep override' });
+  }
+}
+
 // ---------- Request router ----------
 
 const server = http.createServer(async (req, res) => {
@@ -5753,6 +5942,24 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/health' && req.method === 'GET') {
       return sendJSON(res, 200, { status: 'ok', now: new Date().toISOString(), build: PORTAL_BUILD });
+    }
+
+    if (pathname === '/api/me' && req.method === 'GET') {
+      const rep = resolveRequestRep(req);
+      return sendJSON(res, 200, { rep });
+    }
+
+    if (pathname === '/api/me/reps' && req.method === 'GET') {
+      return sendJSON(res, 200, { reps: listKnownReps() });
+    }
+
+    if (pathname === '/api/me/override' && req.method === 'POST') {
+      return await handleMeOverride(req, res);
+    }
+
+    if (pathname === '/api/me/work' && req.method === 'GET') {
+      const rep = resolveRequestRep(req);
+      return sendJSON(res, 200, buildMyWorkResponse(rep));
     }
 
     if (pathname === '/api/daily-intelligence' && req.method === 'GET') {

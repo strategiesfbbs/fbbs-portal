@@ -215,6 +215,23 @@
         <a href="https://fbbsinc.com" target="_blank" rel="noopener">fbbsinc.com</a>
       </div>
     </div>
+    <div class="rep-picker" id="repPicker">
+      <button type="button" class="rep-picker-trigger" id="repPickerTrigger" aria-haspopup="true" aria-expanded="false">
+        <span class="rep-picker-kicker">Acting as</span>
+        <span class="rep-picker-name" id="repPickerName">Set rep</span>
+        <span class="rep-picker-caret" aria-hidden="true">&#8964;</span>
+      </button>
+      <div class="rep-picker-panel" id="repPickerPanel" hidden>
+        <p class="rep-picker-hint" id="repPickerHint"></p>
+        <div class="rep-picker-search">
+          <input type="search" id="repPickerSearch" placeholder="Search rep&hellip;" autocomplete="off">
+        </div>
+        <ul class="rep-picker-list" id="repPickerList"></ul>
+        <div class="rep-picker-actions">
+          <button type="button" class="rep-picker-clear" id="repPickerClear">Clear override</button>
+        </div>
+      </div>
+    </div>
   </div>
 </header>
 
@@ -235,6 +252,43 @@
   </section>
 
   <div class="container">
+    <section class="my-work" id="myWorkSection" aria-label="My work">
+      <header class="my-work-head">
+        <div>
+          <p class="my-work-kicker">My Work</p>
+          <h3 id="myWorkHeading">Pick a rep to personalize.</h3>
+        </div>
+        <p class="my-work-sub" id="myWorkSub">Choose your name in the top bar (&ldquo;Acting as&rdquo;) to surface your accounts, prospects, open strategies, and overdue follow-ups.</p>
+      </header>
+      <div class="my-work-grid" id="myWorkGrid" hidden>
+        <article class="my-work-tile" data-mywork="clients">
+          <p class="my-work-tile-kicker">My Clients</p>
+          <p class="my-work-tile-num" data-mywork-num="clients">&mdash;</p>
+          <ul class="my-work-tile-list" data-mywork-list="clients"></ul>
+        </article>
+        <article class="my-work-tile" data-mywork="prospects">
+          <p class="my-work-tile-kicker">My Prospects</p>
+          <p class="my-work-tile-num" data-mywork-num="prospects">&mdash;</p>
+          <ul class="my-work-tile-list" data-mywork-list="prospects"></ul>
+        </article>
+        <article class="my-work-tile" data-mywork="strategies">
+          <p class="my-work-tile-kicker">My Open Strategies</p>
+          <p class="my-work-tile-num" data-mywork-num="strategies">&mdash;</p>
+          <p class="my-work-tile-detail" data-mywork-detail="strategies"></p>
+          <ul class="my-work-tile-list" data-mywork-list="strategies"></ul>
+        </article>
+        <article class="my-work-tile my-work-tile-warn" data-mywork="overdue">
+          <p class="my-work-tile-kicker">Overdue Follow-ups</p>
+          <p class="my-work-tile-num" data-mywork-num="overdue">&mdash;</p>
+          <ul class="my-work-tile-list" data-mywork-list="overdue"></ul>
+        </article>
+      </div>
+      <div class="my-work-recents" id="myWorkRecents" hidden>
+        <h4>Recently touched</h4>
+        <ul class="my-work-recent-list" id="myWorkRecentList"></ul>
+      </div>
+    </section>
+
     <section class="home-tile-grid" aria-label="Home sections">
       <article class="home-tile" data-tile="accounts" data-reveal>
         <header class="home-tile-head">
