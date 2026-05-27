@@ -107,14 +107,55 @@ function ensureCoverageDatabase(outputDir) {
       ref_type TEXT,
       ref_id TEXT
     );
+    CREATE TABLE IF NOT EXISTS bank_product_fit (
+      id TEXT PRIMARY KEY,
+      bank_id TEXT NOT NULL,
+      cert_number TEXT,
+      product TEXT NOT NULL,
+      notes TEXT,
+      flagged_by_username TEXT,
+      flagged_by_display TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(bank_id, product)
+    );
+    CREATE TABLE IF NOT EXISTS billing_queue (
+      id TEXT PRIMARY KEY,
+      ref_type TEXT NOT NULL,
+      ref_id TEXT NOT NULL,
+      bank_id TEXT NOT NULL,
+      cert_number TEXT,
+      summary TEXT,
+      amount REAL,
+      state TEXT NOT NULL DEFAULT 'Pending',
+      enqueued_at TEXT NOT NULL,
+      billed_at TEXT,
+      billed_by TEXT,
+      notes TEXT,
+      UNIQUE(ref_type, ref_id)
+    );
     CREATE INDEX IF NOT EXISTS idx_bank_coverage_priority ON bank_coverage(priority, next_action_date);
     CREATE INDEX IF NOT EXISTS idx_bank_notes_bank_created ON bank_notes(bank_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_bank_contacts_bank ON bank_contacts(bank_id, is_primary DESC, name COLLATE NOCASE ASC);
     CREATE INDEX IF NOT EXISTS idx_bank_activities_bank_at ON bank_activities(bank_id, at DESC);
     CREATE INDEX IF NOT EXISTS idx_bank_activities_actor_at ON bank_activities(actor_username, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bank_product_fit_bank ON bank_product_fit(bank_id);
+    CREATE INDEX IF NOT EXISTS idx_billing_queue_state_enqueued ON billing_queue(state, enqueued_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_billing_queue_bank ON billing_queue(bank_id);
   `);
   return dbPath;
 }
+
+const PRODUCT_FIT_PRODUCTS = [
+  'CD Funding',
+  'Muni Credit / BCIS',
+  'ALM / IRR',
+  'Bond Swap',
+  'Portfolio Accounting',
+  'CECL Analysis'
+];
+
+const BILLING_STATES = new Set(['Pending', 'Invoiced', 'Paid', 'Waived']);
 
 function cleanText(value, maxLength = 200) {
   if (value === undefined || value === null) return null;
@@ -672,20 +713,292 @@ function listRecentActivitiesByActor(outputDir, actorUsername, options = {}) {
   return rows.map(mapActivityRow);
 }
 
+// ---------- Product fit ----------
+
+function productFitSelectSql(where = '1 = 1') {
+  return `
+    SELECT
+      id AS id,
+      bank_id AS bankId,
+      cert_number AS certNumber,
+      product AS product,
+      notes AS notes,
+      flagged_by_username AS flaggedByUsername,
+      flagged_by_display AS flaggedByDisplay,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM bank_product_fit
+    WHERE ${where}
+  `;
+}
+
+function mapProductFitRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    bankId: row.bankId,
+    certNumber: row.certNumber || '',
+    product: row.product || '',
+    notes: row.notes || '',
+    flaggedByUsername: row.flaggedByUsername || '',
+    flaggedByDisplay: row.flaggedByDisplay || '',
+    createdAt: row.createdAt || '',
+    updatedAt: row.updatedAt || ''
+  };
+}
+
+function listProductFitForBank(outputDir, bankId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(bankId || '');
+  if (!id) return [];
+  const rows = querySqliteJson(dbPath, `
+    ${productFitSelectSql(`bank_id = ${sqlString(id)}`)}
+    ORDER BY product COLLATE NOCASE ASC;
+  `);
+  return rows.map(mapProductFitRow);
+}
+
+function listProductFitForBanks(outputDir, bankIds = []) {
+  const ids = [...new Set((bankIds || []).map(id => String(id || '').trim()).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    ${productFitSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)}
+    ORDER BY product COLLATE NOCASE ASC;
+  `);
+  const byBank = new Map(ids.map(id => [id, []]));
+  rows.forEach(row => {
+    const fit = mapProductFitRow(row);
+    if (!fit) return;
+    if (!byBank.has(fit.bankId)) byBank.set(fit.bankId, []);
+    byBank.get(fit.bankId).push(fit);
+  });
+  return byBank;
+}
+
+function getProductFitById(outputDir, id) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `${productFitSelectSql(`id = ${sqlString(String(id || ''))}`)} LIMIT 1;`);
+  return rows.length ? mapProductFitRow(rows[0]) : null;
+}
+
+function upsertProductFit(outputDir, bankSummary, input = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const summary = normalizeBankSummary(bankSummary);
+  if (!summary.bankId) throw new Error('Bank ID is required');
+  const product = cleanText(input.product, 80);
+  if (!product) throw new Error('Product is required');
+  if (!PRODUCT_FIT_PRODUCTS.includes(product)) throw new Error(`Unknown product: ${product}`);
+  const notes = cleanMultilineText(input.notes, 1000);
+  const now = new Date().toISOString();
+
+  // Try update first.
+  const existing = querySqliteJson(dbPath, `
+    ${productFitSelectSql(`bank_id = ${sqlString(summary.bankId)} AND product = ${sqlString(product)}`)}
+    LIMIT 1;
+  `).map(mapProductFitRow)[0];
+
+  if (existing) {
+    runSqlite(dbPath, `
+      UPDATE bank_product_fit SET
+        notes = ${sqlString(notes !== null ? notes : existing.notes)},
+        flagged_by_username = ${sqlString(cleanText(input.flaggedByUsername, 80) || existing.flaggedByUsername)},
+        flagged_by_display = ${sqlString(cleanText(input.flaggedByDisplay, 200) || existing.flaggedByDisplay)},
+        updated_at = ${sqlString(now)}
+      WHERE id = ${sqlString(existing.id)};
+    `);
+    return getProductFitById(outputDir, existing.id);
+  }
+
+  const id = crypto.randomUUID();
+  runSqlite(dbPath, `
+    INSERT INTO bank_product_fit (
+      id, bank_id, cert_number, product, notes,
+      flagged_by_username, flagged_by_display, created_at, updated_at
+    ) VALUES (
+      ${sqlString(id)},
+      ${sqlString(summary.bankId)},
+      ${sqlString(summary.certNumber)},
+      ${sqlString(product)},
+      ${sqlString(notes)},
+      ${sqlString(cleanText(input.flaggedByUsername, 80))},
+      ${sqlString(cleanText(input.flaggedByDisplay, 200))},
+      ${sqlString(now)},
+      ${sqlString(now)}
+    );
+  `);
+  return getProductFitById(outputDir, id);
+}
+
+function deleteProductFit(outputDir, id) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const existing = getProductFitById(outputDir, id);
+  runSqlite(dbPath, `DELETE FROM bank_product_fit WHERE id = ${sqlString(String(id || ''))};`);
+  return existing;
+}
+
+// ---------- Billing queue ----------
+
+function billingSelectSql(where = '1 = 1') {
+  return `
+    SELECT
+      id AS id,
+      ref_type AS refType,
+      ref_id AS refId,
+      bank_id AS bankId,
+      cert_number AS certNumber,
+      summary AS summary,
+      amount AS amount,
+      state AS state,
+      enqueued_at AS enqueuedAt,
+      billed_at AS billedAt,
+      billed_by AS billedBy,
+      notes AS notes
+    FROM billing_queue
+    WHERE ${where}
+  `;
+}
+
+function mapBillingRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    refType: row.refType || '',
+    refId: row.refId || '',
+    bankId: row.bankId || '',
+    certNumber: row.certNumber || '',
+    summary: row.summary || '',
+    amount: row.amount == null ? null : Number(row.amount),
+    state: row.state || 'Pending',
+    enqueuedAt: row.enqueuedAt || '',
+    billedAt: row.billedAt || '',
+    billedBy: row.billedBy || '',
+    notes: row.notes || ''
+  };
+}
+
+function listBillingQueue(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const state = cleanText(options.state, 40);
+  const where = state ? `state = ${sqlString(state)}` : '1 = 1';
+  const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 500), 2000));
+  const rows = querySqliteJson(dbPath, `
+    ${billingSelectSql(where)}
+    ORDER BY
+      CASE state WHEN 'Pending' THEN 1 WHEN 'Invoiced' THEN 2 WHEN 'Paid' THEN 3 ELSE 4 END,
+      enqueued_at DESC
+    LIMIT ${limit};
+  `);
+  return rows.map(mapBillingRow);
+}
+
+function getBillingItem(outputDir, id) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `${billingSelectSql(`id = ${sqlString(String(id || ''))}`)} LIMIT 1;`);
+  return rows.length ? mapBillingRow(rows[0]) : null;
+}
+
+function enqueueBilling(outputDir, payload = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const refType = cleanText(payload.refType, 40);
+  const refId = cleanText(payload.refId, 80);
+  const bankId = cleanText(payload.bankId, 80);
+  if (!refType || !refId || !bankId) return null;
+
+  const existing = querySqliteJson(dbPath, `
+    ${billingSelectSql(`ref_type = ${sqlString(refType)} AND ref_id = ${sqlString(refId)}`)}
+    LIMIT 1;
+  `).map(mapBillingRow)[0];
+
+  const now = new Date().toISOString();
+  if (existing) {
+    runSqlite(dbPath, `
+      UPDATE billing_queue SET
+        summary = ${sqlString(cleanText(payload.summary, 500) || existing.summary)},
+        amount = ${sqlNumber(payload.amount != null ? payload.amount : existing.amount)},
+        cert_number = ${sqlString(cleanText(payload.certNumber, 40) || existing.certNumber)},
+        notes = ${sqlString(cleanText(payload.notes, 2000) !== null ? cleanText(payload.notes, 2000) : existing.notes)}
+      WHERE id = ${sqlString(existing.id)};
+    `);
+    return getBillingItem(outputDir, existing.id);
+  }
+  const id = crypto.randomUUID();
+  runSqlite(dbPath, `
+    INSERT INTO billing_queue (
+      id, ref_type, ref_id, bank_id, cert_number, summary, amount, state,
+      enqueued_at, notes
+    ) VALUES (
+      ${sqlString(id)},
+      ${sqlString(refType)},
+      ${sqlString(refId)},
+      ${sqlString(bankId)},
+      ${sqlString(cleanText(payload.certNumber, 40))},
+      ${sqlString(cleanText(payload.summary, 500))},
+      ${sqlNumber(payload.amount)},
+      ${sqlString('Pending')},
+      ${sqlString(now)},
+      ${sqlString(cleanText(payload.notes, 2000))}
+    );
+  `);
+  return getBillingItem(outputDir, id);
+}
+
+function updateBillingItem(outputDir, id, input = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const existing = getBillingItem(outputDir, id);
+  if (!existing) throw new Error('Billing item not found');
+  const state = input.state && BILLING_STATES.has(input.state) ? input.state : existing.state;
+  const amount = input.amount !== undefined ? input.amount : existing.amount;
+  const notes = input.notes !== undefined ? (cleanText(input.notes, 2000) || '') : existing.notes;
+  const now = new Date().toISOString();
+  const billedAt = state === existing.state ? existing.billedAt : (state === 'Pending' ? null : now);
+  const billedBy = state === existing.state ? existing.billedBy : (state === 'Pending' ? null : cleanText(input.billedBy, 120));
+  runSqlite(dbPath, `
+    UPDATE billing_queue SET
+      state = ${sqlString(state)},
+      amount = ${sqlNumber(amount)},
+      notes = ${sqlString(notes)},
+      billed_at = ${sqlString(billedAt)},
+      billed_by = ${sqlString(billedBy)}
+    WHERE id = ${sqlString(existing.id)};
+  `);
+  return getBillingItem(outputDir, existing.id);
+}
+
+function countBillingByState(outputDir) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    SELECT state AS state, COUNT(*) AS count FROM billing_queue GROUP BY state;
+  `);
+  const counts = { Pending: 0, Invoiced: 0, Paid: 0, Waived: 0 };
+  rows.forEach(r => { counts[r.state] = Number(r.count || 0); });
+  return counts;
+}
+
 module.exports = {
+  BILLING_STATES,
   COVERAGE_DATABASE_FILENAME,
+  PRODUCT_FIT_PRODUCTS,
   addBankNote,
+  countBillingByState,
   coverageDatabasePathForDir,
   createBankContact,
   deleteBankContact,
+  deleteProductFit,
+  enqueueBilling,
   ensureCoverageDatabase,
   getBankContact,
   getBankCoverage,
+  getBillingItem,
   getPreferredPeerGroup,
+  getProductFitById,
   getSavedBankCoverageMap,
   listActivitiesForBank,
+  listBillingQueue,
   listContactsForBank,
   listContactsForBanks,
+  listProductFitForBank,
+  listProductFitForBanks,
   listRecentActivitiesByActor,
   listSavedBanks,
   recordBankActivity,
@@ -694,5 +1007,7 @@ module.exports = {
   removeSavedBank,
   setPreferredPeerGroup,
   updateBankContact,
+  updateBillingItem,
+  upsertProductFit,
   upsertSavedBank
 };

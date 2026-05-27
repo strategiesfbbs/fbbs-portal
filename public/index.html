@@ -111,6 +111,9 @@
         <a class="nav-link nav-minor" data-page="banks" href="#banks">
           <span class="nav-label">Bank Tear Sheets</span>
         </a>
+        <a class="nav-link nav-minor" data-page="views" href="#views">
+          <span class="nav-label">Saved Views</span>
+        </a>
         <a class="nav-link nav-minor" data-page="reports" href="#reports">
           <span class="nav-label">Reports</span>
         </a>
@@ -173,6 +176,7 @@
   <div class="top-strip-links">
     <a class="top-primary-link" href="#home" data-page="home">Home</a>
     <a class="top-primary-link" href="#banks" data-page="banks">Banks</a>
+    <a class="top-primary-link" href="#views" data-page="views">Views</a>
     <a class="top-primary-link" href="#maps" data-page="maps">Map</a>
     <a class="top-primary-link" href="#reports" data-page="reports">Reports</a>
     <a class="top-primary-link" href="#strategies" data-page="strategies">Strategies</a>
@@ -548,6 +552,47 @@
             <p>Coverage status, next actions, and notes will live here.</p>
           </div>
         </section>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ========== SAVED VIEWS PAGE ========== -->
+<div class="page" id="p-views">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Saved <strong>Views</strong></h2>
+        <p class="hero-sub" id="viewsSub">Replace Salesforce reports with native filtered lists over your bank database. Switch between &ldquo;Just me&rdquo; and &ldquo;Everyone&rdquo; to scope each view.</p>
+      </div>
+      <div class="views-scope-toggle" role="radiogroup" aria-label="View scope">
+        <button type="button" class="views-scope-btn is-active" data-views-scope="me">Just me</button>
+        <button type="button" class="views-scope-btn" data-views-scope="all">Everyone</button>
+      </div>
+    </div>
+  </section>
+  <div class="container">
+    <div class="views-grid" id="viewsGrid">
+      <p class="views-loading">Loading saved views&hellip;</p>
+    </div>
+    <section class="views-detail" id="viewsDetail" hidden>
+      <header class="views-detail-head">
+        <div>
+          <p class="views-detail-kicker" id="viewsDetailKicker">View</p>
+          <h3 id="viewsDetailLabel"></h3>
+          <p class="views-detail-sub" id="viewsDetailSub"></p>
+        </div>
+        <div class="views-detail-actions">
+          <a class="small-btn" id="viewsDetailCsv" href="#">Download CSV</a>
+          <button type="button" class="text-btn" id="viewsDetailClose">Close</button>
+        </div>
+      </header>
+      <div class="views-detail-table-wrap">
+        <table class="views-detail-table" id="viewsDetailTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+        <p class="views-detail-empty" id="viewsDetailEmpty" hidden>No matching rows.</p>
       </div>
     </section>
   </div>

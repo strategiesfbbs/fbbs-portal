@@ -83,21 +83,31 @@ const {
   saveWirpWorkbook
 } = require('./wirp-store');
 const {
+  PRODUCT_FIT_PRODUCTS,
   addBankNote,
+  countBillingByState,
   createBankContact,
   deleteBankContact,
+  deleteProductFit,
+  enqueueBilling,
   getBankContact,
   getBankCoverage,
+  getBillingItem,
   getPreferredPeerGroup,
+  getProductFitById,
   getSavedBankCoverageMap,
   listActivitiesForBank,
+  listBillingQueue,
   listContactsForBank,
+  listProductFitForBank,
   listSavedBanks,
   recordBankActivity,
   removeBankNote,
   removeSavedBank,
   setPreferredPeerGroup,
   updateBankContact,
+  updateBillingItem,
+  upsertProductFit,
   upsertSavedBank
 } = require('./bank-coverage-store');
 const {
@@ -117,6 +127,11 @@ const {
   ownerStringContainsRep,
   resolveRequestRep
 } = require('./rep-identity');
+const {
+  listBankViewSummaries,
+  runBankView,
+  viewToCsvRows
+} = require('./bank-views');
 const {
   addStrategyRequestFile,
   createStrategyRequest,
@@ -3818,6 +3833,97 @@ function handleDeleteBankContact(req, res, contactId) {
   }
 }
 
+async function handleUpsertProductFit(req, res, bankId) {
+  try {
+    const body = await readJsonBody(req);
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+    const rep = resolveRequestRep(req);
+    const fit = upsertProductFit(BANK_REPORTS_DIR, summary, {
+      product: body && body.product,
+      notes: body && body.notes,
+      flaggedByUsername: rep ? rep.username : '',
+      flaggedByDisplay: rep ? rep.displayName : ''
+    });
+    appendAuditLog({
+      event: 'bank-product-fit-upsert',
+      bankId,
+      product: fit && fit.product,
+      productFitId: fit && fit.id
+    });
+    logBankActivity(req, {
+      bankId,
+      certNumber: summary.certNumber,
+      kind: 'product-fit',
+      summary: `Flagged ${fit.product}${fit.notes ? ` · ${fit.notes}` : ''}`.slice(0, 500),
+      refType: 'product-fit',
+      refId: fit && fit.id
+    });
+    return sendJSON(res, 200, { productFit: fit });
+  } catch (err) {
+    log('error', 'Bank product-fit upsert failed:', err.message);
+    return sendJSON(res, err.statusCode || 400, { error: err.message || 'Could not save product fit' });
+  }
+}
+
+function handleDeleteProductFit(req, res, id) {
+  try {
+    const removed = deleteProductFit(BANK_REPORTS_DIR, id);
+    if (!removed) return sendJSON(res, 404, { error: 'Product fit not found' });
+    appendAuditLog({
+      event: 'bank-product-fit-delete',
+      bankId: removed.bankId,
+      product: removed.product,
+      productFitId: removed.id
+    });
+    logBankActivity(req, {
+      bankId: removed.bankId,
+      certNumber: removed.certNumber,
+      kind: 'product-fit-remove',
+      summary: `Removed product flag ${removed.product}`,
+      refType: 'product-fit',
+      refId: removed.id
+    });
+    return sendJSON(res, 200, { success: true });
+  } catch (err) {
+    log('error', 'Bank product-fit delete failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not remove product fit' });
+  }
+}
+
+async function handleUpdateBilling(req, res, id) {
+  try {
+    const body = await readJsonBody(req);
+    const rep = resolveRequestRep(req);
+    const billed = updateBillingItem(BANK_REPORTS_DIR, id, {
+      state: body && body.state,
+      amount: body && body.amount,
+      notes: body && body.notes,
+      billedBy: body && body.billedBy ? body.billedBy : (rep ? rep.displayName : '')
+    });
+    appendAuditLog({
+      event: 'billing-update',
+      billingId: billed.id,
+      state: billed.state,
+      bankId: billed.bankId
+    });
+    if (billed && billed.bankId) {
+      logBankActivity(req, {
+        bankId: billed.bankId,
+        certNumber: billed.certNumber,
+        kind: 'billing',
+        summary: `Billing → ${billed.state}${billed.summary ? ` · ${billed.summary}` : ''}`.slice(0, 500),
+        refType: billed.refType,
+        refId: billed.refId
+      });
+    }
+    return sendJSON(res, 200, { item: billed });
+  } catch (err) {
+    log('error', 'Billing update failed:', err.message);
+    return sendJSON(res, err.statusCode || 400, { error: err.message || 'Could not update billing item' });
+  }
+}
+
 async function handleCreateStrategyRequest(req, res) {
   try {
     const body = await readJsonBody(req);
@@ -3883,6 +3989,33 @@ async function handleUpdateStrategyRequest(req, res, id) {
         refType: 'strategy',
         refId: request.id
       });
+    }
+    // Auto-enqueue billing when a strategy enters Needs Billed for the first time.
+    if (existing && existing.status !== 'Needs Billed' && request.status === 'Needs Billed') {
+      const queued = enqueueBilling(BANK_REPORTS_DIR, {
+        refType: 'strategy',
+        refId: request.id,
+        bankId: request.bankId,
+        certNumber: request.certNumber,
+        summary: `${request.requestType}: ${request.summary || request.displayName}`.slice(0, 500)
+      });
+      if (queued) {
+        appendAuditLog({
+          event: 'billing-enqueue',
+          billingId: queued.id,
+          refType: queued.refType,
+          refId: queued.refId,
+          bankId: queued.bankId
+        });
+        logBankActivity(req, {
+          bankId: request.bankId,
+          certNumber: request.certNumber,
+          kind: 'billing',
+          summary: `Queued for billing · ${request.requestType}`,
+          refType: 'billing',
+          refId: queued.id
+        });
+      }
     }
     return sendJSON(res, 200, { request });
   } catch (err) {
@@ -5920,10 +6053,16 @@ function buildMyWorkResponse(rep) {
     };
   }
 
-  const accountRows = listBankAccountStatuses(BANK_REPORTS_DIR, { limit: 1000, sort: 'updated' }) || [];
-  const myAccounts = accountRows.filter(row => ownerStringContainsRep(row.owner, rep));
-  const myClients = myAccounts.filter(row => row.status === 'Client');
-  const myProspects = myAccounts.filter(row => row.status === 'Prospect');
+  // Fetch each status independently so My Work can't miss a rep's older clients/prospects
+  // because they fell outside a recent-N sample.
+  const myClientsView = runBankView({ outputDir: BANK_REPORTS_DIR, viewId: 'clients', rep });
+  const myProspectsView = runBankView({ outputDir: BANK_REPORTS_DIR, viewId: 'prospects', rep });
+  const myClients = myClientsView ? myClientsView.rows : [];
+  const myProspects = myProspectsView ? myProspectsView.rows : [];
+  // For "recently touched", union the two and sort by updatedAt — same shape as before.
+  const myAccountsForRecent = [...myClients, ...myProspects]
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .slice(0, 50);
 
   const strategyResult = listStrategyRequests(BANK_REPORTS_DIR, { archived: '' }) || { requests: [], counts: {} };
   const openStatuses = new Set(['Open', 'In Progress', 'Needs Billed']);
@@ -5949,7 +6088,7 @@ function buildMyWorkResponse(rep) {
 
   // Recently touched: union of my accounts + my strategies, sorted by updatedAt desc.
   const touchedEntries = [];
-  myAccounts.slice(0, 50).forEach(row => {
+  myAccountsForRecent.forEach(row => {
     touchedEntries.push({
       kind: 'account',
       at: row.updatedAt || '',
@@ -6033,6 +6172,28 @@ function logBankActivity(req, payload) {
     log('warn', 'recordBankActivity failed:', err.message);
     return null;
   }
+}
+
+function escapeCsvCell(value) {
+  if (value === null || value === undefined) return '';
+  const s = String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function rowsToCsv(rows) {
+  return (rows || []).map(row => (row || []).map(escapeCsvCell).join(',')).join('\r\n');
+}
+
+function sendCsv(res, filename, csv) {
+  const safe = String(filename || 'export.csv').replace(/[^a-z0-9._-]+/gi, '_');
+  res.writeHead(200, {
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Length': Buffer.byteLength(csv),
+    'Cache-Control': 'no-store',
+    'Content-Disposition': `attachment; filename="${safe}"`
+  });
+  res.end(csv);
 }
 
 async function handleMeOverride(req, res) {
@@ -6144,6 +6305,40 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/me/work' && req.method === 'GET') {
       const rep = resolveRequestRep(req);
       return sendJSON(res, 200, buildMyWorkResponse(rep));
+    }
+
+    if (pathname === '/api/bank-views' && req.method === 'GET') {
+      const repParam = String(query.get('rep') || '').toLowerCase();
+      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      return sendJSON(res, 200, {
+        rep,
+        views: listBankViewSummaries({ outputDir: BANK_REPORTS_DIR, rep })
+      });
+    }
+
+    const bankViewCsvMatch = pathname.match(/^\/api\/bank-views\/([^/]+)\.csv$/);
+    if (bankViewCsvMatch && req.method === 'GET') {
+      const viewId = safeDecodeURIComponent(bankViewCsvMatch[1]);
+      if (!viewId) return sendText(res, 400, 'Invalid view ID');
+      const repParam = String(query.get('rep') || '').toLowerCase();
+      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      const result = runBankView({ outputDir: BANK_REPORTS_DIR, viewId, rep });
+      if (!result) return sendText(res, 404, 'Unknown view');
+      const csv = rowsToCsv(viewToCsvRows(result));
+      const today = new Date().toISOString().slice(0, 10);
+      const tag = rep ? `_${rep.username}` : '';
+      return sendCsv(res, `fbbs_${viewId}${tag}_${today}.csv`, csv);
+    }
+
+    const bankViewMatch = pathname.match(/^\/api\/bank-views\/([^/]+)$/);
+    if (bankViewMatch && req.method === 'GET') {
+      const viewId = safeDecodeURIComponent(bankViewMatch[1]);
+      if (!viewId) return sendJSON(res, 400, { error: 'Invalid view ID' });
+      const repParam = String(query.get('rep') || '').toLowerCase();
+      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      const result = runBankView({ outputDir: BANK_REPORTS_DIR, viewId, rep });
+      if (!result) return sendJSON(res, 404, { error: 'Unknown view' });
+      return sendJSON(res, 200, result);
     }
 
     if (pathname === '/api/daily-intelligence' && req.method === 'GET') {
@@ -6528,8 +6723,47 @@ const server = http.createServer(async (req, res) => {
         ...coverage,
         accountStatus: summary ? effectiveAccountStatus(summary, statuses, coverageMap) : null,
         peerPreference: getPreferredPeerGroup(BANK_REPORTS_DIR, bankId),
-        contacts: listContactsForBank(BANK_REPORTS_DIR, bankId)
+        contacts: listContactsForBank(BANK_REPORTS_DIR, bankId),
+        productFit: listProductFitForBank(BANK_REPORTS_DIR, bankId),
+        productCatalog: PRODUCT_FIT_PRODUCTS
       });
+    }
+
+    const bankProductFitMatch = pathname.match(/^\/api\/banks\/([^/]+)\/product-fit$/);
+    if (bankProductFitMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankProductFitMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return sendJSON(res, 200, {
+        products: PRODUCT_FIT_PRODUCTS,
+        productFit: listProductFitForBank(BANK_REPORTS_DIR, bankId)
+      });
+    }
+    if (bankProductFitMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankProductFitMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return await handleUpsertProductFit(req, res, bankId);
+    }
+
+    const productFitItemMatch = pathname.match(/^\/api\/bank-product-fit\/([^/]+)$/);
+    if (productFitItemMatch && req.method === 'DELETE') {
+      const id = safeDecodeURIComponent(productFitItemMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid product-fit ID' });
+      return handleDeleteProductFit(req, res, id);
+    }
+
+    if (pathname === '/api/billing-queue' && req.method === 'GET') {
+      const state = query.get('state');
+      return sendJSON(res, 200, {
+        items: listBillingQueue(BANK_REPORTS_DIR, { state, limit: query.get('limit') }),
+        counts: countBillingByState(BANK_REPORTS_DIR)
+      });
+    }
+
+    const billingItemMatch = pathname.match(/^\/api\/billing-queue\/([^/]+)$/);
+    if (billingItemMatch && req.method === 'PATCH') {
+      const id = safeDecodeURIComponent(billingItemMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid billing ID' });
+      return await handleUpdateBilling(req, res, id);
     }
 
     const bankActivityMatch = pathname.match(/^\/api\/banks\/([^/]+)\/activity$/);

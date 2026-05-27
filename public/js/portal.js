@@ -45,6 +45,16 @@
   let selectedBankActivities = [];
   let bankActivityBankId = null;
   let bankActivityRequestId = 0;
+  let selectedBankProductFit = [];
+  let bankProductCatalog = [];
+  let savedViewsState = {
+    scope: 'me',
+    summaries: [],
+    selectedId: '',
+    selectedResult: null,
+    loading: false,
+    loadingDetailFor: ''
+  };
   let activeCoverageBankId = null;
   let activeBankWorkspaceView = 'tear-sheet';
   let bankAssistantLastResponse = null;
@@ -121,7 +131,7 @@
   const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'archive', 'upload', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'views', 'archive', 'upload', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -1263,6 +1273,7 @@
     }
 
     if (pageName === 'home') renderHomeRecents();
+    if (pageName === 'views') loadSavedViewSummaries();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
     if (pageName === 'relativeValue') {
       loadRelativeValueSnapshot();
@@ -1948,6 +1959,189 @@
         if (typeof loadBank === 'function') loadBank(bankId, { collapseResults: true });
       }
     });
+  }
+
+  // ============ Saved Views ============
+
+  const SAVED_VIEW_COLUMN_LABELS = {
+    displayName: 'Bank',
+    legalName: 'Legal Name',
+    city: 'City',
+    state: 'State',
+    certNumber: 'Cert',
+    status: 'Status',
+    owner: 'Owner',
+    affiliate: 'Affiliate',
+    requestType: 'Request',
+    priority: 'Priority',
+    assignedTo: 'Assigned',
+    requestedBy: 'Requested by',
+    invoiceContact: 'Invoice',
+    nextActionDate: 'Next Action',
+    summary: 'Summary',
+    updatedAt: 'Updated',
+    refType: 'Source',
+    amount: 'Amount',
+    enqueuedAt: 'Enqueued',
+    billedAt: 'Billed'
+  };
+
+  function repScopeQuery() {
+    return savedViewsState.scope === 'all' ? '?rep=all' : '';
+  }
+
+  async function loadSavedViewSummaries() {
+    if (savedViewsState.loading) return;
+    savedViewsState.loading = true;
+    renderSavedViewsGrid();
+    try {
+      const res = await fetch('/api/bank-views' + repScopeQuery(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      savedViewsState.summaries = Array.isArray(data.views) ? data.views : [];
+    } catch (e) {
+      console.error('Failed to load saved views:', e);
+      savedViewsState.summaries = [];
+    } finally {
+      savedViewsState.loading = false;
+    }
+    renderSavedViewsGrid();
+  }
+
+  async function openSavedView(viewId) {
+    if (!viewId) return;
+    savedViewsState.selectedId = viewId;
+    savedViewsState.selectedResult = null;
+    savedViewsState.loadingDetailFor = viewId;
+    renderSavedViewDetail();
+    try {
+      const res = await fetch(`/api/bank-views/${encodeURIComponent(viewId)}` + repScopeQuery(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      savedViewsState.selectedResult = await res.json();
+    } catch (e) {
+      console.error('Failed to load view:', e);
+      savedViewsState.selectedResult = { rows: [], columns: [], view: { label: viewId } };
+    } finally {
+      savedViewsState.loadingDetailFor = '';
+    }
+    renderSavedViewDetail();
+  }
+
+  function closeSavedView() {
+    savedViewsState.selectedId = '';
+    savedViewsState.selectedResult = null;
+    renderSavedViewDetail();
+  }
+
+  function renderSavedViewsGrid() {
+    const grid = document.getElementById('viewsGrid');
+    if (!grid) return;
+    if (savedViewsState.loading) {
+      grid.innerHTML = '<p class="views-loading">Loading saved views&hellip;</p>';
+      return;
+    }
+    if (!savedViewsState.summaries.length) {
+      grid.innerHTML = '<p class="views-loading">No views available. Make sure the bank workbooks are imported.</p>';
+      return;
+    }
+    grid.innerHTML = savedViewsState.summaries.map(view => {
+      const countLabel = view.count === null || view.count === undefined
+        ? (view.requiresRep ? 'Pick a rep' : '0')
+        : formatNumber(view.count);
+      const isSelected = savedViewsState.selectedId === view.id;
+      return `
+        <button type="button" class="views-card${isSelected ? ' is-selected' : ''}" data-views-card="${escapeHtml(view.id)}">
+          <p class="views-card-label">${escapeHtml(view.label)}</p>
+          <p class="views-card-count">${escapeHtml(countLabel)}</p>
+          <p class="views-card-desc">${escapeHtml(view.description || '')}</p>
+        </button>
+      `;
+    }).join('');
+    grid.querySelectorAll('[data-views-card]').forEach(btn => {
+      btn.addEventListener('click', () => openSavedView(btn.getAttribute('data-views-card')));
+    });
+  }
+
+  function renderSavedViewDetail() {
+    const detail = document.getElementById('viewsDetail');
+    if (!detail) return;
+    const id = savedViewsState.selectedId;
+    if (!id) {
+      detail.hidden = true;
+      return;
+    }
+    detail.hidden = false;
+    const result = savedViewsState.selectedResult;
+    const view = (result && result.view) || savedViewsState.summaries.find(v => v.id === id) || { label: id };
+    const kicker = document.getElementById('viewsDetailKicker');
+    const label = document.getElementById('viewsDetailLabel');
+    const sub = document.getElementById('viewsDetailSub');
+    const csv = document.getElementById('viewsDetailCsv');
+    const empty = document.getElementById('viewsDetailEmpty');
+    const thead = document.querySelector('#viewsDetailTable thead');
+    const tbody = document.querySelector('#viewsDetailTable tbody');
+    if (kicker) kicker.textContent = savedViewsState.scope === 'all' ? 'Everyone · View' : 'Just me · View';
+    if (label) label.textContent = view.label || id;
+    if (sub) {
+      const count = result ? result.count : null;
+      sub.textContent = savedViewsState.loadingDetailFor === id
+        ? 'Loading rows…'
+        : (count != null ? `${formatNumber(count)} row${count === 1 ? '' : 's'}` : '');
+    }
+    if (csv) csv.setAttribute('href', `/api/bank-views/${encodeURIComponent(id)}.csv` + repScopeQuery());
+    if (!result) {
+      if (thead) thead.innerHTML = '';
+      if (tbody) tbody.innerHTML = '';
+      if (empty) empty.hidden = true;
+      return;
+    }
+    const cols = result.columns || [];
+    if (thead) {
+      thead.innerHTML = `<tr>${cols.map(c => `<th>${escapeHtml(SAVED_VIEW_COLUMN_LABELS[c] || c)}</th>`).join('')}</tr>`;
+    }
+    if (!result.rows || !result.rows.length) {
+      if (tbody) tbody.innerHTML = '';
+      if (empty) empty.hidden = false;
+      return;
+    }
+    if (empty) empty.hidden = true;
+    if (tbody) {
+      tbody.innerHTML = result.rows.slice(0, 500).map(row => {
+        const bankId = row.bankId || '';
+        const rowOpen = bankId ? ` data-views-row-bank="${escapeHtml(bankId)}"` : '';
+        return `<tr${rowOpen}>${cols.map(c => `<td>${escapeHtml(String(row[c] == null ? '' : row[c]))}</td>`).join('')}</tr>`;
+      }).join('');
+      tbody.querySelectorAll('[data-views-row-bank]').forEach(tr => {
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', () => {
+          const bankId = tr.getAttribute('data-views-row-bank');
+          if (!bankId) return;
+          goTo('banks');
+          if (typeof loadBank === 'function') loadBank(bankId, { collapseResults: true });
+        });
+      });
+    }
+  }
+
+  function setupSavedViews() {
+    const page = document.getElementById('p-views');
+    if (!page) return;
+    page.querySelectorAll('[data-views-scope]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const next = btn.getAttribute('data-views-scope');
+        if (savedViewsState.scope === next) return;
+        savedViewsState.scope = next;
+        page.querySelectorAll('[data-views-scope]').forEach(b => {
+          b.classList.toggle('is-active', b.getAttribute('data-views-scope') === next);
+        });
+        savedViewsState.selectedId = '';
+        savedViewsState.selectedResult = null;
+        renderSavedViewDetail();
+        loadSavedViewSummaries();
+      });
+    });
+    const closeBtn = document.getElementById('viewsDetailClose');
+    if (closeBtn) closeBtn.addEventListener('click', closeSavedView);
   }
 
   function setHomeTilePulse(numId, labelId, footId, opts) {
@@ -8967,6 +9161,7 @@
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
       ${renderBankContactsPanel()}
+      ${renderBankProductFitPanel()}
       ${renderBankActivityPanel()}
       ${renderBankPeerBanner(bank.peerComparison)}
       ${renderBankIntelligencePanel(bank, values, recentPeriods)}
@@ -9006,6 +9201,7 @@
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
     wireBankContactsControls();
+    wireBankProductFitControls();
     loadBankActivity(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
@@ -10144,12 +10340,16 @@
       selectedTearSheetCoverage = data.saved || getSavedBankById(bankId);
       if (selectedBank && selectedBank.bank) selectedBank.bank.peerPreference = data.peerPreference || null;
       selectedBankContacts = Array.isArray(data.contacts) ? data.contacts : [];
+      selectedBankProductFit = Array.isArray(data.productFit) ? data.productFit : [];
+      if (Array.isArray(data.productCatalog) && data.productCatalog.length) bankProductCatalog = data.productCatalog;
     } catch (e) {
       selectedTearSheetCoverage = getSavedBankById(bankId);
       selectedBankContacts = [];
+      selectedBankProductFit = [];
     }
     updateBankSaveButton();
     refreshBankContactsPanel();
+    refreshBankProductFitPanel();
   }
 
   async function loadBankCoverage(bankId, options = {}) {
@@ -10541,6 +10741,96 @@
     } catch (e) {
       showToast(e.message || 'Could not delete contact', true);
     }
+  }
+
+  // ============ Bank Product Fit (tear sheet) ============
+
+  function renderBankProductFitPanel() {
+    const enabled = new Set((selectedBankProductFit || []).map(f => f.product));
+    const catalog = bankProductCatalog && bankProductCatalog.length
+      ? bankProductCatalog
+      : ['CD Funding', 'Muni Credit / BCIS', 'ALM / IRR', 'Bond Swap', 'Portfolio Accounting', 'CECL Analysis'];
+    const chips = catalog.map(product => {
+      const flag = (selectedBankProductFit || []).find(f => f.product === product);
+      const isOn = enabled.has(product);
+      const flaggedBy = flag && flag.flaggedByDisplay ? `Flagged by ${flag.flaggedByDisplay}` : '';
+      return `
+        <button type="button"
+                class="bank-product-chip${isOn ? ' is-on' : ''}"
+                data-product-chip="${escapeHtml(product)}"
+                ${flag ? `data-product-fit-id="${escapeHtml(flag.id)}"` : ''}
+                title="${escapeHtml(flaggedBy)}">
+          <span class="bank-product-chip-mark">${isOn ? '✓' : '+'}</span>
+          <span class="bank-product-chip-label">${escapeHtml(product)}</span>
+        </button>
+      `;
+    }).join('');
+    return `
+      <section class="bank-section bank-product-fit-section" id="bankProductFitPanel">
+        <div class="bank-section-title">Product Fit</div>
+        <div class="bank-product-fit-strip">${chips}</div>
+      </section>
+    `;
+  }
+
+  function refreshBankProductFitPanel() {
+    const panel = document.getElementById('bankProductFitPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankProductFitPanel();
+    wireBankProductFitControls();
+  }
+
+  function wireBankProductFitControls() {
+    const panel = document.getElementById('bankProductFitPanel');
+    if (!panel) return;
+    panel.querySelectorAll('[data-product-chip]').forEach(btn => {
+      btn.addEventListener('click', () => toggleBankProductFit(
+        btn.getAttribute('data-product-chip'),
+        btn.getAttribute('data-product-fit-id')
+      ));
+    });
+  }
+
+  async function toggleBankProductFit(product, existingId) {
+    const bankId = selectedBankId();
+    if (!bankId || !product) return;
+    try {
+      if (existingId) {
+        const res = await fetch(`/api/bank-product-fit/${encodeURIComponent(existingId)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+      } else {
+        const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/product-fit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ product })
+        });
+        if (!res.ok) {
+          const data = await readBankJson(res);
+          throw new Error(data.error || 'HTTP ' + res.status);
+        }
+      }
+      await reloadBankProductFit(bankId);
+      loadBankActivity(bankId);
+    } catch (e) {
+      showToast(e.message || 'Could not update product fit', true);
+    }
+  }
+
+  async function reloadBankProductFit(bankId) {
+    if (!bankId) {
+      selectedBankProductFit = [];
+      refreshBankProductFitPanel();
+      return;
+    }
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/product-fit`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      selectedBankProductFit = Array.isArray(data.productFit) ? data.productFit : [];
+      if (Array.isArray(data.products) && data.products.length) bankProductCatalog = data.products;
+    } catch (e) {
+      selectedBankProductFit = [];
+    }
+    refreshBankProductFitPanel();
   }
 
   // ============ Bank Activity Timeline (tear sheet) ============
@@ -14867,6 +15157,7 @@
     loadArchive();
     setupRepPicker();
     setupMyWorkClicks();
+    setupSavedViews();
     loadMe();
     setupHome();
     setupHomePolish();

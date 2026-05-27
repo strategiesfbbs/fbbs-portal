@@ -9529,6 +9529,207 @@ body {
   .bank-activity-kind { justify-self: start; }
 }
 
+/* Saved Views page */
+.views-scope-toggle {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+}
+.views-scope-btn {
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.78);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+}
+.views-scope-btn.is-active {
+  background: rgba(160, 217, 180, 0.22);
+  color: #fff;
+}
+.views-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin: 18px 0 24px;
+}
+.views-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  font: inherit;
+  padding: 18px 18px 16px;
+  text-align: left;
+  transition: border-color 100ms, box-shadow 100ms;
+}
+.views-card:hover { border-color: var(--racing-green); box-shadow: 0 4px 14px rgba(18, 66, 43, 0.12); }
+.views-card.is-selected {
+  border-color: var(--racing-green);
+  box-shadow: 0 6px 20px rgba(18, 66, 43, 0.16);
+}
+.views-card-label {
+  color: #5a615e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
+}
+.views-card-count {
+  color: #1a1d1c;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  margin: 6px 0 8px;
+}
+.views-card-desc {
+  color: #5a615e;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+}
+.views-loading {
+  color: #5a615e;
+  font-size: 12px;
+  font-style: italic;
+  padding: 24px 0;
+}
+.views-detail {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 32px;
+  padding: 18px 20px;
+}
+.views-detail-head {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.views-detail-kicker {
+  color: #5a615e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin: 0 0 4px;
+  text-transform: uppercase;
+}
+.views-detail-head h3 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+.views-detail-sub {
+  color: #5a615e;
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+.views-detail-actions {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+.views-detail-actions .small-btn {
+  background: var(--racing-green);
+  border: 0;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 12px;
+  text-decoration: none;
+}
+.views-detail-actions .small-btn:hover { background: #163d28; }
+.views-detail-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 520px;
+  overflow: auto;
+}
+.views-detail-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+.views-detail-table th,
+.views-detail-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.views-detail-table th {
+  background: #f6faf7;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  position: sticky;
+  text-transform: uppercase;
+  top: 0;
+}
+.views-detail-table tbody tr:hover { background: #f6faf7; }
+.views-detail-empty {
+  color: #5a615e;
+  font-size: 12px;
+  font-style: italic;
+  padding: 16px;
+  text-align: center;
+}
+.views-detail[hidden] { display: none; }
+
+/* Bank product-fit chips (tear sheet) */
+.bank-product-fit-section { padding-bottom: 14px; }
+.bank-product-fit-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px 4px;
+}
+.bank-product-chip {
+  align-items: center;
+  background: #fbfcfb;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 6px;
+  padding: 5px 12px 5px 10px;
+  transition: background 100ms, border-color 100ms, color 100ms;
+}
+.bank-product-chip:hover { border-color: var(--racing-green); }
+.bank-product-chip.is-on {
+  background: rgba(160, 217, 180, 0.42);
+  border-color: var(--racing-green);
+  color: #14422a;
+}
+.bank-product-chip-mark {
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  height: 18px;
+  width: 18px;
+}
+.bank-product-chip.is-on .bank-product-chip-mark {
+  background: var(--racing-green);
+  color: #fff;
+}
+
 .bank-note {
   align-items: start;
   background: #fbfcfb;

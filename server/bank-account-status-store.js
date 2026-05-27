@@ -242,7 +242,10 @@ function boundedListLimit(value, fallback = 250, max = 1000) {
 
 function listBankAccountStatuses(outputDir, options = {}) {
   const dbPath = ensureAccountStatusDatabase(outputDir);
-  const limit = boundedListLimit(options.limit || 250);
+  // Bank-views projections need to scan up to ~10K rows to compute accurate per-rep counts.
+  // UI list endpoints stay capped at 1000 by passing options.limit <= 1000.
+  const maxLimit = Number(options.maxLimit) > 0 ? Number(options.maxLimit) : 1000;
+  const limit = boundedListLimit(options.limit || 250, 250, maxLimit);
   const where = bankAccountStatusWhere(options);
   const rows = querySqliteJson(dbPath, `
     ${statusSelectSql(where)}
