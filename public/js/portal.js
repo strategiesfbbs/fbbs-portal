@@ -9478,7 +9478,6 @@
       ${renderBankProductFitPanel()}
       ${renderBankActivityPanel()}
       ${renderBankPeerBanner(bank.peerComparison)}
-      ${renderBankIntelligencePanel(bank, values, recentPeriods)}
       ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
       ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13, bank.peerComparison)}
       ${renderBankCallReportSection('Loan Composition', bankLoanCompositionRows(), recentPeriods, 26, bank.peerComparison)}
@@ -9486,6 +9485,7 @@
       ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38, bank.peerComparison)}
       ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
       ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
+      ${renderBankIntelligencePanel(bank, values, recentPeriods)}
       <div class="bank-services-pair">
         ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
         ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
@@ -9804,8 +9804,11 @@
     const portfolioMeta = bank && bank.bondAccounting && bank.bondAccounting.available ? bank.bondAccounting : null;
     const peerLabel = bank && bank.peerComparison && bank.peerComparison.peerGroup ? bank.peerComparison.peerGroup.label : '';
     return `
-      <section class="bank-section bank-intelligence-section">
-        <div class="bank-section-title">Performance & Portfolio Intelligence</div>
+      <details class="bank-section bank-intelligence-section bank-intelligence-details">
+        <summary class="bank-section-title">
+          <span>Portfolio Snapshot & THC Feed</span>
+          <em>Open / close</em>
+        </summary>
         <div class="bank-intel-head">
           <div>
             <strong>${escapeHtml(latest && latest.period ? `Latest call report ${latest.period}` : 'Latest call report')}</strong>
@@ -9856,7 +9859,7 @@
             </div>
           </div>
         </div>
-      </section>
+      </details>
     `;
   }
 

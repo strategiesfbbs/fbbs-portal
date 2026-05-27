@@ -6800,6 +6800,33 @@ body {
   border-radius: 0;
 }
 
+.bank-intelligence-details {
+  background: #fff;
+}
+
+.bank-intelligence-details summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+}
+
+.bank-intelligence-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.bank-intelligence-details summary em {
+  color: var(--text3);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.bank-intelligence-details[open] summary {
+  border-bottom: 1px solid var(--line);
+}
+
 .bank-intel-head {
   align-items: center;
   border-bottom: 1px solid var(--line);
