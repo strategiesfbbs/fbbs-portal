@@ -9474,8 +9474,6 @@
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
       ${renderBankContactsPanel()}
-      ${renderBankProductFitPanel()}
-      ${renderBankActivityPanel()}
       ${renderBankPeerBanner(bank.peerComparison)}
       ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
       ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13, bank.peerComparison)}
@@ -9484,6 +9482,8 @@
       ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38, bank.peerComparison)}
       ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
       ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
+      ${renderBankProductFitPanel()}
+      ${renderBankActivityPanel()}
       ${renderBankAssistantPanel()}
       ${renderBankIntelligencePanel(bank, values, recentPeriods)}
       <div class="bank-services-pair">
@@ -11219,10 +11219,13 @@
       `;
     }).join('');
     return `
-      <section class="bank-section bank-product-fit-section" id="bankProductFitPanel">
-        <div class="bank-section-title">Product Fit</div>
+      <details class="bank-section bank-product-fit-section bank-product-fit-details" id="bankProductFitPanel">
+        <summary class="bank-section-title">
+          <span>Product Fit</span>
+          <em>Open / close</em>
+        </summary>
         <div class="bank-product-fit-strip">${chips}</div>
-      </section>
+      </details>
     `;
   }
 
@@ -11321,10 +11324,13 @@
       ? items.map(renderBankActivityRow).join('')
       : '<li class="bank-activity-empty">No activity yet. Coverage changes, notes, contacts, and strategy requests show up here.</li>';
     return `
-      <section class="bank-section bank-activity-section" id="bankActivityPanel">
-        <div class="bank-section-title">Activity Timeline</div>
+      <details class="bank-section bank-activity-section bank-activity-details" id="bankActivityPanel">
+        <summary class="bank-section-title">
+          <span>Activity Timeline</span>
+          <em>Open / close</em>
+        </summary>
         <ol class="bank-activity-list" id="bankActivityList">${rows}</ol>
-      </section>
+      </details>
     `;
   }
 

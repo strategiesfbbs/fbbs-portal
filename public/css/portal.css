@@ -9848,7 +9848,45 @@ body {
 
 /* Activity timeline (tear sheet) */
 .bank-activity-section {
+  padding-bottom: 0;
+}
+
+.bank-activity-section[open] {
   padding-bottom: 14px;
+}
+
+.bank-product-fit-details,
+.bank-activity-details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.bank-product-fit-details summary,
+.bank-activity-details summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+}
+
+.bank-product-fit-details summary::-webkit-details-marker,
+.bank-activity-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.bank-product-fit-details summary em,
+.bank-activity-details summary em {
+  color: var(--text3);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
+}
+
+.bank-product-fit-details[open] summary,
+.bank-activity-details[open] summary {
+  border-bottom: 1px solid var(--line);
 }
 
 .bank-activity-list {
@@ -10081,7 +10119,8 @@ body {
 .views-detail[hidden] { display: none; }
 
 /* Bank product-fit chips (tear sheet) */
-.bank-product-fit-section { padding-bottom: 14px; }
+.bank-product-fit-section { padding-bottom: 0; }
+.bank-product-fit-section[open] { padding-bottom: 14px; }
 .bank-product-fit-strip {
   display: flex;
   flex-wrap: wrap;
