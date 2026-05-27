@@ -89,8 +89,17 @@ function toIsoDate(value) {
 
 function toNumber(value) {
   if (value === '' || value == null) return null;
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
+  let cleaned = String(value).trim();
+  if (!cleaned || cleaned === '-' || /^n\/?a$/i.test(cleaned)) return null;
+  let negative = false;
+  const paren = cleaned.match(/^\((.*)\)$/);
+  if (paren) {
+    negative = true;
+    cleaned = paren[1];
+  }
+  cleaned = cleaned.replace(/[$,%]/g, '').replace(/,/g, '').trim();
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? (negative ? -n : n) : null;
 }
 
 function findHeaderRow(sheet) {
@@ -221,6 +230,145 @@ function parseAsOfDate(wb) {
   return '';
 }
 
+function sheetRows(sheet) {
+  if (!sheet) return [];
+  const XLSX = require('./xlsx');
+  return XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: false,
+    blankrows: false
+  });
+}
+
+function parseScenarioSummary(sheet) {
+  const rows = sheetRows(sheet);
+  const scenarioRows = [];
+  for (const row of rows) {
+    const shockLabel = String(row[2] || '').trim();
+    if (!shockLabel || (!/^[-+]?\d+$/.test(shockLabel) && shockLabel.toLowerCase() !== 'base')) continue;
+    const bookValueThousands = toNumber(row[3]);
+    const marketValueThousands = toNumber(row[4]);
+    scenarioRows.push({
+      shock: shockLabel.toLowerCase() === 'base' ? 0 : toNumber(shockLabel),
+      label: shockLabel,
+      bookValue: bookValueThousands == null ? null : Math.round(bookValueThousands * 1000),
+      marketValue: marketValueThousands == null ? null : Math.round(marketValueThousands * 1000),
+      gainLoss: toNumber(row[5]) == null ? null : Math.round(toNumber(row[5])),
+      gainLossPct: toNumber(row[6]),
+      bookPrice: toNumber(row[7]),
+      marketPrice: toNumber(row[8]),
+      priceChangePct: toNumber(row[9]),
+      yieldToWorst: toNumber(row[10]),
+      bookYieldToWorst: toNumber(row[11])
+    });
+  }
+  return scenarioRows;
+}
+
+function parseTotalReturnAnalysis(sheet) {
+  const rows = sheetRows(sheet);
+  const headerIndex = rows.findIndex(row => normalizeHeader(row[3]) === 'sector');
+  if (headerIndex === -1) return [];
+  const header = rows[headerIndex];
+  const shockColumns = [];
+  for (let i = 4; i < header.length; i += 1) {
+    const shock = toNumber(header[i]);
+    if (shock != null) shockColumns.push({ index: i, shock, key: String(header[i]).trim() });
+  }
+  const out = [];
+  for (const row of rows.slice(headerIndex + 1)) {
+    const sector = cleanText(row[3]);
+    if (!sector) continue;
+    const returns = {};
+    for (const col of shockColumns) {
+      const value = toNumber(row[col.index]);
+      if (value != null) returns[col.key] = value;
+    }
+    if (Object.keys(returns).length) out.push({ sector, returns });
+  }
+  return out;
+}
+
+function parsePeerReview(sheet) {
+  const rows = sheetRows(sheet);
+  const out = [];
+  for (const row of rows) {
+    const sector = cleanText(row[1]);
+    if (!sector || /^sector$/i.test(sector) || /^peer:/i.test(sector)) continue;
+    const parThousands = toNumber(row[3]);
+    const hasMetrics = [row[4], row[5], row[7], row[8], row[10], row[11]].some(value => toNumber(value) != null);
+    if (!hasMetrics) continue;
+    out.push({
+      sector,
+      par: parThousands == null ? null : Math.round(parThousands * 1000),
+      allocationPct: toNumber(row[4]),
+      peerAllocationPct: toNumber(row[5]),
+      weightedAverageCoupon: toNumber(row[7]),
+      peerWeightedAverageCoupon: toNumber(row[8]),
+      weightedAverageMaturity: toNumber(row[10]),
+      peerWeightedAverageMaturity: toNumber(row[11])
+    });
+  }
+  return out;
+}
+
+function keyRateLabel(value) {
+  return String(value || '')
+    .replace(/[\n\r]+/g, ' ')
+    .replace(/^krd\s*/i, '')
+    .trim();
+}
+
+function parseKeyRateDuration(sheet) {
+  const rows = sheetRows(sheet);
+  const headerIndex = rows.findIndex(row => String(row[1] || '').trim().toLowerCase() === 'cusip');
+  if (headerIndex === -1) return [];
+  const header = rows[headerIndex];
+  const keyColumns = [];
+  for (let i = 7; i < header.length; i += 1) {
+    const label = keyRateLabel(header[i]);
+    if (label) keyColumns.push({ index: i, label });
+  }
+  const out = [];
+  for (const row of rows.slice(headerIndex + 1)) {
+    const label = cleanText(row[1]);
+    const description = cleanText(row[2]);
+    if (!label || (/^[0-9A-Z]{6,}$/i.test(label) && /\d/.test(label))) continue;
+    const values = {};
+    for (const col of keyColumns) {
+      const value = toNumber(row[col.index]);
+      if (value != null) values[col.label] = value;
+    }
+    if (Object.keys(values).length) {
+      out.push({
+        label,
+        description,
+        par: toNumber(row[3]) == null ? null : Math.round(toNumber(row[3]) * 1000),
+        bookValue: toNumber(row[4]) == null ? null : Math.round(toNumber(row[4]) * 1000),
+        marketValue: toNumber(row[5]) == null ? null : Math.round(toNumber(row[5]) * 1000),
+        gainLoss: toNumber(row[6]) == null ? null : Math.round(toNumber(row[6]) * 1000),
+        values
+      });
+    }
+  }
+  return out;
+}
+
+function cleanText(value) {
+  if (value === undefined || value === null) return '';
+  return String(value).replace(/\s+/g, ' ').trim();
+}
+
+function parseWorkbookAnalytics(wb) {
+  return {
+    scenarioSummary: parseScenarioSummary(wb.Sheets['Scenario Summary']),
+    totalReturn: parseTotalReturnAnalysis(wb.Sheets['Total Return Analysis']),
+    peerReview: parsePeerReview(wb.Sheets['Peer Review']),
+    keyRateDuration: parseKeyRateDuration(wb.Sheets['Key Rate Duration'])
+  };
+}
+
 function parsePortfolioWorkbook(filePath) {
   const XLSX = require('./xlsx');
   const wb = XLSX.readFile(filePath);
@@ -237,6 +385,7 @@ function parsePortfolioWorkbook(filePath) {
   }
   const totals = parseLinkedDataTotals(wb.Sheets['linked data']);
   const asOfDate = parseAsOfDate(wb);
+  const analytics = parseWorkbookAnalytics(wb);
   // Derive helpful aggregates.
   const totalPositions = allHoldings.length;
   const sumPar = allHoldings.reduce((acc, h) => acc + (h.par || 0), 0);
@@ -262,6 +411,7 @@ function parsePortfolioWorkbook(filePath) {
       marketValue: sumMarketValue,
       gainLoss: sumGainLoss
     },
+    analytics,
     cusipIndex
   };
 }
@@ -296,6 +446,7 @@ function loadParsedPortfolio(portfolioXlsmPath, options = {}) {
 module.exports = {
   SECTOR_SHEETS,
   parsePortfolioWorkbook,
+  parseWorkbookAnalytics,
   loadParsedPortfolio,
   holdingsCachePath
 };

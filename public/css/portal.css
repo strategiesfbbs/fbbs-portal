@@ -12147,6 +12147,14 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .portfolio-analytics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-analytics-card {
+    overflow-x: auto;
+  }
+
   .portfolio-ladder-row {
     grid-template-columns: 44px 1fr 82px;
   }

@@ -926,6 +926,43 @@ function assertPortfolioParser() {
     agencyRows[48] = ['', '3130AL7A6', 'FHLB STEP UP', 500, 2.0, 'Step', 47904, '', 500.0, 454.5, -45.5, 100, 90.9, 2.00, 2.00, 4.10, 17, 4.5, 0.23, 'AFS'];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(agencyRows), 'Agency');
 
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Scenario Summary'],
+      ['', 'evaldate'],
+      ['', '', '', 'BK VAL(000)', 'MKT VAL(000)', 'G/L', 'G/L(%)', 'BK PX', 'MKT PX', 'PX % CHG', 'YTW(%)', 'BK YTW(%)'],
+      ['', '', '-300', '990', '1,040', '50,000', '5.05', '99.0', '104.0', '4.00', '3.10', '2.10'],
+      ['', '', 'Base', '990', '920', '-70,000', '-7.07', '99.0', '92.0', '0.00', '4.50', '2.10'],
+      ['', '', '+300', '990', '840', '-150,000', '-15.15', '99.0', '84.0', '-8.70', '6.20', '2.10']
+    ]), 'Scenario Summary');
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Total Return Analysis'],
+      ['', 'evaldate'],
+      ['', '', '', '2 Years Forward'],
+      ['', '', '', 'Sector', -300, -100, 0, 100, 300],
+      ['', '', '', 'Investments', 6.4, 5.1, 3.5, 1.8, -1.7],
+      ['', '', '', 'Agency', 5.0, 4.4, 4.0, 3.6, 2.8]
+    ]), 'Total Return Analysis');
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Portfolio Peer Review'],
+      ['', 'evaldate'],
+      ['', 'Sector', '', 'Par\n(000)', 'Sector Allocation (%)', '', '', 'WAC (%)', '', '', 'WAM'],
+      ['', '', '', '', 'Port', 'Peer', 'Diff', 'Port', 'Peer', 'Diff', 'Port', 'Peer'],
+      ['', 'Agency', '', 1000, 55.5, 42.5, '', 2.25, 3.10, '', 4.5, 3.1],
+      ['', 'Total', '', 1000, 100, 100, '', 2.25, 3.10, '', 4.5, 3.1],
+      ['', 'Peer: 12 banks in the same working group.']
+    ]), 'Peer Review');
+
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Key Rate Duration'],
+      ['', 'evaldate'],
+      ['', 'CUSIP', 'Description', 'Par(000)', 'Bk Val\n(000)', 'Mkt Val\n(000)', 'G/L\n(000)', 'KRD\n0.25', 'KRD1', 'KRD3', 'Eff. Dur'],
+      ['', 'Investments', '', '1,000', '990', '920', '-70', '0.05', '0.20', '0.60', '3.20'],
+      ['', 'Agency', '', '1,000', '990', '920', '-70', '0.05', '0.20', '0.60', '3.20'],
+      ['', '3130AKYZ3', 'FHLB CALLABLE QUARTERLY', '500', '499', '452', '-47', '0.01', '0.10', '0.20', '3.20']
+    ]), 'Key Rate Duration');
+
     XLSX.writeFile(wb, filePath);
 
     const parsed = parsePortfolioWorkbook(filePath);
@@ -942,6 +979,13 @@ function assertPortfolioParser() {
     assert.strictEqual(first.maturity, '2029-08-24');
     assert(Math.abs(first.yieldGap - 3.07) < 0.01, 'yieldGap should be ~3.07, got ' + first.yieldGap);
     assert.strictEqual(parsed.cusipIndex['3130AKYZ3'].sector, 'Agency');
+    assert.strictEqual(parsed.analytics.scenarioSummary.length, 3);
+    assert.strictEqual(parsed.analytics.scenarioSummary[1].shock, 0);
+    assert.strictEqual(parsed.analytics.scenarioSummary[1].marketValue, 920000);
+    assert.strictEqual(parsed.analytics.totalReturn[0].returns['300'], -1.7);
+    assert.strictEqual(parsed.analytics.peerReview[0].peerAllocationPct, 42.5);
+    assert.strictEqual(parsed.analytics.keyRateDuration[0].label, 'Investments');
+    assert.strictEqual(parsed.analytics.keyRateDuration[0].values['Eff. Dur'], 3.2);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
