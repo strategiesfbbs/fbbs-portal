@@ -700,6 +700,25 @@ function listActivitiesForBank(outputDir, bankId, options = {}) {
   return rows.map(mapActivityRow);
 }
 
+function deleteBankActivity(outputDir, bankId, activityId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(activityId || '');
+  const bank = String(bankId || '');
+  if (!id || !bank) return null;
+  const rows = querySqliteJson(dbPath, `
+    ${activitySelectSql(`id = ${sqlString(id)} AND bank_id = ${sqlString(bank)}`)}
+    LIMIT 1;
+  `);
+  const activity = mapActivityRow(rows[0]);
+  if (!activity) return null;
+  runSqlite(dbPath, `
+    DELETE FROM bank_activities
+    WHERE id = ${sqlString(id)}
+      AND bank_id = ${sqlString(bank)};
+  `);
+  return activity;
+}
+
 function listRecentActivitiesByActor(outputDir, actorUsername, options = {}) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const username = String(actorUsername || '').toLowerCase();
@@ -986,6 +1005,7 @@ module.exports = {
   countBillingByState,
   coverageDatabasePathForDir,
   createBankContact,
+  deleteBankActivity,
   deleteBankContact,
   deleteProductFit,
   enqueueBilling,

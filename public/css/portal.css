@@ -9906,7 +9906,7 @@ body {
   border-radius: 8px;
   display: grid;
   gap: 12px;
-  grid-template-columns: 90px 1fr;
+  grid-template-columns: 90px minmax(0, 1fr) auto;
   padding: 9px 12px;
 }
 
@@ -9948,6 +9948,12 @@ body {
   margin: 4px 0 0;
 }
 
+.bank-activity-delete-btn {
+  align-self: center;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .bank-activity-empty {
   color: #5a615e;
   font-size: 12px;
@@ -9958,6 +9964,7 @@ body {
 @media (max-width: 700px) {
   .bank-activity-item { grid-template-columns: 1fr; }
   .bank-activity-kind { justify-self: start; }
+  .bank-activity-delete-btn { justify-self: start; }
 }
 
 /* Saved Views page */

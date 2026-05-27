@@ -11318,13 +11318,13 @@
     return '';
   }
 
-  function renderBankActivityPanel() {
+  function renderBankActivityPanel({ open = false } = {}) {
     const items = selectedBankActivities || [];
     const rows = items.length
       ? items.map(renderBankActivityRow).join('')
       : '<li class="bank-activity-empty">No activity yet. Coverage changes, notes, contacts, and strategy requests show up here.</li>';
     return `
-      <details class="bank-section bank-activity-section bank-activity-details" id="bankActivityPanel">
+      <details class="bank-section bank-activity-section bank-activity-details" id="bankActivityPanel" ${open ? 'open' : ''}>
         <summary class="bank-section-title">
           <span>Activity Timeline</span>
           <em>Open / close</em>
@@ -11338,8 +11338,11 @@
     const actor = item.actorDisplay || item.actorUsername || 'Unknown';
     const when = item.at ? formatRelativeAt(item.at) : '';
     const tooltip = item.at ? formatFullTimestamp(item.at) : '';
+    const deleteButton = item.id
+      ? `<button type="button" class="text-btn danger bank-activity-delete-btn" data-activity-delete="${escapeHtml(item.id)}">Delete</button>`
+      : '';
     return `
-      <li class="bank-activity-item ${bankActivityKindClass(item.kind)}">
+      <li class="bank-activity-item ${bankActivityKindClass(item.kind)}" data-activity-row="${escapeHtml(item.id || '')}">
         <span class="bank-activity-kind">${escapeHtml(bankActivityKindLabel(item.kind))}</span>
         <div class="bank-activity-body">
           <p class="bank-activity-summary">${escapeHtml(item.summary || bankActivityKindLabel(item.kind))}</p>
@@ -11349,6 +11352,7 @@
             <time datetime="${escapeHtml(item.at)}" title="${escapeHtml(tooltip)}">${escapeHtml(when)}</time>
           </p>
         </div>
+        ${deleteButton}
       </li>
     `;
   }
@@ -11356,7 +11360,33 @@
   function refreshBankActivityPanel() {
     const panel = document.getElementById('bankActivityPanel');
     if (!panel) return;
-    panel.outerHTML = renderBankActivityPanel();
+    const wasOpen = panel.open;
+    panel.outerHTML = renderBankActivityPanel({ open: wasOpen });
+    wireBankActivityControls();
+  }
+
+  function wireBankActivityControls() {
+    const panel = document.getElementById('bankActivityPanel');
+    if (!panel) return;
+    panel.querySelectorAll('[data-activity-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteBankActivityById(btn.getAttribute('data-activity-delete')));
+    });
+  }
+
+  async function deleteBankActivityById(activityId) {
+    const bankId = bankActivityBankId || selectedBankId();
+    if (!bankId || !activityId) return;
+    if (!window.confirm('Delete this timeline activity? This only removes the timeline entry.')) return;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity/${encodeURIComponent(activityId)}`, { method: 'DELETE' });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      selectedBankActivities = (selectedBankActivities || []).filter(item => item.id !== activityId);
+      refreshBankActivityPanel();
+      showToast('Deleted timeline activity');
+    } catch (e) {
+      showToast(e.message || 'Could not delete timeline activity', true);
+    }
   }
 
   async function loadBankActivity(bankId) {

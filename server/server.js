@@ -87,6 +87,7 @@ const {
   addBankNote,
   countBillingByState,
   createBankContact,
+  deleteBankActivity,
   deleteBankContact,
   deleteProductFit,
   enqueueBilling,
@@ -7026,6 +7027,22 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, {
         activities: listActivitiesForBank(BANK_REPORTS_DIR, bankId, { limit })
       });
+    }
+
+    const bankActivityItemMatch = pathname.match(/^\/api\/banks\/([^/]+)\/activity\/([^/]+)$/);
+    if (bankActivityItemMatch && req.method === 'DELETE') {
+      const bankId = safeDecodeURIComponent(bankActivityItemMatch[1]);
+      const activityId = safeDecodeURIComponent(bankActivityItemMatch[2]);
+      if (!bankId || !activityId) return sendJSON(res, 400, { error: 'Invalid activity ID' });
+      const removed = deleteBankActivity(BANK_REPORTS_DIR, bankId, activityId);
+      if (!removed) return sendJSON(res, 404, { error: 'Activity not found' });
+      appendAuditLog({
+        event: 'bank-activity-delete',
+        bankId,
+        activityId,
+        kind: removed.kind
+      });
+      return sendJSON(res, 200, { success: true, activity: removed });
     }
 
     const bankContactsListMatch = pathname.match(/^\/api\/banks\/([^/]+)\/contacts$/);
