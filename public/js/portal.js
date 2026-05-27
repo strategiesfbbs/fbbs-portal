@@ -39,6 +39,9 @@
   let selectedTearSheetCoverage = null;
   let selectedBankCoverage = null;
   let selectedBankNotes = [];
+  let selectedBankContacts = [];
+  let bankContactsEditingId = null;
+  let bankContactsAdding = false;
   let activeCoverageBankId = null;
   let activeBankWorkspaceView = 'tear-sheet';
   let bankAssistantLastResponse = null;
@@ -8849,6 +8852,7 @@
       ${renderBankAssistantPanel()}
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
+      ${renderBankContactsPanel()}
       ${renderBankPeerBanner(bank.peerComparison)}
       ${renderBankIntelligencePanel(bank, values, recentPeriods)}
       ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
@@ -8886,6 +8890,7 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
+    wireBankContactsControls();
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
       btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
@@ -8943,7 +8948,10 @@
       const peer = intelligencePeer(bank, key);
       const current = intelligenceNumber(values[key]);
       const peerValue = peer ? intelligenceNumber(peer.peerValue) : null;
-      const delta = peer ? intelligenceNumber(peer.delta) : null;
+      const rawDelta = peer ? intelligenceNumber(peer.delta) : null;
+      const delta = rawDelta !== null
+        ? rawDelta
+        : (current !== null && peerValue !== null ? current - peerValue : null);
       return { label, key, type, current, peerValue, delta };
     }).filter(row => row.current !== null || row.peerValue !== null);
     if (!rows.length) {
@@ -9979,10 +9987,13 @@
       selectedBankAccountStatus = data.accountStatus || selectedBankAccountStatus || defaultBankAccountStatus();
       selectedTearSheetCoverage = data.saved || getSavedBankById(bankId);
       if (selectedBank && selectedBank.bank) selectedBank.bank.peerPreference = data.peerPreference || null;
+      selectedBankContacts = Array.isArray(data.contacts) ? data.contacts : [];
     } catch (e) {
       selectedTearSheetCoverage = getSavedBankById(bankId);
+      selectedBankContacts = [];
     }
     updateBankSaveButton();
+    refreshBankContactsPanel();
   }
 
   async function loadBankCoverage(bankId, options = {}) {
@@ -9995,19 +10006,23 @@
         selectedBank.bank.peerPreference = data.peerPreference || null;
       }
       selectedBankNotes = Array.isArray(data.notes) ? data.notes : [];
+      selectedBankContacts = Array.isArray(data.contacts) ? data.contacts : [];
       if (options.renderDetail) renderCoverageDetail();
       else {
         updateCoveragePanel();
         renderBankNotes();
       }
+      refreshBankContactsPanel();
     } catch (e) {
       selectedBankCoverage = getSavedBankById(bankId);
       selectedBankNotes = [];
+      selectedBankContacts = [];
       if (options.renderDetail) renderCoverageDetail();
       else {
         updateCoveragePanel();
         renderBankNotes(e.message);
       }
+      refreshBankContactsPanel();
     }
   }
 
@@ -10147,6 +10162,242 @@
     list.querySelectorAll('[data-note-id]').forEach(btn => {
       btn.addEventListener('click', () => deleteBankNote(btn.dataset.noteId));
     });
+  }
+
+  // ============ Bank Contacts (tear sheet) ============
+
+  function renderBankContactsPanel() {
+    const contacts = selectedBankContacts || [];
+    const rowsHtml = contacts.length
+      ? contacts.map(renderBankContactRow).join('')
+      : '<li class="bank-contact-empty">No contacts on file. Add the bank&rsquo;s CFO, treasurer, or relationship manager.</li>';
+    const formHtml = bankContactsAdding
+      ? renderBankContactForm(null, { mode: 'add' })
+      : `<button type="button" class="small-btn" id="bankContactAddBtn">+ Add contact</button>`;
+    return `
+      <section class="bank-section bank-contacts-section" id="bankContactsPanel">
+        <div class="bank-section-title">Contacts</div>
+        <ul class="bank-contacts-list" id="bankContactsList">${rowsHtml}</ul>
+        <div class="bank-contacts-toolbar">${formHtml}</div>
+      </section>
+    `;
+  }
+
+  function renderBankContactRow(contact) {
+    if (bankContactsEditingId === contact.id) {
+      return `<li class="bank-contact-row is-editing" data-contact-row="${escapeHtml(contact.id)}">${renderBankContactForm(contact, { mode: 'edit' })}</li>`;
+    }
+    const phone = contact.phone ? `<a class="bank-contact-link" href="tel:${escapeHtml(phoneToTelHref(contact.phone))}">${escapeHtml(contact.phone)}</a>` : '';
+    const email = contact.email ? `<a class="bank-contact-link" href="mailto:${escapeHtml(contact.email)}">${escapeHtml(contact.email)}</a>` : '';
+    const roleLine = contact.role || '';
+    const primaryBadge = contact.isPrimary ? '<span class="bank-contact-badge">Primary</span>' : '';
+    const meta = [phone, email].filter(Boolean).join(' &middot; ');
+    return `
+      <li class="bank-contact-row" data-contact-row="${escapeHtml(contact.id)}">
+        <div class="bank-contact-main">
+          <p class="bank-contact-name">${escapeHtml(contact.name)} ${primaryBadge}</p>
+          ${roleLine ? `<p class="bank-contact-role">${escapeHtml(roleLine)}</p>` : ''}
+          ${meta ? `<p class="bank-contact-meta">${meta}</p>` : ''}
+          ${contact.notes ? `<p class="bank-contact-notes">${escapeHtml(contact.notes).replace(/\n/g, '<br>')}</p>` : ''}
+        </div>
+        <div class="bank-contact-actions">
+          <button type="button" class="text-btn" data-contact-edit="${escapeHtml(contact.id)}">Edit</button>
+          <button type="button" class="text-btn danger" data-contact-delete="${escapeHtml(contact.id)}">Delete</button>
+        </div>
+      </li>
+    `;
+  }
+
+  function renderBankContactForm(contact, { mode } = { mode: 'add' }) {
+    const c = contact || { name: '', role: '', phone: '', email: '', isPrimary: false, notes: '' };
+    const submitLabel = mode === 'edit' ? 'Save' : 'Add Contact';
+    const idAttr = contact ? ` data-contact-form-id="${escapeHtml(contact.id)}"` : '';
+    return `
+      <form class="bank-contact-form" data-contact-form-mode="${escapeHtml(mode)}"${idAttr}>
+        <div class="bank-contact-form-row">
+          <label>
+            <span>Name</span>
+            <input type="text" name="name" required maxlength="200" value="${escapeHtml(c.name || '')}" placeholder="Full name">
+          </label>
+          <label>
+            <span>Role</span>
+            <input type="text" name="role" maxlength="120" value="${escapeHtml(c.role || '')}" placeholder="CFO, Treasurer, etc.">
+          </label>
+        </div>
+        <div class="bank-contact-form-row">
+          <label>
+            <span>Phone</span>
+            <input type="tel" name="phone" maxlength="40" value="${escapeHtml(c.phone || '')}" placeholder="(555) 123-4567">
+          </label>
+          <label>
+            <span>Email</span>
+            <input type="email" name="email" maxlength="180" value="${escapeHtml(c.email || '')}" placeholder="name@bank.com">
+          </label>
+        </div>
+        <label class="bank-contact-form-full">
+          <span>Notes</span>
+          <textarea name="notes" rows="2" maxlength="2000" placeholder="Optional context, preferences, follow-up">${escapeHtml(c.notes || '')}</textarea>
+        </label>
+        <label class="bank-contact-form-checkbox">
+          <input type="checkbox" name="isPrimary" ${c.isPrimary ? 'checked' : ''}>
+          <span>Primary contact for this bank</span>
+        </label>
+        <div class="bank-contact-form-actions">
+          <button type="submit" class="small-btn">${escapeHtml(submitLabel)}</button>
+          <button type="button" class="text-btn" data-contact-cancel>Cancel</button>
+        </div>
+      </form>
+    `;
+  }
+
+  function phoneToTelHref(phone) {
+    return String(phone || '').replace(/[^\d+,;*#x]/gi, '');
+  }
+
+  function refreshBankContactsPanel() {
+    const panel = document.getElementById('bankContactsPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankContactsPanel();
+    wireBankContactsControls();
+  }
+
+  function wireBankContactsControls() {
+    const panel = document.getElementById('bankContactsPanel');
+    if (!panel) return;
+
+    const addBtn = panel.querySelector('#bankContactAddBtn');
+    if (addBtn) {
+      addBtn.addEventListener('click', () => {
+        bankContactsAdding = true;
+        bankContactsEditingId = null;
+        refreshBankContactsPanel();
+        const firstInput = document.querySelector('#bankContactsPanel input[name="name"]');
+        if (firstInput) firstInput.focus();
+      });
+    }
+
+    panel.querySelectorAll('[data-contact-edit]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bankContactsEditingId = btn.getAttribute('data-contact-edit');
+        bankContactsAdding = false;
+        refreshBankContactsPanel();
+      });
+    });
+
+    panel.querySelectorAll('[data-contact-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteBankContactById(btn.getAttribute('data-contact-delete')));
+    });
+
+    panel.querySelectorAll('[data-contact-cancel]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bankContactsAdding = false;
+        bankContactsEditingId = null;
+        refreshBankContactsPanel();
+      });
+    });
+
+    panel.querySelectorAll('form[data-contact-form-mode]').forEach(form => {
+      form.addEventListener('submit', evt => {
+        evt.preventDefault();
+        submitBankContactForm(form);
+      });
+    });
+  }
+
+  function bankContactFormValues(form) {
+    const fd = new FormData(form);
+    return {
+      name: String(fd.get('name') || '').trim(),
+      role: String(fd.get('role') || '').trim(),
+      phone: String(fd.get('phone') || '').trim(),
+      email: String(fd.get('email') || '').trim(),
+      notes: String(fd.get('notes') || '').trim(),
+      isPrimary: fd.get('isPrimary') === 'on'
+    };
+  }
+
+  async function submitBankContactForm(form) {
+    const mode = form.getAttribute('data-contact-form-mode');
+    const values = bankContactFormValues(form);
+    if (!values.name) {
+      showToast('Contact name is required', true);
+      return;
+    }
+    if (mode === 'edit') {
+      const id = form.getAttribute('data-contact-form-id');
+      await updateBankContactById(id, values);
+    } else {
+      await createBankContactForCurrentBank(values);
+    }
+  }
+
+  async function createBankContactForCurrentBank(values) {
+    const bankId = selectedBankId();
+    if (!bankId) return showToast('No bank loaded', true);
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values)
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      bankContactsAdding = false;
+      await reloadBankContacts(bankId);
+      showToast('Contact saved');
+    } catch (e) {
+      showToast(e.message || 'Could not save contact', true);
+    }
+  }
+
+  async function updateBankContactById(contactId, values) {
+    if (!contactId) return;
+    try {
+      const res = await fetch(`/api/bank-contacts/${encodeURIComponent(contactId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values)
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      bankContactsEditingId = null;
+      await reloadBankContacts(selectedBankId());
+      showToast('Contact updated');
+    } catch (e) {
+      showToast(e.message || 'Could not update contact', true);
+    }
+  }
+
+  async function deleteBankContactById(contactId) {
+    if (!contactId) return;
+    if (!window.confirm('Delete this contact?')) return;
+    try {
+      const res = await fetch(`/api/bank-contacts/${encodeURIComponent(contactId)}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await readBankJson(res);
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      await reloadBankContacts(selectedBankId());
+      showToast('Contact deleted');
+    } catch (e) {
+      showToast(e.message || 'Could not delete contact', true);
+    }
+  }
+
+  async function reloadBankContacts(bankId) {
+    if (!bankId) {
+      selectedBankContacts = [];
+      refreshBankContactsPanel();
+      return;
+    }
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/contacts`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      selectedBankContacts = Array.isArray(data.contacts) ? data.contacts : [];
+    } catch (e) {
+      selectedBankContacts = [];
+    }
+    refreshBankContactsPanel();
   }
 
   function printBankProfile() {

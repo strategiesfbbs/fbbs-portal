@@ -82,8 +82,22 @@ function ensureCoverageDatabase(outputDir) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS bank_contacts (
+      id TEXT PRIMARY KEY,
+      bank_id TEXT NOT NULL,
+      cert_number TEXT,
+      name TEXT NOT NULL,
+      role TEXT,
+      phone TEXT,
+      email TEXT,
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_bank_coverage_priority ON bank_coverage(priority, next_action_date);
     CREATE INDEX IF NOT EXISTS idx_bank_notes_bank_created ON bank_notes(bank_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bank_contacts_bank ON bank_contacts(bank_id, is_primary DESC, name COLLATE NOCASE ASC);
   `);
   return dbPath;
 }
@@ -376,18 +390,202 @@ function removePreferredPeerGroup(outputDir, bankId) {
   return { success: true };
 }
 
+// ---------- Bank contacts ----------
+
+function cleanPhone(value) {
+  if (value === undefined || value === null) return null;
+  const cleaned = String(value).replace(/[^\d+()\-.\s,extEXTx]/g, '').replace(/\s+/g, ' ').trim();
+  return cleaned ? cleaned.slice(0, 40) : null;
+}
+
+function cleanEmail(value) {
+  if (value === undefined || value === null) return null;
+  const cleaned = String(value).trim();
+  if (!cleaned) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned)) return null;
+  return cleaned.slice(0, 180);
+}
+
+function contactSelectSql(where = '1 = 1') {
+  return `
+    SELECT
+      id AS id,
+      bank_id AS bankId,
+      cert_number AS certNumber,
+      name AS name,
+      role AS role,
+      phone AS phone,
+      email AS email,
+      is_primary AS isPrimary,
+      notes AS notes,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM bank_contacts
+    WHERE ${where}
+  `;
+}
+
+function mapContactRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    bankId: row.bankId,
+    certNumber: row.certNumber || '',
+    name: row.name || '',
+    role: row.role || '',
+    phone: row.phone || '',
+    email: row.email || '',
+    isPrimary: Boolean(Number(row.isPrimary || 0)),
+    notes: row.notes || '',
+    createdAt: row.createdAt || '',
+    updatedAt: row.updatedAt || ''
+  };
+}
+
+function contactOrderBy() {
+  return `
+    ORDER BY is_primary DESC,
+             name COLLATE NOCASE ASC,
+             created_at ASC
+  `;
+}
+
+function listContactsForBank(outputDir, bankId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(bankId || '');
+  if (!id) return [];
+  const rows = querySqliteJson(dbPath, `
+    ${contactSelectSql(`bank_id = ${sqlString(id)}`)}
+    ${contactOrderBy()}
+    LIMIT 200;
+  `);
+  return rows.map(mapContactRow);
+}
+
+function listContactsForBanks(outputDir, bankIds = []) {
+  const ids = [...new Set((bankIds || []).map(id => String(id || '').trim()).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    ${contactSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)}
+    ${contactOrderBy()};
+  `);
+  const byBank = new Map(ids.map(id => [id, []]));
+  rows.forEach(row => {
+    const contact = mapContactRow(row);
+    if (!contact) return;
+    if (!byBank.has(contact.bankId)) byBank.set(contact.bankId, []);
+    byBank.get(contact.bankId).push(contact);
+  });
+  return byBank;
+}
+
+function getBankContact(outputDir, contactId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `${contactSelectSql(`id = ${sqlString(String(contactId || ''))}`)} LIMIT 1;`);
+  return rows.length ? mapContactRow(rows[0]) : null;
+}
+
+function createBankContact(outputDir, bankSummary, input = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const summary = normalizeBankSummary(bankSummary);
+  if (!summary.bankId) throw new Error('Bank ID is required');
+  const name = cleanText(input.name, 200);
+  if (!name) throw new Error('Contact name is required');
+  const phone = cleanPhone(input.phone);
+  const email = cleanEmail(input.email);
+  const role = cleanText(input.role, 120);
+  const notes = cleanMultilineText(input.notes, 2000);
+  const isPrimary = input.isPrimary ? 1 : 0;
+  const now = new Date().toISOString();
+  const id = crypto.randomUUID();
+
+  if (isPrimary) {
+    runSqlite(dbPath, `
+      UPDATE bank_contacts SET is_primary = 0, updated_at = ${sqlString(now)}
+      WHERE bank_id = ${sqlString(summary.bankId)};
+    `);
+  }
+
+  runSqlite(dbPath, `
+    INSERT INTO bank_contacts (
+      id, bank_id, cert_number, name, role, phone, email, is_primary, notes, created_at, updated_at
+    ) VALUES (
+      ${sqlString(id)},
+      ${sqlString(summary.bankId)},
+      ${sqlString(summary.certNumber)},
+      ${sqlString(name)},
+      ${sqlString(role)},
+      ${sqlString(phone)},
+      ${sqlString(email)},
+      ${isPrimary},
+      ${sqlString(notes)},
+      ${sqlString(now)},
+      ${sqlString(now)}
+    );
+  `);
+  return getBankContact(outputDir, id);
+}
+
+function updateBankContact(outputDir, contactId, input = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const existing = getBankContact(outputDir, contactId);
+  if (!existing) throw new Error('Contact not found');
+  const name = input.name !== undefined ? (cleanText(input.name, 200) || existing.name) : existing.name;
+  if (!name) throw new Error('Contact name is required');
+  const role = input.role !== undefined ? cleanText(input.role, 120) : existing.role;
+  const phone = input.phone !== undefined ? cleanPhone(input.phone) : existing.phone;
+  const email = input.email !== undefined ? cleanEmail(input.email) : existing.email;
+  const notes = input.notes !== undefined ? cleanMultilineText(input.notes, 2000) : existing.notes;
+  const isPrimary = input.isPrimary !== undefined ? (input.isPrimary ? 1 : 0) : (existing.isPrimary ? 1 : 0);
+  const now = new Date().toISOString();
+
+  if (isPrimary) {
+    runSqlite(dbPath, `
+      UPDATE bank_contacts SET is_primary = 0, updated_at = ${sqlString(now)}
+      WHERE bank_id = ${sqlString(existing.bankId)} AND id <> ${sqlString(existing.id)};
+    `);
+  }
+
+  runSqlite(dbPath, `
+    UPDATE bank_contacts SET
+      name = ${sqlString(name)},
+      role = ${sqlString(role)},
+      phone = ${sqlString(phone)},
+      email = ${sqlString(email)},
+      is_primary = ${isPrimary},
+      notes = ${sqlString(notes)},
+      updated_at = ${sqlString(now)}
+    WHERE id = ${sqlString(existing.id)};
+  `);
+  return getBankContact(outputDir, existing.id);
+}
+
+function deleteBankContact(outputDir, contactId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const existing = getBankContact(outputDir, contactId);
+  runSqlite(dbPath, `DELETE FROM bank_contacts WHERE id = ${sqlString(String(contactId || ''))};`);
+  return existing || { id: contactId };
+}
+
 module.exports = {
   COVERAGE_DATABASE_FILENAME,
   addBankNote,
   coverageDatabasePathForDir,
+  createBankContact,
+  deleteBankContact,
   ensureCoverageDatabase,
+  getBankContact,
   getBankCoverage,
   getPreferredPeerGroup,
   getSavedBankCoverageMap,
+  listContactsForBank,
+  listContactsForBanks,
   listSavedBanks,
   removeBankNote,
   removePreferredPeerGroup,
   removeSavedBank,
   setPreferredPeerGroup,
+  updateBankContact,
   upsertSavedBank
 };

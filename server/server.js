@@ -84,13 +84,18 @@ const {
 } = require('./wirp-store');
 const {
   addBankNote,
+  createBankContact,
+  deleteBankContact,
+  getBankContact,
   getBankCoverage,
   getPreferredPeerGroup,
   getSavedBankCoverageMap,
+  listContactsForBank,
   listSavedBanks,
   removeBankNote,
   removeSavedBank,
   setPreferredPeerGroup,
+  updateBankContact,
   upsertSavedBank
 } = require('./bank-coverage-store');
 const {
@@ -3689,6 +3694,59 @@ async function handleAddBankNote(req, res, bankId) {
   }
 }
 
+async function handleCreateBankContact(req, res, bankId) {
+  try {
+    const body = await readJsonBody(req);
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+    const contact = createBankContact(BANK_REPORTS_DIR, summary, body || {});
+    appendAuditLog({
+      event: 'bank-contact-create',
+      bankId,
+      contactId: contact && contact.id,
+      isPrimary: contact && contact.isPrimary
+    });
+    return sendJSON(res, 200, { contact });
+  } catch (err) {
+    log('error', 'Bank contact create failed:', err.message);
+    return sendJSON(res, err.statusCode || 400, { error: err.message || 'Could not save contact' });
+  }
+}
+
+async function handleUpdateBankContact(req, res, contactId) {
+  try {
+    const body = await readJsonBody(req);
+    const existing = getBankContact(BANK_REPORTS_DIR, contactId);
+    if (!existing) return sendJSON(res, 404, { error: 'Contact not found' });
+    const contact = updateBankContact(BANK_REPORTS_DIR, contactId, body || {});
+    appendAuditLog({
+      event: 'bank-contact-update',
+      bankId: contact.bankId,
+      contactId: contact.id,
+      isPrimary: contact.isPrimary
+    });
+    return sendJSON(res, 200, { contact });
+  } catch (err) {
+    log('error', 'Bank contact update failed:', err.message);
+    return sendJSON(res, err.statusCode || 400, { error: err.message || 'Could not update contact' });
+  }
+}
+
+function handleDeleteBankContact(req, res, contactId) {
+  try {
+    const removed = deleteBankContact(BANK_REPORTS_DIR, contactId);
+    appendAuditLog({
+      event: 'bank-contact-delete',
+      bankId: removed && removed.bankId,
+      contactId: removed && removed.id
+    });
+    return sendJSON(res, 200, { success: true });
+  } catch (err) {
+    log('error', 'Bank contact delete failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not delete contact' });
+  }
+}
+
 async function handleCreateStrategyRequest(req, res) {
   try {
     const body = await readJsonBody(req);
@@ -6343,8 +6401,33 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, {
         ...coverage,
         accountStatus: summary ? effectiveAccountStatus(summary, statuses, coverageMap) : null,
-        peerPreference: getPreferredPeerGroup(BANK_REPORTS_DIR, bankId)
+        peerPreference: getPreferredPeerGroup(BANK_REPORTS_DIR, bankId),
+        contacts: listContactsForBank(BANK_REPORTS_DIR, bankId)
       });
+    }
+
+    const bankContactsListMatch = pathname.match(/^\/api\/banks\/([^/]+)\/contacts$/);
+    if (bankContactsListMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankContactsListMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return sendJSON(res, 200, { contacts: listContactsForBank(BANK_REPORTS_DIR, bankId) });
+    }
+    if (bankContactsListMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankContactsListMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return await handleCreateBankContact(req, res, bankId);
+    }
+
+    const bankContactMatch = pathname.match(/^\/api\/bank-contacts\/([^/]+)$/);
+    if (bankContactMatch && req.method === 'PATCH') {
+      const contactId = safeDecodeURIComponent(bankContactMatch[1]);
+      if (!contactId) return sendJSON(res, 400, { error: 'Invalid contact ID' });
+      return await handleUpdateBankContact(req, res, contactId);
+    }
+    if (bankContactMatch && req.method === 'DELETE') {
+      const contactId = safeDecodeURIComponent(bankContactMatch[1]);
+      if (!contactId) return sendJSON(res, 400, { error: 'Invalid contact ID' });
+      return handleDeleteBankContact(req, res, contactId);
     }
 
     if (bankCoverageMatch && req.method === 'DELETE') {

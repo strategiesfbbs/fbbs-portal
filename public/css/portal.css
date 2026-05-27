@@ -9232,6 +9232,145 @@ body {
   padding: 0 12px 14px;
 }
 
+/* Bank contacts panel (tear sheet) */
+.bank-contacts-section {
+  padding-bottom: 12px;
+}
+
+.bank-contacts-list {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 6px 12px 0;
+}
+
+.bank-contact-row {
+  align-items: flex-start;
+  background: #fbfcfb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 12px;
+}
+
+.bank-contact-row.is-editing { background: #f3f7f4; }
+
+.bank-contact-name {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.bank-contact-badge {
+  background: rgba(160, 217, 180, 0.42);
+  border-radius: 999px;
+  color: #244233;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-left: 6px;
+  padding: 1px 7px;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+
+.bank-contact-role {
+  color: #5a615e;
+  font-size: 12px;
+  margin: 2px 0 0;
+}
+
+.bank-contact-meta {
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+.bank-contact-link {
+  color: #155032;
+  text-decoration: underline;
+}
+
+.bank-contact-link:hover { text-decoration: none; }
+
+.bank-contact-notes {
+  color: #3d4441;
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.bank-contact-empty {
+  color: #5a615e;
+  font-size: 12px;
+  font-style: italic;
+  padding: 8px 12px;
+}
+
+.bank-contact-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bank-contacts-toolbar {
+  padding: 12px;
+}
+
+.bank-contact-form {
+  background: #fff;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  width: 100%;
+}
+
+.bank-contact-form-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 700px) {
+  .bank-contact-form-row { grid-template-columns: 1fr; }
+}
+
+.bank-contact-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.bank-contact-form label span { color: #5a615e; }
+
+.bank-contact-form input,
+.bank-contact-form textarea {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font: inherit;
+  padding: 6px 8px;
+}
+
+.bank-contact-form-full { grid-column: 1 / -1; }
+
+.bank-contact-form-checkbox {
+  align-items: center;
+  flex-direction: row !important;
+  font-size: 12px;
+  gap: 6px;
+}
+
+.bank-contact-form-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .bank-note {
   align-items: start;
   background: #fbfcfb;
