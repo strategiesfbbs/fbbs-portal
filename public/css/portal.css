@@ -8645,9 +8645,19 @@ body {
 .portfolio-review-head,
 .portfolio-review-screen-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 14px;
   align-items: flex-start;
+}
+
+.portfolio-review-screen-head > div {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.portfolio-review-screen-head > input {
+  flex: 0 1 auto;
 }
 
 .portfolio-review-head h3 {
@@ -8747,6 +8757,7 @@ body {
   border: 1px solid #cfe0d5;
   border-radius: 8px;
   background: #f8fbf7;
+  container-type: inline-size;
   padding: 14px;
 }
 
@@ -8758,7 +8769,13 @@ body {
 .portfolio-decision-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+}
+
+@media (max-width: 720px) {
+  .portfolio-decision-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .portfolio-decision-commentary {
@@ -8804,9 +8821,18 @@ body {
 }
 
 .portfolio-action-bar {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 740px) {
+  .portfolio-action-bar { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.portfolio-action-bar .small-btn {
+  text-align: center;
+  white-space: nowrap;
 }
 
 .portfolio-action-bar .small-btn.primary {
