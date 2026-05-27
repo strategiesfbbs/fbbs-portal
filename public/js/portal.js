@@ -7379,7 +7379,9 @@
             `).join('')}
           </div>
         </section>
+        ${portfolioDecisionLayerHtml(data)}
         ${portfolioAnalyticsSection(data.analytics || {})}
+        ${portfolioOpportunitiesHtml(data.opportunities || [])}
         <section class="portfolio-review-section portfolio-review-two-col">
           <div>
             <h4>Sector Mix</h4>
@@ -7410,6 +7412,63 @@
           </div>
         </section>
       </article>
+    `;
+	  }
+
+  function portfolioDecisionLayerHtml(data) {
+    const layer = data.decisionLayer || {};
+    const commentary = Array.isArray(layer.commentary) ? layer.commentary : [];
+    const priorities = Array.isArray(layer.priorities) ? layer.priorities : [];
+    const actions = Array.isArray(layer.actions) ? layer.actions : [];
+    if (!commentary.length && !priorities.length && !actions.length) return '';
+    return `
+      <section class="portfolio-review-section portfolio-decision-section">
+        <div class="portfolio-review-screen-head">
+          <h4>FBBS Action Readout</h4>
+          <span class="portfolio-decision-source">THC analytics + call-report context</span>
+        </div>
+        <div class="portfolio-decision-grid">
+          <div class="portfolio-decision-commentary">
+            ${commentary.map(line => `<p>${escapeHtml(line)}</p>`).join('')}
+          </div>
+          <div class="portfolio-decision-priorities">
+            ${priorities.length ? priorities.map(priority => `
+              <span class="${priority.tone === 'High' ? 'high' : ''}">
+                <strong>${escapeHtml(priority.title || 'Priority')}</strong>
+                <em>${escapeHtml(priority.detail || '')}</em>
+              </span>
+            `).join('') : '<span><strong>No dominant issue</strong><em>Review holdings screens and sector mix before creating a task.</em></span>'}
+          </div>
+        </div>
+        ${actions.length ? `
+          <div class="portfolio-action-bar">
+            ${actions.map(action => `
+              <button type="button" class="small-btn ${action.type === 'strategy' ? 'primary' : ''}" data-portfolio-action="${escapeHtml(action.id)}">
+                ${escapeHtml(action.label || 'Create Action')}
+              </button>
+            `).join('')}
+          </div>
+        ` : ''}
+      </section>
+    `;
+  }
+
+  function portfolioOpportunitiesHtml(rows) {
+    if (!rows.length) return '';
+    return `
+      <section class="portfolio-review-section">
+        <h4>Opportunity Worklist</h4>
+        <div class="portfolio-opportunity-list">
+          ${rows.map(row => `
+            <article class="${row.severity === 'High' ? 'high' : ''}">
+              <span>${escapeHtml(row.severity || 'Review')}</span>
+              <strong>${escapeHtml(row.type || 'Opportunity')}</strong>
+              <p>${escapeHtml(row.evidence || '')}</p>
+              <em>${escapeHtml(row.nextStep || '')}</em>
+            </article>
+          `).join('')}
+        </div>
+      </section>
     `;
   }
 
@@ -7487,7 +7546,19 @@
       <div class="portfolio-analytics-card">
         <h5>Portfolio Peer Review</h5>
         <table class="portfolio-mini-table">
-          <thead><tr><th>Sector</th><th>Alloc</th><th>Peer</th><th>WAC</th><th>Peer</th></tr></thead>
+          <thead>
+            <tr>
+              <th rowspan="2">Sector</th>
+              <th colspan="2" class="group-head">Allocation</th>
+              <th colspan="2" class="group-head">Weighted Avg Coupon</th>
+            </tr>
+            <tr>
+              <th>You</th>
+              <th>Peer</th>
+              <th>You</th>
+              <th>Peer</th>
+            </tr>
+          </thead>
           <tbody>${rows.slice(0, 7).map(row => `
             <tr>
               <td>${escapeHtml(row.sector || '')}</td>
@@ -7505,11 +7576,17 @@
   function portfolioKeyRateTable(rows) {
     const investments = rows.find(row => /^investments$/i.test(row.label)) || rows[0];
     const labels = ['0.25', '1', '3', '5', '7', '10', '20', '30'].filter(key => investments && investments.values && investments.values[key] != null);
+    const formatBucketLabel = key => {
+      const n = Number(key);
+      if (!Number.isFinite(n)) return key;
+      if (n < 1) return `${(n * 12).toFixed(0)}M`;
+      return `${n}Y`;
+    };
     return `
       <div class="portfolio-analytics-card">
         <h5>Key Rate Duration</h5>
         <table class="portfolio-mini-table">
-          <thead><tr><th>Bucket</th>${labels.map(label => `<th>${escapeHtml(label)}</th>`).join('')}</tr></thead>
+          <thead><tr><th>Sector</th>${labels.map(label => `<th>${escapeHtml(formatBucketLabel(label))}</th>`).join('')}</tr></thead>
           <tbody>
             ${rows.slice(0, 5).map(row => `
               <tr>
@@ -7526,16 +7603,31 @@
   function portfolioSectorTable(rows) {
     if (!rows.length) return '<div class="bank-search-empty">No sector rows parsed.</div>';
     return `
-      <div class="reports-list-wrap compact">
-        <table class="reports-list portfolio-review-table">
-          <thead><tr><th>Sector</th><th>MV</th><th>Share</th><th>Book Yld</th><th>G/L</th></tr></thead>
+      <div class="reports-list-wrap compact portfolio-sector-wrap">
+        <table class="reports-list portfolio-review-table portfolio-sector-table">
+          <thead>
+            <tr>
+              <th>Sector</th>
+              <th class="num">MV</th>
+              <th class="num">Share</th>
+              <th class="num">Book Yld</th>
+              <th class="num">Mkt Yld</th>
+              <th class="num">Dur</th>
+              <th class="num">G/L</th>
+            </tr>
+          </thead>
           <tbody>${rows.map(row => `
             <tr>
-              <td><strong>${escapeHtml(row.sector || 'Other')}</strong><span>${escapeHtml(formatNumber(row.count || 0))} positions</span></td>
-              <td>${escapeHtml(formatMoney(row.marketValue))}</td>
-              <td>${escapeHtml(formatPercentTile(row.marketShare, 1))}</td>
-              <td>${escapeHtml(formatReviewYield(row.bookYield))}</td>
-              <td class="${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">${escapeHtml(formatMoney(row.gainLoss))}</td>
+              <td>
+                <strong>${escapeHtml(row.sector || 'Other')}</strong>
+                <span>${escapeHtml(formatNumber(row.count || 0))} position${row.count === 1 ? '' : 's'}</span>
+              </td>
+              <td class="num">${escapeHtml(formatMoney(row.marketValue))}</td>
+              <td class="num">${escapeHtml(formatPercentTile(row.marketShare, 1))}</td>
+              <td class="num">${escapeHtml(formatReviewYield(row.bookYield))}</td>
+              <td class="num">${escapeHtml(formatReviewYield(row.marketYield))}</td>
+              <td class="num">${row.effectiveDuration != null ? escapeHtml(row.effectiveDuration.toFixed(2)) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num ${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">${escapeHtml(formatMoney(row.gainLoss))}</td>
             </tr>
           `).join('')}</tbody>
         </table>
@@ -7565,27 +7657,48 @@
   function portfolioHoldingsTable(rows) {
     if (!rows.length) return '<div class="bank-search-empty">No positions match this screen.</div>';
     return `
-      <div class="reports-list-wrap">
-        <table class="reports-list portfolio-review-table">
-          <thead><tr><th>CUSIP</th><th>Description</th><th>Sector</th><th>Mat/Call</th><th>Par</th><th>Book/Market Yld</th><th>G/L</th><th>Dur/WAL</th></tr></thead>
-          <tbody>${rows.map(row => `
+      <div class="reports-list-wrap portfolio-holdings-wrap">
+        <table class="reports-list portfolio-review-table portfolio-holdings-table">
+          <thead>
+            <tr>
+              <th>CUSIP</th>
+              <th>Description</th>
+              <th>Sector</th>
+              <th>Mat / Call</th>
+              <th class="num">Par</th>
+              <th class="num">Book Yld</th>
+              <th class="num">Mkt Yld</th>
+              <th class="num">G/L</th>
+              <th class="num">Dur</th>
+              <th class="num">WAL</th>
+            </tr>
+          </thead>
+          <tbody>${rows.map(row => {
+            const matCall = [row.maturity, row.nextCall ? `Call ${row.nextCall}` : ''].filter(Boolean).join(' / ');
+            return `
             <tr>
               <td><code>${escapeHtml(row.cusip || '')}</code></td>
               <td><strong>${escapeHtml(row.description || 'Holding')}</strong><span>${escapeHtml(row.classification || '')}</span></td>
               <td>${escapeHtml(row.sector || '')}</td>
-              <td>${escapeHtml([row.maturity, row.nextCall ? `Call ${row.nextCall}` : ''].filter(Boolean).join(' / '))}</td>
-              <td>${escapeHtml(formatMoney(row.par))}</td>
-              <td>${escapeHtml(`${formatReviewYield(row.bookYield)} / ${formatReviewYield(row.marketYield)}`)}</td>
-              <td class="${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">${escapeHtml(formatMoney(row.gainLoss))}<br><small>${escapeHtml(formatPercentTile(row.gainLossPct, 2))}</small></td>
-              <td>${escapeHtml([row.effectiveDuration != null ? row.effectiveDuration.toFixed(2) : '', row.averageLife != null ? row.averageLife.toFixed(2) : ''].filter(Boolean).join(' / '))}</td>
+              <td>${matCall ? escapeHtml(matCall) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num">${escapeHtml(formatMoney(row.par))}</td>
+              <td class="num">${escapeHtml(formatReviewYield(row.bookYield))}</td>
+              <td class="num">${escapeHtml(formatReviewYield(row.marketYield))}</td>
+              <td class="num ${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">
+                ${escapeHtml(formatMoney(row.gainLoss))}
+                <small>${escapeHtml(formatPercentTile(row.gainLossPct, 2))}</small>
+              </td>
+              <td class="num">${row.effectiveDuration != null ? escapeHtml(row.effectiveDuration.toFixed(2)) : '<span class="muted-dash">—</span>'}</td>
+              <td class="num">${row.averageLife != null ? escapeHtml(row.averageLife.toFixed(2)) : '<span class="muted-dash">—</span>'}</td>
             </tr>
-          `).join('')}</tbody>
+          `;
+          }).join('')}</tbody>
         </table>
       </div>
     `;
   }
 
-  function portfolioSwapIdeasHtml(rows) {
+	  function portfolioSwapIdeasHtml(rows) {
     if (!rows.length) {
       return '<div class="bank-search-empty">No current-inventory swap ideas passed the hard breakeven/maturity rule today.</div>';
     }
@@ -7603,11 +7716,59 @@
               <b>${row.economics && row.economics.breakevenMonths != null ? escapeHtml(`${row.economics.breakevenMonths}mo breakeven`) : 'No loss breakeven'}</b>
             </div>
             <em>Buy: ${escapeHtml(row.offering && row.offering.label || '')}</em>
-            ${(row.rule && row.rule.warnings || []).length ? `<small>${escapeHtml(row.rule.warnings.join(' · '))}</small>` : ''}
+            ${(row.rule && row.rule.warnings || []).length ? `<small>${escapeHtml((row.rule.warnings || []).map(w => typeof w === 'string' ? w : (w && w.message) || '').filter(Boolean).join(' · '))}</small>` : ''}
           </article>
         `).join('')}
       </div>
     `;
+	  }
+
+  async function runPortfolioWorkflowAction(actionId) {
+    const review = portfolioReviewState.review || {};
+    const actions = review.decisionLayer && Array.isArray(review.decisionLayer.actions)
+      ? review.decisionLayer.actions
+      : [];
+    const action = actions.find(row => row.id === actionId);
+    if (!review.bankId || !action) return showToast('Choose a portfolio action first', true);
+    try {
+      if (action.type === 'product-fit') {
+        const res = await fetch(`/api/banks/${encodeURIComponent(review.bankId)}/product-fit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ product: action.product, notes: action.comments || action.summary || '' })
+        });
+        await readBankJson(res);
+        bankIntelligenceCache.delete(String(review.bankId));
+        showToast(`${action.product || 'Product fit'} flagged`);
+        return;
+      }
+
+      const payload = {
+        bankId: review.bankId,
+        requestType: action.requestType || 'Miscellaneous',
+        priority: action.priority || '3',
+        requestedBy: meState.rep ? meState.rep.displayName : '',
+        assignedTo: 'Strategies',
+        summary: action.summary || action.label || 'Portfolio review follow-up',
+        comments: action.comments || ''
+      };
+      const res = await fetch('/api/strategies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await readBankJson(res);
+      if (data.request) {
+        strategyRequests = [data.request, ...strategyRequests.filter(row => row.id !== data.request.id)];
+        STRATEGY_STATUSES.forEach(status => {
+          strategyCounts[status] = strategyRequests.filter(row => row.status === status).length;
+        });
+        loadStrategyNotifications();
+      }
+      showToast(`${action.requestType || 'Strategy'} request created`);
+    } catch (err) {
+      showToast(err.message || 'Could not create portfolio action', true);
+    }
   }
 
   function addSessionReport(type) {
@@ -7942,6 +8103,11 @@
       if (portfolioScreen) {
         portfolioReviewState.screen = portfolioScreen.dataset.portfolioScreen || 'topLosses';
         renderPortfolioReviewMount();
+        return;
+      }
+      const portfolioAction = clickTarget.closest('[data-portfolio-action]');
+      if (portfolioAction) {
+        runPortfolioWorkflowAction(portfolioAction.dataset.portfolioAction || '');
         return;
       }
       if (clickTarget.closest('#portfolioReviewRefreshBanksBtn')) {

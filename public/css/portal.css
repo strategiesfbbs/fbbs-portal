@@ -8588,6 +8588,78 @@ body {
   background: #fff8f7;
 }
 
+.portfolio-decision-section {
+  border: 1px solid #cfe0d5;
+  border-radius: 8px;
+  background: #f8fbf7;
+  padding: 14px;
+}
+
+.portfolio-decision-source {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.portfolio-decision-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+}
+
+.portfolio-decision-commentary {
+  display: grid;
+  gap: 8px;
+}
+
+.portfolio-decision-commentary p {
+  margin: 0;
+  color: #2d4035;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.portfolio-decision-priorities {
+  display: grid;
+  gap: 8px;
+}
+
+.portfolio-decision-priorities span {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+}
+
+.portfolio-decision-priorities span.high {
+  border-color: #d9a198;
+  background: #fff8f7;
+}
+
+.portfolio-decision-priorities strong {
+  font-size: 0.82rem;
+}
+
+.portfolio-decision-priorities em {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.portfolio-action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.portfolio-action-bar .small-btn.primary {
+  background: var(--racing-green);
+  border-color: var(--racing-green);
+  color: #fff;
+}
+
 .portfolio-analytics-section {
   border-top: 1px solid var(--border);
   padding-top: 4px;
@@ -8616,6 +8688,7 @@ body {
 .portfolio-mini-table {
   border-collapse: collapse;
   font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
   width: 100%;
 }
 
@@ -8632,6 +8705,16 @@ body {
   text-align: left;
 }
 
+.portfolio-mini-table th.group-head {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 .portfolio-mini-table tbody tr:last-child td {
   border-bottom: 0;
 }
@@ -8646,11 +8729,68 @@ body {
   overflow: auto;
 }
 
+.portfolio-review-table {
+  font-variant-numeric: tabular-nums;
+}
+
 .portfolio-review-table td span {
   display: block;
   color: var(--muted);
   font-size: 0.78rem;
   margin-top: 2px;
+}
+
+.portfolio-review-table th.num,
+.portfolio-review-table td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.portfolio-review-table .muted-dash {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.portfolio-holdings-wrap {
+  max-height: 480px;
+  overflow: auto;
+}
+
+.portfolio-holdings-table thead th {
+  background: var(--surface, #fff);
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  position: sticky;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 1;
+}
+
+.portfolio-holdings-table tbody td {
+  font-size: 0.82rem;
+  padding: 6px 8px;
+  vertical-align: top;
+}
+
+.portfolio-holdings-table tbody td code {
+  font-size: 0.78rem;
+}
+
+.portfolio-holdings-table tbody td.num small {
+  color: var(--muted);
+  display: block;
+  font-size: 0.72rem;
+  margin-top: 2px;
+}
+
+.portfolio-sector-table thead th {
+  font-size: 0.74rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.portfolio-sector-table tbody td {
+  font-size: 0.82rem;
 }
 
 .portfolio-ladder {
@@ -8732,6 +8872,46 @@ body {
   border-radius: 6px;
   padding: 7px;
   font-size: 0.78rem;
+}
+
+.portfolio-opportunity-list {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.portfolio-opportunity-list article {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+}
+
+.portfolio-opportunity-list article.high {
+  border-color: #d9a198;
+  background: #fff8f7;
+}
+
+.portfolio-opportunity-list span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.portfolio-opportunity-list strong {
+  font-size: 0.92rem;
+}
+
+.portfolio-opportunity-list p,
+.portfolio-opportunity-list em {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: normal;
+  line-height: 1.35;
+  margin: 0;
 }
 
 .portfolio-review-assumptions {
@@ -12345,6 +12525,10 @@ body {
   }
 
   .portfolio-review-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .portfolio-decision-grid {
     grid-template-columns: 1fr;
   }
 
