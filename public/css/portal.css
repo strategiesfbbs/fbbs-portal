@@ -8887,7 +8887,7 @@ body {
 .portfolio-analytics-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
 }
 
 .portfolio-analytics-card {
@@ -8896,7 +8896,13 @@ body {
   display: grid;
   gap: 8px;
   min-width: 0;
+  overflow: hidden;
   padding: 12px;
+}
+
+.portfolio-analytics-card .portfolio-mini-table-scroll {
+  margin: 0 -4px;
+  overflow-x: auto;
 }
 
 .portfolio-analytics-card h5 {
@@ -8906,22 +8912,29 @@ body {
 
 .portfolio-mini-table {
   border-collapse: collapse;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   font-variant-numeric: tabular-nums;
+  table-layout: auto;
   width: 100%;
 }
 
 .portfolio-mini-table th,
 .portfolio-mini-table td {
   border-bottom: 1px solid var(--border);
-  padding: 6px 5px;
+  padding: 5px 4px;
   text-align: right;
   white-space: nowrap;
 }
 
 .portfolio-mini-table th:first-child,
 .portfolio-mini-table td:first-child {
+  padding-left: 0;
   text-align: left;
+}
+
+.portfolio-mini-table th:last-child,
+.portfolio-mini-table td:last-child {
+  padding-right: 0;
 }
 
 .portfolio-mini-table th.group-head {
