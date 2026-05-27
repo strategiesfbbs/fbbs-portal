@@ -95,9 +95,23 @@ function ensureCoverageDatabase(outputDir) {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS bank_activities (
+      id TEXT PRIMARY KEY,
+      bank_id TEXT NOT NULL,
+      cert_number TEXT,
+      at TEXT NOT NULL,
+      actor_username TEXT,
+      actor_display TEXT,
+      kind TEXT NOT NULL,
+      summary TEXT,
+      ref_type TEXT,
+      ref_id TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_bank_coverage_priority ON bank_coverage(priority, next_action_date);
     CREATE INDEX IF NOT EXISTS idx_bank_notes_bank_created ON bank_notes(bank_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_bank_contacts_bank ON bank_contacts(bank_id, is_primary DESC, name COLLATE NOCASE ASC);
+    CREATE INDEX IF NOT EXISTS idx_bank_activities_bank_at ON bank_activities(bank_id, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bank_activities_actor_at ON bank_activities(actor_username, at DESC);
   `);
   return dbPath;
 }
@@ -568,6 +582,96 @@ function deleteBankContact(outputDir, contactId) {
   return existing || { id: contactId };
 }
 
+// ---------- Bank activity timeline ----------
+
+function activitySelectSql(where = '1 = 1') {
+  return `
+    SELECT
+      id AS id,
+      bank_id AS bankId,
+      cert_number AS certNumber,
+      at AS at,
+      actor_username AS actorUsername,
+      actor_display AS actorDisplay,
+      kind AS kind,
+      summary AS summary,
+      ref_type AS refType,
+      ref_id AS refId
+    FROM bank_activities
+    WHERE ${where}
+  `;
+}
+
+function mapActivityRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    bankId: row.bankId,
+    certNumber: row.certNumber || '',
+    at: row.at || '',
+    actorUsername: row.actorUsername || '',
+    actorDisplay: row.actorDisplay || '',
+    kind: row.kind || '',
+    summary: row.summary || '',
+    refType: row.refType || '',
+    refId: row.refId || ''
+  };
+}
+
+function recordBankActivity(outputDir, payload = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const bankId = cleanText(payload.bankId, 80);
+  if (!bankId) return null;
+  const kind = cleanText(payload.kind, 60);
+  if (!kind) return null;
+  const id = crypto.randomUUID();
+  const at = payload.at || new Date().toISOString();
+  runSqlite(dbPath, `
+    INSERT INTO bank_activities (
+      id, bank_id, cert_number, at, actor_username, actor_display,
+      kind, summary, ref_type, ref_id
+    ) VALUES (
+      ${sqlString(id)},
+      ${sqlString(bankId)},
+      ${sqlString(cleanText(payload.certNumber, 40))},
+      ${sqlString(at)},
+      ${sqlString(cleanText(payload.actorUsername, 80))},
+      ${sqlString(cleanText(payload.actorDisplay, 200))},
+      ${sqlString(kind)},
+      ${sqlString(cleanText(payload.summary, 500))},
+      ${sqlString(cleanText(payload.refType, 60))},
+      ${sqlString(cleanText(payload.refId, 80))}
+    );
+  `);
+  return { id, bankId, at, kind };
+}
+
+function listActivitiesForBank(outputDir, bankId, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(bankId || '');
+  if (!id) return [];
+  const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 100), 500));
+  const rows = querySqliteJson(dbPath, `
+    ${activitySelectSql(`bank_id = ${sqlString(id)}`)}
+    ORDER BY at DESC, id DESC
+    LIMIT ${limit};
+  `);
+  return rows.map(mapActivityRow);
+}
+
+function listRecentActivitiesByActor(outputDir, actorUsername, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const username = String(actorUsername || '').toLowerCase();
+  if (!username) return [];
+  const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 20), 200));
+  const rows = querySqliteJson(dbPath, `
+    ${activitySelectSql(`LOWER(actor_username) = ${sqlString(username)}`)}
+    ORDER BY at DESC
+    LIMIT ${limit};
+  `);
+  return rows.map(mapActivityRow);
+}
+
 module.exports = {
   COVERAGE_DATABASE_FILENAME,
   addBankNote,
@@ -579,9 +683,12 @@ module.exports = {
   getBankCoverage,
   getPreferredPeerGroup,
   getSavedBankCoverageMap,
+  listActivitiesForBank,
   listContactsForBank,
   listContactsForBanks,
+  listRecentActivitiesByActor,
   listSavedBanks,
+  recordBankActivity,
   removeBankNote,
   removePreferredPeerGroup,
   removeSavedBank,

@@ -90,8 +90,10 @@ const {
   getBankCoverage,
   getPreferredPeerGroup,
   getSavedBankCoverageMap,
+  listActivitiesForBank,
   listContactsForBank,
   listSavedBanks,
+  recordBankActivity,
   removeBankNote,
   removeSavedBank,
   setPreferredPeerGroup,
@@ -119,6 +121,7 @@ const {
   addStrategyRequestFile,
   createStrategyRequest,
   deleteStrategyRequest,
+  getStrategyRequest,
   getStrategyRequestFile,
   listStrategyRequests,
   updateStrategyRequest
@@ -3622,6 +3625,7 @@ async function handleSaveBankCoverage(req, res) {
     const summary = getBankSummaryForCoverage(bankId);
     if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
 
+    const existing = getBankCoverage(BANK_REPORTS_DIR, bankId).saved;
     const saved = upsertSavedBank(BANK_REPORTS_DIR, summary, body);
     const accountStatus = upsertBankAccountStatus(BANK_REPORTS_DIR, summary, {
       status: saved.status,
@@ -3634,6 +3638,25 @@ async function handleSaveBankCoverage(req, res) {
       status: saved.status,
       priority: saved.priority
     });
+    const summaryBits = [];
+    if (!existing) {
+      summaryBits.push(`Saved bank · status ${saved.status} · priority ${saved.priority}`);
+    } else {
+      if (existing.status !== saved.status) summaryBits.push(`Status ${existing.status} → ${saved.status}`);
+      if (existing.priority !== saved.priority) summaryBits.push(`Priority ${existing.priority} → ${saved.priority}`);
+      if ((existing.owner || '') !== (saved.owner || '')) summaryBits.push(`Owner → ${saved.owner || '(none)'}`);
+      if ((existing.nextActionDate || '') !== (saved.nextActionDate || '')) summaryBits.push(`Next action → ${saved.nextActionDate || '(cleared)'}`);
+    }
+    if (summaryBits.length) {
+      logBankActivity(req, {
+        bankId,
+        certNumber: summary.certNumber,
+        kind: existing ? 'coverage-update' : 'coverage-save',
+        summary: summaryBits.join(' · '),
+        refType: 'coverage',
+        refId: bankId
+      });
+    }
     invalidateBankCaches();
     return sendJSON(res, 200, { saved, accountStatus });
   } catch (err) {
@@ -3651,6 +3674,7 @@ async function handleSaveBankAccountStatus(req, res) {
     const summary = getBankSummaryForCoverage(bankId);
     if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
 
+    const previousStatus = (getBankAccountStatuses(BANK_REPORTS_DIR, [bankId]).get(String(bankId)) || {}).status || '';
     const accountStatus = upsertBankAccountStatus(BANK_REPORTS_DIR, summary, {
       status: body.status,
       source: 'manual'
@@ -3665,6 +3689,18 @@ async function handleSaveBankAccountStatus(req, res) {
       bankId,
       status: accountStatus.status
     });
+    if (previousStatus !== accountStatus.status) {
+      logBankActivity(req, {
+        bankId,
+        certNumber: summary.certNumber,
+        kind: 'status-change',
+        summary: previousStatus
+          ? `Status ${previousStatus} → ${accountStatus.status}`
+          : `Status set to ${accountStatus.status}`,
+        refType: 'coverage',
+        refId: bankId
+      });
+    }
     invalidateBankCaches();
     return sendJSON(res, 200, { accountStatus, saved });
   } catch (err) {
@@ -3686,6 +3722,15 @@ async function handleAddBankNote(req, res, bankId) {
       bankId,
       noteId: note && note.id
     });
+    const notePreview = String(note && note.text || '').replace(/\s+/g, ' ').slice(0, 140);
+    logBankActivity(req, {
+      bankId,
+      certNumber: summary.certNumber,
+      kind: 'note',
+      summary: notePreview || 'Added a note',
+      refType: 'note',
+      refId: note && note.id
+    });
     invalidateBankCaches();
     return sendJSON(res, 200, { note });
   } catch (err) {
@@ -3706,6 +3751,14 @@ async function handleCreateBankContact(req, res, bankId) {
       contactId: contact && contact.id,
       isPrimary: contact && contact.isPrimary
     });
+    logBankActivity(req, {
+      bankId,
+      certNumber: summary.certNumber,
+      kind: 'contact-add',
+      summary: `Added contact ${contact.name}${contact.role ? ` (${contact.role})` : ''}${contact.isPrimary ? ' · primary' : ''}`,
+      refType: 'contact',
+      refId: contact && contact.id
+    });
     return sendJSON(res, 200, { contact });
   } catch (err) {
     log('error', 'Bank contact create failed:', err.message);
@@ -3725,6 +3778,14 @@ async function handleUpdateBankContact(req, res, contactId) {
       contactId: contact.id,
       isPrimary: contact.isPrimary
     });
+    logBankActivity(req, {
+      bankId: contact.bankId,
+      certNumber: contact.certNumber,
+      kind: 'contact-update',
+      summary: `Updated contact ${contact.name}${contact.role ? ` (${contact.role})` : ''}`,
+      refType: 'contact',
+      refId: contact.id
+    });
     return sendJSON(res, 200, { contact });
   } catch (err) {
     log('error', 'Bank contact update failed:', err.message);
@@ -3740,6 +3801,16 @@ function handleDeleteBankContact(req, res, contactId) {
       bankId: removed && removed.bankId,
       contactId: removed && removed.id
     });
+    if (removed && removed.bankId) {
+      logBankActivity(req, {
+        bankId: removed.bankId,
+        certNumber: removed.certNumber,
+        kind: 'contact-delete',
+        summary: `Removed contact ${removed.name || ''}`.trim(),
+        refType: 'contact',
+        refId: removed.id
+      });
+    }
     return sendJSON(res, 200, { success: true });
   } catch (err) {
     log('error', 'Bank contact delete failed:', err.message);
@@ -3764,6 +3835,14 @@ async function handleCreateStrategyRequest(req, res) {
       requestType: request && request.requestType,
       status: request && request.status
     });
+    logBankActivity(req, {
+      bankId,
+      certNumber: summary.certNumber,
+      kind: 'strategy-create',
+      summary: `Opened ${request.requestType}${request.summary ? ` · ${request.summary}` : ''}`.slice(0, 500),
+      refType: 'strategy',
+      refId: request && request.id
+    });
     return sendJSON(res, 200, { request });
   } catch (err) {
     log('error', 'Strategy request create failed:', err.message);
@@ -3777,6 +3856,7 @@ async function handleUpdateStrategyRequest(req, res, id) {
     if (body && (body.action === 'delete' || body.delete === true)) {
       return handleDeleteStrategyRequest(req, res, id);
     }
+    const existing = getStrategyRequest(BANK_REPORTS_DIR, id);
     const request = updateStrategyRequest(BANK_REPORTS_DIR, id, body);
     if (!request) return sendJSON(res, 404, { error: 'Strategy request not found' });
     appendAuditLog({
@@ -3786,6 +3866,24 @@ async function handleUpdateStrategyRequest(req, res, id) {
       requestType: request.requestType,
       status: request.status
     });
+    const bits = [];
+    if (existing) {
+      if (existing.status !== request.status) bits.push(`${request.requestType}: ${existing.status} → ${request.status}`);
+      if (existing.assignedTo !== request.assignedTo) bits.push(`Assigned → ${request.assignedTo || '(none)'}`);
+      if (existing.priority !== request.priority) bits.push(`Priority ${existing.priority} → ${request.priority}`);
+      if (existing.isArchived !== request.isArchived && request.isArchived) bits.push('Archived');
+      if (existing.isArchived !== request.isArchived && !request.isArchived) bits.push('Unarchived');
+    }
+    if (bits.length) {
+      logBankActivity(req, {
+        bankId: request.bankId,
+        certNumber: request.certNumber,
+        kind: 'strategy-update',
+        summary: bits.join(' · ').slice(0, 500),
+        refType: 'strategy',
+        refId: request.id
+      });
+    }
     return sendJSON(res, 200, { request });
   } catch (err) {
     log('error', 'Strategy request update failed:', err.message);
@@ -3803,6 +3901,14 @@ function handleDeleteStrategyRequest(req, res, id) {
       bankId: request.bankId,
       requestType: request.requestType,
       status: request.status
+    });
+    logBankActivity(req, {
+      bankId: request.bankId,
+      certNumber: request.certNumber,
+      kind: 'strategy-delete',
+      summary: `Deleted ${request.requestType} request`,
+      refType: 'strategy',
+      refId: request.id
     });
     return sendJSON(res, 200, { success: true, deleted: request });
   } catch (err) {
@@ -4143,6 +4249,7 @@ function buildPortfolioReview(bankId, query) {
     flags: buildPortfolioReviewFlags(positions, sectors, reviewSummary, profile),
     sectors,
     ladder: buildPortfolioLadder(positions, parsedHoldings.asOfDate || inventory.asOfDate),
+    analytics: parsedHoldings.analytics || {},
     screens: {
       topLosses,
       lossPct,
@@ -5909,6 +6016,25 @@ function listKnownReps() {
   }
 }
 
+// Bank activity timeline writer. Pulls the actor from the request via the rep
+// identity layer so every per-bank action carries who did it. Failure here must
+// never fail the wrapping request — activity is observability, not the source
+// of truth for the change itself.
+function logBankActivity(req, payload) {
+  try {
+    if (!payload || !payload.bankId || !payload.kind) return null;
+    const rep = resolveRequestRep(req);
+    return recordBankActivity(BANK_REPORTS_DIR, {
+      ...payload,
+      actorUsername: payload.actorUsername || (rep ? rep.username : ''),
+      actorDisplay: payload.actorDisplay || (rep ? rep.displayName : '')
+    });
+  } catch (err) {
+    log('warn', 'recordBankActivity failed:', err.message);
+    return null;
+  }
+}
+
 async function handleMeOverride(req, res) {
   try {
     const body = await readJsonBody(req, 8 * 1024);
@@ -6406,6 +6532,16 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    const bankActivityMatch = pathname.match(/^\/api\/banks\/([^/]+)\/activity$/);
+    if (bankActivityMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankActivityMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      const limit = query.get('limit');
+      return sendJSON(res, 200, {
+        activities: listActivitiesForBank(BANK_REPORTS_DIR, bankId, { limit })
+      });
+    }
+
     const bankContactsListMatch = pathname.match(/^\/api\/banks\/([^/]+)\/contacts$/);
     if (bankContactsListMatch && req.method === 'GET') {
       const bankId = safeDecodeURIComponent(bankContactsListMatch[1]);
@@ -6435,6 +6571,13 @@ const server = http.createServer(async (req, res) => {
       if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
       removeSavedBank(BANK_REPORTS_DIR, bankId);
       appendAuditLog({ event: 'bank-coverage-remove', bankId });
+      logBankActivity(req, {
+        bankId,
+        kind: 'coverage-remove',
+        summary: 'Removed saved bank coverage',
+        refType: 'coverage',
+        refId: bankId
+      });
       invalidateBankCaches();
       return sendJSON(res, 200, { success: true });
     }

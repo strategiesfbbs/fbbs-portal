@@ -42,6 +42,9 @@
   let selectedBankContacts = [];
   let bankContactsEditingId = null;
   let bankContactsAdding = false;
+  let selectedBankActivities = [];
+  let bankActivityBankId = null;
+  let bankActivityRequestId = 0;
   let activeCoverageBankId = null;
   let activeBankWorkspaceView = 'tear-sheet';
   let bankAssistantLastResponse = null;
@@ -7177,6 +7180,7 @@
             `).join('')}
           </div>
         </section>
+        ${portfolioAnalyticsSection(data.analytics || {})}
         <section class="portfolio-review-section portfolio-review-two-col">
           <div>
             <h4>Sector Mix</h4>
@@ -7207,6 +7211,116 @@
           </div>
         </section>
       </article>
+    `;
+  }
+
+  function formatShockLabel(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return String(value || '');
+    if (n === 0) return 'Base';
+    return n > 0 ? `+${n}` : String(n);
+  }
+
+  function portfolioAnalyticsSection(analytics) {
+    const scenarioRows = Array.isArray(analytics.scenarioSummary) ? analytics.scenarioSummary : [];
+    const totalReturn = Array.isArray(analytics.totalReturn) ? analytics.totalReturn : [];
+    const peerReview = Array.isArray(analytics.peerReview) ? analytics.peerReview : [];
+    const krdRows = Array.isArray(analytics.keyRateDuration) ? analytics.keyRateDuration : [];
+    if (!scenarioRows.length && !totalReturn.length && !peerReview.length && !krdRows.length) return '';
+    return `
+      <section class="portfolio-review-section portfolio-analytics-section">
+        <h4>THC Scenario Analytics</h4>
+        <div class="portfolio-analytics-grid">
+          ${scenarioRows.length ? portfolioScenarioTable(scenarioRows) : ''}
+          ${totalReturn.length ? portfolioTotalReturnTable(totalReturn) : ''}
+          ${peerReview.length ? portfolioPeerReviewTable(peerReview) : ''}
+          ${krdRows.length ? portfolioKeyRateTable(krdRows) : ''}
+        </div>
+      </section>
+    `;
+  }
+
+  function portfolioScenarioTable(rows) {
+    const visible = rows.filter(row => [-300, -100, 0, 100, 300].includes(Number(row.shock)));
+    const displayRows = visible.length ? visible : rows.slice(0, 6);
+    return `
+      <div class="portfolio-analytics-card">
+        <h5>Rate Shock Summary</h5>
+        <table class="portfolio-mini-table">
+          <thead><tr><th>Shock</th><th>MV</th><th>G/L</th><th>Price Chg</th><th>YTW</th></tr></thead>
+          <tbody>${displayRows.map(row => `
+            <tr>
+              <td>${escapeHtml(formatShockLabel(row.shock))}</td>
+              <td>${escapeHtml(formatMoney(row.marketValue))}</td>
+              <td class="${(row.gainLoss || 0) < 0 ? 'reports-peer-delta-negative' : 'reports-peer-delta-positive'}">${escapeHtml(formatMoney(row.gainLoss))}</td>
+              <td>${escapeHtml(formatPercentTile(row.priceChangePct, 2))}</td>
+              <td>${escapeHtml(formatReviewYield(row.yieldToWorst))}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function portfolioTotalReturnTable(rows) {
+    const investments = rows.find(row => /^investments$/i.test(row.sector)) || rows[0];
+    const shocks = ['-300', '-100', '0', '100', '300'];
+    return `
+      <div class="portfolio-analytics-card">
+        <h5>2-Year Total Return</h5>
+        <table class="portfolio-mini-table">
+          <thead><tr><th>Sector</th>${shocks.map(shock => `<th>${escapeHtml(formatShockLabel(shock))}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${[investments].concat(rows.filter(row => !/^investments$/i.test(row.sector)).slice(0, 4)).filter(Boolean).map(row => `
+              <tr>
+                <td>${escapeHtml(row.sector || '')}</td>
+                ${shocks.map(shock => `<td>${escapeHtml(formatPercentTile(row.returns && row.returns[shock], 2))}</td>`).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function portfolioPeerReviewTable(rows) {
+    return `
+      <div class="portfolio-analytics-card">
+        <h5>Portfolio Peer Review</h5>
+        <table class="portfolio-mini-table">
+          <thead><tr><th>Sector</th><th>Alloc</th><th>Peer</th><th>WAC</th><th>Peer</th></tr></thead>
+          <tbody>${rows.slice(0, 7).map(row => `
+            <tr>
+              <td>${escapeHtml(row.sector || '')}</td>
+              <td>${escapeHtml(formatPercentTile(row.allocationPct, 2))}</td>
+              <td>${escapeHtml(formatPercentTile(row.peerAllocationPct, 2))}</td>
+              <td>${escapeHtml(formatPercentTile(row.weightedAverageCoupon, 2))}</td>
+              <td>${escapeHtml(formatPercentTile(row.peerWeightedAverageCoupon, 2))}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function portfolioKeyRateTable(rows) {
+    const investments = rows.find(row => /^investments$/i.test(row.label)) || rows[0];
+    const labels = ['0.25', '1', '3', '5', '7', '10', '20', '30'].filter(key => investments && investments.values && investments.values[key] != null);
+    return `
+      <div class="portfolio-analytics-card">
+        <h5>Key Rate Duration</h5>
+        <table class="portfolio-mini-table">
+          <thead><tr><th>Bucket</th>${labels.map(label => `<th>${escapeHtml(label)}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${rows.slice(0, 5).map(row => `
+              <tr>
+                <td>${escapeHtml(row.label || '')}</td>
+                ${labels.map(label => `<td>${escapeHtml(row.values && row.values[label] != null ? Number(row.values[label]).toFixed(2) : '—')}</td>`).join('')}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
     `;
   }
 
@@ -8853,6 +8967,7 @@
       ${renderBankStrategyRequestPanel()}
       ${renderBankSection('Details', details, true)}
       ${renderBankContactsPanel()}
+      ${renderBankActivityPanel()}
       ${renderBankPeerBanner(bank.peerComparison)}
       ${renderBankIntelligencePanel(bank, values, recentPeriods)}
       ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
@@ -8891,6 +9006,7 @@
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
     wireBankContactsControls();
+    loadBankActivity(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
       btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
@@ -9163,6 +9279,46 @@
             </div>
           ` : '<div class="bank-search-empty">No loss positions parsed.</div>'}
         </div>
+      </div>
+      ${bankPortfolioAnalyticsHighlights(data.analytics || {})}
+    `;
+  }
+
+  function bankPortfolioAnalyticsHighlights(analytics) {
+    const scenarios = Array.isArray(analytics.scenarioSummary) ? analytics.scenarioSummary : [];
+    const peerRows = Array.isArray(analytics.peerReview) ? analytics.peerReview : [];
+    const krdRows = Array.isArray(analytics.keyRateDuration) ? analytics.keyRateDuration : [];
+    if (!scenarios.length && !peerRows.length && !krdRows.length) return '';
+    const base = scenarios.find(row => Number(row.shock) === 0);
+    const up300 = scenarios.find(row => Number(row.shock) === 300);
+    const down300 = scenarios.find(row => Number(row.shock) === -300);
+    const investments = krdRows.find(row => /^investments$/i.test(row.label));
+    const peerOutliers = peerRows
+      .map(row => ({
+        row,
+        gap: row.allocationPct != null && row.peerAllocationPct != null
+          ? Math.abs(row.allocationPct - row.peerAllocationPct)
+          : null
+      }))
+      .filter(item => item.gap != null)
+      .sort((a, b) => b.gap - a.gap)
+      .slice(0, 3);
+    return `
+      <div class="bank-intel-analytics">
+        <h5>Scenario Readout</h5>
+        <div class="bank-intel-analytics-grid">
+          ${base ? intelligenceMetricTile('Base EVE Proxy', formatMoney(base.marketValue), `G/L ${formatMoney(base.gainLoss)}`) : ''}
+          ${up300 ? intelligenceMetricTile('+300 bp Shock', formatMoney(up300.marketValue), `Price ${formatPercentTile(up300.priceChangePct, 2)}`, (up300.gainLoss || 0) < 0 ? 'warn' : '') : ''}
+          ${down300 ? intelligenceMetricTile('-300 bp Shock', formatMoney(down300.marketValue), `Price ${formatPercentTile(down300.priceChangePct, 2)}`) : ''}
+          ${investments ? intelligenceMetricTile('Key Rate Duration', investments.values && investments.values['Eff. Dur'] != null ? Number(investments.values['Eff. Dur']).toFixed(2) : '—', 'Investments total') : ''}
+        </div>
+        ${peerOutliers.length ? `
+          <div class="bank-intel-peer-outliers">
+            ${peerOutliers.map(item => `
+              <span>${escapeHtml(item.row.sector)} allocation ${escapeHtml(formatPercentTile(item.row.allocationPct, 1))} vs peer ${escapeHtml(formatPercentTile(item.row.peerAllocationPct, 1))}</span>
+            `).join('')}
+          </div>
+        ` : ''}
       </div>
     `;
   }
@@ -10050,6 +10206,7 @@
       await loadSavedBanks();
       if (activeBankWorkspaceView === 'coverage') renderCoverageDetail();
       else updateCoveragePanel();
+      if (selectedBankId()) loadBankActivity(selectedBankId());
       showToast('Saved bank coverage');
     } catch (e) {
       showToast(e.message, true);
@@ -10074,6 +10231,7 @@
       }
       await loadSavedBanks();
       updateBankSaveButton();
+      if (selectedBankId()) loadBankActivity(selectedBankId());
       showToast('Saved bank status');
     } catch (e) {
       showToast(e.message, true);
@@ -10119,6 +10277,7 @@
       if (textarea) textarea.value = '';
       await loadSavedBanks();
       await loadBankCoverage(bankId, { renderDetail: activeBankWorkspaceView === 'coverage' });
+      if (selectedBankId() === bankId) loadBankActivity(bankId);
       showToast('Added bank note');
     } catch (e) {
       showToast(e.message, true);
@@ -10384,12 +10543,101 @@
     }
   }
 
+  // ============ Bank Activity Timeline (tear sheet) ============
+
+  const BANK_ACTIVITY_KIND_LABELS = {
+    'coverage-save': 'Coverage',
+    'coverage-update': 'Coverage',
+    'coverage-remove': 'Coverage',
+    'status-change': 'Status',
+    'note': 'Note',
+    'contact-add': 'Contact',
+    'contact-update': 'Contact',
+    'contact-delete': 'Contact',
+    'strategy-create': 'Strategy',
+    'strategy-update': 'Strategy',
+    'strategy-delete': 'Strategy'
+  };
+
+  function bankActivityKindLabel(kind) {
+    return BANK_ACTIVITY_KIND_LABELS[kind] || (kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : 'Activity');
+  }
+
+  function bankActivityKindClass(kind) {
+    if (!kind) return '';
+    if (kind.startsWith('contact')) return 'is-contact';
+    if (kind.startsWith('strategy')) return 'is-strategy';
+    if (kind.startsWith('coverage') || kind === 'status-change') return 'is-coverage';
+    if (kind === 'note') return 'is-note';
+    return '';
+  }
+
+  function renderBankActivityPanel() {
+    const items = selectedBankActivities || [];
+    const rows = items.length
+      ? items.map(renderBankActivityRow).join('')
+      : '<li class="bank-activity-empty">No activity yet. Coverage changes, notes, contacts, and strategy requests show up here.</li>';
+    return `
+      <section class="bank-section bank-activity-section" id="bankActivityPanel">
+        <div class="bank-section-title">Activity Timeline</div>
+        <ol class="bank-activity-list" id="bankActivityList">${rows}</ol>
+      </section>
+    `;
+  }
+
+  function renderBankActivityRow(item) {
+    const actor = item.actorDisplay || item.actorUsername || 'Unknown';
+    const when = item.at ? formatRelativeAt(item.at) : '';
+    const tooltip = item.at ? formatFullTimestamp(item.at) : '';
+    return `
+      <li class="bank-activity-item ${bankActivityKindClass(item.kind)}">
+        <span class="bank-activity-kind">${escapeHtml(bankActivityKindLabel(item.kind))}</span>
+        <div class="bank-activity-body">
+          <p class="bank-activity-summary">${escapeHtml(item.summary || bankActivityKindLabel(item.kind))}</p>
+          <p class="bank-activity-meta">
+            <span>${escapeHtml(actor)}</span>
+            <span class="bank-activity-dot" aria-hidden="true">&middot;</span>
+            <time datetime="${escapeHtml(item.at)}" title="${escapeHtml(tooltip)}">${escapeHtml(when)}</time>
+          </p>
+        </div>
+      </li>
+    `;
+  }
+
+  function refreshBankActivityPanel() {
+    const panel = document.getElementById('bankActivityPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankActivityPanel();
+  }
+
+  async function loadBankActivity(bankId) {
+    if (!bankId) {
+      selectedBankActivities = [];
+      bankActivityBankId = null;
+      refreshBankActivityPanel();
+      return;
+    }
+    bankActivityBankId = bankId;
+    const reqId = ++bankActivityRequestId;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity?limit=50`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      if (reqId !== bankActivityRequestId) return;
+      selectedBankActivities = Array.isArray(data.activities) ? data.activities : [];
+    } catch (e) {
+      if (reqId !== bankActivityRequestId) return;
+      selectedBankActivities = [];
+    }
+    refreshBankActivityPanel();
+  }
+
   async function reloadBankContacts(bankId) {
     if (!bankId) {
       selectedBankContacts = [];
       refreshBankContactsPanel();
       return;
     }
+    if (bankId) loadBankActivity(bankId);
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/contacts`, { cache: 'no-store' });
       const data = await readBankJson(res);
