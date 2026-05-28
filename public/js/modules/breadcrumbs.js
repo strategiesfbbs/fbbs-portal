@@ -47,6 +47,13 @@
     return div.innerHTML;
   }
 
+  var BASE_TITLE = 'FBBS Market Intelligence Portal';
+
+  function setTitle(parts) {
+    var trail = parts.filter(Boolean);
+    document.title = trail.length ? trail.join(' · ') + ' · FBBS Portal' : BASE_TITLE;
+  }
+
   function hide() {
     container.hidden = true;
     container.innerHTML = '';
@@ -56,9 +63,11 @@
     var page = basePageFromHash();
     // A detail crumb only applies to the page it was set on.
     if (detail && detail.page !== page) detail = null;
-    if (page === 'home') return hide();
+    if (page === 'home') { setTitle([]); return hide(); }
     var info = navInfo(page);
-    if (!info) return hide();
+    if (!info) { setTitle([]); return hide(); }
+
+    setTitle([detail && detail.label, info.label]);
 
     var crumbs = ['<a class="crumb crumb-link" href="#home">Home</a>'];
     if (info.group) crumbs.push('<span class="crumb crumb-group">' + esc(info.group) + '</span>');
@@ -104,6 +113,17 @@
   window.addEventListener('hashchange', render);
   window.addEventListener('popstate', render);
   window.addEventListener('locationchange', render);
+
+  // Skip link moves focus to the main region without writing "#main-content"
+  // to the URL (which the SPA hash router would try to resolve as a page).
+  var skip = document.querySelector('.skip-link');
+  if (skip) skip.addEventListener('click', function (e) {
+    var target = document.getElementById('main-content');
+    if (!target) return;
+    e.preventDefault();
+    target.focus();
+    target.scrollIntoView();
+  });
 
   render();
 })();
