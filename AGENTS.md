@@ -24,15 +24,15 @@ Filename auto-classification lives in `classifyFile()` in `server/server.js`. Sa
 
 ## Architecture map
 
-- `server/server.js` (~1666 lines) — request router, multipart parser, upload handler, security headers, audit log, graceful shutdown. One process, no framework.
+- `server/server.js` (~7500 lines) — request router, multipart parser, upload handler, security headers, audit log, graceful shutdown. One process, no framework.
 - `server/{cd-offers,brokered-cd,muni-offers,economic-update,agencies,corporates}-parser.js` — PDF/xlsx → structured JSON parsers. Each one is independent and unit-testable.
 - `server/cd-history.js` + `cd-history-importer.js` — Weekly CD Recap (542+ daily snapshots in `data/cd-history/`).
 - `server/bank-data-importer.js` + `bank-coverage-store.js` + `bank-account-status-store.js` — Bank Tear Sheets and account status workspace. All three shell out to the `sqlite3` CLI with string-interpolated SQL via `sqlString()` / `sqlNumber()` helpers. Escaping is correct as written but fragile — every new query site must go through those helpers. **Targeted for `better-sqlite3` migration.** `bank-account-status-store.js` ingests the "Account + FDIC Cert" workbook, joins each row to a bank summary by FDIC cert (latest period wins ties), and surfaces the status (`Open`, `Prospect`, `Client`, `Watchlist`, `Dormant`) on every search result and the tear sheet.
 - `server/strategy-store.js` — SQLite-backed Strategies Queue for Bond Swap, Muni BCIS, CECL Analysis, and Miscellaneous requests. Workflow statuses are `Open`, `In Progress`, `Completed`, and `Needs Billed`; completed/billed requests can be archived without deleting their bank history. Requests can be created from a bank tear sheet and worked from the Strategies tab.
 - `server/pdf-text.js` — wraps `pdf-parse@1.1.1` with a custom page renderer that inserts spaces between adjacent text items and groups items within a small Y tolerance into one row. Every PDF call in `server/server.js` (CD offers, brokered CD, muni, economic update) goes through `extractPdfText()`.
-- `public/index.html` (1443 lines) — single-page app shell with all page templates inlined.
-- `public/js/portal.js` (4400 lines) — SPA. Heavy `innerHTML` usage; XSS protection comes from the `escapeHtml`-style helpers it uses to wrap untrusted strings before interpolation. The dashboard slot's iframe is sandboxed (`allow-scripts` only) so user-uploaded HTML can't reach back into the parent.
-- `public/css/portal.css` — single stylesheet, ~4000 lines.
+- `public/index.html` (~3000 lines) — single-page app shell with all page templates inlined.
+- `public/js/portal.js` (~17300 lines) — SPA. Heavy `innerHTML` usage; XSS protection comes from the `escapeHtml`-style helpers it uses to wrap untrusted strings before interpolation. The dashboard slot's iframe is sandboxed (`allow-scripts` only) so user-uploaded HTML can't reach back into the parent. Large enough now that a no-build modularization is underway — see `public/js/modules/`.
+- `public/css/portal.css` — single stylesheet, ~12900 lines.
 - `web.config` — IIS deployment via iisnode. Hides `data/`, `server/`, `node_modules/`, `iisnode/` segments. Cap is 100 MB at the IIS layer; app enforces tighter `MAX_UPLOAD_MB`.
 - `tests/parser-regression.test.js` — single-file regression suite, run via plain `node`. No test framework.
 - `server/averaged-series-store.js` — parses the FedFis "AVERAGED_SERIES" peer-group workbook into `{ peerGroups, metrics, series }` JSON. Pure fs + xlsx; output lands in `data/bank-reports/averaged-series/`.
