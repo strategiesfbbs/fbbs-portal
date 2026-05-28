@@ -256,6 +256,43 @@ body {
   flex-direction: column;
 }
 
+/* BREADCRUMBS */
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 24px;
+  font-size: 12px;
+  color: var(--text3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.breadcrumbs[hidden] { display: none; }
+
+.breadcrumbs .crumb { color: var(--text3); }
+
+.breadcrumbs .crumb-link {
+  color: var(--text2);
+  text-decoration: none;
+}
+
+.breadcrumbs .crumb-link:hover {
+  color: var(--racing-green);
+  text-decoration: underline;
+}
+
+.breadcrumbs .crumb-current {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.breadcrumbs .crumb-sep {
+  color: var(--text3);
+  opacity: 0.6;
+}
+
 /* TOP STRIP */
 .top-strip {
   min-height: var(--top-strip-height);
