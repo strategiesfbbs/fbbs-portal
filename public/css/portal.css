@@ -6304,6 +6304,20 @@ body {
   vertical-align: middle;
 }
 
+/* Button that should look and sit inline like a text link. */
+.linklike {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline;
+  text-align: inherit;
+}
+
 .bank-assistant-fit-link {
   color: var(--racing-green);
   font-weight: 600;
@@ -6389,12 +6403,14 @@ body {
   gap: 6px;
 }
 
-.buyer-name a {
+.buyer-name a,
+.buyer-name .linklike {
   color: var(--text);
   text-decoration: none;
 }
 
-.buyer-name a:hover {
+.buyer-name a:hover,
+.buyer-name .linklike:hover {
   text-decoration: underline;
 }
 

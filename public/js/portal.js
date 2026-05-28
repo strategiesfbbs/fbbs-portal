@@ -6691,8 +6691,6 @@
                       <summary aria-label="Report actions">⌄</summary>
                       <button type="button" data-report-action="run" data-report-type="${escapeHtml(row.type)}">Run</button>
                       <button type="button" data-report-action="duplicate" data-report-id="${escapeHtml(row.id)}">Duplicate</button>
-                      <button type="button" disabled title="Available in Phase 2">Edit</button>
-                      <button type="button" disabled title="Available in Phase 3">Subscribe</button>
                       <button type="button" class="reports-danger-action" data-report-action="delete" data-report-id="${escapeHtml(row.id)}">Delete</button>
                     </details>
                   </td>
@@ -10262,7 +10260,7 @@
     if (item && typeof item === 'object') {
       const text = escapeHtml(item.text || '');
       const link = item.explorerPage
-        ? ` <a href="#" class="bank-assistant-fit-link" data-assistant-explorer="${escapeHtml(item.explorerPage)}">${escapeHtml(item.explorerLabel || 'Open explorer')} ›</a>`
+        ? ` <button type="button" class="linklike bank-assistant-fit-link" data-assistant-explorer="${escapeHtml(item.explorerPage)}">${escapeHtml(item.explorerLabel || 'Open explorer')} ›</button>`
         : '';
       return `<li>${text}${link}</li>`;
     }
@@ -10491,7 +10489,7 @@
             <div class="buyer-rank">${i + 1}</div>
             <div class="buyer-main">
               <div class="buyer-name">
-                <a href="#" data-buyers-bank-id="${escapeHtml(b.bankId)}">${escapeHtml(b.displayName)}</a>
+                <button type="button" class="linklike" data-buyers-bank-id="${escapeHtml(b.bankId)}">${escapeHtml(b.displayName)}</button>
                 <span class="maps-status-pill maps-status-${escapeHtml(b.statusSlug || 'open')}">${escapeHtml(b.status)}</span>
               </div>
               <div class="buyer-meta">${escapeHtml([b.location, b.period, b.owner ? `Owner: ${b.owner}` : ''].filter(Boolean).join(' · '))}</div>
