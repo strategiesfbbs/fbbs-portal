@@ -360,15 +360,13 @@
     { id: 'created', section: 'REPORTS', label: 'Created by Me' },
     { id: 'saved-views', section: 'REPORTS', label: 'Saved Views' },
     { id: 'pinned', section: 'REPORTS', label: 'Pinned' },
-    { id: 'subscribed', section: 'REPORTS', label: 'Subscribed', disabled: true },
     { id: 'all', section: 'REPORTS', label: 'All Reports' },
     { id: 'folders-all', section: 'FOLDERS', label: 'All Folders' },
     { id: 'folder-coverage', section: 'FOLDERS', label: 'Coverage', folder: 'Coverage' },
     { id: 'folder-sales', section: 'FOLDERS', label: 'Sales Strategy', folder: 'Sales Strategy' },
     { id: 'folder-portfolio', section: 'FOLDERS', label: 'Portfolio Reviews', folder: 'Portfolio Reviews' },
     { id: 'folder-billing', section: 'FOLDERS', label: 'Billing', folder: 'Billing' },
-    { id: 'folder-personal', section: 'FOLDERS', label: 'Personal', folder: 'Personal' },
-    { id: 'favorites', section: 'FAVORITES', label: 'All Favorites', disabled: true }
+    { id: 'folder-personal', section: 'FOLDERS', label: 'Personal', folder: 'Personal' }
   ];
   const COMMISSION_PRODUCT_LABELS = {
     agencies: 'Agencies',
@@ -6616,12 +6614,8 @@
       <aside class="reports-left-rail" aria-label="Reports navigation">
         ${REPORT_RAIL_ITEMS.map(item => {
           const section = item.section !== currentSection ? (currentSection = item.section, `<h3>${escapeHtml(item.section)}</h3>`) : '';
-          const title = item.disabled ? 'Coming soon' : '';
-          const cls = [
-            item.id === activeRailId ? 'active' : '',
-            item.disabled ? 'is-disabled' : ''
-          ].filter(Boolean).join(' ');
-          return `${section}<button type="button" class="${escapeHtml(cls)}" data-reports-rail="${escapeHtml(item.id)}" ${item.disabled ? 'aria-disabled="true"' : ''} title="${escapeHtml(title)}">${escapeHtml(item.label)}</button>`;
+          const cls = item.id === activeRailId ? 'active' : '';
+          return `${section}<button type="button" class="${escapeHtml(cls)}" data-reports-rail="${escapeHtml(item.id)}">${escapeHtml(item.label)}</button>`;
         }).join('')}
       </aside>
     `;
@@ -8152,10 +8146,6 @@
       if (!clickTarget) return;
       const rail = clickTarget.closest('[data-reports-rail]');
       if (rail) {
-        if (rail.getAttribute('aria-disabled') === 'true') {
-          event.preventDefault();
-          return;
-        }
         reportsActiveRail = rail.dataset.reportsRail || 'recent';
         localStorage.setItem('fbbs.reports.lastRail', reportsActiveRail);
         renderReportsWorkspace();
