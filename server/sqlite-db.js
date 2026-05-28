@@ -52,4 +52,25 @@ function runSqlite(dbPath, sql, params) {
   }
 }
 
-module.exports = { execSqlite, querySqliteJson, runSqlite };
+// Run several parameterized statements atomically. `statements` is an array of
+// { sql, params? }. better-sqlite3's prepare() is single-statement only, so any
+// logical write that used to pipe multiple statements to the sqlite3 CLI is
+// expressed here instead — and gains real transaction semantics it never had
+// under the CLI (the CLI ran them as independent auto-commits).
+function transaction(dbPath, statements) {
+  const db = new Database(dbPath);
+  try {
+    const run = db.transaction((stmts) => {
+      for (const s of stmts) {
+        const stmt = db.prepare(s.sql);
+        if (s.params === undefined) stmt.run();
+        else stmt.run(s.params);
+      }
+    });
+    run(statements);
+  } finally {
+    db.close();
+  }
+}
+
+module.exports = { execSqlite, querySqliteJson, runSqlite, transaction };

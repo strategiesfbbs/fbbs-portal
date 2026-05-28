@@ -16,14 +16,9 @@ function peerGroupDatabasePathForDir(outputDir) {
   return path.join(outputDir, PEER_GROUP_DATABASE_FILENAME);
 }
 
-function sqlString(value) {
-  if (value === undefined || value === null) return 'NULL';
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function runSqlite(dbPath, sql) {
-  sqliteDb.execSqlite(dbPath, sql);
-  return '';
+function runSqlite(dbPath, sql, params) {
+  if (params === undefined) { sqliteDb.execSqlite(dbPath, sql); return ''; }
+  return sqliteDb.runSqlite(dbPath, sql, params);
 }
 
 function querySqliteJson(dbPath, sql, params) {
@@ -159,8 +154,8 @@ function getPeerGroup(outputDir, id) {
   const rows = querySqliteJson(dbPath, `
     SELECT id, name, description, criteria_json, created_by, created_at, updated_at, archived_at
     FROM peer_groups
-    WHERE id = ${sqlString(id)};
-  `);
+    WHERE id = ?;
+  `, [id]);
   return rows.length ? rowToPeerGroup(rows[0]) : null;
 }
 
@@ -175,16 +170,8 @@ function createPeerGroup(outputDir, input = {}) {
   const now = new Date().toISOString();
   runSqlite(dbPath, `
     INSERT INTO peer_groups (id, name, description, criteria_json, created_by, created_at, updated_at)
-    VALUES (
-      ${sqlString(id)},
-      ${sqlString(name)},
-      ${sqlString(description)},
-      ${sqlString(JSON.stringify(criteria))},
-      ${sqlString(createdBy)},
-      ${sqlString(now)},
-      ${sqlString(now)}
-    );
-  `);
+    VALUES (?, ?, ?, ?, ?, ?, ?);
+  `, [id, name, description, JSON.stringify(criteria), createdBy, now, now]);
   return getPeerGroup(outputDir, id);
 }
 
@@ -201,12 +188,12 @@ function updatePeerGroup(outputDir, id, patch = {}) {
   const now = new Date().toISOString();
   runSqlite(dbPath, `
     UPDATE peer_groups SET
-      name = ${sqlString(merged.name)},
-      description = ${sqlString(merged.description)},
-      criteria_json = ${sqlString(JSON.stringify(merged.criteria))},
-      updated_at = ${sqlString(now)}
-    WHERE id = ${sqlString(id)};
-  `);
+      name = ?,
+      description = ?,
+      criteria_json = ?,
+      updated_at = ?
+    WHERE id = ?;
+  `, [merged.name, merged.description, JSON.stringify(merged.criteria), now, id]);
   return getPeerGroup(outputDir, id);
 }
 
@@ -217,10 +204,10 @@ function archivePeerGroup(outputDir, id) {
   const now = new Date().toISOString();
   runSqlite(dbPath, `
     UPDATE peer_groups SET
-      archived_at = ${sqlString(now)},
-      updated_at = ${sqlString(now)}
-    WHERE id = ${sqlString(id)};
-  `);
+      archived_at = ?,
+      updated_at = ?
+    WHERE id = ?;
+  `, [now, now, id]);
   return getPeerGroup(outputDir, id);
 }
 
@@ -232,9 +219,9 @@ function restorePeerGroup(outputDir, id) {
   runSqlite(dbPath, `
     UPDATE peer_groups SET
       archived_at = NULL,
-      updated_at = ${sqlString(now)}
-    WHERE id = ${sqlString(id)};
-  `);
+      updated_at = ?
+    WHERE id = ?;
+  `, [now, id]);
   return getPeerGroup(outputDir, id);
 }
 
@@ -242,7 +229,7 @@ function deletePeerGroup(outputDir, id) {
   const dbPath = ensurePeerGroupDatabase(outputDir);
   const current = getPeerGroup(outputDir, id);
   if (!current) return false;
-  runSqlite(dbPath, `DELETE FROM peer_groups WHERE id = ${sqlString(id)};`);
+  runSqlite(dbPath, `DELETE FROM peer_groups WHERE id = ?;`, [id]);
   return true;
 }
 

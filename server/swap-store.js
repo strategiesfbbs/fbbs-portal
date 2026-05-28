@@ -19,9 +19,9 @@
  * canonical record is `swap_proposal_snapshots.snapshot_json` — the renderer
  * uses it, never live legs. Revisions clone into a new proposal.
  *
- * Follows the existing strategy-store sqlite3-CLI pattern (targeted for
- * better-sqlite3 migration alongside the other bank stores). Every value
- * goes through sqlString / sqlNumber / sqlInt so escaping stays in one place.
+ * Persists through the shared sqlite-db.js (better-sqlite3). Every value is
+ * passed as a bound parameter; multi-statement writes go through txSqlite so
+ * they run atomically.
  */
 
 const crypto = require('crypto');
@@ -38,33 +38,34 @@ function swapDatabasePathForDir(outputDir) {
   return path.join(outputDir, SWAP_DATABASE_FILENAME);
 }
 
-// ---------- SQL helpers (escape-everything; never interpolate raw values) ----------
+// ---------- Bind-value coercers (return JS values for parameterized queries) ----------
+// better-sqlite3 only binds numbers, strings, bigints, buffers, and null — so
+// these normalize JS inputs (incl. '' and booleans) to a bindable value or null.
 
-function sqlString(value) {
-  if (value === undefined || value === null) return 'NULL';
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function sqlNumber(value) {
-  if (value === undefined || value === null || value === '') return 'NULL';
+function numOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
   const n = Number(value);
-  return Number.isFinite(n) ? String(n) : 'NULL';
+  return Number.isFinite(n) ? n : null;
 }
 
-function sqlInt(value) {
-  if (value === undefined || value === null || value === '') return 'NULL';
+function intOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
   const n = parseInt(value, 10);
-  return Number.isFinite(n) ? String(n) : 'NULL';
+  return Number.isFinite(n) ? n : null;
 }
 
-function sqlBool(value) {
-  if (value === undefined || value === null) return 'NULL';
-  return value ? '1' : '0';
+function boolToInt(value) {
+  if (value === undefined || value === null) return null;
+  return value ? 1 : 0;
 }
 
-function runSqlite(dbPath, sql) {
-  sqliteDb.execSqlite(dbPath, sql);
-  return '';
+function runSqlite(dbPath, sql, params) {
+  if (params === undefined) { sqliteDb.execSqlite(dbPath, sql); return ''; }
+  return sqliteDb.runSqlite(dbPath, sql, params);
+}
+
+function txSqlite(dbPath, statements) {
+  return sqliteDb.transaction(dbPath, statements);
 }
 
 function querySqliteJson(dbPath, sql, params) {
@@ -154,16 +155,15 @@ function ensureSwapDatabase(outputDir) {
 function nextProposalId(outputDir, now = new Date()) {
   const dbPath = ensureSwapDatabase(outputDir);
   const year = now.getUTCFullYear();
-  // Atomic-ish: read current, write +1. We're single-process so spawn-per-query
-  // works. If we move to better-sqlite3 this becomes a single UPSERT RETURNING.
+  // Read current, write +1. Single-process, so this read-then-write is fine.
   const existing = querySqliteJson(dbPath,
-    `SELECT next_number AS next FROM swap_proposal_sequence WHERE year = ${sqlInt(year)};`
+    `SELECT next_number AS next FROM swap_proposal_sequence WHERE year = ?;`, [year]
   );
   const nextNum = (existing.length ? existing[0].next : 1);
   runSqlite(dbPath, `
-    INSERT INTO swap_proposal_sequence(year, next_number) VALUES (${sqlInt(year)}, ${sqlInt(nextNum + 1)})
+    INSERT INTO swap_proposal_sequence(year, next_number) VALUES (?, ?)
     ON CONFLICT(year) DO UPDATE SET next_number = excluded.next_number;
-  `);
+  `, [year, nextNum + 1]);
   return `SP-${year}-${String(nextNum).padStart(4, '0')}`;
 }
 
@@ -289,45 +289,45 @@ function createProposal(outputDir, payload = {}) {
       breakeven_cap_months, maturity_floor_months,
       prepared_by, prepared_for, notes,
       created_at, updated_at
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(bankId)},
-      ${sqlString(cleanText(payload.strategyId, 80))},
-      ${sqlString(cleanText(payload.title, 300))},
-      ${sqlString(normalizeStatus(payload.status, 'draft'))},
-      ${sqlString(proposalDate)},
-      ${sqlString(settleDate)},
-      ${sqlNumber(taxRate)},
-      ${sqlBool(isSubS)},
-      ${sqlNumber(payload.horizonYears)},
-      ${sqlInt(payload.breakevenCapMonths)},
-      ${sqlInt(payload.maturityFloorMonths)},
-      ${sqlString(cleanText(payload.preparedBy, 120))},
-      ${sqlString(cleanText(payload.preparedFor, 120))},
-      ${sqlString(cleanMultiline(payload.notes, 4000))},
-      ${sqlString(now.toISOString())},
-      ${sqlString(now.toISOString())}
-    );
-  `);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    bankId,
+    cleanText(payload.strategyId, 80),
+    cleanText(payload.title, 300),
+    normalizeStatus(payload.status, 'draft'),
+    proposalDate,
+    settleDate,
+    numOrNull(taxRate),
+    boolToInt(isSubS),
+    numOrNull(payload.horizonYears),
+    intOrNull(payload.breakevenCapMonths),
+    intOrNull(payload.maturityFloorMonths),
+    cleanText(payload.preparedBy, 120),
+    cleanText(payload.preparedFor, 120),
+    cleanMultiline(payload.notes, 4000),
+    now.toISOString(),
+    now.toISOString()
+  ]);
   return getProposal(outputDir, id);
 }
 
 function getProposal(outputDir, id) {
   const dbPath = ensureSwapDatabase(outputDir);
   const rows = querySqliteJson(dbPath,
-    `SELECT * FROM swap_proposals WHERE id = ${sqlString(id)};`);
+    `SELECT * FROM swap_proposals WHERE id = ?;`, [id]);
   if (!rows.length) return null;
   const proposal = mapProposal(rows[0]);
 
   const legRows = querySqliteJson(dbPath, `
     SELECT * FROM swap_proposal_legs
-    WHERE proposal_id = ${sqlString(id)}
+    WHERE proposal_id = ?
     ORDER BY side, position ASC, id ASC;
-  `);
+  `, [id]);
   const legs = legRows.map(mapLeg);
 
   const snapshotRows = querySqliteJson(dbPath,
-    `SELECT snapshot_json, frozen_at FROM swap_proposal_snapshots WHERE proposal_id = ${sqlString(id)};`);
+    `SELECT snapshot_json, frozen_at FROM swap_proposal_snapshots WHERE proposal_id = ?;`, [id]);
   let snapshot = null;
   if (snapshotRows.length) {
     try {
@@ -344,22 +344,24 @@ function getProposal(outputDir, id) {
 function listProposals(outputDir, { bankId, status, limit = 100 } = {}) {
   const dbPath = ensureSwapDatabase(outputDir);
   const where = ['1 = 1'];
-  if (bankId) where.push(`bank_id = ${sqlString(bankId)}`);
-  if (status) where.push(`status = ${sqlString(normalizeStatus(status, status))}`);
+  const params = [];
+  if (bankId) { where.push('bank_id = ?'); params.push(bankId); }
+  if (status) { where.push('status = ?'); params.push(normalizeStatus(status, status)); }
   const safeLimit = Math.max(1, Math.min(500, parseInt(limit, 10) || 100));
+  params.push(safeLimit);
   const rows = querySqliteJson(dbPath, `
     SELECT * FROM swap_proposals
     WHERE ${where.join(' AND ')}
     ORDER BY updated_at DESC
-    LIMIT ${safeLimit};
-  `);
+    LIMIT ?;
+  `, params);
   return rows.map(mapProposal);
 }
 
 function updateProposal(outputDir, id, updates = {}) {
   const dbPath = ensureSwapDatabase(outputDir);
   const existing = querySqliteJson(dbPath,
-    `SELECT status FROM swap_proposals WHERE id = ${sqlString(id)};`);
+    `SELECT status FROM swap_proposals WHERE id = ?;`, [id]);
   if (!existing.length) throw new Error(`Proposal ${id} not found`);
   const status = existing[0].status;
   if (status !== 'draft') {
@@ -367,34 +369,41 @@ function updateProposal(outputDir, id, updates = {}) {
   }
 
   const sets = [];
+  const params = [];
   const map = {
-    title: v => `title = ${sqlString(cleanText(v, 300))}`,
-    settleDate: v => `settle_date = ${sqlString(normalizeYmd(v))}`,
-    proposalDate: v => `proposal_date = ${sqlString(normalizeYmd(v))}`,
-    taxRate: v => `tax_rate = ${sqlNumber(v)}`,
-    isSubchapterS: v => `is_subchapter_s = ${sqlBool(v)}`,
-    horizonYears: v => `horizon_years = ${sqlNumber(v)}`,
-    breakevenCapMonths: v => `breakeven_cap_months = ${sqlInt(v)}`,
-    maturityFloorMonths: v => `maturity_floor_months = ${sqlInt(v)}`,
-    preparedBy: v => `prepared_by = ${sqlString(cleanText(v, 120))}`,
-    preparedFor: v => `prepared_for = ${sqlString(cleanText(v, 120))}`,
-    notes: v => `notes = ${sqlString(cleanMultiline(v, 4000))}`,
-    strategyId: v => `strategy_id = ${sqlString(cleanText(v, 80))}`
+    title: v => ['title = ?', cleanText(v, 300)],
+    settleDate: v => ['settle_date = ?', normalizeYmd(v)],
+    proposalDate: v => ['proposal_date = ?', normalizeYmd(v)],
+    taxRate: v => ['tax_rate = ?', numOrNull(v)],
+    isSubchapterS: v => ['is_subchapter_s = ?', boolToInt(v)],
+    horizonYears: v => ['horizon_years = ?', numOrNull(v)],
+    breakevenCapMonths: v => ['breakeven_cap_months = ?', intOrNull(v)],
+    maturityFloorMonths: v => ['maturity_floor_months = ?', intOrNull(v)],
+    preparedBy: v => ['prepared_by = ?', cleanText(v, 120)],
+    preparedFor: v => ['prepared_for = ?', cleanText(v, 120)],
+    notes: v => ['notes = ?', cleanMultiline(v, 4000)],
+    strategyId: v => ['strategy_id = ?', cleanText(v, 80)]
   };
   for (const key of Object.keys(updates)) {
-    if (map[key]) sets.push(map[key](updates[key]));
+    if (map[key]) {
+      const [frag, value] = map[key](updates[key]);
+      sets.push(frag);
+      params.push(value);
+    }
   }
   if (!sets.length) return getProposal(outputDir, id);
 
-  sets.push(`updated_at = ${sqlString(new Date().toISOString())}`);
-  runSqlite(dbPath, `UPDATE swap_proposals SET ${sets.join(', ')} WHERE id = ${sqlString(id)};`);
+  sets.push('updated_at = ?');
+  params.push(new Date().toISOString());
+  params.push(id);
+  runSqlite(dbPath, `UPDATE swap_proposals SET ${sets.join(', ')} WHERE id = ?;`, params);
   return getProposal(outputDir, id);
 }
 
 function addLeg(outputDir, id, leg = {}) {
   const dbPath = ensureSwapDatabase(outputDir);
   const proposal = querySqliteJson(dbPath,
-    `SELECT status FROM swap_proposals WHERE id = ${sqlString(id)};`);
+    `SELECT status FROM swap_proposals WHERE id = ?;`, [id]);
   if (!proposal.length) throw new Error(`Proposal ${id} not found`);
   if (proposal[0].status !== 'draft') {
     throw new Error(`Proposal ${id} is ${proposal[0].status}; legs are frozen`);
@@ -405,12 +414,14 @@ function addLeg(outputDir, id, leg = {}) {
   const positionRows = querySqliteJson(dbPath, `
     SELECT COALESCE(MAX(position), 0) + 1 AS next
     FROM swap_proposal_legs
-    WHERE proposal_id = ${sqlString(id)} AND side = ${sqlString(side)};
-  `);
+    WHERE proposal_id = ? AND side = ?;
+  `, [id, side]);
   const position = positionRows.length ? positionRows[0].next : 1;
 
   const now = new Date().toISOString();
-  runSqlite(dbPath, `
+  txSqlite(dbPath, [
+    {
+      sql: `
     INSERT INTO swap_proposal_legs (
       proposal_id, side, position,
       cusip, description, sector, coupon, maturity, call_date, par,
@@ -420,117 +431,136 @@ function addLeg(outputDir, id, leg = {}) {
       modified_duration, average_life, accrued,
       source_kind, source_ref, source_date,
       entered_by, entered_at
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(side)},
-      ${sqlInt(position)},
-      ${sqlString(cleanText(leg.cusip, 16))},
-      ${sqlString(cleanText(leg.description, 200))},
-      ${sqlString(cleanText(leg.sector, 80))},
-      ${sqlNumber(leg.coupon)},
-      ${sqlString(normalizeYmd(leg.maturity))},
-      ${sqlString(normalizeYmd(leg.callDate))},
-      ${sqlNumber(leg.par)},
-      ${sqlNumber(leg.bookPrice)},
-      ${sqlNumber(leg.marketPrice)},
-      ${sqlNumber(leg.bookYieldYtm)},
-      ${sqlNumber(leg.bookYieldYtw)},
-      ${sqlNumber(leg.marketYieldYtm)},
-      ${sqlNumber(leg.marketYieldYtw)},
-      ${sqlNumber(leg.modifiedDuration)},
-      ${sqlNumber(leg.averageLife)},
-      ${sqlNumber(leg.accrued)},
-      ${sqlString(normalizeSourceKind(leg.sourceKind))},
-      ${sqlString(cleanText(leg.sourceRef, 300))},
-      ${sqlString(normalizeYmd(leg.sourceDate))},
-      ${sqlString(cleanText(leg.enteredBy, 120))},
-      ${sqlString(now)}
-    );
-    UPDATE swap_proposals SET updated_at = ${sqlString(now)} WHERE id = ${sqlString(id)};
-  `);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `,
+      params: [
+        id,
+        side,
+        intOrNull(position),
+        cleanText(leg.cusip, 16),
+        cleanText(leg.description, 200),
+        cleanText(leg.sector, 80),
+        numOrNull(leg.coupon),
+        normalizeYmd(leg.maturity),
+        normalizeYmd(leg.callDate),
+        numOrNull(leg.par),
+        numOrNull(leg.bookPrice),
+        numOrNull(leg.marketPrice),
+        numOrNull(leg.bookYieldYtm),
+        numOrNull(leg.bookYieldYtw),
+        numOrNull(leg.marketYieldYtm),
+        numOrNull(leg.marketYieldYtw),
+        numOrNull(leg.modifiedDuration),
+        numOrNull(leg.averageLife),
+        numOrNull(leg.accrued),
+        normalizeSourceKind(leg.sourceKind),
+        cleanText(leg.sourceRef, 300),
+        normalizeYmd(leg.sourceDate),
+        cleanText(leg.enteredBy, 120),
+        now
+      ]
+    },
+    { sql: `UPDATE swap_proposals SET updated_at = ? WHERE id = ?;`, params: [now, id] }
+  ]);
   return getProposal(outputDir, id);
 }
 
 function updateLeg(outputDir, proposalId, legId, leg = {}) {
   const dbPath = ensureSwapDatabase(outputDir);
   const proposalRows = querySqliteJson(dbPath,
-    `SELECT status FROM swap_proposals WHERE id = ${sqlString(proposalId)};`);
+    `SELECT status FROM swap_proposals WHERE id = ?;`, [proposalId]);
   if (!proposalRows.length) throw new Error(`Proposal ${proposalId} not found`);
   if (proposalRows[0].status !== 'draft') {
     throw new Error(`Proposal ${proposalId} is ${proposalRows[0].status}; legs are frozen`);
   }
 
   const map = {
-    cusip: v => `cusip = ${sqlString(cleanText(v, 16))}`,
-    description: v => `description = ${sqlString(cleanText(v, 200))}`,
-    sector: v => `sector = ${sqlString(cleanText(v, 80))}`,
-    coupon: v => `coupon = ${sqlNumber(v)}`,
-    maturity: v => `maturity = ${sqlString(normalizeYmd(v))}`,
-    callDate: v => `call_date = ${sqlString(normalizeYmd(v))}`,
-    par: v => `par = ${sqlNumber(v)}`,
-    bookPrice: v => `book_price = ${sqlNumber(v)}`,
-    marketPrice: v => `market_price = ${sqlNumber(v)}`,
-    bookYieldYtm: v => `book_yield_ytm = ${sqlNumber(v)}`,
-    bookYieldYtw: v => `book_yield_ytw = ${sqlNumber(v)}`,
-    marketYieldYtm: v => `market_yield_ytm = ${sqlNumber(v)}`,
-    marketYieldYtw: v => `market_yield_ytw = ${sqlNumber(v)}`,
-    modifiedDuration: v => `modified_duration = ${sqlNumber(v)}`,
-    averageLife: v => `average_life = ${sqlNumber(v)}`,
-    accrued: v => `accrued = ${sqlNumber(v)}`,
-    sourceKind: v => `source_kind = ${sqlString(normalizeSourceKind(v))}`,
-    sourceRef: v => `source_ref = ${sqlString(cleanText(v, 300))}`,
-    sourceDate: v => `source_date = ${sqlString(normalizeYmd(v))}`,
-    position: v => `position = ${sqlInt(v)}`
+    cusip: v => ['cusip = ?', cleanText(v, 16)],
+    description: v => ['description = ?', cleanText(v, 200)],
+    sector: v => ['sector = ?', cleanText(v, 80)],
+    coupon: v => ['coupon = ?', numOrNull(v)],
+    maturity: v => ['maturity = ?', normalizeYmd(v)],
+    callDate: v => ['call_date = ?', normalizeYmd(v)],
+    par: v => ['par = ?', numOrNull(v)],
+    bookPrice: v => ['book_price = ?', numOrNull(v)],
+    marketPrice: v => ['market_price = ?', numOrNull(v)],
+    bookYieldYtm: v => ['book_yield_ytm = ?', numOrNull(v)],
+    bookYieldYtw: v => ['book_yield_ytw = ?', numOrNull(v)],
+    marketYieldYtm: v => ['market_yield_ytm = ?', numOrNull(v)],
+    marketYieldYtw: v => ['market_yield_ytw = ?', numOrNull(v)],
+    modifiedDuration: v => ['modified_duration = ?', numOrNull(v)],
+    averageLife: v => ['average_life = ?', numOrNull(v)],
+    accrued: v => ['accrued = ?', numOrNull(v)],
+    sourceKind: v => ['source_kind = ?', normalizeSourceKind(v)],
+    sourceRef: v => ['source_ref = ?', cleanText(v, 300)],
+    sourceDate: v => ['source_date = ?', normalizeYmd(v)],
+    position: v => ['position = ?', intOrNull(v)]
   };
   const sets = [];
+  const legParams = [];
   for (const key of Object.keys(leg)) {
-    if (map[key]) sets.push(map[key](leg[key]));
+    if (map[key]) {
+      const [frag, value] = map[key](leg[key]);
+      sets.push(frag);
+      legParams.push(value);
+    }
   }
   if (!sets.length) return getProposal(outputDir, proposalId);
   const now = new Date().toISOString();
-  runSqlite(dbPath, `
-    UPDATE swap_proposal_legs SET ${sets.join(', ')}
-    WHERE id = ${sqlInt(legId)} AND proposal_id = ${sqlString(proposalId)};
-    UPDATE swap_proposals SET updated_at = ${sqlString(now)} WHERE id = ${sqlString(proposalId)};
-  `);
+  txSqlite(dbPath, [
+    {
+      sql: `UPDATE swap_proposal_legs SET ${sets.join(', ')} WHERE id = ? AND proposal_id = ?;`,
+      params: [...legParams, intOrNull(legId), proposalId]
+    },
+    { sql: `UPDATE swap_proposals SET updated_at = ? WHERE id = ?;`, params: [now, proposalId] }
+  ]);
   return getProposal(outputDir, proposalId);
 }
 
 function deleteLeg(outputDir, proposalId, legId) {
   const dbPath = ensureSwapDatabase(outputDir);
   const proposalRows = querySqliteJson(dbPath,
-    `SELECT status FROM swap_proposals WHERE id = ${sqlString(proposalId)};`);
+    `SELECT status FROM swap_proposals WHERE id = ?;`, [proposalId]);
   if (!proposalRows.length) throw new Error(`Proposal ${proposalId} not found`);
   if (proposalRows[0].status !== 'draft') {
     throw new Error(`Proposal ${proposalId} is ${proposalRows[0].status}; legs are frozen`);
   }
   const now = new Date().toISOString();
-  runSqlite(dbPath, `
-    DELETE FROM swap_proposal_legs
-    WHERE id = ${sqlInt(legId)} AND proposal_id = ${sqlString(proposalId)};
-    UPDATE swap_proposals SET updated_at = ${sqlString(now)} WHERE id = ${sqlString(proposalId)};
-  `);
+  txSqlite(dbPath, [
+    {
+      sql: `DELETE FROM swap_proposal_legs WHERE id = ? AND proposal_id = ?;`,
+      params: [intOrNull(legId), proposalId]
+    },
+    { sql: `UPDATE swap_proposals SET updated_at = ? WHERE id = ?;`, params: [now, proposalId] }
+  ]);
   return getProposal(outputDir, proposalId);
 }
 
 function freezeProposal(outputDir, id, snapshotData) {
   const dbPath = ensureSwapDatabase(outputDir);
   const proposalRows = querySqliteJson(dbPath,
-    `SELECT status FROM swap_proposals WHERE id = ${sqlString(id)};`);
+    `SELECT status FROM swap_proposals WHERE id = ?;`, [id]);
   if (!proposalRows.length) throw new Error(`Proposal ${id} not found`);
   if (proposalRows[0].status !== 'draft') {
     throw new Error(`Proposal ${id} is already ${proposalRows[0].status}`);
   }
   const now = new Date().toISOString();
-  runSqlite(dbPath, `
+  txSqlite(dbPath, [
+    {
+      sql: `
     INSERT INTO swap_proposal_snapshots(proposal_id, snapshot_json, frozen_at)
-    VALUES (${sqlString(id)}, ${sqlString(JSON.stringify(snapshotData))}, ${sqlString(now)})
+    VALUES (?, ?, ?)
     ON CONFLICT(proposal_id) DO UPDATE SET
       snapshot_json = excluded.snapshot_json,
       frozen_at = excluded.frozen_at;
-    UPDATE swap_proposals SET status = 'sent', sent_at = ${sqlString(now)},
-      updated_at = ${sqlString(now)} WHERE id = ${sqlString(id)};
-  `);
+  `,
+      params: [id, JSON.stringify(snapshotData), now]
+    },
+    {
+      sql: `UPDATE swap_proposals SET status = 'sent', sent_at = ?, updated_at = ? WHERE id = ?;`,
+      params: [now, now, id]
+    }
+  ]);
   return getProposal(outputDir, id);
 }
 
@@ -552,7 +582,7 @@ function pruneUnfilledLegs(outputDir, proposalId) {
   let removed = 0;
   for (const leg of (record.legs || [])) {
     if (isLegUnfilled(leg)) {
-      runSqlite(dbPath, `DELETE FROM swap_proposal_legs WHERE id = ${sqlInt(leg.id)} AND proposal_id = ${sqlString(proposalId)};`);
+      runSqlite(dbPath, `DELETE FROM swap_proposal_legs WHERE id = ? AND proposal_id = ?;`, [intOrNull(leg.id), proposalId]);
       removed++;
     }
   }
@@ -614,9 +644,8 @@ function updateProposalStrategyLink(outputDir, id, strategyId) {
   const dbPath = ensureSwapDatabase(outputDir);
   const now = new Date().toISOString();
   runSqlite(dbPath, `
-    UPDATE swap_proposals SET strategy_id = ${sqlString(strategyId)},
-      updated_at = ${sqlString(now)} WHERE id = ${sqlString(id)};
-  `);
+    UPDATE swap_proposals SET strategy_id = ?, updated_at = ? WHERE id = ?;
+  `, [strategyId == null ? null : String(strategyId), now, id]);
   return getProposal(outputDir, id);
 }
 
@@ -624,9 +653,8 @@ function markExecuted(outputDir, id) {
   const dbPath = ensureSwapDatabase(outputDir);
   const now = new Date().toISOString();
   runSqlite(dbPath, `
-    UPDATE swap_proposals SET status = 'executed', executed_at = ${sqlString(now)},
-      updated_at = ${sqlString(now)} WHERE id = ${sqlString(id)};
-  `);
+    UPDATE swap_proposals SET status = 'executed', executed_at = ?, updated_at = ? WHERE id = ?;
+  `, [now, now, id]);
   return getProposal(outputDir, id);
 }
 
@@ -634,9 +662,8 @@ function cancelProposal(outputDir, id) {
   const dbPath = ensureSwapDatabase(outputDir);
   const now = new Date().toISOString();
   runSqlite(dbPath, `
-    UPDATE swap_proposals SET status = 'cancelled', cancelled_at = ${sqlString(now)},
-      updated_at = ${sqlString(now)} WHERE id = ${sqlString(id)};
-  `);
+    UPDATE swap_proposals SET status = 'cancelled', cancelled_at = ?, updated_at = ? WHERE id = ?;
+  `, [now, now, id]);
   return getProposal(outputDir, id);
 }
 
