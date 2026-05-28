@@ -284,27 +284,24 @@ function bankSearchTextFromSummary(summary) {
   ].filter(Boolean).join(' ').toLowerCase();
 }
 
-function sqlString(value) {
-  if (value === undefined || value === null) return 'NULL';
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function sqlNumber(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? String(n) : 'NULL';
-}
-
-function sqlLike(value) {
+// Escape the LIKE wildcards (\ % _) inside a value that will be *bound* as a
+// parameter against `LIKE ? ESCAPE '\'`. Quotes are NOT escaped here — the
+// parameter binding handles those; doubling them would corrupt the match.
+function escapeLikeWildcards(value) {
   return String(value)
     .replace(/\\/g, '\\\\')
     .replace(/%/g, '\\%')
-    .replace(/_/g, '\\_')
-    .replace(/'/g, "''");
+    .replace(/_/g, '\\_');
 }
 
-function runSqlite(dbPath, sql) {
-  sqliteDb.execSqlite(dbPath, sql);
-  return '';
+function numOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function textOrNull(value) {
+  if (value === undefined || value === null) return null;
+  return String(value);
 }
 
 function querySqliteJson(dbPath, sql, params) {
@@ -315,18 +312,23 @@ function databasePathForDir(outputDir) {
   return path.join(outputDir, BANK_DATABASE_FILENAME);
 }
 
-function buildBankDatabaseSql(parsed) {
-  const lines = [
-    'PRAGMA journal_mode = OFF;',
-    'PRAGMA synchronous = OFF;',
-    'PRAGMA temp_store = MEMORY;',
-    'DROP TABLE IF EXISTS metadata;',
-    'DROP TABLE IF EXISTS banks;',
-    'CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);',
-    `INSERT INTO metadata (key, value) VALUES ('metadata', ${sqlString(JSON.stringify(parsed.metadata))});`,
-    `INSERT INTO metadata (key, value) VALUES ('fields', ${sqlString(JSON.stringify(BANK_FIELDS))});`,
-    `INSERT INTO metadata (key, value) VALUES ('schemaVersion', '1');`,
-    [
+// Build the whole bank database on one connection: set the bulk-load PRAGMAs,
+// (re)create the schema, stream every bank row through one prepared INSERT
+// inside a transaction, then build the indexes. better-sqlite3 reuses the
+// compiled statement across the loop, so this is both parameterized and fast.
+function writeBankDatabaseRows(dbPath, parsed) {
+  sqliteDb.withDatabase(dbPath, (db) => {
+    db.pragma('journal_mode = OFF');
+    db.pragma('synchronous = OFF');
+    db.pragma('temp_store = MEMORY');
+    db.exec('DROP TABLE IF EXISTS metadata;');
+    db.exec('DROP TABLE IF EXISTS banks;');
+    db.exec('CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);');
+    const insertMeta = db.prepare('INSERT INTO metadata (key, value) VALUES (?, ?);');
+    insertMeta.run('metadata', JSON.stringify(parsed.metadata));
+    insertMeta.run('fields', JSON.stringify(BANK_FIELDS));
+    insertMeta.run('schemaVersion', '1');
+    db.exec([
       'CREATE TABLE banks (',
       'id TEXT PRIMARY KEY,',
       'display_name TEXT,',
@@ -343,39 +345,39 @@ function buildBankDatabaseSql(parsed) {
       'summary_json TEXT NOT NULL,',
       'detail_json TEXT NOT NULL',
       ');'
-    ].join(' '),
-    'BEGIN TRANSACTION;'
-  ];
+    ].join(' '));
 
-  for (const bank of parsed.banks) {
-    const summary = bank.summary || {};
-    const values = [
-      sqlString(bank.id),
-      sqlString(summary.displayName),
-      sqlString(summary.name),
-      sqlString(summary.city),
-      sqlString(summary.state),
-      sqlString(summary.certNumber),
-      sqlString(summary.parentName),
-      sqlString(summary.primaryRegulator),
-      sqlString(summary.period),
-      sqlNumber(summary.totalAssets),
-      sqlNumber(summary.totalDeposits),
-      sqlString(bankSearchTextFromSummary(summary)),
-      sqlString(JSON.stringify(summary)),
-      sqlString(JSON.stringify(bank))
-    ];
-    lines.push(`INSERT INTO banks VALUES (${values.join(',')});`);
-  }
+    const insertBank = db.prepare(`
+      INSERT INTO banks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    `);
+    const insertAll = db.transaction((banks) => {
+      for (const bank of banks) {
+        const summary = bank.summary || {};
+        insertBank.run(
+          textOrNull(bank.id),
+          textOrNull(summary.displayName),
+          textOrNull(summary.name),
+          textOrNull(summary.city),
+          textOrNull(summary.state),
+          textOrNull(summary.certNumber),
+          textOrNull(summary.parentName),
+          textOrNull(summary.primaryRegulator),
+          textOrNull(summary.period),
+          numOrNull(summary.totalAssets),
+          numOrNull(summary.totalDeposits),
+          bankSearchTextFromSummary(summary),
+          JSON.stringify(summary),
+          JSON.stringify(bank)
+        );
+      }
+    });
+    insertAll(parsed.banks);
 
-  lines.push(
-    'COMMIT;',
-    'CREATE INDEX idx_banks_display_name ON banks(display_name COLLATE NOCASE);',
-    'CREATE INDEX idx_banks_legal_name ON banks(legal_name COLLATE NOCASE);',
-    'CREATE INDEX idx_banks_cert_number ON banks(cert_number);',
-    'CREATE INDEX idx_banks_state_city ON banks(state, city);'
-  );
-  return lines.join('\n');
+    db.exec('CREATE INDEX idx_banks_display_name ON banks(display_name COLLATE NOCASE);');
+    db.exec('CREATE INDEX idx_banks_legal_name ON banks(legal_name COLLATE NOCASE);');
+    db.exec('CREATE INDEX idx_banks_cert_number ON banks(cert_number);');
+    db.exec('CREATE INDEX idx_banks_state_city ON banks(state, city);');
+  });
 }
 
 function parseBankWorkbook(workbookPath, options = {}) {
@@ -481,7 +483,7 @@ function writeBankDatabase(parsed, outputDir) {
   const backupDbPath = `${dbPath}.backup-${process.pid}-${Date.now()}`;
 
   fs.rmSync(tmpDbPath, { force: true });
-  runSqlite(tmpDbPath, buildBankDatabaseSql(parsed));
+  writeBankDatabaseRows(tmpDbPath, parsed);
 
   try {
     if (fs.existsSync(dbPath)) fs.renameSync(dbPath, backupDbPath);
@@ -543,30 +545,40 @@ function searchBankDatabase(outputDir, query, limit = 12) {
   const safeLimit = Math.max(1, Math.min(50, parseInt(limit, 10) || 12));
   const q = String(query || '').trim().toLowerCase();
   let sql;
+  let params;
 
   if (!q) {
-    sql = `SELECT summary_json FROM banks ORDER BY display_name COLLATE NOCASE LIMIT ${safeLimit};`;
+    sql = 'SELECT summary_json FROM banks ORDER BY display_name COLLATE NOCASE LIMIT ?;';
+    params = [safeLimit];
   } else {
     const tokens = q.split(/\s+/).filter(Boolean);
     const where = tokens
-      .map(token => `search_text LIKE '%${sqlLike(token)}%' ESCAPE '\\'`)
+      .map(() => `search_text LIKE ? ESCAPE '\\'`)
       .join(' AND ');
-    const qSql = sqlString(q);
+    const qEsc = escapeLikeWildcards(q);
     sql = `
       SELECT summary_json
       FROM banks
       WHERE ${where || '1 = 1'}
       ORDER BY
-        CASE WHEN lower(display_name) = ${qSql} THEN 60 ELSE 0 END +
-        CASE WHEN lower(legal_name) = ${qSql} THEN 40 ELSE 0 END +
-        CASE WHEN lower(display_name) LIKE '${sqlLike(q)}%' ESCAPE '\\' THEN 30 ELSE 0 END +
-        CASE WHEN lower(display_name) LIKE '%${sqlLike(q)}%' ESCAPE '\\' THEN 10 ELSE 0 END DESC,
+        CASE WHEN lower(display_name) = ? THEN 60 ELSE 0 END +
+        CASE WHEN lower(legal_name) = ? THEN 40 ELSE 0 END +
+        CASE WHEN lower(display_name) LIKE ? ESCAPE '\\' THEN 30 ELSE 0 END +
+        CASE WHEN lower(display_name) LIKE ? ESCAPE '\\' THEN 10 ELSE 0 END DESC,
         display_name COLLATE NOCASE
-      LIMIT ${safeLimit};
+      LIMIT ?;
     `;
+    params = [
+      ...tokens.map(token => `%${escapeLikeWildcards(token)}%`),
+      q,
+      q,
+      `${qEsc}%`,
+      `%${qEsc}%`,
+      safeLimit
+    ];
   }
 
-  const results = querySqliteJson(dbPath, sql).map(row => JSON.parse(row.summary_json));
+  const results = querySqliteJson(dbPath, sql, params).map(row => JSON.parse(row.summary_json));
   return { metadata, results };
 }
 
@@ -576,7 +588,8 @@ function getBankFromDatabase(outputDir, id) {
   const metadata = readBankMetadata(outputDir) || {};
   const rows = querySqliteJson(
     dbPath,
-    `SELECT detail_json FROM banks WHERE id = ${sqlString(String(id || ''))} LIMIT 1;`
+    'SELECT detail_json FROM banks WHERE id = ? LIMIT 1;',
+    [String(id || '')]
   );
   if (!rows.length) return null;
   return { metadata, bank: JSON.parse(rows[0].detail_json) };
@@ -664,7 +677,6 @@ function queryBankMapDataset(outputDir, periodPattern = null, options = {}) {
       pattern = '*';
     }
   }
-  const safePattern = String(pattern).replace(/'/g, "''");
   const fields = buildMapFieldDefs();
   // Pull each bank's latest-period values from detail_json by walking
   // the periods array via json_each, then extracting from the entry
@@ -681,9 +693,9 @@ function queryBankMapDataset(outputDir, periodPattern = null, options = {}) {
       ${fieldSelects}
     FROM banks b, json_each(b.detail_json, '$.periods') p
     WHERE json_extract(p.value, '$.period') = json_extract(b.summary_json, '$.period')
-      AND json_extract(b.summary_json, '$.period') GLOB '${safePattern}'
+      AND json_extract(b.summary_json, '$.period') GLOB ?
     ORDER BY b.total_assets DESC;
-  `, { maxBuffer: 256 * 1024 * 1024 });
+  `, [String(pattern)]);
   const stateCounts = {};
   let mappedCount = 0;
   let latestPeriod = '';

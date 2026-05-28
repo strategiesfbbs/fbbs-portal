@@ -19,14 +19,13 @@ function strategyFilesRootForDir(outputDir) {
   return path.join(outputDir, STRATEGY_FILE_DIRNAME);
 }
 
-function sqlString(value) {
-  if (value === undefined || value === null) return 'NULL';
-  return `'${String(value).replace(/'/g, "''")}'`;
+function runSqlite(dbPath, sql, params) {
+  if (params === undefined) { sqliteDb.execSqlite(dbPath, sql); return ''; }
+  return sqliteDb.runSqlite(dbPath, sql, params);
 }
 
-function runSqlite(dbPath, sql) {
-  sqliteDb.execSqlite(dbPath, sql);
-  return '';
+function txSqlite(dbPath, statements) {
+  return sqliteDb.transaction(dbPath, statements);
 }
 
 function querySqliteJson(dbPath, sql, params) {
@@ -223,9 +222,9 @@ function listFilesForStrategyIds(outputDir, strategyIds) {
       size_bytes AS sizeBytes,
       uploaded_at AS uploadedAt
     FROM strategy_request_files
-    WHERE strategy_id IN (${ids.map(sqlString).join(', ')})
+    WHERE strategy_id IN (${ids.map(() => '?').join(', ')})
     ORDER BY uploaded_at DESC;
-  `);
+  `, ids);
   const filesByRequest = new Map(ids.map(id => [id, []]));
   rows.forEach(row => {
     const file = mapStrategyFileRow(row);
@@ -248,6 +247,7 @@ function attachFiles(outputDir, requests) {
 function listStrategyRequests(outputDir, filters = {}) {
   const dbPath = ensureStrategyDatabase(outputDir);
   const where = [];
+  const params = [];
   const archivedFilter = String(filters.archived || '').toLowerCase();
   if (archivedFilter === 'only') {
     where.push('archived_at IS NOT NULL');
@@ -255,10 +255,12 @@ function listStrategyRequests(outputDir, filters = {}) {
     where.push('archived_at IS NULL');
   }
   if (filters.status && STRATEGY_STATUSES.has(filters.status)) {
-    where.push(`status = ${sqlString(filters.status)}`);
+    where.push('status = ?');
+    params.push(filters.status);
   }
   if (filters.bankId) {
-    where.push(`bank_id = ${sqlString(String(filters.bankId || ''))}`);
+    where.push('bank_id = ?');
+    params.push(String(filters.bankId || ''));
   }
   const rows = querySqliteJson(dbPath, `
     ${strategySelectSql(where.length ? where.join(' AND ') : '1 = 1')}
@@ -274,7 +276,7 @@ function listStrategyRequests(outputDir, filters = {}) {
       CAST(priority AS INTEGER) ASC,
       updated_at DESC
     LIMIT 500;
-  `);
+  `, params);
   const requests = attachFiles(outputDir, rows.map(mapStrategyRow));
   const counts = Object.fromEntries([...STRATEGY_STATUSES].map(status => [status, 0]));
   const countWhere = archivedFilter === 'only'
@@ -290,7 +292,7 @@ function listStrategyRequests(outputDir, filters = {}) {
 
 function getStrategyRequest(outputDir, id) {
   const dbPath = ensureStrategyDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `${strategySelectSql(`id = ${sqlString(String(id || ''))}`)} LIMIT 1;`);
+  const rows = querySqliteJson(dbPath, `${strategySelectSql('id = ?')} LIMIT 1;`, [String(id || '')]);
   return rows.length ? attachFiles(outputDir, mapStrategyRow(rows[0])) : null;
 }
 
@@ -308,28 +310,28 @@ function createStrategyRequest(outputDir, bankSummary, input = {}) {
       id, bank_id, display_name, legal_name, city, state, cert_number,
       request_type, status, priority, requested_by, assigned_to, invoice_contact,
       summary, comments, created_at, updated_at, completed_at, billed_at
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(bank.bankId)},
-      ${sqlString(bank.displayName)},
-      ${sqlString(bank.legalName)},
-      ${sqlString(bank.city)},
-      ${sqlString(bank.state)},
-      ${sqlString(bank.certNumber)},
-      ${sqlString(requestType)},
-      ${sqlString(status)},
-      ${sqlString(normalizePriority(input.priority, '3'))},
-      ${sqlString(cleanText(input.requestedBy, 120))},
-      ${sqlString(cleanText(input.assignedTo, 120))},
-      ${sqlString(cleanText(input.invoiceContact, 180))},
-      ${sqlString(summary)},
-      ${sqlString(cleanMultilineText(input.comments))},
-      ${sqlString(now)},
-      ${sqlString(now)},
-      ${sqlString(status === 'Completed' ? now : null)},
-      ${sqlString(status === 'Needs Billed' ? now : null)}
-    );
-  `);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    bank.bankId,
+    bank.displayName,
+    bank.legalName,
+    bank.city,
+    bank.state,
+    bank.certNumber,
+    requestType,
+    status,
+    normalizePriority(input.priority, '3'),
+    cleanText(input.requestedBy, 120),
+    cleanText(input.assignedTo, 120),
+    cleanText(input.invoiceContact, 180),
+    summary,
+    cleanMultilineText(input.comments),
+    now,
+    now,
+    status === 'Completed' ? now : null,
+    status === 'Needs Billed' ? now : null
+  ]);
   return getStrategyRequest(outputDir, id);
 }
 
@@ -363,21 +365,36 @@ function updateStrategyRequest(outputDir, id, input = {}) {
 
   runSqlite(dbPath, `
     UPDATE strategy_requests SET
-      request_type = ${sqlString(input.requestType !== undefined ? normalizeType(input.requestType) : existing.requestType)},
-      status = ${sqlString(status)},
-      priority = ${sqlString(input.priority !== undefined ? normalizePriority(input.priority, existing.priority) : existing.priority)},
-      requested_by = ${sqlString(input.requestedBy !== undefined ? cleanText(input.requestedBy, 120) : existing.requestedBy)},
-      assigned_to = ${sqlString(input.assignedTo !== undefined ? cleanText(input.assignedTo, 120) : existing.assignedTo)},
-      invoice_contact = ${sqlString(input.invoiceContact !== undefined ? cleanText(input.invoiceContact, 180) : existing.invoiceContact)},
-      summary = ${sqlString(input.summary !== undefined ? (cleanText(input.summary, 500) || existing.summary) : existing.summary)},
-      comments = ${sqlString(input.comments !== undefined ? cleanMultilineText(input.comments) : existing.comments)},
-      updated_at = ${sqlString(now)},
-      completed_at = ${sqlString(completedAt)},
-      billed_at = ${sqlString(billedAt)},
-      archived_at = ${sqlString(archivedAt)},
-      archived_by = ${sqlString(archivedBy)}
-    WHERE id = ${sqlString(String(id || ''))};
-  `);
+      request_type = ?,
+      status = ?,
+      priority = ?,
+      requested_by = ?,
+      assigned_to = ?,
+      invoice_contact = ?,
+      summary = ?,
+      comments = ?,
+      updated_at = ?,
+      completed_at = ?,
+      billed_at = ?,
+      archived_at = ?,
+      archived_by = ?
+    WHERE id = ?;
+  `, [
+    input.requestType !== undefined ? normalizeType(input.requestType) : existing.requestType,
+    status,
+    input.priority !== undefined ? normalizePriority(input.priority, existing.priority) : existing.priority,
+    input.requestedBy !== undefined ? cleanText(input.requestedBy, 120) : existing.requestedBy,
+    input.assignedTo !== undefined ? cleanText(input.assignedTo, 120) : existing.assignedTo,
+    input.invoiceContact !== undefined ? cleanText(input.invoiceContact, 180) : existing.invoiceContact,
+    input.summary !== undefined ? (cleanText(input.summary, 500) || existing.summary) : existing.summary,
+    input.comments !== undefined ? cleanMultilineText(input.comments) : existing.comments,
+    now,
+    completedAt,
+    billedAt,
+    archivedAt,
+    archivedBy,
+    String(id || '')
+  ]);
   return getStrategyRequest(outputDir, id);
 }
 
@@ -405,22 +422,25 @@ function addStrategyRequestFile(outputDir, strategyId, file, input = {}) {
   const filePath = strategyFilePathForRow(outputDir, existing.id, storedFilename);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, file.data);
-  runSqlite(dbPath, `
+  txSqlite(dbPath, [
+    {
+      sql: `
     INSERT INTO strategy_request_files (
       id, strategy_id, original_filename, stored_filename, label, size_bytes, uploaded_at
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(existing.id)},
-      ${sqlString(originalFilename)},
-      ${sqlString(storedFilename)},
-      ${sqlString(cleanText(input.label, 120))},
-      ${Number(file.data.length) || 0},
-      ${sqlString(now)}
-    );
-    UPDATE strategy_requests
-    SET updated_at = ${sqlString(now)}
-    WHERE id = ${sqlString(existing.id)};
-  `);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?);
+  `,
+      params: [
+        id,
+        existing.id,
+        originalFilename,
+        storedFilename,
+        cleanText(input.label, 120),
+        Number(file.data.length) || 0,
+        now
+      ]
+    },
+    { sql: `UPDATE strategy_requests SET updated_at = ? WHERE id = ?;`, params: [now, existing.id] }
+  ]);
   return getStrategyRequest(outputDir, existing.id);
 }
 
@@ -436,10 +456,10 @@ function getStrategyRequestFile(outputDir, strategyId, fileId) {
       size_bytes AS sizeBytes,
       uploaded_at AS uploadedAt
     FROM strategy_request_files
-    WHERE strategy_id = ${sqlString(String(strategyId || ''))}
-      AND id = ${sqlString(String(fileId || ''))}
+    WHERE strategy_id = ?
+      AND id = ?
     LIMIT 1;
-  `);
+  `, [String(strategyId || ''), String(fileId || '')]);
   if (!rows.length) return null;
   const row = rows[0];
   return {
@@ -453,12 +473,10 @@ function deleteStrategyRequest(outputDir, id) {
   const existing = getStrategyRequest(outputDir, id);
   if (!existing) return null;
   const dbPath = ensureStrategyDatabase(outputDir);
-  runSqlite(dbPath, `
-    DELETE FROM strategy_request_files
-    WHERE strategy_id = ${sqlString(existing.id)};
-    DELETE FROM strategy_requests
-    WHERE id = ${sqlString(existing.id)};
-  `);
+  txSqlite(dbPath, [
+    { sql: `DELETE FROM strategy_request_files WHERE strategy_id = ?;`, params: [existing.id] },
+    { sql: `DELETE FROM strategy_requests WHERE id = ?;`, params: [existing.id] }
+  ]);
   const fileDir = path.resolve(strategyFilesRootForDir(outputDir), existing.id);
   const root = path.resolve(strategyFilesRootForDir(outputDir));
   const rel = path.relative(root, fileDir);

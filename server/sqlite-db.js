@@ -73,4 +73,19 @@ function transaction(dbPath, statements) {
   }
 }
 
-module.exports = { execSqlite, querySqliteJson, runSqlite, transaction };
+// Open one connection, hand it to `fn`, and close it afterward. For the rare
+// call site that needs several operations on a single connection — e.g. the
+// bank-workbook bulk import, which sets per-connection performance PRAGMAs
+// (journal_mode/synchronous OFF) and then streams thousands of rows through
+// one prepared INSERT inside a transaction. Everything else should use the
+// statement-shaped helpers above.
+function withDatabase(dbPath, fn) {
+  const db = new Database(dbPath);
+  try {
+    return fn(db);
+  } finally {
+    db.close();
+  }
+}
+
+module.exports = { execSqlite, querySqliteJson, runSqlite, transaction, withDatabase };

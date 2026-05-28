@@ -14,18 +14,24 @@ function accountStatusDatabasePathForDir(outputDir) {
   return path.join(outputDir, ACCOUNT_STATUS_DATABASE_FILENAME);
 }
 
-function sqlString(value) {
-  if (value === undefined || value === null) return 'NULL';
-  return `'${String(value).replace(/'/g, "''")}'`;
+function runSqlite(dbPath, sql, params) {
+  if (params === undefined) { sqliteDb.execSqlite(dbPath, sql); return ''; }
+  return sqliteDb.runSqlite(dbPath, sql, params);
 }
 
-function runSqlite(dbPath, sql) {
-  sqliteDb.execSqlite(dbPath, sql);
-  return '';
+function txSqlite(dbPath, statements) {
+  return sqliteDb.transaction(dbPath, statements);
 }
 
 function querySqliteJson(dbPath, sql, params) {
   return sqliteDb.querySqliteJson(dbPath, sql, params);
+}
+
+// Coerce a possibly-empty value to a bound string or NULL. better-sqlite3
+// binds undefined as a hard error, so normalize to null.
+function textOrNull(value) {
+  if (value === undefined || value === null) return null;
+  return String(value);
 }
 
 function ensureAccountStatusDatabase(outputDir) {
@@ -169,7 +175,7 @@ function defaultAccountStatus(bankSummary = {}) {
 
 function getBankAccountStatus(outputDir, bankId) {
   const dbPath = ensureAccountStatusDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `${statusSelectSql(`bank_id = ${sqlString(String(bankId || ''))}`)} LIMIT 1;`);
+  const rows = querySqliteJson(dbPath, `${statusSelectSql('bank_id = ?')} LIMIT 1;`, [String(bankId || '')]);
   return rows.length ? mapStatusRow(rows[0], true) : null;
 }
 
@@ -177,9 +183,11 @@ function getBankAccountStatuses(outputDir, bankIds = []) {
   const ids = [...new Set(bankIds.map(id => String(id || '').trim()).filter(Boolean))];
   if (!ids.length) return new Map();
   const dbPath = ensureAccountStatusDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `
-    ${statusSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)};
-  `);
+  const rows = querySqliteJson(
+    dbPath,
+    `${statusSelectSql(`bank_id IN (${ids.map(() => '?').join(',')})`)};`,
+    ids
+  );
   return new Map(rows.map(row => [String(row.bankId), mapStatusRow(row, true)]));
 }
 
@@ -188,26 +196,28 @@ function bankAccountStatusWhere(options = {}) {
   const status = cleanText(options.status, 40);
   const serviceFilter = cleanText(options.service, 40);
   const conditions = [];
+  const params = [];
   if (q) {
-    const like = sqlString(`%${q.replace(/[%_]/g, char => `\\${char}`)}%`);
+    const like = `%${q.replace(/[%_]/g, char => `\\${char}`)}%`;
     conditions.push(`(
-      display_name LIKE ${like} ESCAPE '\\' OR
-      legal_name LIKE ${like} ESCAPE '\\' OR
-      city LIKE ${like} ESCAPE '\\' OR
-      state LIKE ${like} ESCAPE '\\' OR
-      cert_number LIKE ${like} ESCAPE '\\' OR
-      owner LIKE ${like} ESCAPE '\\' OR
-      affiliate LIKE ${like} ESCAPE '\\' OR
-      affiliate_rep LIKE ${like} ESCAPE '\\' OR
-      services LIKE ${like} ESCAPE '\\' OR
-      bankers_bank_services LIKE ${like} ESCAPE '\\'
+      display_name LIKE ? ESCAPE '\\' OR
+      legal_name LIKE ? ESCAPE '\\' OR
+      city LIKE ? ESCAPE '\\' OR
+      state LIKE ? ESCAPE '\\' OR
+      cert_number LIKE ? ESCAPE '\\' OR
+      owner LIKE ? ESCAPE '\\' OR
+      affiliate LIKE ? ESCAPE '\\' OR
+      affiliate_rep LIKE ? ESCAPE '\\' OR
+      services LIKE ? ESCAPE '\\' OR
+      bankers_bank_services LIKE ? ESCAPE '\\'
     )`);
+    for (let i = 0; i < 10; i++) params.push(like);
   }
-  if (ACCOUNT_STATUSES.has(status)) conditions.push(`status = ${sqlString(status)}`);
+  if (ACCOUNT_STATUSES.has(status)) { conditions.push('status = ?'); params.push(status); }
   if (serviceFilter === 'fbbs') conditions.push(`services IS NOT NULL AND services <> ''`);
   if (serviceFilter === 'bankersBank') conditions.push(`bankers_bank_services IS NOT NULL AND bankers_bank_services <> ''`);
   if (serviceFilter === 'affiliate') conditions.push(`affiliate IS NOT NULL AND affiliate <> ''`);
-  return conditions.length ? conditions.join(' AND ') : '1 = 1';
+  return { where: conditions.length ? conditions.join(' AND ') : '1 = 1', params };
 }
 
 function bankAccountStatusOrderBy(sort) {
@@ -233,22 +243,23 @@ function listBankAccountStatuses(outputDir, options = {}) {
   // UI list endpoints stay capped at 1000 by passing options.limit <= 1000.
   const maxLimit = Number(options.maxLimit) > 0 ? Number(options.maxLimit) : 1000;
   const limit = boundedListLimit(options.limit || 250, 250, maxLimit);
-  const where = bankAccountStatusWhere(options);
+  const { where, params } = bankAccountStatusWhere(options);
   const rows = querySqliteJson(dbPath, `
     ${statusSelectSql(where)}
     ORDER BY ${bankAccountStatusOrderBy(options.sort)}
-    LIMIT ${limit};
-  `);
+    LIMIT ?;
+  `, [...params, limit]);
   return rows.map(row => mapStatusRow(row, true));
 }
 
 function countBankAccountStatuses(outputDir, options = {}) {
   const dbPath = ensureAccountStatusDatabase(outputDir);
+  const { where, params } = bankAccountStatusWhere(options);
   const rows = querySqliteJson(dbPath, `
     SELECT COUNT(*) AS count
     FROM bank_account_statuses
-    WHERE ${bankAccountStatusWhere(options)};
-  `);
+    WHERE ${where};
+  `, params);
   return rows.length ? Number(rows[0].count || 0) : 0;
 }
 
@@ -268,9 +279,9 @@ function writeAccountStatusMetadata(outputDir, metadata) {
   const dbPath = ensureAccountStatusDatabase(outputDir);
   runSqlite(dbPath, `
     INSERT INTO metadata (key, value)
-    VALUES ('lastImport', ${sqlString(JSON.stringify(metadata || {}))})
+    VALUES ('lastImport', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-  `);
+  `, [JSON.stringify(metadata || {})]);
 }
 
 function getBankAccountStatusImportStatus(outputDir) {
@@ -328,24 +339,7 @@ function upsertBankAccountStatus(outputDir, bankSummary, input = {}) {
       bank_id, cert_number, display_name, legal_name, city, state, status, source,
       owner, services, affiliate, affiliate_status, affiliate_rep, bankers_bank_services,
       created_at, updated_at
-    ) VALUES (
-      ${sqlString(bankId)},
-      ${sqlString(normalizeCert(summary.certNumber))},
-      ${sqlString(cleanText(summary.displayName || summary.name || 'Bank', 300) || 'Bank')},
-      ${sqlString(cleanText(summary.name || summary.legalName, 300))},
-      ${sqlString(cleanText(summary.city, 120))},
-      ${sqlString(cleanText(summary.state, 40))},
-      ${sqlString(status)},
-      ${sqlString(source)},
-      ${sqlString(owner)},
-      ${sqlString(services)},
-      ${sqlString(affiliate)},
-      ${sqlString(affiliateStatus)},
-      ${sqlString(affiliateRep)},
-      ${sqlString(bankersBankServices)},
-      ${sqlString(createdAt)},
-      ${sqlString(now)}
-    )
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(bank_id) DO UPDATE SET
       cert_number = excluded.cert_number,
       display_name = excluded.display_name,
@@ -361,34 +355,33 @@ function upsertBankAccountStatus(outputDir, bankSummary, input = {}) {
       affiliate_rep = excluded.affiliate_rep,
       bankers_bank_services = excluded.bankers_bank_services,
       updated_at = excluded.updated_at;
-  `);
+  `, [
+    textOrNull(bankId),
+    textOrNull(normalizeCert(summary.certNumber)),
+    textOrNull(cleanText(summary.displayName || summary.name || 'Bank', 300) || 'Bank'),
+    textOrNull(cleanText(summary.name || summary.legalName, 300)),
+    textOrNull(cleanText(summary.city, 120)),
+    textOrNull(cleanText(summary.state, 40)),
+    textOrNull(status),
+    textOrNull(source),
+    textOrNull(owner),
+    textOrNull(services),
+    textOrNull(affiliate),
+    textOrNull(affiliateStatus),
+    textOrNull(affiliateRep),
+    textOrNull(bankersBankServices),
+    textOrNull(createdAt),
+    textOrNull(now)
+  ]);
 
   return getBankAccountStatus(outputDir, bankId);
 }
 
-function bankStatusInsertSql(row, now) {
-  return `INSERT INTO bank_account_statuses (
+const BANK_STATUS_INSERT_SQL = `INSERT INTO bank_account_statuses (
     bank_id, cert_number, display_name, legal_name, city, state, status, source,
     owner, services, affiliate, affiliate_status, affiliate_rep, bankers_bank_services,
     created_at, updated_at
-  ) VALUES (
-    ${sqlString(row.bankId)},
-    ${sqlString(row.certNumber)},
-    ${sqlString(row.displayName)},
-    ${sqlString(row.legalName)},
-    ${sqlString(row.city)},
-    ${sqlString(row.state)},
-    ${sqlString(row.status)},
-    ${sqlString(row.source)},
-    ${sqlString(row.owner)},
-    ${sqlString(row.services)},
-    ${sqlString(row.affiliate)},
-    ${sqlString(row.affiliateStatus)},
-    ${sqlString(row.affiliateRep)},
-    ${sqlString(row.bankersBankServices)},
-    ${sqlString(now)},
-    ${sqlString(now)}
-  )
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(bank_id) DO UPDATE SET
     cert_number = excluded.cert_number,
     display_name = excluded.display_name,
@@ -404,6 +397,29 @@ function bankStatusInsertSql(row, now) {
     affiliate_rep = excluded.affiliate_rep,
     bankers_bank_services = excluded.bankers_bank_services,
     updated_at = excluded.updated_at;`;
+
+function bankStatusInsertStatement(row, now) {
+  return {
+    sql: BANK_STATUS_INSERT_SQL,
+    params: [
+      textOrNull(row.bankId),
+      textOrNull(row.certNumber),
+      textOrNull(row.displayName),
+      textOrNull(row.legalName),
+      textOrNull(row.city),
+      textOrNull(row.state),
+      textOrNull(row.status),
+      textOrNull(row.source),
+      textOrNull(row.owner),
+      textOrNull(row.services),
+      textOrNull(row.affiliate),
+      textOrNull(row.affiliateStatus),
+      textOrNull(row.affiliateRep),
+      textOrNull(row.bankersBankServices),
+      textOrNull(now),
+      textOrNull(now)
+    ]
+  };
 }
 
 function normalizeHeader(value) {
@@ -446,11 +462,7 @@ function upsertBankAccountStatusRows(outputDir, rows) {
   if (!rows.length) return;
   const dbPath = ensureAccountStatusDatabase(outputDir);
   const now = new Date().toISOString();
-  runSqlite(dbPath, [
-    'BEGIN TRANSACTION;',
-    ...rows.map(row => bankStatusInsertSql(row, now)),
-    'COMMIT;'
-  ].join('\n'), { maxBuffer: 128 * 1024 * 1024 });
+  txSqlite(dbPath, rows.map(row => bankStatusInsertStatement(row, now)));
 }
 
 function findStatusSheet(workbook) {

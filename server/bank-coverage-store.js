@@ -13,23 +13,29 @@ function coverageDatabasePathForDir(outputDir) {
   return path.join(outputDir, COVERAGE_DATABASE_FILENAME);
 }
 
-function sqlString(value) {
-  if (value === undefined || value === null) return 'NULL';
-  return `'${String(value).replace(/'/g, "''")}'`;
+function runSqlite(dbPath, sql, params) {
+  if (params === undefined) { sqliteDb.execSqlite(dbPath, sql); return ''; }
+  return sqliteDb.runSqlite(dbPath, sql, params);
 }
 
-function sqlNumber(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? String(n) : 'NULL';
-}
-
-function runSqlite(dbPath, sql) {
-  sqliteDb.execSqlite(dbPath, sql);
-  return '';
+function txSqlite(dbPath, statements) {
+  return sqliteDb.transaction(dbPath, statements);
 }
 
 function querySqliteJson(dbPath, sql, params) {
   return sqliteDb.querySqliteJson(dbPath, sql, params);
+}
+
+// better-sqlite3 throws on undefined binds; normalize empty values to null.
+function textOrNull(value) {
+  if (value === undefined || value === null) return null;
+  return String(value);
+}
+
+// Bind a finite number or null (mirrors the old sqlNumber NULL fallback).
+function numOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function ensureCoverageDatabase(outputDir) {
@@ -261,7 +267,7 @@ function notesSelectSql(where = '1 = 1') {
 
 function getExistingCoverage(outputDir, bankId) {
   const dbPath = ensureCoverageDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `${coverageSelectSql(`bank_id = ${sqlString(bankId)}`)} LIMIT 1;`);
+  const rows = querySqliteJson(dbPath, `${coverageSelectSql('bank_id = ?')} LIMIT 1;`, [String(bankId || '')]);
   return rows.length ? mapCoverageRow(rows[0]) : null;
 }
 
@@ -283,10 +289,10 @@ function getBankCoverage(outputDir, bankId) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const saved = getExistingCoverage(outputDir, String(bankId || ''));
   const noteRows = querySqliteJson(dbPath, `
-    ${notesSelectSql(`bank_id = ${sqlString(String(bankId || ''))}`)}
+    ${notesSelectSql('bank_id = ?')}
     ORDER BY created_at DESC
     LIMIT 100;
-  `);
+  `, [String(bankId || '')]);
   return {
     saved,
     notes: noteRows.map(mapNoteRow)
@@ -297,9 +303,11 @@ function getSavedBankCoverageMap(outputDir, bankIds = []) {
   const ids = [...new Set(bankIds.map(id => String(id || '').trim()).filter(Boolean))];
   if (!ids.length) return new Map();
   const dbPath = ensureCoverageDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `
-    ${coverageSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)};
-  `);
+  const rows = querySqliteJson(
+    dbPath,
+    `${coverageSelectSql(`bank_id IN (${ids.map(() => '?').join(',')})`)};`,
+    ids
+  );
   return new Map(rows.map(row => [String(row.bankId), mapCoverageRow(row)]));
 }
 
@@ -321,24 +329,7 @@ function upsertSavedBank(outputDir, bankSummary, input = {}) {
       bank_id, display_name, legal_name, city, state, cert_number, primary_regulator,
       period, total_assets, total_deposits, status, priority, owner, next_action_date,
       created_at, updated_at
-    ) VALUES (
-      ${sqlString(summary.bankId)},
-      ${sqlString(summary.displayName)},
-      ${sqlString(summary.legalName)},
-      ${sqlString(summary.city)},
-      ${sqlString(summary.state)},
-      ${sqlString(summary.certNumber)},
-      ${sqlString(summary.primaryRegulator)},
-      ${sqlString(summary.period)},
-      ${sqlNumber(summary.totalAssets)},
-      ${sqlNumber(summary.totalDeposits)},
-      ${sqlString(status)},
-      ${sqlString(priority)},
-      ${sqlString(owner)},
-      ${sqlString(nextActionDate)},
-      ${sqlString(createdAt)},
-      ${sqlString(now)}
-    )
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(bank_id) DO UPDATE SET
       display_name = excluded.display_name,
       legal_name = excluded.legal_name,
@@ -354,17 +345,33 @@ function upsertSavedBank(outputDir, bankSummary, input = {}) {
       owner = excluded.owner,
       next_action_date = excluded.next_action_date,
       updated_at = excluded.updated_at;
-  `);
+  `, [
+    textOrNull(summary.bankId),
+    textOrNull(summary.displayName),
+    textOrNull(summary.legalName),
+    textOrNull(summary.city),
+    textOrNull(summary.state),
+    textOrNull(summary.certNumber),
+    textOrNull(summary.primaryRegulator),
+    textOrNull(summary.period),
+    numOrNull(summary.totalAssets),
+    numOrNull(summary.totalDeposits),
+    textOrNull(status),
+    textOrNull(priority),
+    textOrNull(owner),
+    textOrNull(nextActionDate),
+    textOrNull(createdAt),
+    textOrNull(now)
+  ]);
 
   return getExistingCoverage(outputDir, summary.bankId);
 }
 
 function removeSavedBank(outputDir, bankId) {
   const dbPath = ensureCoverageDatabase(outputDir);
-  runSqlite(dbPath, `
-    PRAGMA foreign_keys = ON;
-    DELETE FROM bank_coverage WHERE bank_id = ${sqlString(String(bankId || ''))};
-  `);
+  // better-sqlite3 enables foreign keys per connection, so the ON DELETE
+  // CASCADE to bank_notes fires automatically — no explicit PRAGMA needed.
+  runSqlite(dbPath, 'DELETE FROM bank_coverage WHERE bank_id = ?;', [String(bankId || '')]);
   return { success: true };
 }
 
@@ -376,15 +383,15 @@ function addBankNote(outputDir, bankId, text) {
   const id = crypto.randomUUID();
   runSqlite(dbPath, `
     INSERT INTO bank_notes (id, bank_id, note_text, created_at, updated_at)
-    VALUES (${sqlString(id)}, ${sqlString(String(bankId || ''))}, ${sqlString(noteText)}, ${sqlString(now)}, ${sqlString(now)});
-  `);
-  const rows = querySqliteJson(dbPath, `${notesSelectSql(`id = ${sqlString(id)}`)} LIMIT 1;`);
+    VALUES (?, ?, ?, ?, ?);
+  `, [id, String(bankId || ''), noteText, now, now]);
+  const rows = querySqliteJson(dbPath, `${notesSelectSql('id = ?')} LIMIT 1;`, [id]);
   return rows.length ? mapNoteRow(rows[0]) : null;
 }
 
 function removeBankNote(outputDir, noteId) {
   const dbPath = ensureCoverageDatabase(outputDir);
-  runSqlite(dbPath, `DELETE FROM bank_notes WHERE id = ${sqlString(String(noteId || ''))};`);
+  runSqlite(dbPath, 'DELETE FROM bank_notes WHERE id = ?;', [String(noteId || '')]);
   return { success: true };
 }
 
@@ -397,9 +404,9 @@ function getPreferredPeerGroup(outputDir, bankId) {
       created_at AS createdAt,
       updated_at AS updatedAt
     FROM bank_peer_preferences
-    WHERE bank_id = ${sqlString(String(bankId || ''))}
+    WHERE bank_id = ?
     LIMIT 1;
-  `);
+  `, [String(bankId || '')]);
   return rows.length ? {
     bankId: rows[0].bankId,
     peerGroupId: rows[0].peerGroupId,
@@ -418,17 +425,17 @@ function setPreferredPeerGroup(outputDir, bankId, peerGroupId) {
   const now = new Date().toISOString();
   runSqlite(dbPath, `
     INSERT INTO bank_peer_preferences (bank_id, peer_group_id, created_at, updated_at)
-    VALUES (${sqlString(cleanBankId)}, ${sqlString(cleanPeerGroupId)}, ${sqlString(existing ? existing.createdAt : now)}, ${sqlString(now)})
+    VALUES (?, ?, ?, ?)
     ON CONFLICT(bank_id) DO UPDATE SET
       peer_group_id = excluded.peer_group_id,
       updated_at = excluded.updated_at;
-  `);
+  `, [cleanBankId, cleanPeerGroupId, existing ? existing.createdAt : now, now]);
   return getPreferredPeerGroup(outputDir, cleanBankId);
 }
 
 function removePreferredPeerGroup(outputDir, bankId) {
   const dbPath = ensureCoverageDatabase(outputDir);
-  runSqlite(dbPath, `DELETE FROM bank_peer_preferences WHERE bank_id = ${sqlString(String(bankId || ''))};`);
+  runSqlite(dbPath, 'DELETE FROM bank_peer_preferences WHERE bank_id = ?;', [String(bankId || '')]);
   return { success: true };
 }
 
@@ -497,10 +504,10 @@ function listContactsForBank(outputDir, bankId) {
   const id = String(bankId || '');
   if (!id) return [];
   const rows = querySqliteJson(dbPath, `
-    ${contactSelectSql(`bank_id = ${sqlString(id)}`)}
+    ${contactSelectSql('bank_id = ?')}
     ${contactOrderBy()}
     LIMIT 200;
-  `);
+  `, [id]);
   return rows.map(mapContactRow);
 }
 
@@ -508,10 +515,12 @@ function listContactsForBanks(outputDir, bankIds = []) {
   const ids = [...new Set((bankIds || []).map(id => String(id || '').trim()).filter(Boolean))];
   if (!ids.length) return new Map();
   const dbPath = ensureCoverageDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `
-    ${contactSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)}
-    ${contactOrderBy()};
-  `);
+  const rows = querySqliteJson(
+    dbPath,
+    `${contactSelectSql(`bank_id IN (${ids.map(() => '?').join(',')})`)}
+    ${contactOrderBy()};`,
+    ids
+  );
   const byBank = new Map(ids.map(id => [id, []]));
   rows.forEach(row => {
     const contact = mapContactRow(row);
@@ -524,7 +533,7 @@ function listContactsForBanks(outputDir, bankIds = []) {
 
 function getBankContact(outputDir, contactId) {
   const dbPath = ensureCoverageDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `${contactSelectSql(`id = ${sqlString(String(contactId || ''))}`)} LIMIT 1;`);
+  const rows = querySqliteJson(dbPath, `${contactSelectSql('id = ?')} LIMIT 1;`, [String(contactId || '')]);
   return rows.length ? mapContactRow(rows[0]) : null;
 }
 
@@ -542,30 +551,25 @@ function createBankContact(outputDir, bankSummary, input = {}) {
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
 
+  const statements = [];
   if (isPrimary) {
-    runSqlite(dbPath, `
-      UPDATE bank_contacts SET is_primary = 0, updated_at = ${sqlString(now)}
-      WHERE bank_id = ${sqlString(summary.bankId)};
-    `);
+    statements.push({
+      sql: 'UPDATE bank_contacts SET is_primary = 0, updated_at = ? WHERE bank_id = ?;',
+      params: [now, summary.bankId]
+    });
   }
-
-  runSqlite(dbPath, `
-    INSERT INTO bank_contacts (
-      id, bank_id, cert_number, name, role, phone, email, is_primary, notes, created_at, updated_at
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(summary.bankId)},
-      ${sqlString(summary.certNumber)},
-      ${sqlString(name)},
-      ${sqlString(role)},
-      ${sqlString(phone)},
-      ${sqlString(email)},
-      ${isPrimary},
-      ${sqlString(notes)},
-      ${sqlString(now)},
-      ${sqlString(now)}
-    );
-  `);
+  statements.push({
+    sql: `
+      INSERT INTO bank_contacts (
+        id, bank_id, cert_number, name, role, phone, email, is_primary, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    `,
+    params: [
+      id, summary.bankId, textOrNull(summary.certNumber), name, textOrNull(role),
+      textOrNull(phone), textOrNull(email), isPrimary, textOrNull(notes), now, now
+    ]
+  });
+  txSqlite(dbPath, statements);
   return getBankContact(outputDir, id);
 }
 
@@ -582,31 +586,35 @@ function updateBankContact(outputDir, contactId, input = {}) {
   const isPrimary = input.isPrimary !== undefined ? (input.isPrimary ? 1 : 0) : (existing.isPrimary ? 1 : 0);
   const now = new Date().toISOString();
 
+  const statements = [];
   if (isPrimary) {
-    runSqlite(dbPath, `
-      UPDATE bank_contacts SET is_primary = 0, updated_at = ${sqlString(now)}
-      WHERE bank_id = ${sqlString(existing.bankId)} AND id <> ${sqlString(existing.id)};
-    `);
+    statements.push({
+      sql: 'UPDATE bank_contacts SET is_primary = 0, updated_at = ? WHERE bank_id = ? AND id <> ?;',
+      params: [now, existing.bankId, existing.id]
+    });
   }
-
-  runSqlite(dbPath, `
-    UPDATE bank_contacts SET
-      name = ${sqlString(name)},
-      role = ${sqlString(role)},
-      phone = ${sqlString(phone)},
-      email = ${sqlString(email)},
-      is_primary = ${isPrimary},
-      notes = ${sqlString(notes)},
-      updated_at = ${sqlString(now)}
-    WHERE id = ${sqlString(existing.id)};
-  `);
+  statements.push({
+    sql: `
+      UPDATE bank_contacts SET
+        name = ?,
+        role = ?,
+        phone = ?,
+        email = ?,
+        is_primary = ?,
+        notes = ?,
+        updated_at = ?
+      WHERE id = ?;
+    `,
+    params: [name, textOrNull(role), textOrNull(phone), textOrNull(email), isPrimary, textOrNull(notes), now, existing.id]
+  });
+  txSqlite(dbPath, statements);
   return getBankContact(outputDir, existing.id);
 }
 
 function deleteBankContact(outputDir, contactId) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const existing = getBankContact(outputDir, contactId);
-  runSqlite(dbPath, `DELETE FROM bank_contacts WHERE id = ${sqlString(String(contactId || ''))};`);
+  runSqlite(dbPath, 'DELETE FROM bank_contacts WHERE id = ?;', [String(contactId || '')]);
   return existing || { id: contactId };
 }
 
@@ -658,19 +666,19 @@ function recordBankActivity(outputDir, payload = {}) {
     INSERT INTO bank_activities (
       id, bank_id, cert_number, at, actor_username, actor_display,
       kind, summary, ref_type, ref_id
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(bankId)},
-      ${sqlString(cleanText(payload.certNumber, 40))},
-      ${sqlString(at)},
-      ${sqlString(cleanText(payload.actorUsername, 80))},
-      ${sqlString(cleanText(payload.actorDisplay, 200))},
-      ${sqlString(kind)},
-      ${sqlString(cleanText(payload.summary, 500))},
-      ${sqlString(cleanText(payload.refType, 60))},
-      ${sqlString(cleanText(payload.refId, 80))}
-    );
-  `);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    bankId,
+    textOrNull(cleanText(payload.certNumber, 40)),
+    at,
+    textOrNull(cleanText(payload.actorUsername, 80)),
+    textOrNull(cleanText(payload.actorDisplay, 200)),
+    kind,
+    textOrNull(cleanText(payload.summary, 500)),
+    textOrNull(cleanText(payload.refType, 60)),
+    textOrNull(cleanText(payload.refId, 80))
+  ]);
   return { id, bankId, at, kind };
 }
 
@@ -680,10 +688,10 @@ function listActivitiesForBank(outputDir, bankId, options = {}) {
   if (!id) return [];
   const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 100), 500));
   const rows = querySqliteJson(dbPath, `
-    ${activitySelectSql(`bank_id = ${sqlString(id)}`)}
+    ${activitySelectSql('bank_id = ?')}
     ORDER BY at DESC, id DESC
-    LIMIT ${limit};
-  `);
+    LIMIT ?;
+  `, [id, limit]);
   return rows.map(mapActivityRow);
 }
 
@@ -693,16 +701,16 @@ function deleteBankActivity(outputDir, bankId, activityId) {
   const bank = String(bankId || '');
   if (!id || !bank) return null;
   const rows = querySqliteJson(dbPath, `
-    ${activitySelectSql(`id = ${sqlString(id)} AND bank_id = ${sqlString(bank)}`)}
+    ${activitySelectSql('id = ? AND bank_id = ?')}
     LIMIT 1;
-  `);
+  `, [id, bank]);
   const activity = mapActivityRow(rows[0]);
   if (!activity) return null;
   runSqlite(dbPath, `
     DELETE FROM bank_activities
-    WHERE id = ${sqlString(id)}
-      AND bank_id = ${sqlString(bank)};
-  `);
+    WHERE id = ?
+      AND bank_id = ?;
+  `, [id, bank]);
   return activity;
 }
 
@@ -712,10 +720,10 @@ function listRecentActivitiesByActor(outputDir, actorUsername, options = {}) {
   if (!username) return [];
   const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 20), 200));
   const rows = querySqliteJson(dbPath, `
-    ${activitySelectSql(`LOWER(actor_username) = ${sqlString(username)}`)}
+    ${activitySelectSql('LOWER(actor_username) = ?')}
     ORDER BY at DESC
-    LIMIT ${limit};
-  `);
+    LIMIT ?;
+  `, [username, limit]);
   return rows.map(mapActivityRow);
 }
 
@@ -758,9 +766,9 @@ function listProductFitForBank(outputDir, bankId) {
   const id = String(bankId || '');
   if (!id) return [];
   const rows = querySqliteJson(dbPath, `
-    ${productFitSelectSql(`bank_id = ${sqlString(id)}`)}
+    ${productFitSelectSql('bank_id = ?')}
     ORDER BY product COLLATE NOCASE ASC;
-  `);
+  `, [id]);
   return rows.map(mapProductFitRow);
 }
 
@@ -768,10 +776,12 @@ function listProductFitForBanks(outputDir, bankIds = []) {
   const ids = [...new Set((bankIds || []).map(id => String(id || '').trim()).filter(Boolean))];
   if (!ids.length) return new Map();
   const dbPath = ensureCoverageDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `
-    ${productFitSelectSql(`bank_id IN (${ids.map(sqlString).join(',')})`)}
-    ORDER BY product COLLATE NOCASE ASC;
-  `);
+  const rows = querySqliteJson(
+    dbPath,
+    `${productFitSelectSql(`bank_id IN (${ids.map(() => '?').join(',')})`)}
+    ORDER BY product COLLATE NOCASE ASC;`,
+    ids
+  );
   const byBank = new Map(ids.map(id => [id, []]));
   rows.forEach(row => {
     const fit = mapProductFitRow(row);
@@ -784,7 +794,7 @@ function listProductFitForBanks(outputDir, bankIds = []) {
 
 function getProductFitById(outputDir, id) {
   const dbPath = ensureCoverageDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `${productFitSelectSql(`id = ${sqlString(String(id || ''))}`)} LIMIT 1;`);
+  const rows = querySqliteJson(dbPath, `${productFitSelectSql('id = ?')} LIMIT 1;`, [String(id || '')]);
   return rows.length ? mapProductFitRow(rows[0]) : null;
 }
 
@@ -800,19 +810,25 @@ function upsertProductFit(outputDir, bankSummary, input = {}) {
 
   // Try update first.
   const existing = querySqliteJson(dbPath, `
-    ${productFitSelectSql(`bank_id = ${sqlString(summary.bankId)} AND product = ${sqlString(product)}`)}
+    ${productFitSelectSql('bank_id = ? AND product = ?')}
     LIMIT 1;
-  `).map(mapProductFitRow)[0];
+  `, [summary.bankId, product]).map(mapProductFitRow)[0];
 
   if (existing) {
     runSqlite(dbPath, `
       UPDATE bank_product_fit SET
-        notes = ${sqlString(notes !== null ? notes : existing.notes)},
-        flagged_by_username = ${sqlString(cleanText(input.flaggedByUsername, 80) || existing.flaggedByUsername)},
-        flagged_by_display = ${sqlString(cleanText(input.flaggedByDisplay, 200) || existing.flaggedByDisplay)},
-        updated_at = ${sqlString(now)}
-      WHERE id = ${sqlString(existing.id)};
-    `);
+        notes = ?,
+        flagged_by_username = ?,
+        flagged_by_display = ?,
+        updated_at = ?
+      WHERE id = ?;
+    `, [
+      textOrNull(notes !== null ? notes : existing.notes),
+      textOrNull(cleanText(input.flaggedByUsername, 80) || existing.flaggedByUsername),
+      textOrNull(cleanText(input.flaggedByDisplay, 200) || existing.flaggedByDisplay),
+      now,
+      existing.id
+    ]);
     return getProductFitById(outputDir, existing.id);
   }
 
@@ -821,25 +837,25 @@ function upsertProductFit(outputDir, bankSummary, input = {}) {
     INSERT INTO bank_product_fit (
       id, bank_id, cert_number, product, notes,
       flagged_by_username, flagged_by_display, created_at, updated_at
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(summary.bankId)},
-      ${sqlString(summary.certNumber)},
-      ${sqlString(product)},
-      ${sqlString(notes)},
-      ${sqlString(cleanText(input.flaggedByUsername, 80))},
-      ${sqlString(cleanText(input.flaggedByDisplay, 200))},
-      ${sqlString(now)},
-      ${sqlString(now)}
-    );
-  `);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    summary.bankId,
+    textOrNull(summary.certNumber),
+    product,
+    textOrNull(notes),
+    textOrNull(cleanText(input.flaggedByUsername, 80)),
+    textOrNull(cleanText(input.flaggedByDisplay, 200)),
+    now,
+    now
+  ]);
   return getProductFitById(outputDir, id);
 }
 
 function deleteProductFit(outputDir, id) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const existing = getProductFitById(outputDir, id);
-  runSqlite(dbPath, `DELETE FROM bank_product_fit WHERE id = ${sqlString(String(id || ''))};`);
+  runSqlite(dbPath, 'DELETE FROM bank_product_fit WHERE id = ?;', [String(id || '')]);
   return existing;
 }
 
@@ -886,21 +902,24 @@ function mapBillingRow(row) {
 function listBillingQueue(outputDir, options = {}) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const state = cleanText(options.state, 40);
-  const where = state ? `state = ${sqlString(state)}` : '1 = 1';
+  const params = [];
+  let where = '1 = 1';
+  if (state) { where = 'state = ?'; params.push(state); }
   const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 500), 2000));
+  params.push(limit);
   const rows = querySqliteJson(dbPath, `
     ${billingSelectSql(where)}
     ORDER BY
       CASE state WHEN 'Pending' THEN 1 WHEN 'Invoiced' THEN 2 WHEN 'Paid' THEN 3 ELSE 4 END,
       enqueued_at DESC
-    LIMIT ${limit};
-  `);
+    LIMIT ?;
+  `, params);
   return rows.map(mapBillingRow);
 }
 
 function getBillingItem(outputDir, id) {
   const dbPath = ensureCoverageDatabase(outputDir);
-  const rows = querySqliteJson(dbPath, `${billingSelectSql(`id = ${sqlString(String(id || ''))}`)} LIMIT 1;`);
+  const rows = querySqliteJson(dbPath, `${billingSelectSql('id = ?')} LIMIT 1;`, [String(id || '')]);
   return rows.length ? mapBillingRow(rows[0]) : null;
 }
 
@@ -912,20 +931,27 @@ function enqueueBilling(outputDir, payload = {}) {
   if (!refType || !refId || !bankId) return null;
 
   const existing = querySqliteJson(dbPath, `
-    ${billingSelectSql(`ref_type = ${sqlString(refType)} AND ref_id = ${sqlString(refId)}`)}
+    ${billingSelectSql('ref_type = ? AND ref_id = ?')}
     LIMIT 1;
-  `).map(mapBillingRow)[0];
+  `, [refType, refId]).map(mapBillingRow)[0];
 
   const now = new Date().toISOString();
   if (existing) {
+    const patchedNotes = cleanText(payload.notes, 2000);
     runSqlite(dbPath, `
       UPDATE billing_queue SET
-        summary = ${sqlString(cleanText(payload.summary, 500) || existing.summary)},
-        amount = ${sqlNumber(payload.amount != null ? payload.amount : existing.amount)},
-        cert_number = ${sqlString(cleanText(payload.certNumber, 40) || existing.certNumber)},
-        notes = ${sqlString(cleanText(payload.notes, 2000) !== null ? cleanText(payload.notes, 2000) : existing.notes)}
-      WHERE id = ${sqlString(existing.id)};
-    `);
+        summary = ?,
+        amount = ?,
+        cert_number = ?,
+        notes = ?
+      WHERE id = ?;
+    `, [
+      textOrNull(cleanText(payload.summary, 500) || existing.summary),
+      numOrNull(payload.amount != null ? payload.amount : existing.amount),
+      textOrNull(cleanText(payload.certNumber, 40) || existing.certNumber),
+      textOrNull(patchedNotes !== null ? patchedNotes : existing.notes),
+      existing.id
+    ]);
     return getBillingItem(outputDir, existing.id);
   }
   const id = crypto.randomUUID();
@@ -933,19 +959,19 @@ function enqueueBilling(outputDir, payload = {}) {
     INSERT INTO billing_queue (
       id, ref_type, ref_id, bank_id, cert_number, summary, amount, state,
       enqueued_at, notes
-    ) VALUES (
-      ${sqlString(id)},
-      ${sqlString(refType)},
-      ${sqlString(refId)},
-      ${sqlString(bankId)},
-      ${sqlString(cleanText(payload.certNumber, 40))},
-      ${sqlString(cleanText(payload.summary, 500))},
-      ${sqlNumber(payload.amount)},
-      ${sqlString('Pending')},
-      ${sqlString(now)},
-      ${sqlString(cleanText(payload.notes, 2000))}
-    );
-  `);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    refType,
+    refId,
+    bankId,
+    textOrNull(cleanText(payload.certNumber, 40)),
+    textOrNull(cleanText(payload.summary, 500)),
+    numOrNull(payload.amount),
+    'Pending',
+    now,
+    textOrNull(cleanText(payload.notes, 2000))
+  ]);
   return getBillingItem(outputDir, id);
 }
 
@@ -964,13 +990,20 @@ function updateBillingItem(outputDir, id, input = {}) {
   const billedBy = state === existing.state ? existing.billedBy : (state === 'Pending' ? null : cleanText(input.billedBy, 120));
   runSqlite(dbPath, `
     UPDATE billing_queue SET
-      state = ${sqlString(state)},
-      amount = ${sqlNumber(amount)},
-      notes = ${sqlString(notes)},
-      billed_at = ${sqlString(billedAt)},
-      billed_by = ${sqlString(billedBy)}
-    WHERE id = ${sqlString(existing.id)};
-  `);
+      state = ?,
+      amount = ?,
+      notes = ?,
+      billed_at = ?,
+      billed_by = ?
+    WHERE id = ?;
+  `, [
+    textOrNull(state),
+    numOrNull(amount),
+    textOrNull(notes),
+    textOrNull(billedAt),
+    textOrNull(billedBy),
+    existing.id
+  ]);
   return getBillingItem(outputDir, existing.id);
 }
 

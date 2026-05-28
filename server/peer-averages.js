@@ -97,39 +97,42 @@ function metricSqlExpression(metric, periodAlias) {
 // ---------------------------------------------------------------------------
 // SQL fragments from criteria.
 
-function safeStateList(states) {
-  return states
-    .map(s => `'${String(s).replace(/'/g, "''")}'`)
-    .join(',');
-}
-
-// Build the WHERE clauses + JSON_EACH joins needed to filter to the cohort.
+// Build the WHERE clauses + bound params needed to filter to the cohort.
 // Asset and state columns live on `banks` directly. Sub-S and loan-mix
 // fields live in detail_json.periods[].values, so we join the same period
 // row that the bank's latest period (or the requested period) uses.
+//
+// Returns { wheres: [sqlFragment], params: [boundValue] }. Operators
+// (loanMix `op`) and JSON paths (loanMix `key`) are validated against
+// fixed whitelists in peer-group-store.normalizeCriteria, so they are
+// safe to inline; all bank-supplied *values* bind as parameters.
 function buildCohortWhere(criteria, periodAlias) {
   const wheres = [];
+  const params = [];
   if (Number.isFinite(criteria.assetMin)) {
-    wheres.push(`b.total_assets >= ${Number(criteria.assetMin)}`);
+    wheres.push('b.total_assets >= ?');
+    params.push(Number(criteria.assetMin));
   }
   if (Number.isFinite(criteria.assetMax)) {
-    wheres.push(`b.total_assets <= ${Number(criteria.assetMax)}`);
+    wheres.push('b.total_assets <= ?');
+    params.push(Number(criteria.assetMax));
   }
   if (criteria.states && criteria.states.length) {
-    wheres.push(`b.state IN (${safeStateList(criteria.states)})`);
+    wheres.push(`b.state IN (${criteria.states.map(() => '?').join(',')})`);
+    for (const s of criteria.states) params.push(String(s));
   }
-  if (criteria.subchapterS === 'Yes') {
-    wheres.push(`json_extract(${periodAlias}.value, '$.values.subchapterS') = 'Yes'`);
-  } else if (criteria.subchapterS === 'No') {
-    wheres.push(`json_extract(${periodAlias}.value, '$.values.subchapterS') = 'No'`);
+  if (criteria.subchapterS === 'Yes' || criteria.subchapterS === 'No') {
+    wheres.push(`json_extract(${periodAlias}.value, '$.values.subchapterS') = ?`);
+    params.push(criteria.subchapterS);
   }
   if (criteria.loanMix && criteria.loanMix.length) {
     for (const r of criteria.loanMix) {
       const path = `'$.values.${r.key}'`;
-      wheres.push(`CAST(json_extract(${periodAlias}.value, ${path}) AS REAL) ${r.op} ${Number(r.value)}`);
+      wheres.push(`CAST(json_extract(${periodAlias}.value, ${path}) AS REAL) ${r.op} ?`);
+      params.push(Number(r.value));
     }
   }
-  return wheres;
+  return { wheres, params };
 }
 
 // Pick the period to compute against. If caller passes one we use it; else
@@ -152,14 +155,14 @@ function findMatchingBanks(outputDir, criteria, requestedPeriod) {
   if (!fs.existsSync(dbPath)) return { period: null, bankIds: [], count: 0 };
   const period = resolvePeriod(dbPath, requestedPeriod);
   if (!period) return { period: null, bankIds: [], count: 0 };
-  const wheres = buildCohortWhere(criteria || {}, 'p');
+  const { wheres, params } = buildCohortWhere(criteria || {}, 'p');
   const whereSql = wheres.length ? 'AND ' + wheres.join('\n      AND ') : '';
   const rows = querySqliteJson(dbPath, `
     SELECT b.id AS id
     FROM banks b, json_each(b.detail_json, '$.periods') p
-    WHERE json_extract(p.value, '$.period') = '${period.replace(/'/g, "''")}'
+    WHERE json_extract(p.value, '$.period') = ?
       ${whereSql};
-  `, { maxBuffer: 64 * 1024 * 1024 });
+  `, [period, ...params]);
   return { period, bankIds: rows.map(r => r.id), count: rows.length };
 }
 
@@ -175,7 +178,7 @@ function computeCohortAverages(outputDir, criteria, requestedPeriod) {
   }
   const period = resolvePeriod(dbPath, requestedPeriod);
   if (!period) return { period: null, populationCount: 0, byKey: {} };
-  const wheres = buildCohortWhere(criteria || {}, 'p');
+  const { wheres, params } = buildCohortWhere(criteria || {}, 'p');
   const whereSql = wheres.length ? 'AND ' + wheres.join('\n      AND ') : '';
 
   // Project every metric in a single SELECT so we make exactly one SQL call
@@ -194,10 +197,10 @@ function computeCohortAverages(outputDir, criteria, requestedPeriod) {
       COUNT(*) AS population,
       ${projects}
     FROM banks b, json_each(b.detail_json, '$.periods') p
-    WHERE json_extract(p.value, '$.period') = '${period.replace(/'/g, "''")}'
+    WHERE json_extract(p.value, '$.period') = ?
       ${whereSql};
   `;
-  const rows = querySqliteJson(dbPath, sql, { maxBuffer: 64 * 1024 * 1024 });
+  const rows = querySqliteJson(dbPath, sql, [period, ...params]);
   if (!rows.length) return { period, populationCount: 0, byKey: {} };
   const r = rows[0];
   const population = Number(r.population) || 0;
