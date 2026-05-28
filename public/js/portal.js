@@ -4827,8 +4827,10 @@
     const handleBankSelection = () => {
       const id = picker.value || null;
       if (id === swapBuilderState.bankId) return;
-      swapBuilderState.bankId = id;
-      swapBuilderState.bankName = id ? picker.options[picker.selectedIndex].textContent : '';
+      setSwapSelectedBank(id);
+      swapBuilderState.view = 'home';
+      swapBuilderState.proposalId = null;
+      swapBuilderState.record = null;
       replaceHashParams('strategies', { tab: 'bond-swap', bank: id || '' });
       if (id) loadSuggestedSwapsForBank(id);
       else renderSwapBuilderEmpty();
@@ -4845,6 +4847,23 @@
         picker.selectedIndex = Math.max(0, Math.min(max, picker.selectedIndex + direction));
         handleBankSelection();
       });
+    }
+  }
+
+  function setSwapSelectedBank(bankId, fallbackName = '') {
+    const id = bankId ? String(bankId) : null;
+    const select = document.getElementById('swapBankSelect');
+    swapBuilderState.bankId = id;
+    if (select) {
+      select.value = id || '';
+      const selected = select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
+      if (id && selected && selected.value === id) {
+        swapBuilderState.bankName = selected.textContent || fallbackName || id;
+      } else {
+        swapBuilderState.bankName = id ? (fallbackName || swapBuilderState.bankName || id) : '';
+      }
+    } else {
+      swapBuilderState.bankName = id ? (fallbackName || swapBuilderState.bankName || id) : '';
     }
   }
 
@@ -4869,10 +4888,24 @@
       proposal: proposalFromHash
     });
     if (valid === 'bond-swap') {
-      if (!swapBuilderState.eligibleBanks) loadSwapEligibleBanks();
-      if (!swapBuilderState.bankId) loadRecentSwapProposals(null);
+      const banksLoaded = !!swapBuilderState.eligibleBanks;
+      if (bankFromHash) setSwapSelectedBank(bankFromHash);
+      if (!banksLoaded) loadSwapEligibleBanks();
       if (proposalFromHash && swapBuilderState.proposalId !== proposalFromHash) {
         openProposalInEditor(proposalFromHash);
+      } else if (!proposalFromHash) {
+        swapBuilderState.view = 'home';
+        swapBuilderState.proposalId = null;
+        swapBuilderState.record = null;
+        if (bankFromHash) {
+          if (banksLoaded) {
+            loadSuggestedSwapsForBank(bankFromHash);
+            loadRecentSwapProposals(bankFromHash);
+          }
+        } else {
+          renderSwapBuilderEmpty();
+          loadRecentSwapProposals(null);
+        }
       }
     } else if (valid === 'queue') {
       // Re-fetch in case the user just sent a swap proposal from the
@@ -4897,9 +4930,7 @@
       const bankFromHash = params.get('bank') || '';
       const proposalFromHash = params.get('proposal') || '';
       if (bankFromHash && swapBuilderState.eligibleBanks.some(b => b.id === bankFromHash)) {
-        select.value = bankFromHash;
-        swapBuilderState.bankId = bankFromHash;
-        swapBuilderState.bankName = select.options[select.selectedIndex].textContent;
+        setSwapSelectedBank(bankFromHash);
         // Only push the home-suggested view if we're not also restoring a
         // specific proposal — otherwise openProposalInEditor's render gets
         // race-overwritten by the suggested-swap load.
@@ -4907,6 +4938,8 @@
           loadSuggestedSwapsForBank(bankFromHash);
         }
         loadRecentSwapProposals(bankFromHash);
+      } else if (swapBuilderState.bankId && swapBuilderState.eligibleBanks.some(b => b.id === swapBuilderState.bankId)) {
+        setSwapSelectedBank(swapBuilderState.bankId);
       }
     } catch (err) {
       select.innerHTML = `<option value="">Failed to load banks (${escapeHtml(err.message || 'error')})</option>`;
@@ -4927,6 +4960,7 @@
     try {
       const res = await fetch('/api/swap-proposals/suggested?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' });
       const data = await res.json();
+      if (swapBuilderState.bankId !== bankId || swapBuilderState.view !== 'home') return;
       swapBuilderState.suggestion = data;
       renderSuggestedSwaps(data);
     } catch (err) {
@@ -5169,7 +5203,18 @@
       const res = await fetch('/api/swap-proposals/' + encodeURIComponent(id), { cache: 'no-store' });
       const record = await res.json();
       if (!res.ok) throw new Error(record.error || 'Failed to load proposal');
+      if (hashParamsForPage('strategies').get('proposal') !== id) return;
       swapBuilderState.record = record;
+      const recordBankId = record.proposal.bankId || swapBuilderState.bankId || '';
+      if (recordBankId) {
+        setSwapSelectedBank(recordBankId);
+        replaceHashParams('strategies', {
+          tab: 'bond-swap',
+          bank: recordBankId,
+          proposal: id
+        });
+        loadRecentSwapProposals(recordBankId);
+      }
       // Prime the picker caches in parallel so the rep can type a CUSIP
       // the moment the editor renders.
       const bankId = record.proposal.bankId;
