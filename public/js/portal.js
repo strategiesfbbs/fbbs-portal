@@ -1371,11 +1371,16 @@
   }
 
   function setupTopMenuKeyboard() {
-    document.querySelectorAll('.top-link-menu').forEach(menu => {
+    document.querySelectorAll('.top-link-menu').forEach((menu, menuIndex) => {
       const trigger = menu.querySelector('.top-link-trigger');
       const links = Array.from(menu.querySelectorAll('.top-link-menu-panel a'));
       if (!trigger || !links.length || menu.dataset.keyboardBound) return;
       menu.dataset.keyboardBound = '1';
+      const panel = menu.querySelector('.top-link-menu-panel');
+      if (panel) {
+        if (!panel.id) panel.id = 'top-link-panel-' + menuIndex;
+        trigger.setAttribute('aria-controls', panel.id);
+      }
       const openMenu = () => {
         menu.classList.add('keyboard-open');
         trigger.setAttribute('aria-expanded', 'true');

@@ -40,6 +40,28 @@ body {
   min-height: 100vh;
 }
 
+/* Baseline keyboard-focus ring. Components that style their own focus state
+   (via :focus { outline: none } + box-shadow) keep winning on specificity;
+   this only fills the gap for interactive elements that have none, so nothing
+   is ever focused invisibly. Mouse clicks don't trigger :focus-visible. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--racing-green);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Dark sidebar needs a light ring to stay visible against the near-black bg. */
+.sidebar a:focus-visible,
+.sidebar button:focus-visible {
+  outline-color: var(--tea-green);
+}
+
 /* SIDEBAR */
 .sidebar {
   position: fixed;

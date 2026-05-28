@@ -11,7 +11,7 @@
 <!-- SIDEBAR -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
-    <img class="brand-logo" src="/assets/fbbs-logo.svg" alt="FBBS">
+    <img class="brand-logo" src="/assets/fbbs-logo.svg" alt="" aria-hidden="true">
     <div class="brand-text">
       <h1>First Bankers' Banc Securities</h1>
       <p>Market Intelligence Portal</p>
@@ -27,12 +27,12 @@
     </div>
 
     <div class="nav-section nav-group open" data-nav-group="fbbs">
-      <button class="nav-parent" type="button" aria-expanded="true" data-nav-toggle="fbbs">
+      <button class="nav-parent" type="button" aria-expanded="true" aria-controls="nav-sub-fbbs" data-nav-toggle="fbbs">
         <span class="nav-icon">FB</span>
         <span class="nav-label">FBBS</span>
         <span class="nav-caret">&#8250;</span>
       </button>
-      <div class="nav-sub">
+      <div class="nav-sub" id="nav-sub-fbbs">
         <a class="nav-link nav-minor" data-page="daily-intelligence" href="#daily-intelligence">
           <span class="nav-label">Daily Intelligence</span>
         </a>
@@ -55,12 +55,12 @@
     </div>
 
     <div class="nav-section nav-group open" data-nav-group="offerings">
-      <button class="nav-parent" type="button" aria-expanded="true" data-nav-toggle="offerings">
+      <button class="nav-parent" type="button" aria-expanded="true" aria-controls="nav-sub-offerings" data-nav-toggle="offerings">
         <span class="nav-icon">OF</span>
         <span class="nav-label">Offerings</span>
         <span class="nav-caret">&#8250;</span>
       </button>
-      <div class="nav-sub">
+      <div class="nav-sub" id="nav-sub-offerings">
         <a class="nav-link nav-minor" data-page="treasury-explorer" href="#treasury-explorer">
           <span class="nav-label">Treasury Explorer</span>
         </a>
@@ -86,12 +86,12 @@
     </div>
 
     <div class="nav-section nav-group" data-nav-group="cds">
-      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="cds">
+      <button class="nav-parent" type="button" aria-expanded="false" aria-controls="nav-sub-cds" data-nav-toggle="cds">
         <span class="nav-icon">CD</span>
         <span class="nav-label">CDs</span>
         <span class="nav-caret">&#8250;</span>
       </button>
-      <div class="nav-sub">
+      <div class="nav-sub" id="nav-sub-cds">
         <a class="nav-link nav-minor" data-page="cd-recap" href="#cd-recap">
           <span class="nav-label">Weekly CD Recap</span>
         </a>
@@ -102,12 +102,12 @@
     </div>
 
     <div class="nav-section nav-group" data-nav-group="banks">
-      <button class="nav-parent" type="button" aria-expanded="false" data-nav-toggle="banks">
+      <button class="nav-parent" type="button" aria-expanded="false" aria-controls="nav-sub-banks" data-nav-toggle="banks">
         <span class="nav-icon">BK</span>
         <span class="nav-label">Banks</span>
         <span class="nav-caret">&#8250;</span>
       </button>
-      <div class="nav-sub">
+      <div class="nav-sub" id="nav-sub-banks">
         <a class="nav-link nav-minor" data-page="banks" href="#banks">
           <span class="nav-label">Bank Tear Sheets</span>
         </a>
@@ -218,7 +218,7 @@
       </div>
     </div>
     <div class="rep-picker" id="repPicker">
-      <button type="button" class="rep-picker-trigger" id="repPickerTrigger" aria-haspopup="true" aria-expanded="false">
+      <button type="button" class="rep-picker-trigger" id="repPickerTrigger" aria-haspopup="true" aria-expanded="false" aria-controls="repPickerPanel">
         <span class="rep-picker-kicker">Acting as</span>
         <span class="rep-picker-name" id="repPickerName">Set rep</span>
         <span class="rep-picker-caret" aria-hidden="true">&#8964;</span>
