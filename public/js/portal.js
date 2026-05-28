@@ -4749,6 +4749,13 @@
       hideBankRecentDropdown();
       searchBanks(input ? input.value : '');
     });
+    const profile = document.getElementById('bankProfile');
+    if (profile) profile.addEventListener('click', (e) => {
+      if (e.target.closest('[data-bank-focus-search]') && input) {
+        input.focus();
+        showBankRecentDropdown();
+      }
+    });
     if (upload) upload.addEventListener('change', e => {
       const file = e.target.files && e.target.files[0];
       if (file) uploadBankWorkbook(file);
@@ -5843,6 +5850,10 @@
       peerGroupsState.archiveFilter = archive.value;
       loadPeerGroups();
     });
+    const detail = document.getElementById('peerGroupsDetail');
+    if (detail) detail.addEventListener('click', (e) => {
+      if (e.target.closest('[data-pg-start-create]')) startCreatePeerGroup();
+    });
   }
 
   async function loadPeerGroups() {
@@ -5948,6 +5959,9 @@
       <div class="peer-groups-empty-state">
         <h3>Select a cohort or create a new one</h3>
         <p>Cohorts let you compare a bank against the peer set that actually matches it — size bracket, region, Sub-S vs C-corp, and loan mix. The smallest matching cohort wins on every tear sheet by default; reps can switch on the fly.</p>
+        <div class="empty-state-action">
+          <button type="button" class="small-btn" data-pg-start-create>Create a cohort</button>
+        </div>
       </div>`;
   }
 
