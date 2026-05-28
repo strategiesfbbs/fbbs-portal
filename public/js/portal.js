@@ -9421,10 +9421,24 @@
     return selectedBank && selectedBank.bank ? selectedBank.bank.id : null;
   }
 
+  function bankProfileSkeletonHtml() {
+    const cells = Array.from({ length: 8 }, () => '<div class="skeleton-card"></div>').join('');
+    return `
+      <div class="bank-profile-skeleton" aria-busy="true" aria-label="Loading bank tear sheet">
+        <div class="bps-head">
+          <div class="skeleton-card bps-title"></div>
+          <div class="skeleton-card bps-sub"></div>
+        </div>
+        <div class="bps-grid">${cells}</div>
+        <div class="skeleton-card bps-block"></div>
+        <div class="skeleton-card bps-block"></div>
+      </div>`;
+  }
+
   async function loadBank(id, options = {}) {
     if (options.collapseResults) clearBankSearchResults();
     const profile = document.getElementById('bankProfile');
-    if (profile) profile.innerHTML = '<div class="bank-empty-state"><h2>Loading bank tear sheet&hellip;</h2></div>';
+    if (profile) profile.innerHTML = bankProfileSkeletonHtml();
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(id)}`, { cache: 'no-store' });
       selectedBank = await readBankJson(res);

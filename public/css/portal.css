@@ -2727,6 +2727,45 @@ summary:focus-visible,
 @keyframes fbbsSkeleton {
   to { transform: translateX(100%); }
 }
+.bank-profile-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+}
+.bank-profile-skeleton .bps-head {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bank-profile-skeleton .bps-title {
+  border-radius: 8px;
+  min-height: 32px;
+  width: 46%;
+}
+.bank-profile-skeleton .bps-sub {
+  border-radius: 6px;
+  min-height: 15px;
+  width: 28%;
+}
+.bank-profile-skeleton .bps-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, 1fr);
+}
+.bank-profile-skeleton .bps-grid .skeleton-card {
+  border-radius: 8px;
+  min-height: 46px;
+}
+.bank-profile-skeleton .bps-block {
+  border-radius: 12px;
+  min-height: 140px;
+}
+@media (max-width: 700px) {
+  .bank-profile-skeleton .bps-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .viewer-empty {
   display: flex;
   align-items: center;
