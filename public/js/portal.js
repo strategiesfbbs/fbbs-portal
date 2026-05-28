@@ -5303,6 +5303,7 @@
     swapBuilderState.view = 'home';
     swapBuilderState.proposalId = null;
     swapBuilderState.record = null;
+    if (window.fbbsBreadcrumb) window.fbbsBreadcrumb.clearDetail();
     replaceHashParams('strategies', { tab: 'bond-swap', bank: swapBuilderState.bankId || '' });
     if (swapBuilderState.bankId) loadSuggestedSwapsForBank(swapBuilderState.bankId);
     else renderSwapBuilderEmpty();
@@ -5352,6 +5353,7 @@
         <datalist id="swapHoldingsDatalist"></datalist>
         <datalist id="swapInventoryDatalist"></datalist>
       </div>`;
+    if (window.fbbsBreadcrumb) window.fbbsBreadcrumb.setDetail('strategies', proposal.id);
     refreshPickerDatalists();
     bindEditorHandlers(record);
   }
@@ -9499,6 +9501,9 @@
     const profile = document.getElementById('bankProfile');
     if (!profile || !selectedBank || !selectedBank.bank) return;
     const bank = selectedBank.bank;
+    if (window.fbbsBreadcrumb) {
+      window.fbbsBreadcrumb.setDetail('banks', (bank.summary && bank.summary.name) || bank.id);
+    }
     const meta = selectedBank.metadata || {};
     const latest = bank.periods && bank.periods[0] ? bank.periods[0] : { values: {} };
     const values = latest.values || {};

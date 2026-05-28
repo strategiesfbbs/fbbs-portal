@@ -11,6 +11,10 @@
   var container = document.getElementById('breadcrumbs');
   if (!container) return;
 
+  // Optional deepest crumb set by the app (selected bank, open proposal, …).
+  // Scoped to the page it was set on so it self-clears on navigation away.
+  var detail = null; // { page: string, label: string }
+
   function basePageFromHash() {
     var raw = String(location.hash || '').replace(/^#/, '');
     var path = raw.split('?')[0];
@@ -50,17 +54,41 @@
 
   function render() {
     var page = basePageFromHash();
+    // A detail crumb only applies to the page it was set on.
+    if (detail && detail.page !== page) detail = null;
     if (page === 'home') return hide();
     var info = navInfo(page);
     if (!info) return hide();
 
     var crumbs = ['<a class="crumb crumb-link" href="#home">Home</a>'];
     if (info.group) crumbs.push('<span class="crumb crumb-group">' + esc(info.group) + '</span>');
-    crumbs.push('<span class="crumb crumb-current" aria-current="page">' + esc(info.label) + '</span>');
+
+    if (detail && detail.label) {
+      // The page is the section the detail lives under; detail is the current
+      // crumb. The page itself isn't a link — there's nowhere distinct to go.
+      crumbs.push('<span class="crumb crumb-group">' + esc(info.label) + '</span>');
+      crumbs.push('<span class="crumb crumb-current" aria-current="page">' + esc(detail.label) + '</span>');
+    } else {
+      crumbs.push('<span class="crumb crumb-current" aria-current="page">' + esc(info.label) + '</span>');
+    }
 
     container.hidden = false;
     container.innerHTML = crumbs.join('<span class="crumb-sep" aria-hidden="true">&rsaquo;</span>');
   }
+
+  function setDetail(page, label) {
+    if (!page || !label) return clearDetail();
+    detail = { page: String(page), label: String(label) };
+    render();
+  }
+
+  function clearDetail() {
+    if (!detail) return;
+    detail = null;
+    render();
+  }
+
+  window.fbbsBreadcrumb = { setDetail: setDetail, clearDetail: clearDetail };
 
   // Make replaceState/pushState observable so in-app navigation re-renders.
   ['pushState', 'replaceState'].forEach(function (method) {
