@@ -452,8 +452,12 @@ summary:focus-visible,
 .jump-result:last-child {
   border-bottom: 0;
 }
-.jump-result:hover {
+.jump-result:hover,
+.jump-result.is-active {
   background: var(--surface-hover);
+}
+.jump-result.is-active {
+  box-shadow: inset 3px 0 0 var(--racing-green);
 }
 .jump-result span {
   color: var(--text3);

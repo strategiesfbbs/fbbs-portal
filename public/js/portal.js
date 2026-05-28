@@ -1475,11 +1475,24 @@
     const results = document.getElementById('navSearchResults');
     if (!input || !results) return;
 
+    let activeIndex = -1;
+
+    const optionEls = () => Array.from(results.querySelectorAll('[data-goto]'));
+
+    const setActive = (index) => {
+      const opts = optionEls();
+      if (!opts.length) { activeIndex = -1; return; }
+      activeIndex = (index + opts.length) % opts.length;
+      opts.forEach((el, i) => el.classList.toggle('is-active', i === activeIndex));
+      opts[activeIndex].scrollIntoView({ block: 'nearest' });
+    };
+
     const render = () => {
       const query = input.value.trim().toLowerCase();
       if (!query) {
         results.classList.remove('show');
         results.innerHTML = '';
+        activeIndex = -1;
         return;
       }
       const terms = query.split(/\s+/).filter(Boolean);
@@ -1496,6 +1509,9 @@
           <em>${escapeHtml(item.description)}</em>
         </button>
       `).join('') : '<div class="jump-empty">No matching pages found</div>';
+      // Highlight the first match so Enter has an obvious target.
+      activeIndex = -1;
+      if (matches.length) setActive(0);
     };
 
     input.addEventListener('input', render);
@@ -1504,12 +1520,18 @@
       if (e.key === 'Escape') {
         closeNavSearch();
         input.blur();
-      }
-      if (e.key === 'Enter') {
-        const first = results.querySelector('[data-goto]');
-        if (first) {
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActive(activeIndex + 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActive(activeIndex - 1);
+      } else if (e.key === 'Enter') {
+        const opts = optionEls();
+        const target = opts[activeIndex] || opts[0];
+        if (target) {
           e.preventDefault();
-          goTo(first.dataset.goto);
+          goTo(target.dataset.goto);
         }
       }
     });
@@ -15502,10 +15524,18 @@
     }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
     targets.forEach(el => observer.observe(el));
 
-    // "/" focuses the jump bar from anywhere except a typing context.
+    // Jump-bar shortcuts: "/" from a non-typing context, or Cmd/Ctrl+K anywhere.
     const jumpInput = document.getElementById('navSearchInput');
     if (jumpInput) {
       document.addEventListener('keydown', (event) => {
+        const cmdK = (event.metaKey || event.ctrlKey) && !event.altKey
+          && (event.key === 'k' || event.key === 'K');
+        if (cmdK) {
+          event.preventDefault();
+          jumpInput.focus();
+          jumpInput.select();
+          return;
+        }
         if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
         const t = event.target;
         const tag = t && t.tagName;
