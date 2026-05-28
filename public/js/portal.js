@@ -4846,6 +4846,16 @@
         handleBankSelection();
       });
     }
+    const body = document.getElementById('swapBuilderBody');
+    if (body && picker) {
+      body.addEventListener('click', event => {
+        if (!event.target.closest('[data-swap-pick-bank]')) return;
+        picker.focus();
+        if (typeof picker.showPicker === 'function') {
+          try { picker.showPicker(); } catch (e) { /* not user-activated; focus is enough */ }
+        }
+      });
+    }
   }
 
   function setSwapSelectedBank(bankId, fallbackName = '') {
@@ -4944,10 +4954,30 @@
     }
   }
 
+  function emptyStateHtml({ icon = '', title = '', hint = '', action = '' } = {}) {
+    return `
+      <div class="empty-state">
+        ${icon ? `<div class="empty-state-icon" aria-hidden="true">${icon}</div>` : ''}
+        ${title ? `<h3>${escapeHtml(title)}</h3>` : ''}
+        ${hint ? `<p>${escapeHtml(hint)}</p>` : ''}
+        ${action ? `<div class="empty-state-action">${action}</div>` : ''}
+      </div>`;
+  }
+
   function renderSwapBuilderEmpty(message) {
     const body = document.getElementById('swapBuilderBody');
     if (!body) return;
-    body.innerHTML = `<div class="bank-search-empty">${escapeHtml(message || 'Pick a bank to see suggested swaps or build your own.')}</div>`;
+    // An explicit message means an error/status — keep the plain inline line.
+    if (message) {
+      body.innerHTML = `<div class="bank-search-empty">${escapeHtml(message)}</div>`;
+      return;
+    }
+    body.innerHTML = emptyStateHtml({
+      icon: '⇄',
+      title: 'No bank selected',
+      hint: 'Choose a bank with a bond-accounting file on record to see suggested swaps, or build your own proposal by CUSIP.',
+      action: '<button type="button" class="small-btn" data-swap-pick-bank>Choose a bank</button>'
+    });
   }
 
   async function loadSuggestedSwapsForBank(bankId) {

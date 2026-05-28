@@ -6651,6 +6651,49 @@ body {
   padding-top: 12px;
 }
 
+/* Reusable empty state for prominent "nothing here yet" panels.
+   Distinct from the inline .bank-search-empty status line (which also
+   carries transient loading/error text). */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 44px 24px;
+  color: var(--text2);
+}
+
+.empty-state .empty-state-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  color: var(--text3);
+  font-size: 22px;
+  line-height: 1;
+}
+
+.empty-state h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.empty-state p {
+  margin: 0;
+  max-width: 440px;
+  font-size: 13px;
+  color: var(--text3);
+}
+
+.empty-state .empty-state-action {
+  margin-top: 12px;
+}
+
 .bank-empty-state {
   color: var(--text3);
   padding: 34px 18px;

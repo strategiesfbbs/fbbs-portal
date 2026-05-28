@@ -853,7 +853,14 @@
         <span class="swap-bank-meta" id="swapBankMeta">Banks shown have a parsed portfolio on file. Suggested swaps come from holdings against today's offerings.</span>
       </div>
       <div class="swap-builder-body" id="swapBuilderBody">
-        <div class="bank-search-empty">Pick a bank to see suggested swaps or build your own.</div>
+        <div class="empty-state">
+          <div class="empty-state-icon" aria-hidden="true">⇄</div>
+          <h3>No bank selected</h3>
+          <p>Choose a bank with a bond-accounting file on record to see suggested swaps, or build your own proposal by CUSIP.</p>
+          <div class="empty-state-action">
+            <button type="button" class="small-btn" data-swap-pick-bank>Choose a bank</button>
+          </div>
+        </div>
       </div>
       <div class="swap-recent" id="swapRecentProposals" hidden>
         <h3>Recent proposals</h3>
