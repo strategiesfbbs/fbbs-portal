@@ -11,9 +11,9 @@
 // renderer doesn't need to know whether numbers came from the FedFis
 // workbook or from a user-defined cohort.
 
-const childProcess = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const sqliteDb = require('./sqlite-db');
 
 const BANK_DATABASE_FILENAME = 'bank-data.sqlite';
 
@@ -21,13 +21,8 @@ function bankDatabasePathForDir(outputDir) {
   return path.join(outputDir, BANK_DATABASE_FILENAME);
 }
 
-function querySqliteJson(dbPath, sql, options = {}) {
-  const result = childProcess.execFileSync('sqlite3', ['-json', dbPath, sql], {
-    encoding: 'utf8',
-    maxBuffer: options.maxBuffer || 64 * 1024 * 1024
-  });
-  const text = String(result || '').trim();
-  return text ? JSON.parse(text) : [];
+function querySqliteJson(dbPath, sql, params) {
+  return sqliteDb.querySqliteJson(dbPath, sql, params);
 }
 
 // ---------------------------------------------------------------------------

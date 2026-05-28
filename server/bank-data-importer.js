@@ -1,8 +1,9 @@
 'use strict';
 
-const childProcess = require('child_process');
+const childProcess = require('child_process'); // still used to shell out to `unzip`
 const fs = require('fs');
 const path = require('path');
+const sqliteDb = require('./sqlite-db');
 // 2025 Census Gazetteer ZCTA internal points, keyed by ZIP/ZCTA.
 const ZIP_CENTROIDS = require('./us-zcta-centroids-2025.json');
 
@@ -301,26 +302,13 @@ function sqlLike(value) {
     .replace(/'/g, "''");
 }
 
-function runSqlite(dbPath, sql, options = {}) {
-  const result = childProcess.spawnSync('sqlite3', [dbPath], {
-    input: sql,
-    encoding: 'utf8',
-    maxBuffer: options.maxBuffer || 256 * 1024 * 1024
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error((result.stderr || `sqlite3 exited with status ${result.status}`).trim());
-  }
-  return result.stdout || '';
+function runSqlite(dbPath, sql) {
+  sqliteDb.execSqlite(dbPath, sql);
+  return '';
 }
 
-function querySqliteJson(dbPath, sql, options = {}) {
-  const result = childProcess.execFileSync('sqlite3', ['-json', dbPath, sql], {
-    encoding: 'utf8',
-    maxBuffer: options.maxBuffer || 64 * 1024 * 1024
-  });
-  const text = String(result || '').trim();
-  return text ? JSON.parse(text) : [];
+function querySqliteJson(dbPath, sql, params) {
+  return sqliteDb.querySqliteJson(dbPath, sql, params);
 }
 
 function databasePathForDir(outputDir) {

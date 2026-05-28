@@ -1,9 +1,9 @@
 'use strict';
 
-const childProcess = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const sqliteDb = require('./sqlite-db');
 
 const COVERAGE_DATABASE_FILENAME = 'bank-coverage.sqlite';
 const COVERAGE_STATUSES = new Set(['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant']);
@@ -23,26 +23,13 @@ function sqlNumber(value) {
   return Number.isFinite(n) ? String(n) : 'NULL';
 }
 
-function runSqlite(dbPath, sql, options = {}) {
-  const result = childProcess.spawnSync('sqlite3', [dbPath], {
-    input: sql,
-    encoding: 'utf8',
-    maxBuffer: options.maxBuffer || 32 * 1024 * 1024
-  });
-  if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error((result.stderr || `sqlite3 exited with status ${result.status}`).trim());
-  }
-  return result.stdout || '';
+function runSqlite(dbPath, sql) {
+  sqliteDb.execSqlite(dbPath, sql);
+  return '';
 }
 
-function querySqliteJson(dbPath, sql) {
-  const result = childProcess.execFileSync('sqlite3', ['-json', dbPath, sql], {
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024
-  });
-  const text = String(result || '').trim();
-  return text ? JSON.parse(text) : [];
+function querySqliteJson(dbPath, sql, params) {
+  return sqliteDb.querySqliteJson(dbPath, sql, params);
 }
 
 function ensureCoverageDatabase(outputDir) {
