@@ -12705,6 +12705,18 @@ body {
 }
 .swap-leg-size:hover { background: #e8f3ec; }
 .swap-leg-size:focus-visible { outline: 2px solid #1b5e20; outline-offset: 1px; }
+.swap-send-issues {
+  margin: 10px 0 4px;
+  padding: 10px 14px;
+  border: 1px solid #e3b7b7;
+  background: #fbecec;
+  border-radius: 8px;
+  color: #6b1d1d;
+  font-size: 13px;
+}
+.swap-send-issues strong { display: block; margin-bottom: 4px; }
+.swap-send-issues ul { margin: 0; padding-left: 18px; }
+.swap-send-issues li { margin: 2px 0; }
 
 .swap-editor-summary {
   background: var(--black, #0f1f17);

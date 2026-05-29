@@ -5376,6 +5376,7 @@
             ` : ''}
           </div>
         </header>
+        <div id="swapSendIssues" class="swap-send-issues" role="alert" hidden></div>
         <div class="swap-editor-meta">
           <label class="swap-editor-title-field"><span>Title</span><input type="text" data-editor-field="title" value="${escapeHtml(proposal.title || '')}" title="${escapeHtml(proposal.title || '')}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Settle date</span><input type="date" data-editor-field="settleDate" value="${escapeHtml(proposal.settleDate || '')}" ${isDraft ? '' : 'readonly'}></label>
@@ -5746,6 +5747,9 @@
   }
 
   function updateLiveSummary(record) {
+    // Any edit invalidates a previous blocked-send list — clear it so the rep
+    // isn't staring at stale gaps after fixing them.
+    clearSendIssues();
     const body = document.getElementById('swapBuilderBody');
     if (!body) return;
     const summaryNode = body.querySelector('.swap-editor-summary');
@@ -5804,16 +5808,45 @@
     const id = swapBuilderState.proposalId;
     if (!id) return;
     if (!confirm('Send this proposal? Once sent, legs are frozen and a Bond Swap entry will be added to the Strategies queue.')) return;
+    clearSendIssues();
     try {
       const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/send`, { method: 'POST' });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Send failed');
+      if (!res.ok) {
+        // The completeness gate returns a per-leg list of what's missing —
+        // surface it inline next to the editor instead of burying it in a toast.
+        if (Array.isArray(data.issues) && data.issues.length) {
+          showSendIssues(data.issues);
+          showToast(data.error || 'This proposal is missing required data', true);
+          return;
+        }
+        throw new Error(data.error || 'Send failed');
+      }
       swapBuilderState.record = data;
       renderProposalEditor(data);
       showToast(`Proposal ${id} sent — added to Strategies queue`);
     } catch (err) {
       showToast('Send failed: ' + (err.message || err), true);
     }
+  }
+
+  // The pre-send completeness gate (server) can block a send with a list of
+  // per-leg gaps. Render them in the editor's alert banner and scroll it into
+  // view; clearSendIssues() hides it once the rep edits anything or re-sends.
+  function showSendIssues(issues) {
+    const box = document.getElementById('swapSendIssues');
+    if (!box) return;
+    box.innerHTML = `<strong>Can't send yet — complete these legs first:</strong>` +
+      `<ul>${issues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
+    box.hidden = false;
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function clearSendIssues() {
+    const box = document.getElementById('swapSendIssues');
+    if (!box) return;
+    box.hidden = true;
+    box.innerHTML = '';
   }
 
   async function cloneProposalToDraft() {
