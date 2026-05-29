@@ -281,5 +281,11 @@ module.exports = {
   getWirpStatus,
   loadWirpAnalysis,
   parseWirpWorkbook,
-  saveWirpWorkbook
+  saveWirpWorkbook,
+  // Pure parsing helpers — exported for unit testing.
+  excelDateToIso,
+  findHeaderRow,
+  keyForHeader,
+  parseNumber,
+  preferredKeyForHeader
 };
