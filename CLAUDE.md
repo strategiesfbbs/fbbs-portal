@@ -97,6 +97,8 @@ Multi-leg swap-proposal tool aimed at producing the client-facing one-pager FBBS
 
 **Status lifecycle:** `draft → sent → executed → cancelled`. On `send` the legs freeze and the canonical record becomes the `swap_proposal_snapshots.snapshot_json` row — re-renders never silently shift as market data moves. Revisions clone into a new SP-YYYY-NNNN.
 
+**Send is gated by a completeness check.** `buildProposalSnapshot()` enriches legs (derives blank yields/duration from price+coupon+maturity) *before* freezing, so the immutable snapshot — and the printed sent proposal that renders from it — matches what the rep approved in the live editor. `send` then runs `swapMath.validateLegsForSend(sells, buys)` on those enriched legs and returns `400 { error, issues[] }` if any leg lacks the data its printed economics need (par, maturity, prices, a usable yield), rather than freezing a proposal full of `—`. The leg add/update routes range-check numeric inputs via `swapMath.validateLegInput()` (rejects e.g. negative par, a 150% coupon) before writing; empty stub rows still pass so the add-then-fill workflow is unaffected.
+
 **Routes (server/server.js):**
 
 ```

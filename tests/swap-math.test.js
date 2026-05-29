@@ -393,6 +393,82 @@ test('swapSummary roundtrips a simple 1×1 swap', () => {
   assert.ok(Math.abs(s.settleAdjust) < 100, `settleAdjust ${s.settleAdjust} should be near 0`);
 });
 
+// ---------- Input validation: validateLegInput ----------
+
+test('validateLegInput passes an empty stub leg (add-then-fill workflow)', () => {
+  assert.deepStrictEqual(m.validateLegInput({}), []);
+  assert.deepStrictEqual(m.validateLegInput({ side: 'buy', cusip: '' }), []);
+});
+
+test('validateLegInput passes a clean leg', () => {
+  const ok = m.validateLegInput({
+    par: 1_000_000, coupon: 4.5, bookPrice: 99.5, marketPrice: 98.25,
+    bookYieldYtm: 4.6, marketYieldYtw: 5.1, modifiedDuration: 3.2,
+    averageLife: 3.4, accrued: 1234.56
+  });
+  assert.deepStrictEqual(ok, []);
+});
+
+test('validateLegInput rejects negative and zero par', () => {
+  assert.ok(m.validateLegInput({ par: -500 }).some(p => /Par/.test(p)));
+  assert.ok(m.validateLegInput({ par: 0 }).some(p => /Par must be greater than 0/.test(p)));
+});
+
+test('validateLegInput rejects an out-of-range coupon', () => {
+  assert.ok(m.validateLegInput({ coupon: 150 }).some(p => /Coupon.*exceed 30/.test(p)));
+  assert.ok(m.validateLegInput({ coupon: -1 }).some(p => /Coupon.*less than 0/.test(p)));
+});
+
+test('validateLegInput rejects a non-numeric value', () => {
+  assert.ok(m.validateLegInput({ coupon: 'abc' }).some(p => /Coupon.*must be a number/.test(p)));
+});
+
+test('validateLegInput rejects a zero/negative price and negative accrued', () => {
+  assert.ok(m.validateLegInput({ marketPrice: 0 }).some(p => /Market price must be greater than 0/.test(p)));
+  assert.ok(m.validateLegInput({ accrued: -10 }).some(p => /Accrued/.test(p)));
+});
+
+test('validateLegInput treats blank strings as absent', () => {
+  assert.deepStrictEqual(m.validateLegInput({ par: '', coupon: '', marketPrice: '' }), []);
+});
+
+// ---------- Input validation: validateLegsForSend ----------
+
+test('validateLegsForSend passes a complete 1×1 swap', () => {
+  const sells = [{ cusip: '111', par: 1_000_000, maturity: '2030-01-01', bookPrice: 100, marketPrice: 98, bookYieldYtm: 2, marketYieldYtw: 5 }];
+  const buys = [{ cusip: '222', par: 1_000_000, maturity: '2031-01-01', marketPrice: 98, marketYieldYtw: 5 }];
+  assert.deepStrictEqual(m.validateLegsForSend(sells, buys), []);
+});
+
+test('validateLegsForSend flags a sell leg missing par and maturity', () => {
+  const sells = [{ cusip: 'ABC', bookPrice: 100, marketPrice: 98, bookYieldYtm: 2 }];
+  const buys = [{ cusip: '222', par: 1_000_000, maturity: '2031-01-01', marketPrice: 98, marketYieldYtw: 5 }];
+  const issues = m.validateLegsForSend(sells, buys);
+  assert.strictEqual(issues.length, 1);
+  assert.ok(/Sell leg 1 \(ABC\)/.test(issues[0]), issues[0]);
+  assert.ok(/par amount/.test(issues[0]) && /maturity date/.test(issues[0]), issues[0]);
+});
+
+test('validateLegsForSend flags a buy leg missing market yield and price', () => {
+  const sells = [{ cusip: '111', par: 1_000_000, maturity: '2030-01-01', bookPrice: 100, marketPrice: 98, bookYieldYtm: 2 }];
+  const buys = [{ cusip: '222', par: 1_000_000, maturity: '2031-01-01' }];
+  const issues = m.validateLegsForSend(sells, buys);
+  assert.strictEqual(issues.length, 1);
+  assert.ok(/Buy leg 1 \(222\)/.test(issues[0]), issues[0]);
+  assert.ok(/market price/.test(issues[0]) && /market yield/.test(issues[0]), issues[0]);
+});
+
+test('validateLegsForSend passes once a price-only leg is enriched (derived yield)', () => {
+  // A buy leg with price + coupon + maturity but no explicit yield: raw it
+  // would be flagged, but after enrichment the yield is derived, so the
+  // freeze-time check (which runs on enriched legs) must pass.
+  const sells = [{ cusip: '111', par: 1_000_000, maturity: '2030-01-01', bookPrice: 100, marketPrice: 98, bookYieldYtm: 2 }];
+  const rawBuy = { cusip: '222', par: 1_000_000, maturity: '2031-01-01', coupon: 5, marketPrice: 98 };
+  assert.ok(m.validateLegsForSend(sells, [rawBuy]).length === 1, 'raw price-only buy should be flagged');
+  const enrichedBuy = m.enrichLegWithComputedFields(rawBuy, '2026-05-29');
+  assert.deepStrictEqual(m.validateLegsForSend(sells, [enrichedBuy]), []);
+});
+
 // ---------- Done ----------
 
 console.log(`swap-math tests: ${passed} passed.`);

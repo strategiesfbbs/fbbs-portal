@@ -4748,6 +4748,8 @@ function autoFillAccrued(body, proposal) {
 async function handleAddSwapLeg(req, res, id) {
   try {
     const body = await readJsonBody(req);
+    const legProblems = swapMath.validateLegInput(body);
+    if (legProblems.length) return sendJSON(res, 400, { error: legProblems.join('; ') });
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
     if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
     const after = swapStore.addLeg(BANK_REPORTS_DIR, id, autoFillAccrued(body, current.proposal));
@@ -4762,6 +4764,8 @@ async function handleAddSwapLeg(req, res, id) {
 async function handleUpdateSwapLeg(req, res, id, legId) {
   try {
     const body = await readJsonBody(req);
+    const legProblems = swapMath.validateLegInput(body);
+    if (legProblems.length) return sendJSON(res, 400, { error: legProblems.join('; ') });
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
     if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
     // Merge the incoming patch with the leg's current values, then auto-fill
@@ -4797,8 +4801,14 @@ function handleDeleteSwapLeg(req, res, id, legId) {
 
 function buildProposalSnapshot(proposalRecord) {
   const { proposal, legs } = proposalRecord;
-  const sells = legs.filter(l => l.side === 'sell');
-  const buys = legs.filter(l => l.side === 'buy');
+  // Enrich legs (derive blank yields/duration from price+coupon+maturity)
+  // BEFORE freezing, so the immutable snapshot — and therefore the printed
+  // sent proposal, which renders straight from the snapshot — shows the same
+  // values the rep approved in the live editor instead of silently dropping
+  // to "—".
+  const enrich = l => swapMath.enrichLegWithComputedFields(l, proposal.settleDate);
+  const sells = legs.filter(l => l.side === 'sell').map(enrich);
+  const buys = legs.filter(l => l.side === 'buy').map(enrich);
   const summary = swapMath.swapSummary({
     sells, buys,
     horizonYears: proposal.horizonYears || 3,
@@ -4854,6 +4864,16 @@ async function handleSendSwapProposal(req, res, id) {
     }
 
     const snapshot = buildProposalSnapshot(refreshed);
+    // Don't freeze a proposal whose printed economics would be full of "—".
+    // Once sent, the snapshot is immutable and goes to the bank, so block the
+    // send and tell the rep exactly which legs are missing what.
+    const sendIssues = swapMath.validateLegsForSend(snapshot.sells, snapshot.buys);
+    if (sendIssues.length) {
+      return sendJSON(res, 400, {
+        error: 'This proposal is missing data needed for a complete client artifact. Fill in the fields below, then send.',
+        issues: sendIssues
+      });
+    }
     let frozen = swapStore.freezeProposal(BANK_REPORTS_DIR, id, snapshot);
 
     // Promote into the Strategies Queue as type 'Bond Swap' so the rest

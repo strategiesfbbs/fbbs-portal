@@ -5170,10 +5170,11 @@
 
       // Look up the bank's holdings row so we get full sell-side metadata
       const holdingsRes = await fetch('/api/swap-proposals/holdings?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' });
+      if (!holdingsRes.ok) throw new Error('Could not load holdings for the sell leg');
       const holdings = await holdingsRes.json();
       const sellRow = (holdings.positions || []).find(p => p.cusip === candidate.held.cusip) || {};
 
-      await fetch(`/api/swap-proposals/${id}/legs`, {
+      const sellRes = await fetch(`/api/swap-proposals/${id}/legs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -5198,8 +5199,12 @@
           sourceDate: holdings.reportDate || ''
         })
       });
+      if (!sellRes.ok) {
+        const e = await sellRes.json().catch(() => ({}));
+        throw new Error(e.error || 'Could not add the sell leg');
+      }
 
-      await fetch(`/api/swap-proposals/${id}/legs`, {
+      const buyRes = await fetch(`/api/swap-proposals/${id}/legs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -5218,6 +5223,10 @@
           sourceDate: new Date().toISOString().slice(0, 10)
         })
       });
+      if (!buyRes.ok) {
+        const e = await buyRes.json().catch(() => ({}));
+        throw new Error(e.error || 'Could not add the buy leg');
+      }
 
       showToast(`Proposal ${id} created with seeded legs`);
       await openProposalInEditor(id);

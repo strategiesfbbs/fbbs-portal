@@ -680,6 +680,89 @@ function swapSummary({ sells, buys, horizonYears, settleAdjust = null, taxRate =
   };
 }
 
+// ---------- Input validation (route-boundary guards) ----------
+//
+// Two guards used by the swap routes. Both are pure and return plain arrays
+// of human-readable strings so the route can surface them verbatim and the
+// regression tests can assert on them.
+
+// Sane bounds for a leg's numeric inputs. Deliberately generous — the goal is
+// to catch fat-finger entries (a negative par, a 150% coupon) before they
+// reach the store, not to second-guess the desk. `minInclusive: false` means
+// the value must be strictly greater than `min`.
+const LEG_NUMERIC_BOUNDS = Object.freeze({
+  par:              { label: 'Par',               min: 0, minInclusive: false },
+  coupon:           { label: 'Coupon (%)',        min: 0, max: 30 },
+  bookPrice:        { label: 'Book price',        min: 0, minInclusive: false, max: 1000 },
+  marketPrice:      { label: 'Market price',      min: 0, minInclusive: false, max: 1000 },
+  bookYieldYtm:     { label: 'Book yield (YTM)',  min: -10, max: 50 },
+  bookYieldYtw:     { label: 'Book yield (YTW)',  min: -10, max: 50 },
+  marketYieldYtm:   { label: 'Market yield (YTM)', min: -10, max: 50 },
+  marketYieldYtw:   { label: 'Market yield (YTW)', min: -10, max: 50 },
+  modifiedDuration: { label: 'Modified duration', min: 0, max: 100 },
+  averageLife:      { label: 'Average life',      min: 0, max: 100 },
+  accrued:          { label: 'Accrued interest',  min: 0 }
+});
+
+// Validate a single leg's numeric inputs. Only checks fields that are PRESENT
+// and non-empty, so an empty "Add buy/sell" stub row (the editor adds one
+// before the rep fills it) passes cleanly. Returns [] when the leg is fine.
+function validateLegInput(leg) {
+  const problems = [];
+  if (!leg || typeof leg !== 'object') return problems;
+  for (const [key, b] of Object.entries(LEG_NUMERIC_BOUNDS)) {
+    const raw = leg[key];
+    if (raw == null || raw === '') continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) { problems.push(`${b.label} must be a number`); continue; }
+    const minOk = b.min == null ? true : (b.minInclusive === false ? n > b.min : n >= b.min);
+    if (!minOk) {
+      problems.push(b.minInclusive === false
+        ? `${b.label} must be greater than ${b.min}`
+        : `${b.label} cannot be less than ${b.min}`);
+      continue;
+    }
+    if (b.max != null && n > b.max) problems.push(`${b.label} cannot exceed ${b.max}`);
+  }
+  return problems;
+}
+
+// Completeness check run just before a proposal is frozen + mailed. Operates
+// on ENRICHED legs (call enrichLegWithComputedFields first) so a leg that only
+// carries price + coupon + maturity — yield derived — still passes. Returns
+// one human-readable issue per incomplete leg; [] means ready to send. This is
+// the guard that keeps a proposal full of "—" placeholders from being frozen
+// into an immutable snapshot and printed for a bank.
+function validateLegsForSend(sells, buys) {
+  const issues = [];
+  const check = (leg, side, index) => {
+    if (!leg) return;
+    const missing = [];
+    const par = num(leg.par);
+    const haveBookValue = (num(leg.bookValue) || 0) > 0 || (par != null && num(leg.bookPrice) != null);
+    const haveMarketValue = (num(leg.marketValue) || 0) > 0 || (par != null && num(leg.marketPrice) != null);
+    const haveBookYield = leg.bookYieldYtm != null || leg.bookYieldYtw != null;
+    const haveMarketYield = leg.marketYieldYtw != null || leg.marketYieldYtm != null;
+    if (par == null || par <= 0) missing.push('a par amount');
+    if (!leg.maturity) missing.push('a maturity date');
+    if (side === 'sell') {
+      if (!haveBookValue) missing.push('a book price');
+      if (!haveMarketValue) missing.push('a market price');
+      if (!haveBookYield) missing.push('a book yield (or book price + coupon + maturity to derive it)');
+    } else {
+      if (!haveMarketValue) missing.push('a market price');
+      if (!haveMarketYield) missing.push('a market yield (or market price + coupon + maturity to derive it)');
+    }
+    if (missing.length) {
+      const label = `${side === 'sell' ? 'Sell' : 'Buy'} leg ${index + 1}${leg.cusip ? ' (' + leg.cusip + ')' : ''}`;
+      issues.push(`${label} needs ${missing.join(', ')}.`);
+    }
+  };
+  (sells || []).forEach((l, i) => check(l, 'sell', i));
+  (buys || []).forEach((l, i) => check(l, 'buy', i));
+  return issues;
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -721,5 +804,8 @@ module.exports = {
   // Portfolio / summary
   aggregateLegs,
   portfolioDiff,
-  swapSummary
+  swapSummary,
+  // Input validation
+  validateLegInput,
+  validateLegsForSend
 };
