@@ -12728,6 +12728,12 @@ body {
   color: #4a5b53;
 }
 .swap-derived-legend em { color: #1f4e79; font-style: italic; }
+.swap-leg-table input.swap-input-invalid,
+.swap-editor-meta input.swap-input-invalid {
+  border-color: #c0392b;
+  background: #fbecec;
+  outline: none;
+}
 
 .swap-editor-summary {
   background: var(--black, #0f1f17);

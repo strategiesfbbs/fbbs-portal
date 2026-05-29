@@ -5381,7 +5381,7 @@
           <label class="swap-editor-title-field"><span>Title</span><input type="text" data-editor-field="title" value="${escapeHtml(proposal.title || '')}" title="${escapeHtml(proposal.title || '')}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Settle date</span><input type="date" data-editor-field="settleDate" value="${escapeHtml(proposal.settleDate || '')}" ${isDraft ? '' : 'readonly'}></label>
           <label><span>Horizon (yr)</span><input type="number" step="0.25" min="0.25" max="30" data-editor-field="horizonYears" value="${proposal.horizonYears == null ? '' : proposal.horizonYears}" ${isDraft ? '' : 'readonly'}></label>
-          <label><span>Tax rate (%)</span><input type="number" step="0.1" data-editor-field="taxRate" value="${proposal.taxRate == null ? '' : proposal.taxRate}" ${isDraft ? '' : 'readonly'}></label>
+          <label><span>Tax rate (%)</span><input type="number" step="0.1" min="0" max="100" data-editor-field="taxRate" value="${proposal.taxRate == null ? '' : proposal.taxRate}" ${isDraft ? '' : 'readonly'}></label>
           <label class="swap-editor-notes"><span>Notes</span><textarea data-editor-field="notes" rows="2" ${isDraft ? '' : 'readonly'}>${escapeHtml(proposal.notes || '')}</textarea></label>
         </div>
         ${renderLegSideTable('sell', sells, isDraft)}
@@ -5409,17 +5409,20 @@
     return `<span class="swap-status-pill ${cls}">${escapeHtml(label)}</span>`;
   }
 
+  // min/max mirror swapMath.validateLegInput (server) so the browser flags an
+  // out-of-range value before the PATCH round-trip; the server stays the hard
+  // gate. Keep these in sync with LEG_NUMERIC_BOUNDS in swap-math.js.
   const LEG_INPUTS = [
     { key: 'cusip', label: 'CUSIP', type: 'text', size: 10 },
     { key: 'description', label: 'Description', type: 'text', size: 26 },
-    { key: 'coupon', label: 'Cpn', type: 'number', step: '0.001' },
+    { key: 'coupon', label: 'Cpn', type: 'number', step: '0.001', min: 0, max: 30 },
     { key: 'maturity', label: 'Maturity', type: 'date' },
-    { key: 'par', label: 'Par', type: 'number', step: '1' },
-    { key: 'bookPrice', label: 'Bk Px', type: 'number', step: '0.001', secondary: true },
-    { key: 'marketPrice', label: 'Mkt Px', type: 'number', step: '0.001' },
-    { key: 'bookYieldYtm', label: 'Bk YTM %', type: 'number', step: '0.001', secondary: true },
-    { key: 'marketYieldYtw', label: 'Mkt YTW %', type: 'number', step: '0.001' },
-    { key: 'averageLife', label: 'WAL', type: 'number', step: '0.01', secondary: true }
+    { key: 'par', label: 'Par', type: 'number', step: '1', min: 0 },
+    { key: 'bookPrice', label: 'Bk Px', type: 'number', step: '0.001', min: 0, max: 1000, secondary: true },
+    { key: 'marketPrice', label: 'Mkt Px', type: 'number', step: '0.001', min: 0, max: 1000 },
+    { key: 'bookYieldYtm', label: 'Bk YTM %', type: 'number', step: '0.001', min: -10, max: 50, secondary: true },
+    { key: 'marketYieldYtw', label: 'Mkt YTW %', type: 'number', step: '0.001', min: -10, max: 50 },
+    { key: 'averageLife', label: 'WAL', type: 'number', step: '0.01', min: 0, max: 100, secondary: true }
   ];
 
   function legIsUnfilled(leg) {
@@ -5463,6 +5466,7 @@
     const cells = LEG_INPUTS.map(col => {
       const value = leg[col.key] == null ? '' : leg[col.key];
       const step = col.step ? ` step="${col.step}"` : '';
+      const range = `${col.min != null ? ` min="${col.min}"` : ''}${col.max != null ? ` max="${col.max}"` : ''}`;
       const readonly = isDraft ? '' : 'readonly';
       // Wire the CUSIP column to the appropriate datalist for autocomplete
       // + smart-fill of all sibling fields when the rep picks a known one.
@@ -5477,7 +5481,7 @@
       const inputAttrs = isDerived
         ? ` class="swap-leg-derived" title="Computed from price + coupon + maturity — the source workbook didn't supply this"`
         : '';
-      return `<td${tdClass}><input type="${col.type}" data-leg-field="${col.key}"${step}${listAttr}${inputAttrs} value="${escapeHtml(value)}" ${readonly}></td>`;
+      return `<td${tdClass}><input type="${col.type}" data-leg-field="${col.key}"${step}${range}${listAttr}${inputAttrs} value="${escapeHtml(value)}" ${readonly}></td>`;
     }).join('');
     const del = isDraft
       ? `<button type="button" class="swap-leg-del" data-del-leg="${leg.id}" title="Remove leg">&times;</button>`
@@ -5644,9 +5648,25 @@
     }
   }
 
+  // Block only clearly out-of-range numbers before a PATCH, marking the field.
+  // Ignores stepMismatch so a value like a 5.1234% yield against step="0.001"
+  // isn't false-flagged. The server (validateLegInput) remains the hard gate.
+  function inputRangeOk(input) {
+    if (!input || input.type !== 'number') return true;
+    const v = input.validity;
+    if (v.rangeUnderflow || v.rangeOverflow) {
+      input.classList.add('swap-input-invalid');
+      showToast(input.validationMessage || 'Value is out of range', true);
+      return false;
+    }
+    input.classList.remove('swap-input-invalid');
+    return true;
+  }
+
   function queueProposalHeaderUpdate(input) {
     const id = swapBuilderState.proposalId;
     if (!id) return;
+    if (!inputRangeOk(input)) return;
     const field = input.dataset.editorField;
     const value = input.type === 'number' ? (input.value === '' ? null : Number(input.value)) : input.value;
     debouncedPatchProposal(id, { [field]: value });
@@ -5655,6 +5675,7 @@
   function queueLegUpdate(legId, input) {
     const id = swapBuilderState.proposalId;
     if (!id || !legId) return;
+    if (!inputRangeOk(input)) return;
     const field = input.dataset.legField;
     const value = input.type === 'number' ? (input.value === '' ? null : Number(input.value)) : input.value;
     const patch = { [field]: value };
