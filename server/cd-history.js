@@ -285,5 +285,16 @@ module.exports = {
   ensureCdHistoryDir,
   saveCdHistorySnapshot,
   summarizeWeeklyCdHistory,
-  loadCdHistory
+  loadCdHistory,
+  // Pure comparison/aggregation/date helpers — exported for unit testing.
+  delta,
+  findSnapshotOnOrBefore,
+  median,
+  medianRatesByTerm,
+  normalizeTerm,
+  parseYmd,
+  shiftYmd,
+  toYmd,
+  uniqueByCusip,
+  weekBounds
 };
