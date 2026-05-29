@@ -12680,7 +12680,7 @@ body {
   text-transform: uppercase;
   vertical-align: middle;
 }
-.swap-leg-actions { width: 28px; text-align: center; }
+.swap-leg-actions { white-space: nowrap; text-align: center; }
 .swap-leg-del {
   background: transparent;
   border: 0;
@@ -12692,6 +12692,19 @@ body {
   border-radius: 4px;
 }
 .swap-leg-del:hover { background: #fbecec; }
+.swap-leg-size {
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #1b5e20;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+.swap-leg-size:hover { background: #e8f3ec; }
+.swap-leg-size:focus-visible { outline: 2px solid #1b5e20; outline-offset: 1px; }
 
 .swap-editor-summary {
   background: var(--black, #0f1f17);

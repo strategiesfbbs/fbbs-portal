@@ -5471,7 +5471,12 @@
     const del = isDraft
       ? `<button type="button" class="swap-leg-del" data-del-leg="${leg.id}" title="Remove leg">&times;</button>`
       : '';
-    return `<tr data-leg-id="${leg.id}" data-side="${escapeHtml(side)}">${cells}<td class="swap-leg-actions">${del}</td></tr>`;
+    // Buy legs in a draft get a one-click "size to proceeds" action: solve the
+    // par that balances total buy proceeds against sell proceeds (cash-neutral).
+    const size = (isDraft && side === 'buy')
+      ? `<button type="button" class="swap-leg-size" data-size-leg="${leg.id}" title="Size this buy's par so total buy proceeds match sell proceeds (cash-neutral settle)">Size</button>`
+      : '';
+    return `<tr data-leg-id="${leg.id}" data-side="${escapeHtml(side)}">${cells}<td class="swap-leg-actions">${size}${del}</td></tr>`;
   }
 
   function renderEditorSummary(summary, proposal) {
@@ -5555,6 +5560,9 @@
     });
     body.querySelectorAll('[data-del-leg]').forEach(btn => {
       btn.addEventListener('click', () => deleteLeg(Number(btn.dataset.delLeg)));
+    });
+    body.querySelectorAll('[data-size-leg]').forEach(btn => {
+      btn.addEventListener('click', () => sizeBuyLeg(Number(btn.dataset.sizeLeg)));
     });
     body.querySelectorAll('tr[data-leg-id]').forEach(tr => {
       tr.querySelectorAll('input[data-leg-field]').forEach(input => {
@@ -5694,6 +5702,46 @@
       updateLiveSummary(data);
     } catch (err) {
       showToast('Leg save failed: ' + (err.message || err), true);
+    }
+  }
+
+  // Ask the server for the par that balances this buy leg's proceeds against
+  // total sell proceeds (cash-neutral), show the rep the numbers, and on
+  // confirm apply it through the normal leg PATCH so the swap rules and
+  // accrued recompute. The route is read-only — nothing changes until the
+  // PATCH below.
+  async function sizeBuyLeg(legId) {
+    const id = swapBuilderState.proposalId;
+    if (!id || !legId) return;
+    const fmt = n => (n == null ? '—' : Number(n).toLocaleString('en-US'));
+    try {
+      const res = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/size-buy?flexLegId=${encodeURIComponent(legId)}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not size this buy leg');
+      const p = data.proceeds || {};
+      const lines = [
+        `Size this buy leg to ${fmt(data.suggestedPar)} par?`,
+        '',
+        `Sell proceeds:            ${fmt(p.sell)}`,
+        p.lockedBuy ? `Other buys (locked):      ${fmt(p.lockedBuy)}` : null,
+        `Buy proceeds at this par: ${fmt(p.flexAtSuggested)}`,
+        `Net cash to settle:       ${fmt(p.netCash)}`,
+        '',
+        `(currently ${data.currentPar == null ? 'unset' : fmt(data.currentPar)} par)`
+      ].filter(l => l !== null);
+      if (!confirm(lines.join('\n'))) return;
+      const patchRes = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/legs/${legId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ par: data.suggestedPar })
+      });
+      const patched = await patchRes.json();
+      if (!patchRes.ok) throw new Error(patched.error || 'Could not apply the sized par');
+      swapBuilderState.record = patched;
+      renderProposalEditor(patched);
+      showToast(`Sized buy leg to ${fmt(data.suggestedPar)} par`);
+    } catch (err) {
+      showToast('Size to proceeds failed: ' + (err.message || err), true);
     }
   }
 
