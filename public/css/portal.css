@@ -12717,6 +12717,17 @@ body {
 .swap-send-issues strong { display: block; margin-bottom: 4px; }
 .swap-send-issues ul { margin: 0; padding-left: 18px; }
 .swap-send-issues li { margin: 2px 0; }
+.swap-leg-table input.swap-leg-derived {
+  background: #eef5ff;
+  font-style: italic;
+  color: #1f4e79;
+}
+.swap-derived-legend {
+  margin: 6px 2px 0;
+  font-size: 11px;
+  color: #4a5b53;
+}
+.swap-derived-legend em { color: #1f4e79; font-style: italic; }
 
 .swap-editor-summary {
   background: var(--black, #0f1f17);

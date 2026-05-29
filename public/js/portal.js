@@ -5386,6 +5386,9 @@
         </div>
         ${renderLegSideTable('sell', sells, isDraft)}
         ${renderLegSideTable('buy', buys, isDraft)}
+        ${legs.some(l => l.derived && Object.keys(l.derived).length)
+          ? `<p class="swap-derived-legend">Fields in <em>italic blue</em> were computed from price + coupon + maturity — the source workbook didn't supply them.</p>`
+          : ''}
         ${renderEditorSummary(computedSummary, proposal)}
         <datalist id="swapHoldingsDatalist"></datalist>
         <datalist id="swapInventoryDatalist"></datalist>
@@ -5467,7 +5470,14 @@
         ? ` list="${side === 'sell' ? 'swapHoldingsDatalist' : 'swapInventoryDatalist'}"`
         : '';
       const tdClass = col.secondary ? ' class="swap-leg-secondary"' : '';
-      return `<td${tdClass}><input type="${col.type}" data-leg-field="${col.key}"${step}${listAttr} value="${escapeHtml(value)}" ${readonly}></td>`;
+      // Flag fields the server derived (e.g. a yield computed from price +
+      // coupon + maturity when the workbook shipped it blank) so the rep can
+      // tell a computed value from one that came off the source file.
+      const isDerived = leg.derived && leg.derived[col.key];
+      const inputAttrs = isDerived
+        ? ` class="swap-leg-derived" title="Computed from price + coupon + maturity — the source workbook didn't supply this"`
+        : '';
+      return `<td${tdClass}><input type="${col.type}" data-leg-field="${col.key}"${step}${listAttr}${inputAttrs} value="${escapeHtml(value)}" ${readonly}></td>`;
     }).join('');
     const del = isDraft
       ? `<button type="button" class="swap-leg-del" data-del-leg="${leg.id}" title="Remove leg">&times;</button>`
