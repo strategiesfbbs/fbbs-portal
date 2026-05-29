@@ -9,8 +9,8 @@
  *   • Brokered CD Rate Sheet (PDF)
  *   • Daily CD Offerings (PDF or Excel)   ← also parsed into structured Offerings
  *
- * Dependencies: pdf-parse (for extracting PDF text) and xlsx (for workbook parsing).
- *               Everything else is Node built-ins.
+ * Dependencies: pdf-parse (for extracting PDF text) and better-sqlite3 (for SQLite stores).
+ *               Workbook parsing uses the vendored SheetJS wrapper in server/xlsx.js.
  *
  * Configuration (environment variables, all optional):
  *   PORT          — port to listen on (default 3000)

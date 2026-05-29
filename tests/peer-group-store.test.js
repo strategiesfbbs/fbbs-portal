@@ -1,32 +1,18 @@
 'use strict';
 
 // Regression tests for peer-group-store. Uses a fresh tmp dir per run so
-// nothing leaks across CI runs. We hit sqlite3 via the same CLI path the
-// production code does — if `sqlite3` is missing we skip with a clear
-// message so other suites still run.
+// nothing leaks across CI runs. Seeds the bank-data fixture through the same
+// shared SQLite layer production uses, so the test does not require the
+// sqlite3 command-line tool to be installed.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const childProcess = require('child_process');
-
-function sqliteAvailable() {
-  try {
-    const r = childProcess.spawnSync('sqlite3', ['-version'], { encoding: 'utf8' });
-    return r.status === 0;
-  } catch (_) {
-    return false;
-  }
-}
-
-if (!sqliteAvailable()) {
-  console.log('peer-group-store tests: skipped (sqlite3 CLI not available)');
-  process.exit(0);
-}
 
 const store = require('../server/peer-group-store');
 const peerAverages = require('../server/peer-averages');
 const coverageStore = require('../server/bank-coverage-store');
+const sqliteDb = require('../server/sqlite-db');
 
 let passed = 0;
 let failed = 0;
@@ -34,10 +20,6 @@ function ok(label, cond, detail) {
   if (cond) { passed++; return; }
   failed++;
   console.error(`FAIL ${label}${detail ? ' — ' + detail : ''}`);
-}
-
-function sqlString(value) {
-  return `'${String(value == null ? '' : value).replace(/'/g, "''")}'`;
 }
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-peer-test-'));
@@ -130,7 +112,7 @@ try {
   // ratio before averaging, or the credibility column can show impossible
   // values such as 70,000%.
   const dbPath = path.join(tmpDir, 'bank-data.sqlite');
-  childProcess.execFileSync('sqlite3', [dbPath, `
+  sqliteDb.execSqlite(dbPath, `
     CREATE TABLE banks (
       id TEXT PRIMARY KEY,
       total_assets REAL,
@@ -138,7 +120,7 @@ try {
       summary_json TEXT,
       detail_json TEXT
     );
-  `]);
+  `);
   const insertBank = (id, totalAssets, largeDeposits, totalDeposits) => {
     const period = {
       period: '2026Q1',
@@ -148,16 +130,16 @@ try {
         totalDeposits
       }
     };
-    childProcess.execFileSync('sqlite3', [dbPath, `
+    sqliteDb.runSqlite(dbPath, `
       INSERT INTO banks (id, total_assets, state, summary_json, detail_json)
-      VALUES (
-        ${sqlString(id)},
-        ${Number(totalAssets)},
-        'IL',
-        ${sqlString(JSON.stringify({ period: '2026Q1' }))},
-        ${sqlString(JSON.stringify({ periods: [period] }))}
-      );
-    `]);
+      VALUES (?, ?, ?, ?, ?);
+    `, [
+      id,
+      Number(totalAssets),
+      'IL',
+      JSON.stringify({ period: '2026Q1' }),
+      JSON.stringify({ periods: [period] })
+    ]);
   };
   insertBank('B1', 100000, 100, 1000);
   insertBank('B2', 200000, 75, 500);

@@ -12,7 +12,7 @@ Internal web app for publishing the daily FBBS document package:
 - **Agencies** (Excel — bullets + callables) — parsed into a **searchable Agencies Explorer**
 - **Corporates** (Excel) — parsed into a **searchable Corporates Explorer**
 
-Built on Node.js with one npm dependency (`pdf-parse` for PDF text extraction). Excel parsing uses a pinned vendored SheetJS build in `vendor/sheetjs/xlsx-0.20.3/`. Runs the same way on a laptop, a dedicated workstation, or behind IIS.
+Built on Node.js 20+ with two npm dependencies: `pdf-parse` for PDF text extraction and `better-sqlite3` for the portal's SQLite-backed workspaces. Excel parsing uses a pinned vendored SheetJS build in `vendor/sheetjs/xlsx-0.20.3/`. Runs the same way on a laptop, a dedicated workstation, or behind IIS.
 
 ---
 
@@ -20,7 +20,7 @@ Built on Node.js with one npm dependency (`pdf-parse` for PDF text extraction). 
 
 ### 1. Install Node.js (one-time)
 
-Grab the LTS from [nodejs.org](https://nodejs.org), run the installer, accept defaults. Restart if prompted.
+Grab the current Node.js LTS from [nodejs.org](https://nodejs.org), run the installer, accept defaults. Use Node 20 or newer. Restart if prompted.
 
 ### 2. Install dependencies (one-time)
 
@@ -30,7 +30,7 @@ From the project folder, run once:
 npm install
 ```
 
-This installs `pdf-parse` for PDF text extraction and `xlsx` for trader spreadsheets.
+This installs `pdf-parse` for PDF text extraction and `better-sqlite3` for the local SQLite stores. Trader spreadsheet parsing uses the vendored SheetJS build already included in the repo.
 
 ### 3. Launch
 
@@ -65,7 +65,7 @@ Exactly the Quick Start above. The portal lives on your machine. Only you can re
 Use this if you want the team to be able to view (or publish) from their own desks without IT getting involved.
 
 1. Pick an always-on PC or small server on the network.
-2. Install Node.js LTS on it.
+2. Install Node.js LTS 20 or newer on it.
 3. Copy this folder to that machine.
 4. Launch the portal. Leave the window open (or set it up as a Windows service — see below).
 5. Find that machine's network name or IP (`hostname` on Windows, or `ipconfig`).
@@ -84,7 +84,7 @@ nssm start FBBSPortal
 
 Use this if your IT team already operates an internal IIS farm and wants this integrated there.
 
-1. IT installs Node.js LTS and the [iisnode](https://github.com/Azure/iisnode) module on the server.
+1. IT installs Node.js LTS 20 or newer and the [iisnode](https://github.com/Azure/iisnode) module on the server.
 2. IT copies this folder to the IIS site's physical path (e.g. `C:\inetpub\wwwroot\fbbs-portal`).
 3. IT creates an Application in IIS Manager pointing at that folder — `web.config` is included and does the rest.
 4. IT grants the App Pool identity write access to the `data\` subfolder (or points `DATA_DIR` to a shared location — see below).
@@ -379,7 +379,7 @@ Uploaded data is untouched — it stays in `DATA_DIR`.
 ## Troubleshooting
 
 **"Node is not recognized"**
-Install/reinstall Node from nodejs.org and restart the machine.
+Install/reinstall Node 20 or newer from nodejs.org and restart the machine.
 
 **"Port 3000 is already in use"**
 Set `PORT` to something else: `PORT=3001 npm start`.
@@ -467,7 +467,7 @@ This portal has **no built-in authentication**, matching your current "trusted i
 - **`/api/agencies`** endpoint (current + archived by date)
 - Filename date sniffing extended to handle 2-digit year patterns like `04_24_26`
 - Upload handler now supports multi-file slots alongside single-file slots, maintaining backward compatibility for all existing daily-package slots
-- Dependency footprint: `pdf-parse` remains the only npm dependency; Excel parsing uses the vendored SheetJS wrapper in `server/xlsx.js`
+- Dependency footprint: npm dependencies are `pdf-parse` and `better-sqlite3`; Excel parsing uses the vendored SheetJS wrapper in `server/xlsx.js`
 
 ### v1.2 — muni offerings
 
@@ -489,7 +489,7 @@ This portal has **no built-in authentication**, matching your current "trusted i
 - **Package date auto-detection** — the package's date now comes from the CD Offers PDF's internal "as of" date (falls back to filename sniffing, then to today), not just today's server date
 - **Structured offerings JSON** — written alongside the PDFs, accessible at `/api/offerings` and `/api/offerings?date=YYYY-MM-DD`
 - **Internal metadata protection** — files prefixed with `_` are never served to clients over `/current/` or `/archive/`
-- One new dependency: `pdf-parse` (for extracting text from the CD Offers PDF). Install via `npm install` before first launch.
+- npm dependencies: `pdf-parse` for PDF text extraction and `better-sqlite3` for SQLite workspaces. Install via `npm install` before first launch.
 
 ---
 

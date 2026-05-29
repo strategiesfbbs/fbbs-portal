@@ -1,8 +1,8 @@
 'use strict';
 
 /**
- * Smoke tests for server/swap-store.js. Spawns the sqlite3 CLI against a
- * temp dir; no network, no shared state.
+ * Smoke tests for server/swap-store.js. Uses a temp dir; no network,
+ * no shared state.
  */
 
 const assert = require('assert');

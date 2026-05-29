@@ -5,6 +5,7 @@ const http = require('http');
 
 const port = process.env.PORT || '3000';
 const expectedBuild = 'swap-workflow-2026-05-13';
+const minNodeMajor = 20;
 
 function execFileText(cmd, args) {
   return new Promise(resolve => {
@@ -44,6 +45,8 @@ function uniquePids(lsofText) {
 }
 
 async function main() {
+  const nodeMajor = Number(process.versions.node.split('.')[0]);
+  let hasRuntimeProblem = false;
   const lsof = await execFileText('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN']);
   const listeners = lsof.stdout.trim();
   const pids = uniquePids(listeners);
@@ -51,7 +54,23 @@ async function main() {
   console.log(`FBBS Portal Doctor`);
   console.log(`Port: ${port}`);
   console.log(`Expected build: ${expectedBuild}`);
+  console.log(`Node: ${process.versions.node}`);
   console.log('');
+
+  if (!Number.isFinite(nodeMajor) || nodeMajor < minNodeMajor) {
+    hasRuntimeProblem = true;
+    console.log(`WARNING: Node ${minNodeMajor}+ is required. Install the current Node.js LTS before running the portal.`);
+    console.log('');
+  }
+
+  try {
+    require('better-sqlite3');
+  } catch (err) {
+    hasRuntimeProblem = true;
+    console.log(`WARNING: better-sqlite3 could not be loaded. Run npm install with Node ${minNodeMajor}+.`);
+    console.log(`Details: ${err.message}`);
+    console.log('');
+  }
 
   if (!listeners) {
     console.log(`No process is listening on port ${port}.`);
@@ -86,6 +105,8 @@ async function main() {
     console.log('');
     console.log(`At least one listener is serving an old build. Stop the stale Node process before reviewing the swap workflow.`);
   }
+
+  if (hasRuntimeProblem) process.exitCode = 1;
 }
 
 main().catch(err => {
