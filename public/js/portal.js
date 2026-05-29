@@ -46,6 +46,7 @@
   let bankActivityBankId = null;
   let bankActivityRequestId = 0;
   let bankLoadRequestId = 0;
+  let tearSheetCoverageRequestId = 0;
   let selectedBankProductFit = [];
   let bankProductCatalog = [];
   let savedViewsState = {
@@ -10124,6 +10125,7 @@
 
   async function loadBankIntelligence(bankId) {
     const requestId = ++bankIntelligenceRequestId;
+    bankIntelligenceLoading = false;
     const mount = document.getElementById('bankPortfolioIntelligenceMount');
     const portfolioBtn = document.getElementById('bankIntelPortfolioReportBtn');
     if (portfolioBtn) portfolioBtn.addEventListener('click', () => openBankReportBuilder('portfolio-peer'));
@@ -11050,9 +11052,11 @@
   }
 
   async function loadTearSheetCoverage(bankId) {
+    const requestId = ++tearSheetCoverageRequestId;
     try {
       const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { cache: 'no-store' });
       const data = await readBankJson(res);
+      if (requestId !== tearSheetCoverageRequestId || String(selectedBankId()) !== String(bankId)) return;
       selectedBankAccountStatus = data.accountStatus || selectedBankAccountStatus || defaultBankAccountStatus();
       selectedTearSheetCoverage = data.saved || getSavedBankById(bankId);
       if (selectedBank && selectedBank.bank) selectedBank.bank.peerPreference = data.peerPreference || null;
@@ -11060,6 +11064,7 @@
       selectedBankProductFit = Array.isArray(data.productFit) ? data.productFit : [];
       if (Array.isArray(data.productCatalog) && data.productCatalog.length) bankProductCatalog = data.productCatalog;
     } catch (e) {
+      if (requestId !== tearSheetCoverageRequestId || String(selectedBankId()) !== String(bankId)) return;
       selectedTearSheetCoverage = getSavedBankById(bankId);
       selectedBankContacts = [];
       selectedBankProductFit = [];
