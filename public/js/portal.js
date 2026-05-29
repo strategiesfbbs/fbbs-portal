@@ -45,6 +45,7 @@
   let selectedBankActivities = [];
   let bankActivityBankId = null;
   let bankActivityRequestId = 0;
+  let bankLoadRequestId = 0;
   let selectedBankProductFit = [];
   let bankProductCatalog = [];
   let savedViewsState = {
@@ -61,6 +62,7 @@
   const bankAssistantCache = new Map();
   const bankIntelligenceCache = new Map();
   let bankIntelligenceRequestId = 0;
+  let bankIntelligenceLoading = false;
   let strategyRequests = [];
   let strategyCounts = {};
   let strategyNotifications = { requests: [], counts: {} };
@@ -9564,12 +9566,17 @@
   }
 
   async function loadBank(id, options = {}) {
+    // Guard against a slower earlier load resolving after a newer one and
+    // rendering the wrong bank when the rep clicks through results quickly.
+    const reqId = ++bankLoadRequestId;
     if (options.collapseResults) clearBankSearchResults();
     const profile = document.getElementById('bankProfile');
     if (profile) profile.innerHTML = bankProfileSkeletonHtml();
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(id)}`, { cache: 'no-store' });
-      selectedBank = await readBankJson(res);
+      const loaded = await readBankJson(res);
+      if (reqId !== bankLoadRequestId) return; // a newer bank load superseded this one
+      selectedBank = loaded;
       selectedBankAccountStatus = (selectedBank.bank && selectedBank.bank.summary && selectedBank.bank.summary.accountStatus) || defaultBankAccountStatus();
       selectedTearSheetCoverage = getSavedBankById(selectedBank.bank.id);
       selectedBankNotes = [];
@@ -9582,6 +9589,7 @@
       loadTearSheetCoverage(selectedBank.bank.id);
       loadBankStrategyHistory(selectedBank.bank.id);
     } catch (e) {
+      if (reqId !== bankLoadRequestId) return; // a newer load is in flight; don't clobber it with this error
       if (profile) profile.innerHTML = `<div class="bank-empty-state"><h2>${escapeHtml(e.message)}</h2></div>`;
     }
   }
@@ -10121,6 +10129,7 @@
     if (portfolioBtn) portfolioBtn.addEventListener('click', () => openBankReportBuilder('portfolio-peer'));
     const bank = selectedBank && selectedBank.bank && String(selectedBank.bank.id) === String(bankId) ? selectedBank.bank : null;
     if (!mount || !bank || !bank.bondAccounting || !bank.bondAccounting.available) return;
+    bankIntelligenceLoading = true;
     try {
       let data = bankIntelligenceCache.get(String(bankId));
       if (!data) {
@@ -10133,6 +10142,10 @@
     } catch (err) {
       if (requestId !== bankIntelligenceRequestId) return;
       mount.innerHTML = `<div class="bank-search-empty">${escapeHtml(err.message || 'Could not load portfolio intelligence.')}</div>`;
+    } finally {
+      // Only the latest request clears the flag, so a stale load finishing
+      // doesn't mark a newer in-flight one as done.
+      if (requestId === bankIntelligenceRequestId) bankIntelligenceLoading = false;
     }
   }
 
@@ -11050,6 +11063,7 @@
       selectedTearSheetCoverage = getSavedBankById(bankId);
       selectedBankContacts = [];
       selectedBankProductFit = [];
+      showToast("Couldn't load this bank's coverage details — showing saved data only.", true);
     }
     updateBankSaveButton();
     refreshBankContactsPanel();
@@ -11657,6 +11671,7 @@
     } catch (e) {
       if (reqId !== bankActivityRequestId) return;
       selectedBankActivities = [];
+      showToast("Couldn't load this bank's activity timeline.", true);
     }
     refreshBankActivityPanel();
   }
@@ -11680,6 +11695,9 @@
 
   function printBankProfile() {
     if (!selectedBank || !selectedBank.bank) return showToast('No bank tear sheet loaded', true);
+    // The portfolio panel loads asynchronously; printing mid-load would capture
+    // its placeholder. Let the rep wait or print anyway.
+    if (bankIntelligenceLoading && !confirm('The portfolio panel is still loading — print anyway?')) return;
     window.print();
   }
 
