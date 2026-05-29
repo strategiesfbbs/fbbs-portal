@@ -296,5 +296,12 @@ module.exports = {
   loadBondAccountingManifest,
   parseBankListWorkbook,
   parsePortfolioFilename,
-  resolveBondAccountingStoredFile
+  resolveBondAccountingStoredFile,
+  // Pure helpers — exported for unit testing (join keys + path-safety guards).
+  bankSummaryMapByCert,
+  chooseBankSummary,
+  cleanDigits,
+  normalizePCode,
+  portfolioTargetPath,
+  sanitizePathSegment
 };
