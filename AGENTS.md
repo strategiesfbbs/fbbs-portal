@@ -67,7 +67,7 @@ data/
 
 ## Config (env vars; all optional)
 
-`PORT` (3000), `HOST` (`0.0.0.0`), `DATA_DIR`, `MAX_UPLOAD_MB` (50), `BANK_UPLOAD_MAX_MB` (300), `LOG_LEVEL` (`info`).
+`PORT` (3000), `HOST` (`0.0.0.0`), `DATA_DIR`, `MAX_UPLOAD_MB` (50), `BANK_UPLOAD_MAX_MB` (300), `LOG_LEVEL` (`info`), `AUDIT_LOG_MAX_MB` (10), `AUDIT_LOG_KEEP` (5).
 
 ## Security posture (current)
 
@@ -127,11 +127,9 @@ Every mutating route writes to `data/audit.log`.
 
 ## Known issues / open work
 
-- **`effectiveAccountStatus()` N+1.** It calls `getBankCoverage()` once per search result. Cheaper now that each call is an in-process query rather than a spawned `sqlite3`, but still N round trips — batch it the way `getBankAccountStatuses()` already is before search latency becomes user-visible.
-- **Audit log has no rotation.** Reads are now efficient (`readFileTail()` in `server.js` tail-reads instead of slurping the whole file), but the file still grows unbounded — add rotation before it gets large.
 - **Multipart parser buffers entire body in RAM.** OK for 50 MB; the 300 MB bank-workbook ceiling is heavier — switch to streaming if/when memory pressure shows.
 
-_(Resolved since this list was written: `getCurrentPackage()` / `getArchiveList()` are now cached and invalidated via `invalidatePackageCache()` on upload success; the audit-log read is now a tail-read, not whole-file.)_
+_(Resolved since this list was written: `getCurrentPackage()` / `getArchiveList()` are now cached and invalidated via `invalidatePackageCache()` on upload success; the audit-log read is a tail-read (`readFileTail()`), not whole-file; the audit log now rotates by size — `server/log-rotation.js`, env `AUDIT_LOG_MAX_MB` / `AUDIT_LOG_KEEP`; the bank-search account-status enrichment batches its coverage/status lookups once per query, so the old `effectiveAccountStatus()` N+1 no longer applies.)_
 
 ## Conventions
 

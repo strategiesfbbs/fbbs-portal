@@ -150,6 +150,7 @@ const {
 const swapMath = require('./swap-math');
 const swapStore = require('./swap-store');
 const { renderProposalHtml } = require('./swap-render');
+const { rotateFileIfNeeded } = require('./log-rotation');
 const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
 
@@ -172,6 +173,8 @@ const STRUCTURED_NOTES_DIR = path.join(DATA_DIR, 'structured-notes');
 const MARKET_COLOR_DIR = path.join(DATA_DIR, 'market-color');
 const CD_INTERNAL_DIR = path.join(DATA_DIR, 'cd-internal');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
+const AUDIT_LOG_MAX_BYTES = (parseInt(process.env.AUDIT_LOG_MAX_MB, 10) || 10) * 1024 * 1024;
+const AUDIT_LOG_KEEP = Math.max(1, parseInt(process.env.AUDIT_LOG_KEEP, 10) || 5);
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
 const BANK_UPLOAD_MAX_BYTES = (parseInt(process.env.BANK_UPLOAD_MAX_MB, 10) || 300) * 1024 * 1024;
 const BANK_CACHE_MAX_ENTRIES = 200;
@@ -5488,6 +5491,8 @@ function loadArchivedCorporates(date) {
 function appendAuditLog(entry) {
   const line = JSON.stringify({ ...entry, at: new Date().toISOString() }) + '\n';
   try {
+    // Rotate before appending so the active file never grows far past the cap.
+    rotateFileIfNeeded(AUDIT_LOG_PATH, { maxBytes: AUDIT_LOG_MAX_BYTES, keep: AUDIT_LOG_KEEP });
     fs.appendFileSync(AUDIT_LOG_PATH, line);
   } catch (err) {
     log('error', 'Failed to write audit log:', err.message);
