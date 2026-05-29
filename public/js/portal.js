@@ -4399,7 +4399,9 @@
     if (exportBtn) exportBtn.disabled = true;
     if (results) results.innerHTML = '<div class="bank-search-empty opp-loading">Pulling map dataset and applying peer-gap rules across every bank...</div>';
     try {
-      const data = await fetch('/api/banks/map', { cache: 'no-store' }).then(r => r.json());
+      const res = await fetch('/api/banks/map', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Map dataset request failed (HTTP ${res.status}). Restart the portal or re-import the bank workbook, then retry.`);
+      const data = await res.json();
       if (!data || !Array.isArray(data.banks)) throw new Error('Map dataset unavailable');
       if (!data.peerComparison) {
         // Distinguish "really not imported" from "imported but cache is stale".
