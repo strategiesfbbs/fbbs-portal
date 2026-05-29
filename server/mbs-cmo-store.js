@@ -471,5 +471,12 @@ function parseEmail(text, source) {
 module.exports = {
   getMbsCmoSourceFile,
   loadMbsCmoInventory,
-  saveMbsCmoUpload
+  saveMbsCmoUpload,
+  // Pure parsing/normalization helpers — exported for unit testing.
+  inferProductType,
+  isMissingValue,
+  normalizeCusip,
+  normalizeDate,
+  sanitizeFilename,
+  toNumber
 };
