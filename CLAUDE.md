@@ -107,6 +107,7 @@ Multi-leg swap-proposal tool aimed at producing the client-facing one-pager FBBS
 GET    /api/swap-proposals/eligible-banks      banks with bond-accounting holdings (picker)
 GET    /api/swap-proposals/suggested?bankId=X  hardened detector → { kept, dropped }
 GET    /api/swap-proposals/holdings?bankId=X   parsed portfolio for CUSIP search
+GET    /api/swap-proposals/inventory[?state=]  daily-package buy-side offerings (CUSIP search)
 GET    /api/swap-proposals/:id/size-buy        advisory proceeds-balancing buy par (read-only)
 GET    /api/swap-proposals                     list (bankId/status filters)
 POST   /api/swap-proposals                     create draft
@@ -116,7 +117,9 @@ POST   /api/swap-proposals/:id/legs            add leg
 PATCH  /api/swap-proposals/:id/legs/:legId     update leg
 DELETE /api/swap-proposals/:id/legs/:legId     remove leg
 POST   /api/swap-proposals/:id/send            freeze + write snapshot
+POST   /api/swap-proposals/:id/execute         mark sent → executed (syncs linked strategy → Completed)
 POST   /api/swap-proposals/:id/cancel          cancel
+POST   /api/swap-proposals/:id/clone           clone a sent/cancelled proposal into a new draft
 GET    /api/swap-proposals/:id/render          printable HTML (uses snapshot if sent)
 ```
 
@@ -125,9 +128,10 @@ Every mutating route writes to `data/audit.log`.
 ## Known issues / open work
 
 - **`effectiveAccountStatus()` N+1.** It calls `getBankCoverage()` once per search result. Cheaper now that each call is an in-process query rather than a spawned `sqlite3`, but still N round trips — batch it the way `getBankAccountStatuses()` already is before search latency becomes user-visible.
-- **Audit log read-whole-file every request.** Fine at 24 KB; needs rotation or tail-streaming before it grows.
-- **`getCurrentPackage()` / `getArchiveList()` re-read every API hit.** Should be cached and invalidated from `handleUpload`'s success path.
+- **Audit log has no rotation.** Reads are now efficient (`readFileTail()` in `server.js` tail-reads instead of slurping the whole file), but the file still grows unbounded — add rotation before it gets large.
 - **Multipart parser buffers entire body in RAM.** OK for 50 MB; the 300 MB bank-workbook ceiling is heavier — switch to streaming if/when memory pressure shows.
+
+_(Resolved since this list was written: `getCurrentPackage()` / `getArchiveList()` are now cached and invalidated via `invalidatePackageCache()` on upload success; the audit-log read is now a tail-read, not whole-file.)_
 
 ## Conventions
 
