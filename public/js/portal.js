@@ -5417,9 +5417,9 @@
     { key: 'description', label: 'Description', type: 'text', size: 26 },
     { key: 'coupon', label: 'Cpn', type: 'number', step: '0.001', min: 0, max: 30 },
     { key: 'maturity', label: 'Maturity', type: 'date' },
-    { key: 'par', label: 'Par', type: 'number', step: '1', min: 0 },
-    { key: 'bookPrice', label: 'Bk Px', type: 'number', step: '0.001', min: 0, max: 1000, secondary: true },
-    { key: 'marketPrice', label: 'Mkt Px', type: 'number', step: '0.001', min: 0, max: 1000 },
+    { key: 'par', label: 'Par', type: 'number', step: '1', min: 0, minExclusive: true },
+    { key: 'bookPrice', label: 'Bk Px', type: 'number', step: '0.001', min: 0, minExclusive: true, max: 1000, secondary: true },
+    { key: 'marketPrice', label: 'Mkt Px', type: 'number', step: '0.001', min: 0, minExclusive: true, max: 1000 },
     { key: 'bookYieldYtm', label: 'Bk YTM %', type: 'number', step: '0.001', min: -10, max: 50, secondary: true },
     { key: 'marketYieldYtw', label: 'Mkt YTW %', type: 'number', step: '0.001', min: -10, max: 50 },
     { key: 'averageLife', label: 'WAL', type: 'number', step: '0.01', min: 0, max: 100, secondary: true }
@@ -5466,7 +5466,7 @@
     const cells = LEG_INPUTS.map(col => {
       const value = leg[col.key] == null ? '' : leg[col.key];
       const step = col.step ? ` step="${col.step}"` : '';
-      const range = `${col.min != null ? ` min="${col.min}"` : ''}${col.max != null ? ` max="${col.max}"` : ''}`;
+      const range = `${col.min != null ? ` min="${col.min}"` : ''}${col.max != null ? ` max="${col.max}"` : ''}${col.minExclusive ? ` data-min-exclusive="1"` : ''}`;
       const readonly = isDraft ? '' : 'readonly';
       // Wire the CUSIP column to the appropriate datalist for autocomplete
       // + smart-fill of all sibling fields when the rep picks a known one.
@@ -5654,6 +5654,13 @@
   function inputRangeOk(input) {
     if (!input || input.type !== 'number') return true;
     const v = input.validity;
+    const min = input.min === '' ? null : Number(input.min);
+    const minExclusive = input.dataset.minExclusive === '1';
+    if (minExclusive && Number.isFinite(min) && input.value !== '' && Number(input.value) <= min) {
+      input.classList.add('swap-input-invalid');
+      showToast(`Value must be greater than ${min}`, true);
+      return false;
+    }
     if (v.rangeUnderflow || v.rangeOverflow) {
       input.classList.add('swap-input-invalid');
       showToast(input.validationMessage || 'Value is out of range', true);
