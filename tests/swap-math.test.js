@@ -469,6 +469,82 @@ test('validateLegsForSend passes once a price-only leg is enriched (derived yiel
   assert.deepStrictEqual(m.validateLegsForSend(sells, [enrichedBuy]), []);
 });
 
+// ---------- Buy sizing: solveBuyParForProceeds ----------
+
+test('solveBuyParForProceeds sizes a single buy leg cash-neutral', () => {
+  // Sell $1MM @ 98 → proceeds 980,000. Buy @ 100 → par must be 980,000.
+  const r = m.solveBuyParForProceeds({
+    sells: [{ par: 1_000_000, marketPrice: 98 }],
+    buys: [{ marketPrice: 100 }]
+  });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.suggestedPar, 980_000);
+  assert.strictEqual(r.proceeds.sell, 980_000);
+  assert.strictEqual(r.proceeds.netCash, 0);
+});
+
+test('solveBuyParForProceeds handles a premium buy price (rounding residual reported)', () => {
+  // Sell proceeds 1,000,000; buy @ 101 → raw 990,099.01, rounds to 990,000,
+  // leaving ~$100 of net cash.
+  const r = m.solveBuyParForProceeds({
+    sells: [{ par: 1_000_000, marketPrice: 100 }],
+    buys: [{ marketPrice: 101 }]
+  });
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.suggestedPar, 990_000);
+  near(r.rawPar, 990_099.01, 0.5);
+  assert.strictEqual(r.proceeds.netCash, 100);
+});
+
+test('solveBuyParForProceeds hits a non-zero target net cash', () => {
+  // Want to leave $50,000 with the bank.
+  const r = m.solveBuyParForProceeds({
+    sells: [{ par: 1_000_000, marketPrice: 100 }],
+    buys: [{ marketPrice: 100 }],
+    targetNetCash: 50_000
+  });
+  assert.strictEqual(r.suggestedPar, 950_000);
+  assert.strictEqual(r.proceeds.netCash, 50_000);
+  assert.strictEqual(r.proceeds.targetNetCash, 50_000);
+});
+
+test('solveBuyParForProceeds folds accrued into the coefficient', () => {
+  // A coupon-bearing buy leg: proceeds = market value + accrued, so the
+  // coefficient exceeds price/100 and the sized par drops below the
+  // price-only answer. Net cash lands within one rounding increment.
+  const r = m.solveBuyParForProceeds({
+    sells: [{ par: 1_000_000, marketPrice: 100 }],
+    buys: [{ marketPrice: 100, coupon: 5, maturity: '2031-01-01', sector: 'Corporate' }],
+    settleDate: '2026-05-29'
+  });
+  assert.strictEqual(r.ok, true);
+  assert.ok(r.coefficient > 1.0, `coefficient ${r.coefficient} should exceed 1.0 with accrued`);
+  assert.ok(r.suggestedPar < 1_000_000, `par ${r.suggestedPar} should be below the price-only 1,000,000`);
+  assert.ok(Math.abs(r.proceeds.netCash) <= 1000, `net cash ${r.proceeds.netCash} should be within a rounding increment`);
+});
+
+test('solveBuyParForProceeds locks the other buy legs', () => {
+  // Two buys; size leg 0 with leg 1 ($1MM @ 100) locked. Sells 2MM proceeds.
+  const r = m.solveBuyParForProceeds({
+    sells: [{ par: 2_000_000, marketPrice: 100 }],
+    buys: [{ marketPrice: 100 }, { par: 1_000_000, marketPrice: 100 }],
+    flexIndex: 0
+  });
+  assert.strictEqual(r.proceeds.lockedBuy, 1_000_000);
+  assert.strictEqual(r.suggestedPar, 1_000_000);
+  assert.strictEqual(r.proceeds.netCash, 0);
+});
+
+test('solveBuyParForProceeds reports actionable reasons when it cannot solve', () => {
+  assert.strictEqual(m.solveBuyParForProceeds({ sells: [{ par: 1e6, marketPrice: 100 }], buys: [] }).ok, false);
+  assert.ok(/market price/.test(m.solveBuyParForProceeds({
+    sells: [{ par: 1e6, marketPrice: 100 }], buys: [{}]
+  }).reason));
+  assert.ok(/sell leg/.test(m.solveBuyParForProceeds({
+    sells: [], buys: [{ marketPrice: 100 }]
+  }).reason));
+});
+
 // ---------- Done ----------
 
 console.log(`swap-math tests: ${passed} passed.`);

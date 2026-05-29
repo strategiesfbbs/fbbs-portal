@@ -680,6 +680,108 @@ function swapSummary({ sells, buys, horizonYears, settleAdjust = null, taxRate =
   };
 }
 
+// ---------- Buy sizing (proceeds-balancing solver) ----------
+//
+// The FBBS swap template's "Solver": given sell legs (fixed proceeds) and
+// buy legs, size ONE buy leg's par so total buy proceeds match total sell
+// proceeds (a cash-neutral swap) or hit a target net-cash difference. The
+// rep does this by hand today, iterating par until the settle-adjust line
+// zeroes out.
+//
+// Proceeds = market value + accrued interest, and BOTH scale linearly with
+// par, so this is a closed-form solve — no bisection:
+//   proceeds(par) = par * (marketPrice/100) + accrued(par)
+//                 = par * (marketPrice/100 + accruedPerPar)
+//   par           = targetFlexProceeds / coefficient
+//
+// `targetNetCash` is the desired (sellProceeds − buyProceeds): 0 = neutral,
+// positive leaves cash with the bank, negative means cash must be added.
+// Advisory only — returns a suggestion the rep applies through the normal
+// leg-update path (so the hard/soft swap rules still get re-evaluated).
+// Returns { ok:false, reason } when it can't solve.
+
+// Proceeds of a leg whose par is FIXED (sells, locked buys). Uses the leg's
+// stored accrued so the result matches what swapSummary reports post-solve.
+function fixedLegProceeds(leg) {
+  return legProceeds({
+    marketValue: legMarketValue({ par: leg.par, marketPrice: leg.marketPrice, marketValue: leg.marketValue }),
+    accrued: leg.accrued
+  });
+}
+
+function solveBuyParForProceeds({ sells, buys, flexIndex = 0, settleDate, targetNetCash = 0, parIncrement = 1000 } = {}) {
+  const buyList = Array.isArray(buys) ? buys : [];
+  const sellList = Array.isArray(sells) ? sells : [];
+  const flex = buyList[flexIndex];
+  if (!flex) return { ok: false, reason: 'No buy leg to size.' };
+
+  const mp = num(flex.marketPrice);
+  if (mp == null || mp <= 0) return { ok: false, reason: 'The buy leg needs a market price before it can be sized.' };
+
+  // Total sell proceeds — every sell leg must have par + market price.
+  let sellProceeds = 0;
+  for (const s of sellList) {
+    const pr = fixedLegProceeds(s);
+    if (pr == null) return { ok: false, reason: 'Every sell leg needs a par and market price before sizing.' };
+    sellProceeds += pr;
+  }
+  if (!sellList.length) return { ok: false, reason: 'Add at least one sell leg before sizing the buy.' };
+
+  // Locked buy proceeds — every buy leg except the one being sized.
+  let lockedBuyProceeds = 0;
+  for (let i = 0; i < buyList.length; i++) {
+    if (i === flexIndex) continue;
+    const pr = fixedLegProceeds(buyList[i]);
+    if (pr == null) return { ok: false, reason: 'Every other buy leg needs a par and market price before sizing.' };
+    lockedBuyProceeds += pr;
+  }
+
+  const target = num(targetNetCash) || 0;
+  const targetFlexProceeds = sellProceeds - target - lockedBuyProceeds;
+
+  // Coefficient = proceeds per $1 par for the flex leg (price fraction +
+  // accrued per unit par; accrued is linear so par=1 gives the unit rate).
+  const accruedPerPar = accruedInterest({
+    par: 1, coupon: flex.coupon, maturity: flex.maturity,
+    settleDate, dayCount: defaultDayCountForSector(flex.sector), frequency: 2
+  }) || 0;
+  const coefficient = mp / 100 + accruedPerPar;
+  if (!(coefficient > 0)) return { ok: false, reason: 'Cannot size this buy leg (non-positive price).' };
+
+  const rawPar = targetFlexProceeds / coefficient;
+  const inc = (num(parIncrement) && num(parIncrement) > 0) ? num(parIncrement) : 1000;
+  let suggestedPar = Math.round(rawPar / inc) * inc;
+  if (suggestedPar < 0) suggestedPar = 0;
+
+  // Actual proceeds at the rounded par — rounding means net cash won't land
+  // exactly on target, so report the residual the rep will actually see.
+  const flexAccrued = accruedInterest({
+    par: suggestedPar, coupon: flex.coupon, maturity: flex.maturity,
+    settleDate, dayCount: defaultDayCountForSector(flex.sector), frequency: 2
+  }) || 0;
+  const flexProceeds = suggestedPar * mp / 100 + flexAccrued;
+  const totalBuyProceeds = lockedBuyProceeds + flexProceeds;
+  const netCash = sellProceeds - totalBuyProceeds;
+
+  return {
+    ok: true,
+    flexIndex,
+    currentPar: num(flex.par),
+    suggestedPar,
+    rawPar: Number(rawPar.toFixed(2)),
+    parIncrement: inc,
+    coefficient: Number(coefficient.toFixed(6)),
+    proceeds: {
+      sell: Math.round(sellProceeds),
+      lockedBuy: Math.round(lockedBuyProceeds),
+      flexAtSuggested: Math.round(flexProceeds),
+      totalBuy: Math.round(totalBuyProceeds),
+      netCash: Math.round(netCash),
+      targetNetCash: Math.round(target)
+    }
+  };
+}
+
 // ---------- Input validation (route-boundary guards) ----------
 //
 // Two guards used by the swap routes. Both are pure and return plain arrays
@@ -805,6 +907,8 @@ module.exports = {
   aggregateLegs,
   portfolioDiff,
   swapSummary,
+  // Buy sizing
+  solveBuyParForProceeds,
   // Input validation
   validateLegInput,
   validateLegsForSend

@@ -4931,6 +4931,53 @@ function handleCloneSwapProposal(req, res, id) {
   }
 }
 
+// Advisory: suggest the par for one buy leg that balances the swap's
+// proceeds (cash-neutral, or a target net-cash difference). Read-only — the
+// rep applies the suggestion through the normal PATCH-leg path so the swap
+// rules get re-evaluated. Defaults to the sole buy leg; pass ?flexLegId= to
+// size a specific one when there are several.
+function handleSizeBuySwapProposal(res, id, query) {
+  try {
+    const record = swapStore.getProposal(BANK_REPORTS_DIR, id);
+    if (!record) return sendJSON(res, 404, { error: 'Proposal not found' });
+    const sells = (record.legs || []).filter(l => l.side === 'sell');
+    const buys = (record.legs || []).filter(l => l.side === 'buy');
+    if (!buys.length) return sendJSON(res, 400, { error: 'Add a buy leg before sizing.' });
+
+    let flexIndex = 0;
+    const flexLegId = query.get('flexLegId');
+    if (flexLegId) {
+      flexIndex = buys.findIndex(l => Number(l.id) === Number(flexLegId));
+      if (flexIndex < 0) return sendJSON(res, 400, { error: 'flexLegId is not a buy leg on this proposal' });
+    } else if (buys.length > 1) {
+      return sendJSON(res, 400, { error: 'This proposal has multiple buy legs — pass flexLegId to choose which one to size.' });
+    }
+
+    let targetNetCash = 0;
+    if (query.get('targetNetCash') != null && query.get('targetNetCash') !== '') {
+      targetNetCash = Number(query.get('targetNetCash'));
+      if (!Number.isFinite(targetNetCash)) return sendJSON(res, 400, { error: 'targetNetCash must be a number' });
+    }
+    let parIncrement = 1000;
+    if (query.get('parIncrement') != null && query.get('parIncrement') !== '') {
+      const inc = Number(query.get('parIncrement'));
+      if (!Number.isFinite(inc) || inc <= 0) return sendJSON(res, 400, { error: 'parIncrement must be a positive number' });
+      parIncrement = inc;
+    }
+
+    const result = swapMath.solveBuyParForProceeds({
+      sells, buys, flexIndex,
+      settleDate: record.proposal.settleDate,
+      targetNetCash, parIncrement
+    });
+    if (!result.ok) return sendJSON(res, 400, { error: result.reason });
+    return sendJSON(res, 200, { ...result, flexLegId: buys[flexIndex].id });
+  } catch (err) {
+    log('error', 'Swap buy-sizing failed:', err.message);
+    return sendJSON(res, 500, { error: err.message || 'Could not size buy leg' });
+  }
+}
+
 function handleExecuteSwapProposal(req, res, id) {
   try {
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
@@ -6890,6 +6937,13 @@ const server = http.createServer(async (req, res) => {
         'Cache-Control': 'no-store'
       });
       return res.end(html);
+    }
+
+    const swapSizeBuyMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/size-buy$/);
+    if (swapSizeBuyMatch && req.method === 'GET') {
+      const id = safeDecodeURIComponent(swapSizeBuyMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return handleSizeBuySwapProposal(res, id, query);
     }
 
     const swapProposalMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)$/);

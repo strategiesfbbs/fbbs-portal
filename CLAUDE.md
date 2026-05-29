@@ -99,12 +99,15 @@ Multi-leg swap-proposal tool aimed at producing the client-facing one-pager FBBS
 
 **Send is gated by a completeness check.** `buildProposalSnapshot()` enriches legs (derives blank yields/duration from price+coupon+maturity) *before* freezing, so the immutable snapshot — and the printed sent proposal that renders from it — matches what the rep approved in the live editor. `send` then runs `swapMath.validateLegsForSend(sells, buys)` on those enriched legs and returns `400 { error, issues[] }` if any leg lacks the data its printed economics need (par, maturity, prices, a usable yield), rather than freezing a proposal full of `—`. The leg add/update routes range-check numeric inputs via `swapMath.validateLegInput()` (rejects e.g. negative par, a 150% coupon) before writing; empty stub rows still pass so the add-then-fill workflow is unaffected.
 
+**Automated buy sizing (proceeds-balancing solver).** `swapMath.solveBuyParForProceeds({ sells, buys, flexIndex, settleDate, targetNetCash, parIncrement })` sizes one buy leg's par so total buy proceeds match total sell proceeds (cash-neutral) or hit a target net-cash difference — the "Solver" reps run by hand in the Excel template. Proceeds = market value + accrued, both linear in par, so it's a closed-form solve (no iteration). Exposed read-only at `GET /api/swap-proposals/:id/size-buy?flexLegId=&targetNetCash=&parIncrement=` (defaults: sole buy leg, 0, 1000). **Advisory only** — it returns a `suggestedPar` the rep applies through the normal PATCH-leg path so the hard/soft swap rules still re-evaluate; the route never mutates. `flexLegId` is required when there are multiple buy legs.
+
 **Routes (server/server.js):**
 
 ```
 GET    /api/swap-proposals/eligible-banks      banks with bond-accounting holdings (picker)
 GET    /api/swap-proposals/suggested?bankId=X  hardened detector → { kept, dropped }
 GET    /api/swap-proposals/holdings?bankId=X   parsed portfolio for CUSIP search
+GET    /api/swap-proposals/:id/size-buy        advisory proceeds-balancing buy par (read-only)
 GET    /api/swap-proposals                     list (bankId/status filters)
 POST   /api/swap-proposals                     create draft
 GET    /api/swap-proposals/:id                 fetch full record
