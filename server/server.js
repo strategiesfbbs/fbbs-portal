@@ -141,6 +141,7 @@ const {
   getStrategyRequest,
   getStrategyRequestFile,
   listStrategyRequests,
+  summarizeStrategyCountsByBank,
   updateStrategyRequest
 } = require('./strategy-store');
 const {
@@ -7176,6 +7177,13 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/strategies' && req.method === 'POST') {
       return await handleCreateStrategyRequest(req, res);
+    }
+
+    // Complete per-bank strategy counts (no 500-row cap) for the Coverage Book.
+    // Registered before the /api/strategies/:id matches so "summary" isn't read
+    // as an id.
+    if (pathname === '/api/strategies/summary' && req.method === 'GET') {
+      return sendJSON(res, 200, { byBank: summarizeStrategyCountsByBank(BANK_REPORTS_DIR) });
     }
 
     const strategyFileMatch = pathname.match(/^\/api\/strategies\/([^/]+)\/files\/([^/]+)$/);

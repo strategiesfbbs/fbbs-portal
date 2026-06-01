@@ -290,6 +290,31 @@ function listStrategyRequests(outputDir, filters = {}) {
   return { requests, counts };
 }
 
+// Complete per-bank strategy counts for the Coverage Book. listStrategyRequests
+// caps at 500 rows, so deriving per-bank counts from it under-reports once the
+// queue is large. This is a direct GROUP BY (no row cap) over active
+// (non-archived) requests: `open` = Open + In Progress; `total` = all
+// non-archived for the bank; `byStatus` keeps the per-status breakdown.
+function summarizeStrategyCountsByBank(outputDir) {
+  const dbPath = ensureStrategyDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `
+    SELECT bank_id AS bankId, status, COUNT(*) AS count
+    FROM strategy_requests
+    WHERE archived_at IS NULL AND bank_id IS NOT NULL AND bank_id <> ''
+    GROUP BY bank_id, status;
+  `);
+  const byBank = {};
+  rows.forEach(row => {
+    const bankId = String(row.bankId);
+    const n = Number(row.count || 0);
+    const entry = byBank[bankId] || (byBank[bankId] = { open: 0, total: 0, byStatus: {} });
+    entry.total += n;
+    if (STRATEGY_STATUSES.has(row.status)) entry.byStatus[row.status] = (entry.byStatus[row.status] || 0) + n;
+    if (row.status === 'Open' || row.status === 'In Progress') entry.open += n;
+  });
+  return byBank;
+}
+
 function getStrategyRequest(outputDir, id) {
   const dbPath = ensureStrategyDatabase(outputDir);
   const rows = querySqliteJson(dbPath, `${strategySelectSql('id = ?')} LIMIT 1;`, [String(id || '')]);
@@ -497,6 +522,7 @@ module.exports = {
   getStrategyRequestFile,
   getStrategyRequest,
   listStrategyRequests,
+  summarizeStrategyCountsByBank,
   strategyDatabasePathForDir,
   strategyFilesRootForDir,
   updateStrategyRequest

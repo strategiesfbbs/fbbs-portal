@@ -95,7 +95,7 @@
   let hiddenReportIds = [];
   let reportsLoadPromise = null;
   let reportsAppEventsBound = false;
-  let coverageBookState = { loaded: false, loading: false, banks: [], strategiesByBank: {}, search: '', expanded: new Set(), detail: {} };
+  let coverageBookState = { loaded: false, loading: false, banks: [], strategyCounts: {}, search: '', expanded: new Set(), detail: {} };
   let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
   let customBankReportState = {
     loading: false,
@@ -6851,8 +6851,12 @@
     }
   }
 
-  function folderRailId(folder) {
-    return 'folder-' + String(folder).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  // Custom (rep-created) folders get a "custom-folder-" prefix so their rail ids
+  // can never collide with the built-in REPORT_RAIL_ITEMS ids (folder-coverage,
+  // folder-sales, …) even if a custom folder name slugifies to the same string.
+  function customFolderRailId(folder) {
+    const slug = String(folder).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return 'custom-folder-' + (slug || 'unnamed');
   }
 
   // Distinct folder names: the predefined rail folders plus any custom folder a
@@ -6869,12 +6873,18 @@
   // moved into a brand-new folder name shows up as a navigable rail entry.
   function allReportRailItems() {
     const items = REPORT_RAIL_ITEMS.slice();
-    const known = new Set(items.filter(i => i.folder).map(i => i.folder));
+    const knownFolders = new Set(items.filter(i => i.folder).map(i => i.folder));
+    const usedIds = new Set(items.map(i => i.id));
     [...savedReportDefinitions, ...reportsSessionReports].forEach(d => {
-      if (d && d.folder && !known.has(d.folder)) {
-        known.add(d.folder);
-        items.push({ id: folderRailId(d.folder), section: 'FOLDERS', label: d.folder, folder: d.folder });
-      }
+      if (!d || !d.folder || knownFolders.has(d.folder)) return;
+      knownFolders.add(d.folder);
+      // Guard against two distinct custom names slugifying to the same id.
+      const base = customFolderRailId(d.folder);
+      let id = base;
+      let n = 2;
+      while (usedIds.has(id)) { id = base + '-' + n++; }
+      usedIds.add(id);
+      items.push({ id, section: 'FOLDERS', label: d.folder, folder: d.folder });
     });
     return items;
   }
@@ -8381,19 +8391,15 @@
     coverageBookState.loading = true;
     renderCoverageBookMount();
     try {
-      const [covRes, stratRes] = await Promise.all([
+      const [covRes, sumRes] = await Promise.all([
         fetch('/api/bank-coverage', { cache: 'no-store' }),
-        fetch('/api/strategies?archived=all', { cache: 'no-store' })
+        fetch('/api/strategies/summary', { cache: 'no-store' })
       ]);
       const cov = await readBankJson(covRes);
-      const strat = await readBankJson(stratRes);
+      const summary = await readBankJson(sumRes);
       coverageBookState.banks = Array.isArray(cov.savedBanks) ? cov.savedBanks : [];
-      const byBank = {};
-      (Array.isArray(strat.requests) ? strat.requests : []).forEach(r => {
-        if (!r.bankId) return;
-        (byBank[r.bankId] = byBank[r.bankId] || []).push(r);
-      });
-      coverageBookState.strategiesByBank = byBank;
+      // Complete per-bank counts (uncapped) from the dedicated summary endpoint.
+      coverageBookState.strategyCounts = (summary && summary.byBank) || {};
       coverageBookState.loaded = true;
     } catch (e) {
       showToast('Could not load coverage book: ' + (e && e.message || ''), true);
@@ -8404,9 +8410,8 @@
   }
 
   function coverageBookStrategyStats(bankId) {
-    const list = (coverageBookState.strategiesByBank[bankId] || []).filter(r => !r.isArchived);
-    const open = list.filter(r => r.status === 'Open' || r.status === 'In Progress').length;
-    return { open, total: list.length, list };
+    const c = coverageBookState.strategyCounts[bankId] || {};
+    return { open: Number(c.open || 0), total: Number(c.total || 0) };
   }
 
   function coverageBookRows() {
@@ -8422,10 +8427,16 @@
   async function loadCoverageBankDetail(bankId) {
     if (coverageBookState.detail[bankId]) return;
     try {
-      const res = await fetch('/api/bank-coverage/' + encodeURIComponent(bankId), { cache: 'no-store' });
-      coverageBookState.detail[bankId] = await readBankJson(res);
+      const [covRes, stratRes] = await Promise.all([
+        fetch('/api/bank-coverage/' + encodeURIComponent(bankId), { cache: 'no-store' }),
+        fetch('/api/strategies?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' })
+      ]);
+      const detail = await readBankJson(covRes);
+      const strat = await readBankJson(stratRes);
+      detail.strategies = (Array.isArray(strat.requests) ? strat.requests : []).filter(r => !r.isArchived);
+      coverageBookState.detail[bankId] = detail;
     } catch (e) {
-      coverageBookState.detail[bankId] = { notes: [], contacts: [], productFit: [] };
+      coverageBookState.detail[bankId] = { notes: [], contacts: [], productFit: [], strategies: [] };
     }
     renderCoverageBookMount();
   }
@@ -8436,7 +8447,7 @@
     const notes = Array.isArray(detail.notes) ? detail.notes : [];
     const contacts = Array.isArray(detail.contacts) ? detail.contacts : [];
     const fit = Array.isArray(detail.productFit) ? detail.productFit : [];
-    const stats = coverageBookStrategyStats(bank.bankId);
+    const strategies = Array.isArray(detail.strategies) ? detail.strategies : [];
     return `
       <div class="coverage-book-detail">
         <div class="coverage-book-detail-grid">
@@ -8449,8 +8460,8 @@
             ${fit.length ? `<div class="cb-chips">${fit.map(f => `<span class="cb-chip">${escapeHtml(f.product)}</span>`).join('')}</div>` : '<p class="cb-muted">No product-fit flags.</p>'}
           </section>
           <section>
-            <h5>Strategy Queue (${stats.list.length})</h5>
-            ${stats.list.length ? stats.list.map(s => `<div class="cb-line"><span class="bank-pill ${coverageClass(s.status)}">${escapeHtml(s.status)}</span> <strong>${escapeHtml(s.requestType)}</strong>${s.summary ? ' — ' + escapeHtml(s.summary) : ''}${s.assignedTo ? ' <em>(' + escapeHtml(s.assignedTo) + ')</em>' : ''}</div>`).join('') : '<p class="cb-muted">No strategy requests.</p>'}
+            <h5>Strategy Queue (${strategies.length})</h5>
+            ${strategies.length ? strategies.map(s => `<div class="cb-line"><span class="bank-pill ${coverageClass(s.status)}">${escapeHtml(s.status)}</span> <strong>${escapeHtml(s.requestType)}</strong>${s.summary ? ' — ' + escapeHtml(s.summary) : ''}${s.assignedTo ? ' <em>(' + escapeHtml(s.assignedTo) + ')</em>' : ''}</div>`).join('') : '<p class="cb-muted">No strategy requests.</p>'}
           </section>
           <section>
             <h5>Notes (${notes.length})</h5>
@@ -8471,15 +8482,19 @@
       return;
     }
     const rows = coverageBookRows();
+    const total = coverageBookState.banks.length;
+    const isFiltered = !!coverageBookState.search.trim() && rows.length !== total;
+    // Totals reflect what's shown (filtered rows), consistent with the table and
+    // the printout; the headline notes the full book size when a filter is active.
     const statusTotals = {};
-    coverageBookState.banks.forEach(b => { const s = b.status || 'Open'; statusTotals[s] = (statusTotals[s] || 0) + 1; });
+    rows.forEach(b => { const s = b.status || 'Open'; statusTotals[s] = (statusTotals[s] || 0) + 1; });
     mount.innerHTML = `
       <article class="coverage-book">
         <header class="coverage-book-head">
           <div>
             <span class="tool-eyebrow">Coverage Book</span>
-            <h3>${formatNumber(coverageBookState.banks.length)} covered bank${coverageBookState.banks.length === 1 ? '' : 's'}</h3>
-            <p>${Object.entries(statusTotals).map(([k, v]) => `${escapeHtml(k)}: ${v}`).join(' · ') || 'No saved banks yet — add coverage from a bank tear sheet.'}</p>
+            <h3>${formatNumber(rows.length)} covered bank${rows.length === 1 ? '' : 's'}${isFiltered ? ` <span class="cb-muted" style="font-weight:400">of ${formatNumber(total)}</span>` : ''}</h3>
+            <p>${Object.entries(statusTotals).map(([k, v]) => `${escapeHtml(k)}: ${v}`).join(' · ') || (total ? 'No banks match this search.' : 'No saved banks yet — add coverage from a bank tear sheet.')}</p>
           </div>
           <div class="coverage-book-actions">
             <input type="search" id="coverageBookSearch" placeholder="Search bank, owner, state, cert…" value="${escapeHtml(coverageBookState.search)}">
@@ -8542,8 +8557,9 @@
     const rows = coverageBookRows();
     if (!rows.length) return showToast('No covered banks to print', true);
     const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    // Totals from the same (filtered) rows shown in the printout, matching screen.
     const statusTotals = {};
-    coverageBookState.banks.forEach(b => { const s = b.status || 'Open'; statusTotals[s] = (statusTotals[s] || 0) + 1; });
+    rows.forEach(b => { const s = b.status || 'Open'; statusTotals[s] = (statusTotals[s] || 0) + 1; });
     const body = rows.map(b => {
       const st = coverageBookStrategyStats(b.bankId);
       return `<tr><td>${esc(b.displayName || b.legalName || b.bankId)}</td><td>${esc(b.status || 'Open')}</td><td>${esc(b.owner || '')}</td><td>${esc(b.priority || '')}</td><td>${esc([b.city, b.state].filter(Boolean).join(', '))}</td><td class="r">${b.totalAssets != null ? esc(formatMoney(b.totalAssets)) : ''}</td><td class="r">${st.open}/${st.total}</td><td>${esc(b.period || '')}</td></tr>`;
