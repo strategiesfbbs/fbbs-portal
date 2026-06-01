@@ -843,6 +843,39 @@
       .slice(0, 80) || 'bank';
   }
 
+  // Generic CSP-safe printable for a rendered report panel (Bank Peer Analysis,
+  // Opportunity Scan — both computed client-side). Clones the panel's current DOM
+  // into a popup, links the app stylesheet (:root theme vars apply), hides
+  // interactive controls, and prints from this context via opener.print() — so
+  // the printed numbers match exactly what's on screen. The cloned innerHTML was
+  // already escaped when the SPA rendered it.
+  function printReportPanel(selector, title) {
+    const el = document.querySelector(selector);
+    if (!el || !el.textContent.trim() || /select a bank|no scan yet|run the scan|generate a peer/i.test(el.textContent)) {
+      return showToast('Run the report first, then print', true);
+    }
+    const w = window.open('', '_blank');
+    if (!w) return showToast('Allow pop-ups to print', true);
+    const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    w.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+      <link rel="stylesheet" href="/css/portal.css">
+      <style>
+        body{margin:24px;background:#fff;}
+        .print-banner{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #0f1f17;padding-bottom:8px;margin-bottom:14px;}
+        .print-banner .firm{font-weight:800;text-transform:uppercase;letter-spacing:.04em;font-size:11px;}
+        .print-banner .firm strong{display:block;font-size:16px;text-transform:none;letter-spacing:0;}
+        button,input,select,textarea,.text-btn,.small-btn,.icon-btn,[data-reports-export],[data-coverage-export],[data-coverage-print],.reports-peer-search,.opportunity-actions{display:none !important;}
+        @media print{@page{size:letter portrait;margin:.5in;} body{margin:0;}}
+      </style></head><body>
+      <div class="print-banner"><div class="firm">First Bankers' Banc Securities, Inc.<strong>${escapeHtml(title)}</strong></div><div style="font-size:11px;color:#4a5b53">${escapeHtml(dateStr)}</div></div>
+      ${el.innerHTML}
+      <div style="margin-top:18px;border-top:1px solid #c8d6cd;padding-top:8px;font-size:9.5px;color:#4a5b53">For Institutional Use Only. Internal strategy screen — desk review controls the final recommendation. First Bankers' Banc Securities, Inc. is a member of FINRA / SIPC.</div>
+      </body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => { try { w.print(); } catch (e) {} }, 400);
+  }
+
   // Unified export entry point for the Reports Workspace. CSV reuses the shared
   // downloadCsv()/csvEscape() helpers via each report's existing exporter;
   // portfolio-peer also supports a server-rendered Print/PDF handout.
@@ -6504,6 +6537,8 @@
       searchPeerAnalysisBanks(peerSearch ? peerSearch.value : '', { openFirst: true });
     });
     if (peerExport) peerExport.addEventListener('click', exportPeerAnalysisCsv);
+    const peerPrint = document.getElementById('peerAnalysisPrintBtn');
+    if (peerPrint) peerPrint.addEventListener('click', () => printReportPanel('#peerAnalysisOutput', 'Bank Peer Analysis'));
 
     const oppoRunBtn = document.getElementById('opportunityRunBtn');
     const oppoExportBtn = document.getElementById('opportunityExportBtn');
@@ -6512,6 +6547,8 @@
     const oppoSavedOnly = document.getElementById('opportunitySavedOnly');
     if (oppoRunBtn) oppoRunBtn.addEventListener('click', runOpportunityScan);
     if (oppoExportBtn) oppoExportBtn.addEventListener('click', exportOpportunityReportCsv);
+    const oppoPrint = document.getElementById('opportunityPrintBtn');
+    if (oppoPrint) oppoPrint.addEventListener('click', () => printReportPanel('#opportunityResults', 'Opportunity Scan'));
     if (oppoMinFlags) oppoMinFlags.addEventListener('change', renderOpportunityResults);
     if (oppoStateFilter) oppoStateFilter.addEventListener('input', renderOpportunityResults);
     if (oppoSavedOnly) oppoSavedOnly.addEventListener('change', renderOpportunityResults);
@@ -6843,6 +6880,14 @@
       if (!inSession && !inSaved) {
         // Fixture / unknown id — dismiss it server-side so it stays hidden.
         await setReportHiddenOnServer(id, true);
+      }
+      // If the active rail is a custom folder that just lost its last report,
+      // it vanishes from the rail — fall back to "recent" so the view isn't stuck
+      // on a dangling empty folder.
+      const active = reportRailItem(reportsActiveRail);
+      if (active && active.folder && !allReportRailItems().some(item => item.id === reportsActiveRail)) {
+        reportsActiveRail = 'recent';
+        try { localStorage.setItem('fbbs.reports.lastRail', 'recent'); } catch (_) {}
       }
       renderReportsWorkspace();
       showToast('Deleted report');
@@ -8425,7 +8470,8 @@
   }
 
   async function loadCoverageBankDetail(bankId) {
-    if (coverageBookState.detail[bankId]) return;
+    const cached = coverageBookState.detail[bankId];
+    if (cached && !cached._failed) return; // re-fetch if the previous attempt failed
     try {
       const [covRes, stratRes] = await Promise.all([
         fetch('/api/bank-coverage/' + encodeURIComponent(bankId), { cache: 'no-store' }),
@@ -8436,7 +8482,7 @@
       detail.strategies = (Array.isArray(strat.requests) ? strat.requests : []).filter(r => !r.isArchived);
       coverageBookState.detail[bankId] = detail;
     } catch (e) {
-      coverageBookState.detail[bankId] = { notes: [], contacts: [], productFit: [], strategies: [] };
+      coverageBookState.detail[bankId] = { _failed: true, notes: [], contacts: [], productFit: [], strategies: [] };
     }
     renderCoverageBookMount();
   }
@@ -8444,6 +8490,7 @@
   function coverageBookDetailHtml(bank) {
     const detail = coverageBookState.detail[bank.bankId];
     if (!detail) return '<div class="coverage-book-detail"><p class="cb-muted">Loading detail…</p></div>';
+    if (detail._failed) return '<div class="coverage-book-detail"><p class="cb-muted">Couldn\'t load this bank\'s detail — collapse and expand to retry.</p></div>';
     const notes = Array.isArray(detail.notes) ? detail.notes : [];
     const contacts = Array.isArray(detail.contacts) ? detail.contacts : [];
     const fit = Array.isArray(detail.productFit) ? detail.productFit : [];
@@ -8556,7 +8603,7 @@
   function printCoverageBook() {
     const rows = coverageBookRows();
     if (!rows.length) return showToast('No covered banks to print', true);
-    const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     // Totals from the same (filtered) rows shown in the printout, matching screen.
     const statusTotals = {};
     rows.forEach(b => { const s = b.status || 'Open'; statusTotals[s] = (statusTotals[s] || 0) + 1; });
@@ -16015,9 +16062,13 @@
           status = 'warn';
           issues.push('Filled but parsed 0 ' + (slot.countLabel || 'rows'));
         }
-        if (fileDate && pkg.date && fileDate !== pkg.date) {
+        // Compare as YYYY-MM-DD so an ISO timestamp vs a plain date doesn't
+        // trip a false "file date ≠ package date" flag.
+        const fileDay = String(fileDate || '').slice(0, 10);
+        const pkgDay = String(pkg.date || '').slice(0, 10);
+        if (fileDay && pkgDay && fileDay !== pkgDay) {
           if (status === 'ok') status = 'warn';
-          issues.push('File date ' + fileDate + ' ≠ package date ' + pkg.date);
+          issues.push('File date ' + fileDay + ' ≠ package date ' + pkgDay);
         }
       }
       return { slot, meta, filename, filled, count, fileDate, status, issues };

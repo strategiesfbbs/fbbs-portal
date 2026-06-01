@@ -13284,3 +13284,5 @@ body {
   text-transform: uppercase;
 }
 .coverage-book-detail-foot { margin-top: 10px; }
+
+.reports-head-btns { display: flex; gap: 8px; align-items: center; }

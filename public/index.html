@@ -657,7 +657,10 @@
             <h3>Bank Peer Analysis</h3>
             <p>Pick a bank to compare call-report metrics against the imported averaged-series peer group, then export banker-ready talking points.</p>
           </div>
-          <button type="button" class="small-btn" id="peerAnalysisExportBtn" disabled>Export Analysis</button>
+          <div class="reports-head-btns">
+            <button type="button" class="small-btn" id="peerAnalysisExportBtn" disabled>Export Analysis</button>
+            <button type="button" class="small-btn secondary" id="peerAnalysisPrintBtn">Print / PDF</button>
+          </div>
         </div>
         <div class="reports-peer-search">
           <input type="search" id="peerAnalysisBankSearchInput" placeholder="Search bank name, city, cert, or parent...">
@@ -679,6 +682,7 @@
           <div class="opportunity-actions">
             <button type="button" class="small-btn" id="opportunityRunBtn">Run scan</button>
             <button type="button" class="small-btn" id="opportunityExportBtn" disabled>Export CSV</button>
+            <button type="button" class="small-btn secondary" id="opportunityPrintBtn">Print / PDF</button>
           </div>
         </div>
         <div class="opportunity-filters">

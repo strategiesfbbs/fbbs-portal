@@ -63,13 +63,18 @@ function normalizeType(value) {
 }
 
 // JSON columns: stringify on write, parse on read with a safe fallback so a
-// corrupt blob never throws past the mapper.
+// corrupt blob never throws past the mapper. A size cap guards against a client
+// storing a giant filters/columns/sort blob (legit values are well under 1 KB;
+// MAX_JSON_BYTES is generous). Oversized input falls back to the default.
+const MAX_JSON_BYTES = 20000;
 function toJsonText(value, fallback) {
-  if (value === undefined || value === null) {
-    return fallback === undefined ? null : JSON.stringify(fallback);
-  }
-  try { return JSON.stringify(value); }
-  catch (_) { return fallback === undefined ? null : JSON.stringify(fallback); }
+  const fallbackText = fallback === undefined ? null : JSON.stringify(fallback);
+  if (value === undefined || value === null) return fallbackText;
+  try {
+    const text = JSON.stringify(value);
+    if (text && text.length > MAX_JSON_BYTES) return fallbackText;
+    return text;
+  } catch (_) { return fallbackText; }
 }
 
 function parseJson(text, fallback) {
