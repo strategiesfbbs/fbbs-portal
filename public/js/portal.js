@@ -95,6 +95,7 @@
   let hiddenReportIds = [];
   let reportsLoadPromise = null;
   let reportsAppEventsBound = false;
+  let coverageBookState = { loaded: false, loading: false, banks: [], strategiesByBank: {}, search: '', expanded: new Set(), detail: {} };
   let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
   let customBankReportState = {
     loading: false,
@@ -7402,7 +7403,8 @@
     if (type === 'bank-peer') return '<div id="reportsBankPeerMount"></div>';
     if (type === 'portfolio-peer') return '<div id="reportsPortfolioReviewMount"></div>';
     if (type === 'opportunity') return '<div id="reportsOpportunityMount"></div>';
-    return '<p class="reports-muted">Coverage Book will use saved banks, statuses, notes, strategy requests, and latest call-report availability.</p>';
+    if (type === 'coverage') return '<div id="reportsCoverageBookMount"></div>';
+    return '<p class="reports-muted">Select a report type to begin.</p>';
   }
 
   function reportsBuilderHtml(type) {
@@ -8351,6 +8353,7 @@
         }
       }
       if (type === 'opportunity') mountReportPanel('opportunityReportPanel', 'reportsOpportunityMount');
+      if (type === 'coverage') renderCoverageBookMount();
       if (autorun && !handledAutorun) setTimeout(() => runReportBuilder(type), 0);
     } else if (path === 'data/files') {
       app.innerHTML = reportsDataHtml(true);
@@ -8363,6 +8366,175 @@
     } else {
       app.innerHTML = reportsHomeHtml();
     }
+  }
+
+  // ===== Coverage Book report (Codex queue #3) =====
+  // Assembled CLIENT-SIDE from existing APIs (no dedicated backend payload):
+  //   GET /api/bank-coverage          → covered banks (status, owner, priority, period, assets)
+  //   GET /api/strategies?archived=all → strategy-queue items, grouped by bank
+  //   GET /api/bank-coverage/:bankId  → lazy per-bank detail (notes, contacts, product-fit) on expand
+  // NOTE for Codex: this front-end does its own assembly; if you later add a
+  // server Coverage report payload, swap loadCoverageBook() to read it instead.
+  async function loadCoverageBook(force) {
+    if (coverageBookState.loading) return;
+    if (coverageBookState.loaded && !force) return;
+    coverageBookState.loading = true;
+    renderCoverageBookMount();
+    try {
+      const [covRes, stratRes] = await Promise.all([
+        fetch('/api/bank-coverage', { cache: 'no-store' }),
+        fetch('/api/strategies?archived=all', { cache: 'no-store' })
+      ]);
+      const cov = await readBankJson(covRes);
+      const strat = await readBankJson(stratRes);
+      coverageBookState.banks = Array.isArray(cov.savedBanks) ? cov.savedBanks : [];
+      const byBank = {};
+      (Array.isArray(strat.requests) ? strat.requests : []).forEach(r => {
+        if (!r.bankId) return;
+        (byBank[r.bankId] = byBank[r.bankId] || []).push(r);
+      });
+      coverageBookState.strategiesByBank = byBank;
+      coverageBookState.loaded = true;
+    } catch (e) {
+      showToast('Could not load coverage book: ' + (e && e.message || ''), true);
+    } finally {
+      coverageBookState.loading = false;
+      renderCoverageBookMount();
+    }
+  }
+
+  function coverageBookStrategyStats(bankId) {
+    const list = (coverageBookState.strategiesByBank[bankId] || []).filter(r => !r.isArchived);
+    const open = list.filter(r => r.status === 'Open' || r.status === 'In Progress').length;
+    return { open, total: list.length, list };
+  }
+
+  function coverageBookRows() {
+    const q = coverageBookState.search.trim().toLowerCase();
+    let rows = coverageBookState.banks.slice();
+    if (q) {
+      rows = rows.filter(b => [b.displayName, b.legalName, b.city, b.state, b.certNumber, b.owner, b.status]
+        .filter(Boolean).join(' ').toLowerCase().includes(q));
+    }
+    return rows.sort((a, b) => String(a.displayName || '').localeCompare(String(b.displayName || '')));
+  }
+
+  async function loadCoverageBankDetail(bankId) {
+    if (coverageBookState.detail[bankId]) return;
+    try {
+      const res = await fetch('/api/bank-coverage/' + encodeURIComponent(bankId), { cache: 'no-store' });
+      coverageBookState.detail[bankId] = await readBankJson(res);
+    } catch (e) {
+      coverageBookState.detail[bankId] = { notes: [], contacts: [], productFit: [] };
+    }
+    renderCoverageBookMount();
+  }
+
+  function coverageBookDetailHtml(bank) {
+    const detail = coverageBookState.detail[bank.bankId];
+    if (!detail) return '<div class="coverage-book-detail"><p class="cb-muted">Loading detail…</p></div>';
+    const notes = Array.isArray(detail.notes) ? detail.notes : [];
+    const contacts = Array.isArray(detail.contacts) ? detail.contacts : [];
+    const fit = Array.isArray(detail.productFit) ? detail.productFit : [];
+    const stats = coverageBookStrategyStats(bank.bankId);
+    return `
+      <div class="coverage-book-detail">
+        <div class="coverage-book-detail-grid">
+          <section>
+            <h5>Contacts (${contacts.length})</h5>
+            ${contacts.length ? contacts.map(c => `<div class="cb-line"><strong>${escapeHtml(c.name)}</strong>${c.role ? ' · ' + escapeHtml(c.role) : ''}${c.phone ? ' · ' + escapeHtml(c.phone) : ''}${c.email ? ' · ' + escapeHtml(c.email) : ''}${c.isPrimary ? ' <span class="cb-tag">primary</span>' : ''}</div>`).join('') : '<p class="cb-muted">No contacts.</p>'}
+          </section>
+          <section>
+            <h5>Product Fit (${fit.length})</h5>
+            ${fit.length ? `<div class="cb-chips">${fit.map(f => `<span class="cb-chip">${escapeHtml(f.product)}</span>`).join('')}</div>` : '<p class="cb-muted">No product-fit flags.</p>'}
+          </section>
+          <section>
+            <h5>Strategy Queue (${stats.list.length})</h5>
+            ${stats.list.length ? stats.list.map(s => `<div class="cb-line"><span class="bank-pill ${coverageClass(s.status)}">${escapeHtml(s.status)}</span> <strong>${escapeHtml(s.requestType)}</strong>${s.summary ? ' — ' + escapeHtml(s.summary) : ''}${s.assignedTo ? ' <em>(' + escapeHtml(s.assignedTo) + ')</em>' : ''}</div>`).join('') : '<p class="cb-muted">No strategy requests.</p>'}
+          </section>
+          <section>
+            <h5>Notes (${notes.length})</h5>
+            ${notes.length ? notes.slice(0, 6).map(n => `<div class="cb-line">${escapeHtml(n.text)}<span class="cb-muted"> · ${escapeHtml(formatShortDate(n.updatedAt || n.createdAt))}</span></div>`).join('') : '<p class="cb-muted">No notes.</p>'}
+          </section>
+        </div>
+        <div class="coverage-book-detail-foot"><a class="text-btn" href="#banks" data-coverage-open="${escapeHtml(bank.bankId)}">Open tear sheet ›</a></div>
+      </div>
+    `;
+  }
+
+  function renderCoverageBookMount() {
+    const mount = document.getElementById('reportsCoverageBookMount');
+    if (!mount) return;
+    if (!coverageBookState.loaded && !coverageBookState.loading) { loadCoverageBook(); return; }
+    if (coverageBookState.loading && !coverageBookState.loaded) {
+      mount.innerHTML = '<div class="bank-search-empty">Loading coverage book…</div>';
+      return;
+    }
+    const rows = coverageBookRows();
+    const statusTotals = {};
+    coverageBookState.banks.forEach(b => { const s = b.status || 'Open'; statusTotals[s] = (statusTotals[s] || 0) + 1; });
+    mount.innerHTML = `
+      <article class="coverage-book">
+        <header class="coverage-book-head">
+          <div>
+            <span class="tool-eyebrow">Coverage Book</span>
+            <h3>${formatNumber(coverageBookState.banks.length)} covered bank${coverageBookState.banks.length === 1 ? '' : 's'}</h3>
+            <p>${Object.entries(statusTotals).map(([k, v]) => `${escapeHtml(k)}: ${v}`).join(' · ') || 'No saved banks yet — add coverage from a bank tear sheet.'}</p>
+          </div>
+          <div class="coverage-book-actions">
+            <input type="search" id="coverageBookSearch" placeholder="Search bank, owner, state, cert…" value="${escapeHtml(coverageBookState.search)}">
+            <button type="button" class="small-btn secondary" data-coverage-export>Export CSV</button>
+          </div>
+        </header>
+        ${!rows.length ? '<div class="bank-search-empty">No covered banks match.</div>' : `
+        <div class="reports-list-wrap">
+          <table class="reports-list coverage-book-table">
+            <thead><tr>
+              <th>Bank</th><th>Status</th><th>Owner</th><th>Priority</th>
+              <th>Location</th><th style="text-align:right">Assets</th>
+              <th style="text-align:right">Strategies</th><th>Period</th><th></th>
+            </tr></thead>
+            <tbody>
+              ${rows.map(b => {
+                const stats = coverageBookStrategyStats(b.bankId);
+                const expanded = coverageBookState.expanded.has(b.bankId);
+                return `
+                  <tr class="coverage-book-row${expanded ? ' expanded' : ''}">
+                    <td><strong>${escapeHtml(b.displayName || b.legalName || b.bankId)}</strong></td>
+                    <td><span class="bank-pill ${coverageClass(b.status)}">${escapeHtml(b.status || 'Open')}</span></td>
+                    <td>${escapeHtml(b.owner || '—')}</td>
+                    <td>${escapeHtml(b.priority || '—')}</td>
+                    <td>${escapeHtml([b.city, b.state].filter(Boolean).join(', ') || '—')}</td>
+                    <td style="text-align:right">${b.totalAssets != null ? formatMoney(b.totalAssets) : '—'}</td>
+                    <td style="text-align:right">${stats.open}/${stats.total}</td>
+                    <td>${escapeHtml(b.period || '—')}</td>
+                    <td><button type="button" class="text-btn" data-coverage-expand="${escapeHtml(b.bankId)}">${expanded ? 'Hide' : 'Detail'}</button></td>
+                  </tr>
+                  ${expanded ? `<tr class="coverage-book-detail-row"><td colspan="9">${coverageBookDetailHtml(b)}</td></tr>` : ''}
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`}
+      </article>
+    `;
+  }
+
+  function exportCoverageBookCsv() {
+    const rows = coverageBookRows();
+    if (!rows.length) return showToast('No covered banks to export', true);
+    const out = [['Bank', 'Status', 'Owner', 'Priority', 'City', 'State', 'Cert', 'Assets', 'Deposits', 'Open Strategies', 'Total Strategies', 'Period', 'Next Action']];
+    rows.forEach(b => {
+      const stats = coverageBookStrategyStats(b.bankId);
+      out.push([b.displayName || b.legalName || b.bankId, b.status || 'Open', b.owner || '', b.priority || '',
+        b.city || '', b.state || '', b.certNumber || '', b.totalAssets, b.totalDeposits,
+        stats.open, stats.total, b.period || '', b.nextActionDate || '']);
+    });
+    downloadCsv('coverage_book_' + new Date().toISOString().slice(0, 10) + '.csv', out);
+  }
+
+  function runCoverageBook() {
+    loadCoverageBook(true);
   }
 
   function setupReportsAppEvents() {
@@ -8403,6 +8575,15 @@
         portfolioReviewState.holdingSearch = target.value || '';
         renderPortfolioReviewMount();
         const nextInput = document.getElementById('portfolioHoldingsSearchInput');
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+        }
+      }
+      if (target.id === 'coverageBookSearch') {
+        coverageBookState.search = target.value || '';
+        renderCoverageBookMount();
+        const nextInput = document.getElementById('coverageBookSearch');
         if (nextInput) {
           nextInput.focus();
           nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
@@ -8612,6 +8793,29 @@
       if (clickTarget.closest('#reportsFilesExportBtn')) {
         exportBondAccountingCsv();
       }
+      const coverageExpand = clickTarget.closest('[data-coverage-expand]');
+      if (coverageExpand) {
+        const id = coverageExpand.dataset.coverageExpand;
+        if (coverageBookState.expanded.has(id)) {
+          coverageBookState.expanded.delete(id);
+        } else {
+          coverageBookState.expanded.add(id);
+          loadCoverageBankDetail(id);
+        }
+        renderCoverageBookMount();
+        return;
+      }
+      if (clickTarget.closest('[data-coverage-export]')) {
+        exportCoverageBookCsv();
+        return;
+      }
+      const coverageOpen = clickTarget.closest('[data-coverage-open]');
+      if (coverageOpen) {
+        event.preventDefault();
+        goTo('banks');
+        loadBank(coverageOpen.dataset.coverageOpen, { collapseResults: true });
+        return;
+      }
       const portfolioBank = clickTarget.closest('[data-portfolio-bank]');
       if (portfolioBank) {
         runPortfolioReview(portfolioBank.dataset.portfolioBank);
@@ -8696,9 +8900,8 @@
       return;
     }
     if (type === 'coverage') {
+      runCoverageBook();
       addSessionReport(type);
-      goTo('banks');
-      showToast('Coverage Book uses the saved bank workspace in this phase');
     }
   }
   // ----------------------------------------------------------------------
