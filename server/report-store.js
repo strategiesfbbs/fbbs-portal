@@ -126,7 +126,28 @@ function ensureReportDatabase(outputDir) {
       next_number INTEGER NOT NULL
     );
   `);
+  migrateReportHiddenPerRep(dbPath);
   return dbPath;
+}
+
+function migrateReportHiddenPerRep(dbPath) {
+  const columns = querySqliteJson(dbPath, `PRAGMA table_info(report_hidden);`);
+  const reportIdPk = columns.find(col => col.name === 'report_id');
+  const hiddenByPk = columns.find(col => col.name === 'hidden_by');
+  if (reportIdPk && reportIdPk.pk === 1 && (!hiddenByPk || !hiddenByPk.pk)) {
+    runSqlite(dbPath, `
+      CREATE TABLE IF NOT EXISTS report_hidden_v2 (
+        report_id TEXT NOT NULL,
+        hidden_by TEXT NOT NULL DEFAULT '',
+        hidden_at TEXT NOT NULL,
+        PRIMARY KEY (report_id, hidden_by)
+      );
+      INSERT OR REPLACE INTO report_hidden_v2(report_id, hidden_by, hidden_at)
+        SELECT report_id, COALESCE(hidden_by, ''), hidden_at FROM report_hidden;
+      DROP TABLE report_hidden;
+      ALTER TABLE report_hidden_v2 RENAME TO report_hidden;
+    `);
+  }
 }
 
 // ---------- ID generation ----------
@@ -279,10 +300,12 @@ function deleteReportDefinition(outputDir, id) {
   return existing;
 }
 
-function listHiddenReportIds(outputDir) {
+function listHiddenReportIds(outputDir, rep = null) {
   const dbPath = ensureReportDatabase(outputDir);
+  const { username } = repFields(rep);
+  const hiddenBy = username || '';
   const rows = querySqliteJson(dbPath,
-    `SELECT report_id FROM report_hidden ORDER BY hidden_at DESC;`, []);
+    `SELECT report_id FROM report_hidden WHERE hidden_by = ? ORDER BY hidden_at DESC;`, [hiddenBy]);
   return rows.map(row => row.report_id);
 }
 
@@ -294,14 +317,14 @@ function setReportHidden(outputDir, id, hidden, rep = null) {
     const { username } = repFields(rep);
     runSqlite(dbPath, `
       INSERT INTO report_hidden(report_id, hidden_by, hidden_at) VALUES (?, ?, ?)
-      ON CONFLICT(report_id) DO UPDATE SET
-        hidden_by = excluded.hidden_by,
+      ON CONFLICT(report_id, hidden_by) DO UPDATE SET
         hidden_at = excluded.hidden_at;
-    `, [reportId, username, new Date().toISOString()]);
+    `, [reportId, username || '', new Date().toISOString()]);
   } else {
-    runSqlite(dbPath, `DELETE FROM report_hidden WHERE report_id = ?;`, [reportId]);
+    const { username } = repFields(rep);
+    runSqlite(dbPath, `DELETE FROM report_hidden WHERE report_id = ? AND hidden_by = ?;`, [reportId, username || '']);
   }
-  return listHiddenReportIds(outputDir);
+  return listHiddenReportIds(outputDir, rep);
 }
 
 module.exports = {

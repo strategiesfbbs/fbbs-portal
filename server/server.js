@@ -280,6 +280,23 @@ function sendText(res, status, text) {
   res.end(text);
 }
 
+function sendPrintableHtml(res, html) {
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': [
+      "default-src 'self'",
+      "img-src 'self' data:",
+      "style-src 'unsafe-inline'",
+      "script-src 'unsafe-inline'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'"
+    ].join('; ')
+  });
+  res.end(html);
+}
+
 function sendFile(res, filePath, { download = false, sandboxHtml = false, filename = '' } = {}) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
@@ -4717,12 +4734,13 @@ function handlePortfolioReview(res, query) {
 
 function handleListReports(req, res, query) {
   try {
+    const rep = resolveRequestRep(req);
     const reports = reportStore.listReportDefinitions(BANK_REPORTS_DIR, {
       type: query.get('type') || undefined,
       limit: parseInt(query.get('limit'), 10) || 100
     });
-    const hidden = reportStore.listHiddenReportIds(BANK_REPORTS_DIR);
-    return sendJSON(res, 200, { reports, hidden, rep: resolveRequestRep(req) });
+    const hidden = reportStore.listHiddenReportIds(BANK_REPORTS_DIR, rep);
+    return sendJSON(res, 200, { reports, hidden, rep });
   } catch (err) {
     log('error', 'Report list failed:', err.message);
     return sendJSON(res, 500, { error: err.message || 'Could not list reports' });
@@ -7002,8 +7020,7 @@ const server = http.createServer(async (req, res) => {
       if (!review) return sendText(res, 404, 'Bank not found');
       if (review.available === false) return sendText(res, 404, review.notice || 'No portfolio available for this bank');
       const html = renderPortfolioReviewHtml(review, { bankName: review.bankName });
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-      return res.end(html);
+      return sendPrintableHtml(res, html);
     }
 
     // ---- Reports Workspace persistence. Register the literal /api/reports and
@@ -7016,7 +7033,7 @@ const server = http.createServer(async (req, res) => {
       return await handleCreateReport(req, res);
     }
     if (pathname === '/api/reports/hidden' && req.method === 'GET') {
-      return sendJSON(res, 200, { hidden: reportStore.listHiddenReportIds(BANK_REPORTS_DIR) });
+      return sendJSON(res, 200, { hidden: reportStore.listHiddenReportIds(BANK_REPORTS_DIR, resolveRequestRep(req)) });
     }
     if (pathname === '/api/reports/hidden' && req.method === 'POST') {
       return await handleSetReportHidden(req, res);
@@ -7139,11 +7156,7 @@ const server = http.createServer(async (req, res) => {
       const html = renderProposalHtml(record, {
         bankName: summary ? (summary.displayName || summary.name) : ''
       });
-      res.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'no-store'
-      });
-      return res.end(html);
+      return sendPrintableHtml(res, html);
     }
 
     const swapSizeBuyMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/size-buy$/);

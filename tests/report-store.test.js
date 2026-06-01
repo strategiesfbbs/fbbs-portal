@@ -119,10 +119,27 @@ test('hidden list: add/remove, incl. ids with no definition row (fixtures)', () 
   assert.deepStrictEqual(store.listHiddenReportIds(dir), []);
   store.setReportHidden(dir, 'fixture-opportunity', true, REP); // no definition row — must still work
   let hidden = store.setReportHidden(dir, 'saved-9', true, null);
-  assert.ok(hidden.includes('fixture-opportunity') && hidden.includes('saved-9'));
-  hidden = store.setReportHidden(dir, 'fixture-opportunity', false);
+  assert.deepStrictEqual(hidden, ['saved-9']);
+  assert.deepStrictEqual(store.listHiddenReportIds(dir, REP), ['fixture-opportunity']);
+  hidden = store.setReportHidden(dir, 'fixture-opportunity', false, REP);
   assert.ok(!hidden.includes('fixture-opportunity'));
+  hidden = store.listHiddenReportIds(dir);
   assert.ok(hidden.includes('saved-9'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('hidden list is scoped per rep', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'report-hidden-rep-'));
+  const alice = { username: 'alice', displayName: 'Alice' };
+  const bob = { username: 'bob', displayName: 'Bob' };
+  store.setReportHidden(dir, 'fixture-opportunity', true, alice);
+  store.setReportHidden(dir, 'fixture-coverage', true, bob);
+  assert.deepStrictEqual(store.listHiddenReportIds(dir, alice), ['fixture-opportunity']);
+  assert.deepStrictEqual(store.listHiddenReportIds(dir, bob), ['fixture-coverage']);
+  assert.deepStrictEqual(store.listHiddenReportIds(dir), []);
+  store.setReportHidden(dir, 'fixture-opportunity', false, alice);
+  assert.deepStrictEqual(store.listHiddenReportIds(dir, alice), []);
+  assert.deepStrictEqual(store.listHiddenReportIds(dir, bob), ['fixture-coverage']);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
