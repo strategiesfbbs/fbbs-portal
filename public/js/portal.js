@@ -93,6 +93,7 @@
   let reportsSessionReports = [];
   let savedReportDefinitions = [];
   let hiddenReportIds = [];
+  let reportsLoadPromise = null;
   let reportsAppEventsBound = false;
   let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
   let customBankReportState = {
@@ -6357,8 +6358,9 @@
 
   function setupReports() {
     loadReportsSessionReports();
-    loadSavedReportDefinitions();
-    loadHiddenReportIds();
+    // Saved definitions + hidden ids now live server-side; hydrate them in the
+    // background (and run the one-time localStorage migration), then repaint.
+    ensureReportsLoaded().then(() => renderReportsWorkspace());
     setupReportsAppEvents();
     const averagedInput = document.getElementById('reportsAveragedSeriesWorkbookInput');
     const averagedImportBtn = document.getElementById('reportsAveragedSeriesImportBtn');
@@ -6677,30 +6679,102 @@
     }
   }
 
-  function loadSavedReportDefinitions() {
+  // Reports persistence moved server-side (see /api/reports). Saved definitions
+  // and the hidden-ids list load from the server into the in-memory caches; the
+  // render path stays synchronous against those caches and repaints when the
+  // fetch resolves. Recent-run history (reportsSessionReports) stays in
+  // sessionStorage — it is genuinely per-tab.
+  async function loadReportsFromServer() {
     try {
-      const parsed = JSON.parse(localStorage.getItem(SAVED_REPORTS_STORAGE_KEY) || '[]');
-      savedReportDefinitions = Array.isArray(parsed) ? parsed : [];
+      const res = await fetch('/api/reports', { cache: 'no-store' });
+      const data = await readBankJson(res);
+      savedReportDefinitions = Array.isArray(data.reports) ? data.reports : [];
+      hiddenReportIds = Array.isArray(data.hidden) ? data.hidden.map(String) : [];
     } catch (e) {
-      savedReportDefinitions = [];
+      // Graceful: the workspace still renders fixtures + session rows.
+      console.warn('Could not load reports from server:', e && e.message);
     }
   }
 
-  function saveSavedReportDefinitions() {
-    localStorage.setItem(SAVED_REPORTS_STORAGE_KEY, JSON.stringify(savedReportDefinitions.slice(0, 100)));
-  }
-
-  function loadHiddenReportIds() {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(HIDDEN_REPORTS_STORAGE_KEY) || '[]');
-      hiddenReportIds = Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch (e) {
-      hiddenReportIds = [];
+  // Hydrate once per session (load → one-time migration). Cached so concurrent
+  // hashchanges during startup don't double-fetch.
+  function ensureReportsLoaded() {
+    if (!reportsLoadPromise) {
+      reportsLoadPromise = loadReportsFromServer()
+        .then(runReportsMigration)
+        .catch(err => console.warn('Reports init failed:', err && err.message));
     }
+    return reportsLoadPromise;
   }
 
-  function saveHiddenReportIds() {
-    localStorage.setItem(HIDDEN_REPORTS_STORAGE_KEY, JSON.stringify([...new Set(hiddenReportIds)].slice(0, 100)));
+  // POST (new) or PATCH (existing) a saved definition, then adopt the
+  // server-returned row (authoritative id + timestamps + createdBy) into cache.
+  async function persistReportDefinition(def) {
+    const hasId = def.id && savedReportDefinitionById(def.id);
+    const url = hasId ? `/api/reports/${encodeURIComponent(def.id)}` : '/api/reports';
+    const res = await fetch(url, {
+      method: hasId ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(def)
+    });
+    const data = await readBankJson(res);
+    const report = data.report;
+    savedReportDefinitions = [report, ...savedReportDefinitions.filter(d => d.id !== report.id)];
+    return report;
+  }
+
+  async function setReportHiddenOnServer(id, hidden) {
+    const res = await fetch('/api/reports/hidden', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: String(id), hidden: Boolean(hidden) })
+    });
+    const data = await readBankJson(res);
+    if (Array.isArray(data.hidden)) hiddenReportIds = data.hidden.map(String);
+    return hiddenReportIds;
+  }
+
+  // One-time migration of legacy localStorage reports to the shared server.
+  // Preserves ids (idempotent upsert), so a second machine migrating the same
+  // export doesn't duplicate. Only clears localStorage on full success.
+  async function runReportsMigration() {
+    if (localStorage.getItem('fbbs.reports.migratedToServer') === '1') return;
+    let legacyDefs = [];
+    let legacyHidden = [];
+    try { legacyDefs = JSON.parse(localStorage.getItem(SAVED_REPORTS_STORAGE_KEY) || '[]'); } catch (_) {}
+    try { legacyHidden = JSON.parse(localStorage.getItem(HIDDEN_REPORTS_STORAGE_KEY) || '[]'); } catch (_) {}
+    if (!Array.isArray(legacyDefs)) legacyDefs = [];
+    if (!Array.isArray(legacyHidden)) legacyHidden = [];
+    if (!legacyDefs.length && !legacyHidden.length) {
+      localStorage.setItem('fbbs.reports.migratedToServer', '1');
+      return;
+    }
+    try {
+      for (const def of legacyDefs) {
+        if (!def || !def.id) continue;
+        await fetch('/api/reports', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(def)
+        }).then(readBankJson);
+      }
+      for (const id of legacyHidden) {
+        await fetch('/api/reports/hidden', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: String(id), hidden: true })
+        }).then(readBankJson);
+      }
+      localStorage.removeItem(SAVED_REPORTS_STORAGE_KEY);
+      localStorage.removeItem(HIDDEN_REPORTS_STORAGE_KEY);
+      localStorage.setItem('fbbs.reports.migratedToServer', '1');
+      await loadReportsFromServer();
+      renderReportsWorkspace();
+      showToast('Saved reports moved to the shared server');
+    } catch (e) {
+      // Leave localStorage intact so a later session retries.
+      console.warn('Reports migration deferred:', e && e.message);
+    }
   }
 
   function savedReportRows() {
@@ -6720,7 +6794,12 @@
   function allReportsRows() {
     const seen = new Set();
     const hidden = new Set(hiddenReportIds);
-    return [...reportsSessionReports, ...savedReportRows(), ...REPORT_FIXTURES].filter(row => {
+    // Demo fixtures are first-run examples only: once a rep has any real saved
+    // or session report, drop them so they aren't mistaken for live data.
+    const showFixtures = savedReportDefinitions.length === 0 && reportsSessionReports.length === 0;
+    const base = [...reportsSessionReports, ...savedReportRows()];
+    const rows = showFixtures ? [...base, ...REPORT_FIXTURES] : base;
+    return rows.filter(row => {
       if (!row || seen.has(row.id)) return false;
       if (hidden.has(row.id)) return false;
       seen.add(row.id);
@@ -6728,23 +6807,31 @@
     });
   }
 
-  function deleteReportRow(reportId) {
+  async function deleteReportRow(reportId) {
     const id = String(reportId || '');
     const row = allReportsRows().find(item => item.id === id);
     if (!row) return showToast('Report not found', true);
     if (!window.confirm(`Delete "${row.name}" from Reports?`)) return;
-    const beforeSessions = reportsSessionReports.length;
-    const beforeSaved = savedReportDefinitions.length;
-    reportsSessionReports = reportsSessionReports.filter(item => item.id !== id);
-    savedReportDefinitions = savedReportDefinitions.filter(item => item.id !== id);
-    if (reportsSessionReports.length !== beforeSessions) saveReportsSessionReports();
-    if (savedReportDefinitions.length !== beforeSaved) saveSavedReportDefinitions();
-    if (reportsSessionReports.length === beforeSessions && savedReportDefinitions.length === beforeSaved) {
-      hiddenReportIds = [...new Set([...hiddenReportIds, id])];
-      saveHiddenReportIds();
+    const inSession = reportsSessionReports.some(item => item.id === id);
+    const inSaved = savedReportDefinitions.some(item => item.id === id);
+    try {
+      if (inSession) {
+        reportsSessionReports = reportsSessionReports.filter(item => item.id !== id);
+        saveReportsSessionReports();
+      }
+      if (inSaved) {
+        await fetch(`/api/reports/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(readBankJson);
+        savedReportDefinitions = savedReportDefinitions.filter(item => item.id !== id);
+      }
+      if (!inSession && !inSaved) {
+        // Fixture / unknown id — dismiss it server-side so it stays hidden.
+        await setReportHiddenOnServer(id, true);
+      }
+      renderReportsWorkspace();
+      showToast('Deleted report');
+    } catch (e) {
+      showToast('Could not delete report', true);
     }
-    renderReportsWorkspace();
-    showToast('Deleted report');
   }
 
   function reportRailItem(id) {
@@ -7236,14 +7323,13 @@
     showToast(`Exported ${formatNumber(rows.length)} banks`);
   }
 
-  function saveCustomBankReportDefinition() {
+  async function saveCustomBankReportDefinition() {
     const defaultName = customBankReportState.name || `Custom Bank List - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
     const name = window.prompt('Name this saved view', defaultName);
     if (!name) return;
-    const now = new Date().toISOString();
-    const id = customBankReportState.definitionId || `saved-${Date.now()}`;
-    const next = {
-      id,
+    // Server owns id (mints RP-YYYY-NNNN for new) + timestamps + createdBy.
+    const def = {
+      id: customBankReportState.definitionId || undefined,
       name: name.trim(),
       type: 'custom-bank',
       folder: 'Saved Views',
@@ -7251,16 +7337,17 @@
       filters: { ...customBankReportState.filters },
       columns: customBankReportState.selectedColumns.slice(),
       sort: { ...customBankReportState.sort },
-      createdAt: (savedReportDefinitionById(id) || {}).createdAt || now,
-      updatedAt: now,
       pinned: true
     };
-    savedReportDefinitions = [next, ...savedReportDefinitions.filter(def => def.id !== id)];
-    customBankReportState.definitionId = id;
-    customBankReportState.name = next.name;
-    saveSavedReportDefinitions();
-    showToast('Saved report view');
-    renderReportsWorkspace();
+    try {
+      const report = await persistReportDefinition(def);
+      customBankReportState.definitionId = report.id;
+      customBankReportState.name = report.name;
+      showToast('Saved report view');
+      renderReportsWorkspace();
+    } catch (e) {
+      showToast('Could not save report view', true);
+    }
   }
 
   function builderFieldHtml(type) {
