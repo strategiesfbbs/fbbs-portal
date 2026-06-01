@@ -6850,8 +6850,37 @@
     }
   }
 
+  function folderRailId(folder) {
+    return 'folder-' + String(folder).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+
+  // Distinct folder names: the predefined rail folders plus any custom folder a
+  // rep has assigned to a saved/session report (so "Move to folder…" with a new
+  // name is effectively how you create a folder).
+  function reportFolderNames() {
+    const names = new Set();
+    REPORT_RAIL_ITEMS.forEach(item => { if (item.folder) names.add(item.folder); });
+    [...savedReportDefinitions, ...reportsSessionReports].forEach(d => { if (d && d.folder) names.add(d.folder); });
+    return [...names];
+  }
+
+  // Predefined rail + any custom folders discovered on the data, so a report
+  // moved into a brand-new folder name shows up as a navigable rail entry.
+  function allReportRailItems() {
+    const items = REPORT_RAIL_ITEMS.slice();
+    const known = new Set(items.filter(i => i.folder).map(i => i.folder));
+    [...savedReportDefinitions, ...reportsSessionReports].forEach(d => {
+      if (d && d.folder && !known.has(d.folder)) {
+        known.add(d.folder);
+        items.push({ id: folderRailId(d.folder), section: 'FOLDERS', label: d.folder, folder: d.folder });
+      }
+    });
+    return items;
+  }
+
   function reportRailItem(id) {
-    return REPORT_RAIL_ITEMS.find(item => item.id === id) || REPORT_RAIL_ITEMS[0];
+    const items = allReportRailItems();
+    return items.find(item => item.id === id) || items[0];
   }
 
   function reportTypeMeta(type) {
@@ -6923,7 +6952,7 @@
     const activeRailId = effectiveReportsRailId();
     return `
       <aside class="reports-left-rail" aria-label="Reports navigation">
-        ${REPORT_RAIL_ITEMS.map(item => {
+        ${allReportRailItems().map(item => {
           const section = item.section !== currentSection ? (currentSection = item.section, `<h3>${escapeHtml(item.section)}</h3>`) : '';
           const cls = item.id === activeRailId ? 'active' : '';
           return `${section}<button type="button" class="${escapeHtml(cls)}" data-reports-rail="${escapeHtml(item.id)}">${escapeHtml(item.label)}</button>`;
@@ -6948,7 +6977,7 @@
             <div class="reports-head-actions">
               <input type="search" id="reportsSearchInput" placeholder="Search all reports..." value="${escapeHtml(reportsSearchQuery)}">
               <a class="small-btn" href="#reports/new">New Report</a>
-              <button type="button" class="small-btn secondary" disabled title="Available in Phase 2">New Folder</button>
+              <button type="button" class="small-btn secondary" disabled title="Create a folder by choosing &quot;Move to folder…&quot; on a report and typing a new name">New Folder</button>
               <button type="button" class="icon-btn" disabled title="Available in Phase 1">⚙</button>
             </div>
           </header>
@@ -7001,6 +7030,8 @@
                     <details class="reports-row-menu">
                       <summary aria-label="Report actions">⌄</summary>
                       <button type="button" data-report-action="run" data-report-type="${escapeHtml(row.type)}">Run</button>
+                      ${row.savedDefinition ? `<button type="button" data-report-action="pin" data-report-id="${escapeHtml(row.id)}">${row.pinned ? 'Unpin' : 'Pin'}</button>` : ''}
+                      ${row.savedDefinition ? `<button type="button" data-report-action="move" data-report-id="${escapeHtml(row.id)}">Move to folder…</button>` : ''}
                       <button type="button" data-report-action="duplicate" data-report-id="${escapeHtml(row.id)}">Duplicate</button>
                       <button type="button" class="reports-danger-action" data-report-action="delete" data-report-id="${escapeHtml(row.id)}">Delete</button>
                     </details>
@@ -8532,13 +8563,45 @@
         if (action === 'run') {
           window.location.hash = reportBuildHash(rowAction.dataset.reportType || 'bank-peer', rowAction.closest('tr')?.dataset.reportId || '', { autorun: '1' });
         }
+        if (action === 'pin') {
+          const def = savedReportDefinitionById(rowAction.dataset.reportId);
+          if (def) {
+            persistReportDefinition({ id: def.id, pinned: !def.pinned })
+              .then(() => { renderReportsWorkspace(); showToast(def.pinned ? 'Unpinned' : 'Pinned'); })
+              .catch(() => showToast('Could not update pin', true));
+          }
+        }
+        if (action === 'move') {
+          const def = savedReportDefinitionById(rowAction.dataset.reportId);
+          if (def) {
+            const existing = reportFolderNames().join(', ');
+            const target = window.prompt(`Move "${def.name}" to which folder?\nExisting: ${existing}\n(Type a new name to create a folder.)`, def.folder || 'Personal');
+            if (target && target.trim() && target.trim() !== def.folder) {
+              persistReportDefinition({ id: def.id, folder: target.trim() })
+                .then(() => { renderReportsWorkspace(); showToast('Moved to ' + target.trim()); })
+                .catch(() => showToast('Could not move report', true));
+            }
+          }
+        }
         if (action === 'duplicate') {
-          const source = allReportsRows().find(row => row.id === rowAction.dataset.reportId);
-          if (source) {
-            reportsSessionReports.unshift({ ...source, id: `session-${Date.now()}`, name: `${source.name} (Copy)`, lastRunAt: new Date().toISOString(), lastRunBy: 'You' });
-            saveReportsSessionReports();
-            renderReportsWorkspace();
-            showToast('Duplicated report');
+          const def = savedReportDefinitionById(rowAction.dataset.reportId);
+          if (def) {
+            // Saved report → persist a server-side copy so it survives reloads.
+            persistReportDefinition({
+              name: `${def.name} (Copy)`, type: def.type, folder: def.folder,
+              description: def.description, filters: def.filters, columns: def.columns,
+              sort: def.sort, pinned: false
+            })
+              .then(() => { renderReportsWorkspace(); showToast('Duplicated report'); })
+              .catch(() => showToast('Could not duplicate', true));
+          } else {
+            const source = allReportsRows().find(row => row.id === rowAction.dataset.reportId);
+            if (source) {
+              reportsSessionReports.unshift({ ...source, id: `session-${Date.now()}`, name: `${source.name} (Copy)`, lastRunAt: new Date().toISOString(), lastRunBy: 'You' });
+              saveReportsSessionReports();
+              renderReportsWorkspace();
+              showToast('Duplicated report');
+            }
           }
         }
         if (action === 'delete') {
