@@ -150,6 +150,7 @@ const {
 } = require('./cd-history');
 const swapMath = require('./swap-math');
 const swapStore = require('./swap-store');
+const reportStore = require('./report-store');
 const { renderProposalHtml } = require('./swap-render');
 const { rotateFileIfNeeded } = require('./log-rotation');
 const peerGroupStore = require('./peer-group-store');
@@ -4707,6 +4708,79 @@ function handlePortfolioReview(res, query) {
   }
 }
 
+// ---- Reports Workspace persistence (saved report definitions + hidden list).
+// Replaces the old browser-only localStorage model so reports are shared across
+// machines/reps. createdBy is taken server-side from the resolved rep, never
+// trusted from the request body. ----
+
+function handleListReports(req, res, query) {
+  try {
+    const reports = reportStore.listReportDefinitions(BANK_REPORTS_DIR, {
+      type: query.get('type') || undefined,
+      limit: parseInt(query.get('limit'), 10) || 100
+    });
+    const hidden = reportStore.listHiddenReportIds(BANK_REPORTS_DIR);
+    return sendJSON(res, 200, { reports, hidden, rep: resolveRequestRep(req) });
+  } catch (err) {
+    log('error', 'Report list failed:', err.message);
+    return sendJSON(res, 500, { error: err.message || 'Could not list reports' });
+  }
+}
+
+async function handleCreateReport(req, res) {
+  try {
+    const body = await readJsonBody(req, 256 * 1024);
+    const rep = resolveRequestRep(req);
+    const report = reportStore.createReportDefinition(BANK_REPORTS_DIR, body, rep);
+    appendAuditLog({ event: 'report-create', reportId: report.id, type: report.type, rep: rep ? rep.username : null });
+    return sendJSON(res, 200, { report });
+  } catch (err) {
+    log('error', 'Report create failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not save report' });
+  }
+}
+
+async function handleUpdateReport(req, res, id) {
+  try {
+    const body = await readJsonBody(req, 256 * 1024);
+    const report = reportStore.updateReportDefinition(BANK_REPORTS_DIR, id, body);
+    if (!report) return sendJSON(res, 404, { error: 'Report not found' });
+    appendAuditLog({ event: 'report-update', reportId: id });
+    return sendJSON(res, 200, { report });
+  } catch (err) {
+    log('error', 'Report update failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not update report' });
+  }
+}
+
+function handleDeleteReport(req, res, id) {
+  try {
+    const deleted = reportStore.deleteReportDefinition(BANK_REPORTS_DIR, id);
+    if (!deleted) return sendJSON(res, 404, { error: 'Report not found' });
+    appendAuditLog({ event: 'report-delete', reportId: id });
+    return sendJSON(res, 200, { deleted: true, id });
+  } catch (err) {
+    log('error', 'Report delete failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not delete report' });
+  }
+}
+
+async function handleSetReportHidden(req, res) {
+  try {
+    const body = await readJsonBody(req, 16 * 1024);
+    const id = String(body.id || '').trim();
+    if (!id) return sendJSON(res, 400, { error: 'id is required' });
+    const hidden = Boolean(body.hidden);
+    const rep = resolveRequestRep(req);
+    const hiddenIds = reportStore.setReportHidden(BANK_REPORTS_DIR, id, hidden, rep);
+    appendAuditLog({ event: hidden ? 'report-hide' : 'report-unhide', reportId: id, rep: rep ? rep.username : null });
+    return sendJSON(res, 200, { hidden: hiddenIds });
+  } catch (err) {
+    log('error', 'Report hidden update failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not update hidden reports' });
+  }
+}
+
 async function handleCreateSwapProposal(req, res) {
   try {
     const body = await readJsonBody(req);
@@ -6909,6 +6983,33 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/portfolio-review' && req.method === 'GET') {
       return handlePortfolioReview(res, query);
+    }
+
+    // ---- Reports Workspace persistence. Register the literal /api/reports and
+    // /api/reports/hidden routes BEFORE the /api/reports/:id regex so "hidden"
+    // isn't captured as an id. ----
+    if (pathname === '/api/reports' && req.method === 'GET') {
+      return handleListReports(req, res, query);
+    }
+    if (pathname === '/api/reports' && req.method === 'POST') {
+      return await handleCreateReport(req, res);
+    }
+    if (pathname === '/api/reports/hidden' && req.method === 'GET') {
+      return sendJSON(res, 200, { hidden: reportStore.listHiddenReportIds(BANK_REPORTS_DIR) });
+    }
+    if (pathname === '/api/reports/hidden' && req.method === 'POST') {
+      return await handleSetReportHidden(req, res);
+    }
+    const reportIdMatch = pathname.match(/^\/api\/reports\/([^/]+)$/);
+    if (reportIdMatch && req.method === 'PATCH') {
+      const id = safeDecodeURIComponent(reportIdMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid report id' });
+      return await handleUpdateReport(req, res, id);
+    }
+    if (reportIdMatch && req.method === 'DELETE') {
+      const id = safeDecodeURIComponent(reportIdMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid report id' });
+      return handleDeleteReport(req, res, id);
     }
 
     const mbsCmoFileMatch = pathname.match(/^\/api\/mbs-cmo\/files\/([^/]+)$/);
