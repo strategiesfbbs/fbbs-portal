@@ -8484,6 +8484,7 @@
           <div class="coverage-book-actions">
             <input type="search" id="coverageBookSearch" placeholder="Search bank, owner, state, cert…" value="${escapeHtml(coverageBookState.search)}">
             <button type="button" class="small-btn secondary" data-coverage-export>Export CSV</button>
+            <button type="button" class="small-btn secondary" data-coverage-print>Print / PDF</button>
           </div>
         </header>
         ${!rows.length ? '<div class="bank-search-empty">No covered banks match.</div>' : `
@@ -8531,6 +8532,47 @@
         stats.open, stats.total, b.period || '', b.nextActionDate || '']);
     });
     downloadCsv('coverage_book_' + new Date().toISOString().slice(0, 10) + '.csv', out);
+  }
+
+  // Client-side printable Coverage Book handout. Opens a clean standalone doc in
+  // a popup and prints it from this (script-src 'self') context — no inline
+  // script in the popup, so it sidesteps the strict-CSP inline-handler issue that
+  // affects the server-rendered /render pages.
+  function printCoverageBook() {
+    const rows = coverageBookRows();
+    if (!rows.length) return showToast('No covered banks to print', true);
+    const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const statusTotals = {};
+    coverageBookState.banks.forEach(b => { const s = b.status || 'Open'; statusTotals[s] = (statusTotals[s] || 0) + 1; });
+    const body = rows.map(b => {
+      const st = coverageBookStrategyStats(b.bankId);
+      return `<tr><td>${esc(b.displayName || b.legalName || b.bankId)}</td><td>${esc(b.status || 'Open')}</td><td>${esc(b.owner || '')}</td><td>${esc(b.priority || '')}</td><td>${esc([b.city, b.state].filter(Boolean).join(', '))}</td><td class="r">${b.totalAssets != null ? esc(formatMoney(b.totalAssets)) : ''}</td><td class="r">${st.open}/${st.total}</td><td>${esc(b.period || '')}</td></tr>`;
+    }).join('');
+    const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>FBBS Coverage Book</title><style>
+      body{font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#0f1f17;margin:24px;}
+      header{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #0f1f17;padding-bottom:8px;margin-bottom:10px;}
+      .firm{font-weight:800;text-transform:uppercase;letter-spacing:.04em;font-size:11px;}
+      .firm strong{display:block;font-size:16px;text-transform:none;letter-spacing:0;}
+      .totals{color:#4a5b53;font-size:11px;margin-bottom:10px;}
+      table{width:100%;border-collapse:collapse;font-size:11px;}
+      th,td{padding:4px 6px;border-bottom:1px solid #c8d6cd;text-align:left;}
+      th{background:#f4f8f6;text-transform:uppercase;font-size:9.5px;letter-spacing:.04em;}
+      .r{text-align:right;font-variant-numeric:tabular-nums;}
+      footer{margin-top:18px;border-top:1px solid #c8d6cd;padding-top:8px;font-size:9.5px;color:#4a5b53;}
+      @media print{@page{size:letter landscape;margin:.4in;}}
+    </style></head><body>
+      <header><div class="firm">First Bankers' Banc Securities, Inc.<strong>Coverage Book</strong></div><div style="font-size:11px;color:#4a5b53">${esc(dateStr)} &middot; ${rows.length} bank${rows.length === 1 ? '' : 's'}</div></header>
+      <div class="totals">${Object.entries(statusTotals).map(([k, v]) => esc(k) + ': ' + v).join(' &middot; ')}</div>
+      <table><thead><tr><th>Bank</th><th>Status</th><th>Owner</th><th>Priority</th><th>Location</th><th class="r">Assets</th><th class="r">Strategies</th><th>Period</th></tr></thead><tbody>${body}</tbody></table>
+      <footer>For Institutional Use Only. Internal coverage summary. First Bankers' Banc Securities, Inc. is a member of FINRA / SIPC.</footer>
+    </body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) return showToast('Allow pop-ups to print the coverage book', true);
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    setTimeout(() => { try { w.print(); } catch (e) {} }, 300);
   }
 
   function runCoverageBook() {
@@ -8807,6 +8849,10 @@
       }
       if (clickTarget.closest('[data-coverage-export]')) {
         exportCoverageBookCsv();
+        return;
+      }
+      if (clickTarget.closest('[data-coverage-print]')) {
+        printCoverageBook();
         return;
       }
       const coverageOpen = clickTarget.closest('[data-coverage-open]');
