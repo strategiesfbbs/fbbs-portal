@@ -7696,6 +7696,8 @@
             <p>${escapeHtml([data.city, data.state, data.certNumber ? `Cert ${data.certNumber}` : '', data.reportDate ? `Portfolio ${data.reportDate}` : '', data.inventoryDate ? `Inventory ${data.inventoryDate}` : ''].filter(Boolean).join(' · '))}</p>
           </div>
           <div class="portfolio-review-actions">
+            <button type="button" class="small-btn secondary" data-portfolio-export="csv">Export CSV</button>
+            <button type="button" class="small-btn secondary" data-portfolio-export="pdf">Print / PDF</button>
             <a class="text-btn" href="#strategies">Open Strategies</a>
             <a class="text-btn" href="#reports/data/files">Matched Files</a>
           </div>
@@ -7737,7 +7739,10 @@
           <div class="portfolio-review-screen-head">
             <h4>Holdings Screens</h4>
             <div class="portfolio-review-tabs">
-              ${screenDefs.map(([key, label]) => `<button type="button" class="${key === selectedScreen ? 'active' : ''}" data-portfolio-screen="${escapeHtml(key)}">${escapeHtml(label)}</button>`).join('')}
+              ${screenDefs.map(([key, label]) => {
+                const n = data.screens && Array.isArray(data.screens[key]) ? data.screens[key].length : 0;
+                return `<button type="button" class="${key === selectedScreen ? 'active' : ''}" data-portfolio-screen="${escapeHtml(key)}">${escapeHtml(label)}<span class="portfolio-tab-count">${n}</span></button>`;
+              }).join('')}
             </div>
           </div>
           ${portfolioHoldingsTable(screenRows)}
@@ -8547,6 +8552,11 @@
       const portfolioBank = clickTarget.closest('[data-portfolio-bank]');
       if (portfolioBank) {
         runPortfolioReview(portfolioBank.dataset.portfolioBank);
+        return;
+      }
+      const portfolioExport = clickTarget.closest('[data-portfolio-export]');
+      if (portfolioExport) {
+        exportReport('portfolio-peer', portfolioExport.dataset.portfolioExport === 'pdf' ? 'pdf' : 'csv');
         return;
       }
       const portfolioScreen = clickTarget.closest('[data-portfolio-screen]');

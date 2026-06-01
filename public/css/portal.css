@@ -13208,3 +13208,20 @@ body {
 .qa-count-lbl { font-size: 11px; color: var(--text3); font-weight: 500; }
 .qa-note { color: var(--text3); font-style: italic; }
 .qa-issue { color: #92400e; font-size: 12px; }
+
+/* Portfolio Review holdings-screen tab counts */
+.portfolio-review-tabs button .portfolio-tab-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-light);
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.portfolio-review-tabs button.active .portfolio-tab-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: inherit;
+}
