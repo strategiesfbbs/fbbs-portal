@@ -66,8 +66,11 @@ function toIsoDate(mdy) {
 }
 
 function normalizeSpreadTokens(tokens) {
-  const compact = tokens.join('').toUpperCase();
-  return SPREAD_RE.test(compact) ? compact : null;
+  const joined = tokens.join(' ').replace(/\s+/g, ' ').trim().toUpperCase();
+  const compact = joined.replace(/\s+/g, '');
+  if (SPREAD_RE.test(compact)) return compact;
+  if (/^\+\d+\/(?:OLD\s*)?\d+YR(?:\s*T)?$/i.test(joined)) return joined;
+  return null;
 }
 
 // ---------- Rating extraction ----------
@@ -142,8 +145,9 @@ function parseMuniRow(line, section, warnings) {
 
   const { moodysRating, spRating } = extractRatings(ratingTokens);
 
-  // Right side: walk backwards to find CUSIP, then the two dates before it
-  // are settle + couponDate. Tokens after CUSIP = credit enhancement.
+  // Right side: walk backwards to find CUSIP. Most rows carry settle +
+  // couponDate immediately before it; a few taxable spread rows only carry
+  // one trailing date, which we keep as couponDate and leave settle blank.
   let cusipIdx = -1;
   for (let i = right.length - 1; i >= 0; i--) {
     if (CUSIP_RE.test(right[i])) { cusipIdx = i; break; }
@@ -153,15 +157,24 @@ function parseMuniRow(line, section, warnings) {
   const creditEnhancement = right.slice(cusipIdx + 1).join(' ').trim() || null;
   const cusip = right[cusipIdx];
 
-  if (cusipIdx < 2 || !DATE_RE.test(right[cusipIdx - 1]) || !DATE_RE.test(right[cusipIdx - 2])) {
+  let couponDate = null;
+  let settle = null;
+  let trailingDateCount = 0;
+  if (cusipIdx >= 1 && DATE_RE.test(right[cusipIdx - 1])) {
+    couponDate = right[cusipIdx - 1];
+    trailingDateCount = 1;
+    if (cusipIdx >= 2 && DATE_RE.test(right[cusipIdx - 2])) {
+      settle = right[cusipIdx - 2];
+      trailingDateCount = 2;
+    }
+  }
+  if (!couponDate) {
     warnings.push(`Expected settle & couponDate before CUSIP: ${line}`);
     return null;
   }
-  const couponDate = right[cusipIdx - 1];
-  const settle     = right[cusipIdx - 2];
 
   // Pricing block: coupon, maturity, then optional call date + optional pricing
-  const pricingBlock = right.slice(0, cusipIdx - 2);
+  const pricingBlock = right.slice(0, cusipIdx - trailingDateCount);
   if (pricingBlock.length < 2) { warnings.push(`Pricing block too short: ${line}`); return null; }
 
   const coupon = parseFloat(pricingBlock[0]);
@@ -213,7 +226,7 @@ function parseMuniRow(line, section, warnings) {
     ytm,
     price,
     spread,
-    settle: toIsoDate(settle),
+    settle: settle ? toIsoDate(settle) : null,
     couponDate: toIsoDate(couponDate),
     cusip,
     creditEnhancement

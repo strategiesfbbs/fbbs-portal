@@ -108,13 +108,13 @@
     sort: { key: 'totalAssets', dir: 'desc' }
   };
   let selectedFiles = {
-    dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
+    dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null, bairdSyndicate: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
   };
 
-  const SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+  const SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
   const TOTAL_SLOTS = SLOTS.length;
-  const UPLOAD_SLOTS = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+  const UPLOAD_SLOTS = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 
   const DOC_TYPES = {
     dashboard:         { label: 'FBBS Sales Dashboard', ext: 'HTML', viewer: 'dashboard' },
@@ -126,6 +126,7 @@
     cdoffers:          { label: 'Daily CD Offerings PDF', ext: 'PDF', viewer: 'cdoffers' },
     cdoffersCost:      { label: 'Internal CD Workbook', ext: 'XLSX', viewer: 'explorer' },
     munioffers:        { label: 'Muni Offerings', ext: 'PDF', viewer: 'munioffers' },
+    bairdSyndicate:    { label: 'Baird Syndicate Munis', ext: 'XLSX', viewer: 'muni-explorer' },
     agenciesBullets:   { label: 'Agencies — Bullets', ext: 'XLSX', viewer: 'agencies' },
     agenciesCallables: { label: 'Agencies — Callables', ext: 'XLSX', viewer: 'agencies' },
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
@@ -1154,6 +1155,7 @@
     if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
       if ((lower.includes('treasury') || lower.includes('tsy')) &&
           (lower.includes('note') || lower.includes('notes'))) return 'treasuryNotes';
+      if (lower.includes('baird') || lower.includes('syndicate')) return 'bairdSyndicate';
       if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
           lower.includes('daily_cd') || lower.includes('daily cd') ||
           lower.includes('cd offering') || lower.includes('cd_offering') ||
@@ -12241,6 +12243,7 @@
     if (slot === 'treasuryNotes') return ['.xlsx', '.xlsm', '.xls'];
     if (slot === 'cdoffers') return ['.pdf'];
     if (slot === 'cdoffersCost') return ['.xlsx', '.xlsm', '.xls'];
+    if (slot === 'bairdSyndicate') return ['.xlsx', '.xlsm', '.xls'];
     if (slot === 'agenciesBullets' || slot === 'agenciesCallables' || slot === 'corporates') return ['.xlsx', '.xls'];
     return ['.pdf'];
   }
@@ -12258,7 +12261,8 @@
     }
     const detected = classifyFile(file.name);
     const expectedSlot = slot === 'cdoffersCost' ? 'cdoffers' : slot;
-    if (detected && detected !== expectedSlot) {
+    const genericGridForBaird = slot === 'bairdSyndicate' && /^grid\d*/i.test(file.name || '');
+    if (detected && detected !== expectedSlot && !genericGridForBaird) {
       showToast(`Heads up: filename looks like a ${DOC_TYPES[detected].label} but you're putting it in the ${DOC_TYPES[slot].label} slot. Double-check before publishing.`, true);
     }
 
@@ -12459,7 +12463,7 @@
 
   function resetSelectedUploadFiles() {
     selectedFiles = {
-      dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null,
+      dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null, bairdSyndicate: null,
       agenciesBullets: null, agenciesCallables: null, corporates: null
     };
     UPLOAD_SLOTS.forEach(resetDropZone);
@@ -13500,7 +13504,8 @@
     minCoupon: null,
     minYtw: null,
     callable: '',       // '', 'callable', 'noncall'
-    rated: ''           // '', 'both', 'moodys', 'sp', 'unrated'
+    rated: '',          // '', 'both', 'moodys', 'sp', 'unrated'
+    showBaird: true
   };
   let muniSort = { col: 'maturity', dir: 'asc' };
 
@@ -13514,7 +13519,8 @@
       minCoupon: numberOrNull(params.get('minCoupon')),
       minYtw: numberOrNull(params.get('minYtw')),
       callable: params.get('callable') || '',
-      rated: params.get('rated') || ''
+      rated: params.get('rated') || '',
+      showBaird: params.get('showBaird') !== '0'
     };
     setControlValue('mf-search', muniFilters.search);
     setControlValue('mf-section', muniFilters.section);
@@ -13523,6 +13529,8 @@
     setControlValue('mf-minYtw', muniFilters.minYtw);
     setControlValue('mf-callable', muniFilters.callable);
     setControlValue('mf-rated', muniFilters.rated);
+    const showBaird = document.getElementById('mf-showBaird');
+    if (showBaird) showBaird.checked = muniFilters.showBaird;
   }
 
   function syncMuniFiltersToUrl() {
@@ -13533,7 +13541,8 @@
       minCoupon: muniFilters.minCoupon,
       minYtw: muniFilters.minYtw,
       callable: muniFilters.callable,
-      rated: muniFilters.rated
+      rated: muniFilters.rated,
+      showBaird: muniFilters.showBaird ? null : '0'
     });
   }
 
@@ -13544,7 +13553,7 @@
       const res = await fetch('/api/muni-offerings', { cache: 'no-store' });
       if (res.status === 404) {
         muniData = null;
-        body.innerHTML = `<tr><td colspan="16" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="17" style="text-align:center;padding:40px;color:var(--text3)">
           No muni offerings yet. Upload the Muni Offerings PDF on the Upload page and offerings will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No muni offerings data';
@@ -13562,7 +13571,7 @@
       muniData = await res.json();
     } catch (e) {
       console.error('Failed to load muni offerings:', e);
-      body.innerHTML = `<tr><td colspan="16" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="17" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load muni offerings: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading offerings';
@@ -13763,6 +13772,7 @@
     document.getElementById('muniExplorerStat').textContent = filtered.length;
     renderStatTiles('muniStatTiles', [
       { label: 'Shown', value: formatNumber(filtered.length) },
+      { label: 'Baird Syndicate', value: formatNumber(filtered.filter(o => o.isSyndicate).length) },
       { label: 'Average YTW', value: formatPercentTile(average(filtered.map(o => o.ytw)), 3) },
       { label: 'Top TEY/ATY', value: topTey ? formatPercentTile(muniTaxSortValue(topTey.adjusted), 3) : '—' },
       { label: 'TEY Setting', value: muniAudienceLabel() },
@@ -13770,7 +13780,7 @@
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="16" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="17" style="text-align:center;padding:40px;color:var(--text3)">
         No offerings match the current filters.
       </td></tr>`;
       return;
@@ -13817,10 +13827,15 @@
       const creditCell = o.creditEnhancement
         ? `<span class="credit-chip">${escapeHtml(o.creditEnhancement)}</span>`
         : '<span class="no-restrict">&mdash;</span>';
+      const source = o.source || (o.isSyndicate ? 'Baird Syndicate' : 'FBBS');
+      const sourceCell = o.isSyndicate
+        ? `<span class="source-pill source-baird">${escapeHtml(source)}</span>`
+        : `<span class="source-pill source-fbbs">${escapeHtml(source)}</span>`;
 
       return `
         <tr>
           <td><span class="section-pill section-${o.section.toLowerCase()}">${escapeHtml(o.section)}</span></td>
+          <td>${sourceCell}</td>
           <td class="rating-cell">${ratingCell}</td>
           <td style="text-align:right" class="qnty-cell">${o.quantity.toLocaleString()}</td>
           <td>${escapeHtml(o.issuerState)}</td>
@@ -13843,9 +13858,11 @@
 
   function applyMuniFilters(offerings) {
     return offerings.filter(o => {
+      if (!muniFilters.showBaird && o.isSyndicate) return false;
       if (muniFilters.search) {
         const q = muniFilters.search.toLowerCase();
-        if (!o.issuerName.toLowerCase().includes(q) && !o.cusip.toLowerCase().includes(q)) return false;
+        const haystack = [o.issuerName, o.cusip, o.source].map(v => String(v || '').toLowerCase()).join(' ');
+        if (!haystack.includes(q)) return false;
       }
       if (muniFilters.section && o.section !== muniFilters.section) return false;
       if (muniFilters.state && o.issuerState !== muniFilters.state) return false;
@@ -13895,6 +13912,7 @@
     const minYtw    = document.getElementById('mf-minYtw');
     const callable  = document.getElementById('mf-callable');
     const rated     = document.getElementById('mf-rated');
+    const showBaird = document.getElementById('mf-showBaird');
     const customRate = document.getElementById('muniCustomTaxRate');
     const capitalGainsRate = document.getElementById('muniCapitalGainsRate');
     const costOfFunds = document.getElementById('muniCostOfFunds');
@@ -14009,6 +14027,12 @@
       muniFilters.rated = rated.value;
       if (muniData) renderMuniOfferings();
     });
+    if (showBaird) {
+      showBaird.addEventListener('change', () => {
+        muniFilters.showBaird = showBaird.checked;
+        if (muniData) renderMuniOfferings();
+      });
+    }
 
     document.getElementById('mf-reset').addEventListener('click', () => {
       search.value = '';
@@ -14018,7 +14042,8 @@
       minYtw.value = '';
       callable.value = '';
       rated.value = '';
-      muniFilters = { search: '', section: '', state: '', minCoupon: null, minYtw: null, callable: '', rated: '' };
+      if (showBaird) showBaird.checked = true;
+      muniFilters = { search: '', section: '', state: '', minCoupon: null, minYtw: null, callable: '', rated: '', showBaird: true };
       if (muniData) renderMuniOfferings();
     });
 
@@ -14050,7 +14075,7 @@
     sortMuniInPlace(filtered);
     if (filtered.length === 0) return showToast('No offerings match filters', true);
 
-    const header = ['Section','Moodys','SP','Quantity','State','Issuer','IssueType',
+    const header = ['Section','Source','Moodys','SP','Quantity','State','Issuer','IssueType',
                     'Coupon','Maturity','CallDate','YTW','TaxAdjustedYield','TaxAdjustedYieldType',
                     'DiscountATY','DiscountATYType',
                     'OrdinaryTaxRate','CapitalGainsRate','CostOfFunds','DisallowancePct',
@@ -14062,7 +14087,8 @@
       const deMin = muniDeMinimis(o);
       const disallowance = muniDisallowancePct(o);
       return [
-        o.section, o.moodysRating || '', o.spRating || '', o.quantity,
+        o.section, o.source || (o.isSyndicate ? 'Baird Syndicate' : 'FBBS'),
+        o.moodysRating || '', o.spRating || '', o.quantity,
         o.issuerState, o.issuerName, o.issueType,
         o.coupon.toFixed(3), o.maturity,
         o.callDate || '',

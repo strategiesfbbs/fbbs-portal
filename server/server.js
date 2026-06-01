@@ -31,9 +31,10 @@ const { extractPdfText } = require('./pdf-text');
 const { parseCdOffersText, parseCdOffersWorkbook } = require('./cd-offers-parser');
 const { parseBrokeredCdRateSheetText } = require('./brokered-cd-parser');
 const { parseMuniOffersText } = require('./muni-offers-parser');
+const { parseBairdSyndicateWorkbook, looksLikeBairdSyndicateWorkbook } = require('./baird-syndicate-parser');
 const { parseEconomicUpdateText } = require('./economic-update-parser');
 const { parseMmdCurveText } = require('./mmd-parser');
-const { parseTreasuryNotesWorkbook } = require('./treasury-notes-parser');
+const { parseTreasuryNotesWorkbook, looksLikeTreasuryWorkbook } = require('./treasury-notes-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
 const { parseCorporatesFiles } = require('./corporates-parser');
 const {
@@ -226,7 +227,7 @@ const MIME_TYPES = {
   '.txt':  'text/plain; charset=utf-8'
 };
 
-const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 const DOC_TYPES_LABELS = {
   dashboard: 'FBBS Sales Dashboard',
   econ: 'Economic Update',
@@ -236,6 +237,7 @@ const DOC_TYPES_LABELS = {
   cd: 'Brokered CD Sheet',
   cdoffers: 'Daily CD Offerings',
   munioffers: 'Muni Offerings',
+  bairdSyndicate: 'Baird Syndicate Munis',
   agenciesBullets: 'Agency Bullets',
   agenciesCallables: 'Agency Callables',
   corporates: 'Corporates'
@@ -379,6 +381,9 @@ function classifyFile(filename, explicitSlot) {
         (lower.includes('note') || lower.includes('notes'))) {
       return 'treasuryNotes';
     }
+    if (lower.includes('baird') || lower.includes('syndicate')) {
+      return 'bairdSyndicate';
+    }
     if (lower.includes('cd_offer') || lower.includes('cdoffer') ||
         lower.includes('daily_cd') || lower.includes('daily cd') ||
         lower.includes('cd offering') || lower.includes('cd_offering') ||
@@ -469,6 +474,24 @@ function classifyFolderDropFile(filename) {
   }
 
   return classifyFile(filename);
+}
+
+// Content fallback for folder-drop xlsx that the filename classifier left unslotted.
+// Desk exports increasingly arrive with generic names ("grid1_<hash>.xlsx") that the
+// same tool reuses for WIRP, Treasury, and Baird Syndicate reports — the filename alone
+// can't tell them apart. Peek at the workbook and route Treasury-note and Baird muni
+// exports to their real slots; genuine WIRP/Fed-Funds books match neither and fall
+// through to the existing reference handling. Returns a slot name or null.
+function sniffWorkbookSlot(fullPath) {
+  let buffer;
+  try {
+    buffer = fs.readFileSync(fullPath);
+  } catch (err) {
+    return null;
+  }
+  if (looksLikeTreasuryWorkbook(buffer)) return 'treasuryNotes';
+  if (looksLikeBairdSyndicateWorkbook(buffer)) return 'bairdSyndicate';
+  return null;
 }
 
 function hasBytes(buffer, bytes, offset = 0) {
@@ -571,6 +594,9 @@ function validateUploadSignature(file, slot) {
   }
   if (['econ', 'relativeValue', 'cd', 'munioffers'].includes(slot)) {
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
+  }
+  if (slot === 'bairdSyndicate') {
+    return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
   }
   if (['treasuryNotes', 'agenciesBullets', 'agenciesCallables', 'corporates'].includes(slot)) {
     return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
@@ -705,7 +731,7 @@ function parseMultipart(req, boundary, limit) {
             } else if (SLOT_NAMES.includes(fieldName)) {
               explicitSlot = fieldName;
             } else {
-              const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|relativeValue|treasuryNotes|cdoffers|munioffers|agenciesBullets|agenciesCallables|corporates|cd)/i);
+              const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|relativeValue|treasuryNotes|cdoffers|munioffers|bairdSyndicate|agenciesBullets|agenciesCallables|corporates|cd)/i);
               if (m) {
                 const token = m[1];
                 // Normalize the canonical form (case-sensitive slot names)
@@ -905,6 +931,15 @@ async function extractMuniOfferings(pdfBuffer) {
     return parsed;
   } catch (err) {
     log('warn', 'Muni offerings extraction failed:', err.message);
+    return null;
+  }
+}
+
+function extractBairdSyndicateOfferings(workbookBuffer) {
+  try {
+    return parseBairdSyndicateWorkbook(workbookBuffer);
+  } catch (err) {
+    log('warn', 'Baird Syndicate workbook extraction failed:', err.message);
     return null;
   }
 }
@@ -5585,7 +5620,10 @@ function scanFolderDrop(dateValue) {
       const filename = entry.name;
       const fullPath = path.join(folderPath, filename);
       const stat = fs.statSync(fullPath);
-      const slot = classifyFolderDropFile(filename);
+      let slot = classifyFolderDropFile(filename);
+      if (!slot && /\.(xlsx|xlsm|xls)$/i.test(filename)) {
+        slot = sniffWorkbookSlot(fullPath);
+      }
       const reference = !slot && isReferenceDropFile(filename);
       return {
         filename,
@@ -5747,6 +5785,7 @@ async function handleUpload(req, res) {
 
 async function publishPackageFiles(files, res, options = {}) {
   let priorMeta = readMetaFile(CURRENT_DIR);
+  let priorMuniOfferingsPayload = loadCurrentMuniOfferings();
   const existingBeforeUpload = fs.existsSync(CURRENT_DIR)
     ? fs.readdirSync(CURRENT_DIR).filter(f => f !== '.gitkeep' && f !== '.DS_Store')
     : [];
@@ -5764,6 +5803,7 @@ async function publishPackageFiles(files, res, options = {}) {
   }
 
   const touchesAgencies = incomingSlots.has('agenciesBullets') || incomingSlots.has('agenciesCallables');
+  const touchesMuniOfferings = incomingSlots.has('munioffers') || incomingSlots.has('bairdSyndicate');
   if (touchesAgencies) {
     const missingAgencyUploads = ['agenciesBullets', 'agenciesCallables']
       .filter(slot => !incomingSlots.has(slot));
@@ -5806,6 +5846,7 @@ async function publishPackageFiles(files, res, options = {}) {
           fs.renameSync(path.join(CURRENT_DIR, f), path.join(archiveTarget, f));
         }
         priorMeta = {};
+        priorMuniOfferingsPayload = null;
         log('info', 'Archived prior package to', archiveDate);
       } else {
         // Same day: selectively remove ONLY the files whose slots are being
@@ -6033,35 +6074,74 @@ async function publishPackageFiles(files, res, options = {}) {
     }
   }
 
-  // Extract muni offerings from the Muni Offerings PDF if present.
+  // Extract muni offerings from the Muni Offerings PDF and optional Baird Syndicate workbook.
   let muniOfferingsCount = null;
   let muniOfferingsWarnings = [];
   let muniOfferingsAsOfDate = null;
   const muniOffersFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'munioffers');
-  if (muniOffersFile) {
-    const extracted = await extractMuniOfferings(muniOffersFile.data);
-    if (extracted && Array.isArray(extracted.offerings)) {
-      muniOfferingsCount = extracted.offerings.length;
-      muniOfferingsWarnings = extracted.warnings || [];
-      muniOfferingsAsOfDate = extracted.asOfDate;
-      const offPayload = {
-        asOfDate: extracted.asOfDate,
-        extractedAt: new Date().toISOString(),
-        sourceFile: slotFilenames.munioffers,
-        warnings: muniOfferingsWarnings,
-        offerings: extracted.offerings
-      };
-      try {
-        fs.writeFileSync(
-          path.join(CURRENT_DIR, MUNI_OFFERINGS_FILENAME),
-          JSON.stringify(offPayload, null, 2)
-        );
-        log('info', `Extracted ${muniOfferingsCount} muni offerings from Muni Offers PDF`);
-      } catch (err) {
-        log('error', 'Failed to write muni offerings JSON:', err.message);
+  const bairdSyndicateFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'bairdSyndicate');
+  if (muniOffersFile || bairdSyndicateFile) {
+    const priorRows = Array.isArray(priorMuniOfferingsPayload && priorMuniOfferingsPayload.offerings)
+      ? priorMuniOfferingsPayload.offerings
+      : [];
+    let primaryOfferings = priorRows.filter(row => !(row && row.isSyndicate));
+    let syndicateOfferings = priorRows.filter(row => row && row.isSyndicate);
+    let primarySourceFile = priorMuniOfferingsPayload && priorMuniOfferingsPayload.sourceFile;
+    let syndicateSourceFile = priorMuniOfferingsPayload && priorMuniOfferingsPayload.bairdSyndicateSourceFile;
+    muniOfferingsAsOfDate = priorMuniOfferingsPayload && priorMuniOfferingsPayload.asOfDate;
+
+    if (muniOffersFile) {
+      const extracted = await extractMuniOfferings(muniOffersFile.data);
+      if (extracted && Array.isArray(extracted.offerings)) {
+        primaryOfferings = extracted.offerings.map(row => ({
+          ...row,
+          source: row.source || 'FBBS',
+          isSyndicate: false
+        }));
+        muniOfferingsWarnings.push(...(extracted.warnings || []));
+        muniOfferingsAsOfDate = extracted.asOfDate || muniOfferingsAsOfDate;
+        primarySourceFile = slotFilenames.munioffers;
+        log('info', `Extracted ${primaryOfferings.length} muni offerings from Muni Offers PDF`);
+      } else {
+        muniOfferingsWarnings.push('Muni Offerings PDF was uploaded but no offerings were extracted.');
+        log('warn', 'Muni Offerings PDF was uploaded but no offerings were extracted');
       }
-    } else {
-      log('warn', 'Muni Offerings PDF was uploaded but no offerings were extracted');
+    }
+
+    if (bairdSyndicateFile) {
+      const syndicate = extractBairdSyndicateOfferings(bairdSyndicateFile.data);
+      if (syndicate && Array.isArray(syndicate.offerings)) {
+        syndicateOfferings = syndicate.offerings;
+        muniOfferingsWarnings.push(...(syndicate.warnings || []));
+        syndicateSourceFile = slotFilenames.bairdSyndicate;
+        log('info', `Extracted ${syndicateOfferings.length} Baird Syndicate muni offerings`);
+      } else {
+        muniOfferingsWarnings.push('Baird Syndicate workbook was uploaded but no offerings were extracted.');
+        log('warn', 'Baird Syndicate workbook was uploaded but no offerings were extracted');
+      }
+    }
+
+    const combinedOfferings = [...primaryOfferings, ...syndicateOfferings];
+    muniOfferingsCount = combinedOfferings.length;
+    const offPayload = {
+      asOfDate: muniOfferingsAsOfDate,
+      extractedAt: new Date().toISOString(),
+      sourceFile: primarySourceFile || null,
+      bairdSyndicateSourceFile: syndicateSourceFile || null,
+      sourceCounts: {
+        fbbs: primaryOfferings.length,
+        bairdSyndicate: syndicateOfferings.length
+      },
+      warnings: muniOfferingsWarnings,
+      offerings: combinedOfferings
+    };
+    try {
+      fs.writeFileSync(
+        path.join(CURRENT_DIR, MUNI_OFFERINGS_FILENAME),
+        JSON.stringify(offPayload, null, 2)
+      );
+    } catch (err) {
+      log('error', 'Failed to write muni offerings JSON:', err.message);
     }
   }
 
@@ -6207,7 +6287,7 @@ async function publishPackageFiles(files, res, options = {}) {
   const packageDate = offeringsAsOfDate || brokeredCdAsOfDate || muniOfferingsAsOfDate || mmdAsOfDate || uniqueDates[0] || todayStamp();
 
   const mergedOfferingsCount      = incomingSlots.has('cdoffers')    ? offeringsCount      : (priorMeta.offeringsCount ?? null);
-  const mergedMuniOfferingsCount  = incomingSlots.has('munioffers')  ? muniOfferingsCount  : (priorMeta.muniOfferingsCount ?? null);
+  const mergedMuniOfferingsCount  = touchesMuniOfferings  ? muniOfferingsCount  : (priorMeta.muniOfferingsCount ?? null);
   const mergedTreasuryNotesCount  = incomingSlots.has('treasuryNotes') ? treasuryNotesCount : (priorMeta.treasuryNotesCount ?? null);
   const mergedAgencyCount         = touchesAgencies ? agencyCount        : (priorMeta.agencyCount ?? null);
   const mergedAgencyFileDate      = touchesAgencies ? agencyFileDate     : (priorMeta.agencyFileDate ?? null);

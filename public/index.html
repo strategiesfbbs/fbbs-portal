@@ -1667,6 +1667,28 @@
           </div>
         </div>
 
+        <div class="upload-card">
+          <div class="upload-card-head">
+            <span>Baird Syndicate Munis</span>
+            <span class="ft">.XLSX</span>
+          </div>
+          <label class="drop-zone" data-slot="bairdSyndicate">
+            <input type="file" accept=".xlsx,.xlsm,.xls" hidden>
+            <div class="drop-icon-sm">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
+                <path d="M9 12V3M5 7l4-4 4 4"/>
+                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+              </svg>
+            </div>
+            <h5 data-default="Drop Syndicate Workbook">Drop Syndicate Workbook</h5>
+            <p data-default="Baird grid workbook">Baird grid workbook</p>
+          </label>
+          <div class="upload-status" id="status-bairdSyndicate">
+            <span>Accepts: .xlsx, .xlsm, .xls</span>
+            <span class="pending">Optional</span>
+          </div>
+        </div>
+
         </div>
       </section>
 
@@ -2218,6 +2240,13 @@
           <option value="unrated">Unrated</option>
         </select>
       </label>
+      <label class="ef-field ef-check-field">
+        <span>Source</span>
+        <label class="mini-toggle">
+          <input type="checkbox" id="mf-showBaird" checked>
+          <span>Show Baird Syndicate</span>
+        </label>
+      </label>
       <div class="ef-actions">
         <button type="button" class="small-btn" id="mf-reset">Reset</button>
         <button type="button" class="small-btn" id="mf-export">Export CSV</button>
@@ -2229,6 +2258,7 @@
         <thead>
           <tr>
             <th data-sort="section" style="width:90px">Section</th>
+            <th data-sort="source" style="width:90px">Source</th>
             <th style="width:110px">Ratings</th>
             <th data-sort="quantity" style="width:80px;text-align:right">Qnty</th>
             <th data-sort="issuerState" style="width:55px">ST</th>
@@ -2247,7 +2277,7 @@
           </tr>
         </thead>
         <tbody id="muniExplorerBody">
-          <tr><td colspan="16" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
+          <tr><td colspan="17" style="text-align:center;padding:40px;color:var(--text3)">Loading offerings&hellip;</td></tr>
         </tbody>
       </table>
     </div>

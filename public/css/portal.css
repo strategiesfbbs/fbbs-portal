@@ -3492,7 +3492,7 @@ summary:focus-visible,
 }
 
 .muni-filters {
-  grid-template-columns: 1.4fr 1fr 0.7fr 0.8fr 0.8fr 0.9fr 0.9fr auto;
+  grid-template-columns: 1.4fr 1fr 0.7fr 0.8fr 0.8fr 0.9fr 0.9fr 1fr auto;
 }
 .muni-filters .ef-actions {
   grid-column: -2 / -1;
@@ -3557,6 +3557,43 @@ summary:focus-visible,
 .section-taxable {
   background: rgba(224,106,106,0.13);
   color: #f1a984;
+}
+.ef-check-field {
+  justify-content: end;
+}
+.mini-toggle {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 700;
+}
+.mini-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--tea-green);
+}
+.source-pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.source-fbbs {
+  background: rgba(184,206,190,0.14);
+  color: var(--tea-green);
+  border: 1px solid rgba(184,206,190,0.28);
+}
+.source-baird {
+  background: rgba(217,154,58,0.16);
+  color: #f0c66f;
+  border: 1px solid rgba(217,154,58,0.34);
 }
 .credit-chip {
   display: inline-block;

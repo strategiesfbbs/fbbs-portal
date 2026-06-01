@@ -10,9 +10,10 @@ const XLSX = require('../server/xlsx');
 const { parseCdOffersText, parseCdOffersWorkbook } = require('../server/cd-offers-parser');
 const { parseBrokeredCdRateSheetText } = require('../server/brokered-cd-parser');
 const { parseMuniOffersText } = require('../server/muni-offers-parser');
+const { parseBairdSyndicateWorkbook, looksLikeBairdSyndicateWorkbook } = require('../server/baird-syndicate-parser');
 const { parseEconomicUpdateText } = require('../server/economic-update-parser');
 const { parseMmdCurveText } = require('../server/mmd-parser');
-const { parseTreasuryNotesWorkbook } = require('../server/treasury-notes-parser');
+const { parseTreasuryNotesWorkbook, looksLikeTreasuryWorkbook } = require('../server/treasury-notes-parser');
 const { parseAgenciesFiles } = require('../server/agencies-parser');
 const { parseCorporatesFiles } = require('../server/corporates-parser');
 const {
@@ -123,6 +124,8 @@ function assertClassification() {
   assert.strictEqual(classifyFile('20260424_CD_Offers.xlsx'), 'cdoffers');
   assert.strictEqual(classifyFile('new issue cds - cost - 5.8.26.xlsx'), 'cdoffers');
   assert.strictEqual(classifyFile('20260424_FBBS_Offerings.pdf'), 'munioffers');
+  assert.strictEqual(classifyFile('grid1_twjtolp5.xlsx'), 'agenciesBullets');
+  assert.strictEqual(classifyFile('Baird Syndicate Munis.xlsx'), 'bairdSyndicate');
   assert.strictEqual(classifyFile('bullets 04.24.26.xlsx'), 'agenciesBullets');
   assert.strictEqual(classifyFile('callables 04.24.26.xlsx'), 'agenciesCallables');
   assert.strictEqual(classifyFile('corporates 04.24.26.xlsx'), 'corporates');
@@ -266,6 +269,45 @@ async function assertMuniParser() {
   assert(wrappedTaxable);
   assert.strictEqual(wrappedTaxable.issuerName, 'NORFOLK VA ETM - 100% SLUGS');
   assert.strictEqual(wrappedTaxable.spread, '+24/7YR');
+
+  const taxableVariants = parseMuniOffersText([
+    '6/1/2026',
+    'TAXABLE MUNIS',
+    'A2 A (POS) 1230 KS WYANDOTTE CNTY/KANSAS CITY KS UNIG GOVT UTILITY SYSTEM REV 2.061 9/1/2030 +10/OLD 5YR 9/1/2026 982674NK5',
+    'NR 805 MA MASSACHUSETTS ST SCH BLDG AUTH ETM.. CASH & OTHER COLLATERAL REV 2.400 2/15/2036 2/15/2031 +30/10YR T 8/15/2026 576000H22 ETM'
+  ].join('\n'));
+  assert.strictEqual(taxableVariants.warnings.length, 0);
+  assert.strictEqual(taxableVariants.offerings.length, 2);
+  assert.strictEqual(taxableVariants.offerings[0].spread, '+10/OLD 5YR');
+  assert.strictEqual(taxableVariants.offerings[0].settle, null);
+  assert.strictEqual(taxableVariants.offerings[1].callDate, '2031-02-15');
+  assert.strictEqual(taxableVariants.offerings[1].spread, '+30/10YR T');
+  assert.strictEqual(taxableVariants.offerings[1].creditEnhancement, 'ETM');
+}
+
+function assertBairdSyndicateParser() {
+  const sheet = XLSX.utils.aoa_to_sheet([
+    ['Security','St','Issuer','Cpn','Mty','Nxt Call','A Sz','A YTC','A YTM','A Px','Moody','S&P','BQ','FED\nTAX','TOTAL\nCUTS','COMM'],
+    ['848576WP5','IA','SPIRIT LAKE IA','5.000','6/1/2030','','5','2.930','2.930','107.687','','AA-','Y','N','-10','$3.75'],
+    ['020213MU5','MI','ALMA MI PUBLIC SCHS','4.125','5/1/2043','5/1/2036','80','4.250','4.250','98.500','','AA','N','N','-10','$12.50']
+  ]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Worksheet');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+  const parsed = parseBairdSyndicateWorkbook(buffer);
+
+  assert.strictEqual(parsed.warnings.length, 0);
+  assert.strictEqual(parsed.offerings.length, 2);
+  assert.strictEqual(parsed.offerings[0].source, 'Baird Syndicate');
+  assert.strictEqual(parsed.offerings[0].isSyndicate, true);
+  assert.strictEqual(parsed.offerings[0].section, 'BQ');
+  assert.strictEqual(parsed.offerings[0].cusip, '848576WP5');
+  assert.strictEqual(parsed.offerings[0].maturity, '2030-06-01');
+  assert.strictEqual(parsed.offerings[0].ytw, 2.93);
+  assert.strictEqual(parsed.offerings[1].section, 'Municipals');
+  assert.strictEqual(parsed.offerings[1].callDate, '2036-05-01');
+  assert.strictEqual(parsed.offerings[1].bairdCommission, '$12.50');
+  assert.strictEqual(looksLikeBairdSyndicateWorkbook(buffer), true);
 }
 
 async function assertEconomicUpdateParser() {
@@ -309,6 +351,7 @@ function assertTreasuryNotesParser() {
   const rows = [
     ['CUSIP(s)', 'Cpn(s)', 'Maturity(s)', 'Ask Amt', 'NET OFFER COST', 'NET OFFER YTM'],
     ['912828U24', 2, '11/15/2026', 5000, 99.20292663574219, 3.562],
+    ['91282CCP4', 0.625, '07/31/2026', 5000, 99.532, 3.507],
     ['91282CJK8', 4.625, '11/15/2026', 5000, 100.53955078125, 3.566]
   ];
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Worksheet');
@@ -316,8 +359,9 @@ function assertTreasuryNotesParser() {
 
   const parsed = parseTreasuryNotesWorkbook(buffer, { filename: 'TSY NOTE OFFERS 5.7.26.xlsx' });
   assert.strictEqual(parsed.asOfDate, '2026-05-07');
-  assert.strictEqual(parsed.notes.length, 2);
-  assert.strictEqual(parsed.sources[0].rowCount, 2);
+  assert.strictEqual(parsed.notes.length, 3);
+  assert.strictEqual(parsed.sources[0].rowCount, 3);
+  assert.strictEqual(parsed.notes[1].coupon, 0.625);
   assert.deepStrictEqual(parsed.notes[0], {
     description: 'Treasury Note 2.000% due 2026-11-15',
     cusip: '912828U24',
@@ -340,6 +384,60 @@ function assertTreasuryNotesParser() {
       'NET OFFER YTM': 3.562
     }
   });
+
+  const genericNameParsed = parseTreasuryNotesWorkbook(workbookBuffer([
+    ['Name', 'Cpn', 'Mty', 'A Px', 'A YTM', 'Settle', 'CUSIP', 'Cpn Freq'],
+    ['US TREASURY N/B', 0.625, '7/31/2026', 99.532, 3.507, '06/02/26', '91282CCP4', 2]
+  ]), { filename: 'grid1_q0b0wejm.xlsx' });
+  assert.strictEqual(genericNameParsed.notes[0].description, 'Treasury Note 0.625% due 2026-07-31');
+}
+
+function workbookBuffer(rows) {
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), 'Worksheet');
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+}
+
+// The desk's export tool reuses generic "grid1_<hash>.xlsx" names for WIRP, Treasury,
+// and Baird Syndicate reports, so the filename can't disambiguate them. These detectors
+// drive the folder-drop content fallback (sniffWorkbookSlot) and must be mutually
+// exclusive on real-world layouts.
+function assertWorkbookContentSniffing() {
+  // Treasury notes in the Bloomberg "ask" export layout (what arrives as grid1_*.xlsx
+  // after the trader-side format change) — different columns than the NET OFFER sheet,
+  // but unmistakably Treasuries by description + 912-prefixed CUSIPs.
+  const treasury = workbookBuffer([
+    ['Name', 'Cpn', 'Mty', 'A Px', 'A YTM', 'Settle', 'CUSIP', 'Cpn Freq'],
+    ['US TREASURY N/B', 4.5, '7/15/2026', 100.121, 3.415, '06/02/26', '91282CHM6', 2],
+    ['US TREASURY N/B', 0.625, '7/31/2026', 99.532, 3.507, '06/02/26', '91282CCP4', 2],
+    ['US TREASURY N/B', 1.875, '7/31/2026', 99.735, 3.488, '06/02/26', '912828Y95', 2],
+    ['US TREASURY N/B', 4.375, '8/15/2026', 100.25, 3.42, '06/02/26', '91282CHX2', 2]
+  ]);
+  assert.strictEqual(looksLikeTreasuryWorkbook(treasury), true);
+  assert.strictEqual(looksLikeBairdSyndicateWorkbook(treasury), false);
+
+  // Baird Syndicate munis — same generic naming, but a Security/St/Issuer muni layout.
+  const baird = workbookBuffer([
+    ['Security', 'St', 'Issuer', 'Cpn', 'Mty', 'Nxt Call', 'A Sz', 'A YTC', 'A YTM', 'A Px', 'Moody', 'S&P', 'BQ', 'FED\nTAX', 'TOTAL\nCUTS', 'COMM'],
+    ['848576WP5', 'IA', 'SPIRIT LAKE IA', '5.000', '6/1/2030', '', '5', '2.930', '2.930', '107.687', '', 'AA-', 'Y', 'N', '-10', '$3.75'],
+    ['020213MU5', 'MI', 'ALMA MI PUBLIC SCHS', '4.125', '5/1/2043', '5/1/2036', '80', '4.250', '4.250', '98.500', '', 'AA', 'N', 'N', '-10', '$12.50'],
+    ['64966QCH7', 'NY', 'NEW YORK NY', '4.000', '8/1/2034', '', '25', '3.510', '3.510', '103.250', '', 'AA', 'Y', 'N', '-10', '$5.00']
+  ]);
+  assert.strictEqual(looksLikeBairdSyndicateWorkbook(baird), true);
+  assert.strictEqual(looksLikeTreasuryWorkbook(baird), false);
+
+  // Genuine WIRP / Fed Funds futures export — no bond columns at all. Must match
+  // neither detector so it stays a reference (preserving the grid1_nnepvdfk behavior).
+  const wirp = workbookBuffer([
+    ['Pricing Date', '2026-05-12'],
+    ['Region: United States', 'Instrument: Fed Funds Futures'],
+    ['Target Rate', 3.75],
+    ['Meeting', 'Implied Rate', 'Move'],
+    ['6/18/2026', 3.62, -0.13],
+    ['7/30/2026', 3.48, -0.27]
+  ]);
+  assert.strictEqual(looksLikeTreasuryWorkbook(wirp), false);
+  assert.strictEqual(looksLikeBairdSyndicateWorkbook(wirp), false);
 }
 
 function assertPackageReaderUsesSlotMetadata() {
@@ -1289,10 +1387,12 @@ function assertReferenceIntakeParsers() {
   assertCdWorkbookParser();
   await assertBrokeredCdParser();
   await assertMuniParser();
+  assertBairdSyndicateParser();
   await assertEconomicUpdateParser();
   assertMmdParser();
   assertReferenceIntakeParsers();
   assertTreasuryNotesParser();
+  assertWorkbookContentSniffing();
   assertAgenciesParser();
   assertCorporatesParser();
   assertPackageReaderUsesSlotMetadata();

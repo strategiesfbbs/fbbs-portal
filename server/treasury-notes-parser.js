@@ -79,7 +79,8 @@ function parseRows(rows, headers, map, sheetName, warnings) {
     const cusip = cleanString(get('cusip')).toUpperCase();
     const maturity = toIsoDate(get('maturity'));
     const coupon = toPercentNumber(get('coupon'));
-    const description = cleanString(get('description')) || inferDescription(row) || buildDescription(coupon, maturity);
+    const rawDescription = cleanString(get('description')) || inferDescription(row);
+    const description = normalizeTreasuryDescription(rawDescription, coupon, maturity);
     const yieldValue = toPercentNumber(get('yield'));
     const price = toNumber(get('price'));
     const spread = toNumber(get('spread'));
@@ -183,6 +184,17 @@ function buildDescription(coupon, maturity) {
   return parts.join(' ');
 }
 
+function isGenericTreasuryDescription(value) {
+  return /^(?:US\s+)?TREASURY\s+(?:N\/B|NOTE|NOTES|BOND|BONDS|BILL|BILLS|T-BILL|T-NOTE)$/i.test(cleanString(value));
+}
+
+function normalizeTreasuryDescription(description, coupon, maturity) {
+  if (!description || isGenericTreasuryDescription(description)) {
+    return buildDescription(coupon, maturity);
+  }
+  return description;
+}
+
 function normalizeCell(value) {
   if (value == null) return null;
   if (value instanceof Date && !isNaN(value)) return toIsoDate(value);
@@ -227,8 +239,7 @@ function toNumber(value) {
 function toPercentNumber(value) {
   const n = toNumber(value);
   if (n == null) return null;
-  const normalized = n > 0 && n <= 1 ? n * 100 : n;
-  return Math.round(normalized * 1000) / 1000;
+  return Math.round(n * 1000) / 1000;
 }
 
 function parseQuantity(value) {
@@ -268,4 +279,25 @@ function sniffDateFromFilename(filename) {
   return null;
 }
 
-module.exports = { parseTreasuryNotesWorkbook };
+// Content-based detector for the daily folder drop. Some desk exports arrive with a
+// generic name (e.g. "grid1_<hash>.xlsx") that the filename classifier routes to WIRP,
+// so we peek at the parsed rows instead: a Treasury Notes sheet is dominated by rows
+// whose description mentions "Treasury" or whose CUSIP carries the US Treasury "912"
+// prefix. Muni (Baird Syndicate) and WIRP/Fed-Funds exports match neither.
+function looksLikeTreasuryWorkbook(buffer) {
+  let parsed;
+  try {
+    parsed = parseTreasuryNotesWorkbook(buffer, {});
+  } catch (err) {
+    return false;
+  }
+  const notes = parsed.notes || [];
+  if (notes.length < 3) return false;
+  const treasuryLike = notes.filter(note =>
+    /treasur/i.test(String(note.description || '')) ||
+    /^912[0-9A-Za-z]/.test(String(note.cusip || ''))
+  ).length;
+  return treasuryLike >= Math.ceil(notes.length * 0.6);
+}
+
+module.exports = { parseTreasuryNotesWorkbook, looksLikeTreasuryWorkbook };
