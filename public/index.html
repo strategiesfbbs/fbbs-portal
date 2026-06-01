@@ -621,72 +621,13 @@
   <div class="container">
     <section class="reports-v2" id="reportsApp" aria-label="Reports workspace"></section>
 
-    <section class="reports-shell reports-legacy-shell" id="reportsLegacyShell">
-      <div class="reports-shell-head">
-        <div>
-          <h3>Report Builder</h3>
-          <p>Select a report type to stage the inputs. Peer and portfolio exports use the imported bank, averaged-series, and bond-accounting files.</p>
-        </div>
-        <button type="button" class="small-btn" id="reportsGenerateBtn" disabled>Generate</button>
-      </div>
-
-      <div class="reports-grid" aria-label="Available report templates">
-        <article class="report-card" id="reportsPeerAnalysisCard">
-          <span class="report-card-kicker">SNL + Averaged Series</span>
-          <h4>Bank Peer Analysis</h4>
-          <p>Compare a selected bank against peer averages for liquidity, securities, profitability, capital, and asset quality.</p>
-          <div class="report-card-foot">
-            <span id="reportsPeerAnalysisCardStatus">Import peer averages</span>
-            <button type="button" class="text-btn" id="reportsPeerAnalysisStageBtn">Stage</button>
-          </div>
-        </article>
-
-        <article class="report-card" id="reportsBondAccountingCard">
-          <span class="report-card-kicker">Bond Accounting</span>
-          <h4>Portfolio Peer Review</h4>
-          <p>Blend matched portfolio reports with call-report context to review yield, mix, duration, unrealized loss, and concentrations.</p>
-          <div class="report-card-foot">
-            <span id="reportsBondAccountingCardStatus">Import portfolio files</span>
-            <button type="button" class="text-btn" id="reportsBondAccountingStageBtn" disabled>Stage</button>
-          </div>
-        </article>
-
-        <article class="report-card" id="reportsOpportunityCard">
-          <span class="report-card-kicker">Sales Strategy</span>
-          <h4>Opportunity Report</h4>
-          <p>Surface banks with peer gaps that suggest funding, liquidity, bond swap, muni, or CECL conversations.</p>
-          <div class="report-card-foot">
-            <span id="reportsOpportunityCardStatus">Needs peer averages</span>
-            <button type="button" class="text-btn" id="reportsOpportunityStageBtn" disabled>Run</button>
-          </div>
-        </article>
-
-        <article class="report-card">
-          <span class="report-card-kicker">Coverage</span>
-          <h4>Coverage Book</h4>
-          <p>Summarize saved banks, statuses, notes, strategy requests, latest call-report period, and report availability.</p>
-          <div class="report-card-foot">
-            <span>Uses coverage workspace</span>
-            <button type="button" class="text-btn" disabled>Stage</button>
-          </div>
-        </article>
-      </div>
-
-      <aside class="reports-readiness">
-        <div>
-          <strong>Ready now</strong>
-          <span>Q1 SNL tear sheet import and bank search data.</span>
-        </div>
-        <div>
-          <strong>Next import</strong>
-          <span id="reportsAveragedSeriesStatus">Averaged-series peer workbook not imported yet.</span>
-        </div>
-        <div>
-          <strong>Later</strong>
-          <span id="reportsBondAccountingStatus">Bond accounting portfolios have not been imported yet.</span>
-        </div>
-      </aside>
-
+    <!-- Hidden panel reservoir. The Reports v2 workspace (#reportsApp) is the only
+         reachable Reports UI; it mounts these functional import/builder panels into
+         its builder and data views on demand (mountReportPanel / parkReportPanels in
+         portal.js). The old "Report Builder" cards grid + readiness aside that used to
+         live here duplicated the v2 workspace and were only visible via an unreachable
+         ?legacy=1 URL, so they were retired during the v2/legacy consolidation. -->
+    <section class="reports-shell reports-legacy-shell" id="reportsLegacyShell" hidden>
       <section class="reports-import-panel" id="averagedSeriesImportPanel">
         <div class="reports-import-head">
           <div>

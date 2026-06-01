@@ -3996,14 +3996,7 @@
     const status = document.getElementById('bankImportStatus');
     const accountStatus = document.getElementById('bankStatusImportStatus');
     const averagedSeriesStatus = document.getElementById('averagedSeriesImportStatus');
-    const reportsAveragedSeriesStatus = document.getElementById('reportsAveragedSeriesStatus');
     const reportsAveragedSeriesImportStatus = document.getElementById('reportsAveragedSeriesImportStatus');
-    const reportsPeerAnalysisCard = document.getElementById('reportsPeerAnalysisCard');
-    const reportsPeerAnalysisCardStatus = document.getElementById('reportsPeerAnalysisCardStatus');
-    const reportsBondAccountingStatus = document.getElementById('reportsBondAccountingStatus');
-    const reportsBondAccountingCardStatus = document.getElementById('reportsBondAccountingCardStatus');
-    const reportsBondAccountingCard = document.getElementById('reportsBondAccountingCard');
-    const reportsBondAccountingStageBtn = document.getElementById('reportsBondAccountingStageBtn');
     try {
       const res = await fetch('/api/banks/status', { cache: 'no-store' });
       bankDataStatus = await readBankJson(res);
@@ -4042,46 +4035,11 @@
       const averagedDataset = averagedMeta.dataset || {};
       const text = `${averagedImportMeta.sourceFile || 'Averaged-series workbook'} imported ${formatImportedDate(averagedImportMeta.importedAt)} · latest ${averagedImportMeta.latestPeriod || '—'} · ${formatNumber(averagedDataset.metricCount || averagedImportMeta.metricCount || 0)} metrics · ${formatNumber(averagedDataset.seriesRowCount || averagedImportMeta.seriesRowCount || 0)} peer rows`;
       if (averagedSeriesStatus) averagedSeriesStatus.textContent = text;
-      if (reportsAveragedSeriesStatus) reportsAveragedSeriesStatus.textContent = text;
       if (reportsAveragedSeriesImportStatus) reportsAveragedSeriesImportStatus.textContent = text;
-      if (reportsPeerAnalysisCard) reportsPeerAnalysisCard.classList.add('report-card-ready');
-      if (reportsPeerAnalysisCardStatus) reportsPeerAnalysisCardStatus.textContent = `${formatNumber(averagedDataset.metricCount || averagedImportMeta.metricCount || 0)} metrics ready`;
-      const oppoCard = document.getElementById('reportsOpportunityCard');
-      const oppoBtn = document.getElementById('reportsOpportunityStageBtn');
-      const oppoStatus = document.getElementById('reportsOpportunityCardStatus');
-      if (oppoCard) oppoCard.classList.add('report-card-ready');
-      if (oppoBtn) oppoBtn.disabled = false;
-      if (oppoStatus) oppoStatus.textContent = 'Ready to scan';
     } else {
       const text = averagedMeta.error || 'Averaged-series peer data has not been imported yet.';
       if (averagedSeriesStatus) averagedSeriesStatus.textContent = text;
-      if (reportsAveragedSeriesStatus) reportsAveragedSeriesStatus.textContent = text;
       if (reportsAveragedSeriesImportStatus) reportsAveragedSeriesImportStatus.textContent = text;
-      if (reportsPeerAnalysisCard) reportsPeerAnalysisCard.classList.remove('report-card-ready');
-      if (reportsPeerAnalysisCardStatus) reportsPeerAnalysisCardStatus.textContent = 'Import peer averages';
-      const oppoCard = document.getElementById('reportsOpportunityCard');
-      const oppoBtn = document.getElementById('reportsOpportunityStageBtn');
-      const oppoStatus = document.getElementById('reportsOpportunityCardStatus');
-      if (oppoCard) oppoCard.classList.remove('report-card-ready');
-      if (oppoBtn) oppoBtn.disabled = true;
-      if (oppoStatus) oppoStatus.textContent = 'Needs peer averages';
-    }
-
-    const bondMeta = bankDataStatus && bankDataStatus.bondAccounting ? bankDataStatus.bondAccounting : {};
-    if (bondMeta.available) {
-      const counts = bondAccountingReviewCounts(bondMeta);
-      const text = `${formatNumber(counts.matched)} matched portfolio files · ${formatNumber(counts.pCodeOnly)} P-code only · ${formatNumber(counts.unmatchedPCode)} unmatched P-code · imported ${formatImportedDate(bondMeta.importedAt)}`;
-      if (reportsBondAccountingStatus) reportsBondAccountingStatus.textContent = text;
-      if (reportsBondAccountingCardStatus) reportsBondAccountingCardStatus.textContent = `${formatNumber(bondMeta.matchedCount || 0)} matched files`;
-      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.add('report-card-ready');
-      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.toggle('report-card-warning', Boolean(counts.needsReview));
-      if (reportsBondAccountingStageBtn) reportsBondAccountingStageBtn.disabled = false;
-    } else {
-      const text = bondMeta.error || 'Bond accounting portfolios have not been imported yet.';
-      if (reportsBondAccountingStatus) reportsBondAccountingStatus.textContent = text;
-      if (reportsBondAccountingCardStatus) reportsBondAccountingCardStatus.textContent = 'Import portfolio files';
-      if (reportsBondAccountingCard) reportsBondAccountingCard.classList.remove('report-card-ready', 'report-card-warning');
-      if (reportsBondAccountingStageBtn) reportsBondAccountingStageBtn.disabled = true;
     }
 
     if (typeof renderHomeTileAccounts === 'function') renderHomeTileAccounts();
@@ -6451,8 +6409,6 @@
     const peerSearchBtn = document.getElementById('peerAnalysisBankSearchBtn');
     const peerExport = document.getElementById('peerAnalysisExportBtn');
     const importBtn = document.getElementById('bondAccountingImportBtn');
-    const peerStageBtn = document.getElementById('reportsPeerAnalysisStageBtn');
-    const stageBtn = document.getElementById('reportsBondAccountingStageBtn');
     if (averagedInput) {
       averagedInput.addEventListener('change', () => {
         const file = averagedInput.files && averagedInput.files[0];
@@ -6545,32 +6501,12 @@
       searchPeerAnalysisBanks(peerSearch ? peerSearch.value : '', { openFirst: true });
     });
     if (peerExport) peerExport.addEventListener('click', exportPeerAnalysisCsv);
-    if (peerStageBtn) peerStageBtn.addEventListener('click', () => {
-      const hasPeerData = peerAnalysisState.peerData || (bankDataStatus && bankDataStatus.averagedSeries && bankDataStatus.averagedSeries.available);
-      const target = hasPeerData ? 'peerAnalysisBuilderPanel' : 'averagedSeriesImportPanel';
-      document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-    if (stageBtn) stageBtn.addEventListener('click', () => {
-      document.getElementById('bondAccountingImportPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
 
-    const oppoStageBtn = document.getElementById('reportsOpportunityStageBtn');
     const oppoRunBtn = document.getElementById('opportunityRunBtn');
     const oppoExportBtn = document.getElementById('opportunityExportBtn');
     const oppoMinFlags = document.getElementById('opportunityMinFlags');
     const oppoStateFilter = document.getElementById('opportunityStateFilter');
     const oppoSavedOnly = document.getElementById('opportunitySavedOnly');
-    if (oppoStageBtn) oppoStageBtn.addEventListener('click', () => {
-      const panel = document.getElementById('opportunityReportPanel');
-      if (panel) {
-        panel.hidden = false;
-        panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-      // Auto-run if no scan yet — the card button is the obvious "Run" affordance.
-      if (!opportunityState.rows.length && !opportunityState.loading) {
-        runOpportunityScan();
-      }
-    });
     if (oppoRunBtn) oppoRunBtn.addEventListener('click', runOpportunityScan);
     if (oppoExportBtn) oppoExportBtn.addEventListener('click', exportOpportunityReportCsv);
     if (oppoMinFlags) oppoMinFlags.addEventListener('change', renderOpportunityResults);
@@ -7523,17 +7459,6 @@
     });
   }
 
-  function restoreLegacyReportPanels() {
-    const legacy = document.getElementById('reportsLegacyShell');
-    const parking = document.getElementById('reportsPanelParking');
-    if (!legacy || !parking) return;
-    ['averagedSeriesImportPanel', 'peerAnalysisBuilderPanel', 'opportunityReportPanel', 'bondAccountingImportPanel'].forEach(id => {
-      const panel = document.getElementById(id);
-      if (panel && panel.parentElement !== legacy) legacy.insertBefore(panel, parking);
-      if (panel) panel.hidden = id === 'opportunityReportPanel';
-    });
-  }
-
   function mountReportPanel(id, mountId) {
     const mount = document.getElementById(mountId);
     const panel = document.getElementById(id);
@@ -8328,17 +8253,8 @@
 
   function renderReportsWorkspace() {
     const app = document.getElementById('reportsApp');
-    const legacy = document.getElementById('reportsLegacyShell');
-    if (!app || !legacy) return;
+    if (!app) return;
     const route = reportsRoute();
-    const legacyMode = route.params.get('legacy') === '1';
-    if (legacyMode) {
-      app.hidden = true;
-      legacy.hidden = false;
-      restoreLegacyReportPanels();
-      return;
-    }
-    legacy.hidden = true;
     app.hidden = false;
     parkReportPanels();
     reportsSelectedType = '';
