@@ -841,6 +841,84 @@
       .slice(0, 80) || 'bank';
   }
 
+  // Unified export entry point for the Reports Workspace. CSV reuses the shared
+  // downloadCsv()/csvEscape() helpers via each report's existing exporter;
+  // portfolio-peer also supports a server-rendered Print/PDF handout.
+  function exportReport(type, format) {
+    if (format === 'pdf') {
+      if (type === 'portfolio-peer') {
+        const id = portfolioReviewState.selectedBankId;
+        const review = portfolioReviewState.review;
+        if (!id || !review || review.available === false) {
+          return showToast('Run a portfolio review first', true);
+        }
+        window.open('/api/portfolio-review/render?bankId=' + encodeURIComponent(id), '_blank', 'noopener');
+        return;
+      }
+      return showToast('Print / PDF is available for Portfolio Review in this phase', true);
+    }
+    // CSV — delegate to each report type's exporter.
+    if (type === 'custom-bank') return exportCustomBankReportCsv();
+    if (type === 'bank-peer') return exportPeerAnalysisCsv();
+    if (type === 'opportunity') return exportOpportunityReportCsv();
+    if (type === 'portfolio-peer') return exportPortfolioReviewCsv();
+    return showToast('CSV export is not available for this report type yet', true);
+  }
+
+  // Portfolio Review CSV: a summary block followed by the full holdings table.
+  // Numbers are emitted raw (not $/%-formatted) so Excel keeps them numeric.
+  function exportPortfolioReviewCsv() {
+    const review = portfolioReviewState.review;
+    if (!review || review.available === false) {
+      return showToast('Run a portfolio review first', true);
+    }
+    const s = review.summary || {};
+    const rows = [
+      ['FBBS Portfolio Review'],
+      ['Bank', review.bankName || ''],
+      ['Location', [review.city, review.state].filter(Boolean).join(', ')],
+      ['Cert', review.certNumber || ''],
+      ['Portfolio Date', review.reportDate || ''],
+      ['Inventory Date', review.inventoryDate || ''],
+      ['Source File', review.sourceFile || ''],
+      ['Tax Treatment', `${review.isSubchapterS ? 'Sub-S' : 'C-corp'} (${review.taxRate}%)`],
+      ['Positions', s.positions],
+      ['Par', s.par],
+      ['Book Value', s.bookValue],
+      ['Market Value', s.marketValue],
+      ['Unrealized G/L', s.gainLoss],
+      ['Unrealized G/L %', s.gainLossPct],
+      ['Book Yield', s.bookYield],
+      ['Market Yield', s.marketYield],
+      ['Weighted Coupon', s.weightedCoupon],
+      ['Weighted Avg Life', s.weightedAverageLife],
+      ['Effective Duration', s.effectiveDuration],
+      ['Yield on Securities', s.yieldOnSecurities],
+      ['NIM', s.netInterestMargin],
+      ['Cost of Funds', s.costOfFunds],
+      [],
+      ['Holdings'],
+      ['Sector', 'CUSIP', 'Description', 'Coupon', 'Maturity', 'Next Call', 'Classification',
+        'Par', 'Book Value', 'Market Value', 'Gain/Loss', 'Gain/Loss %', 'Book Price', 'Market Price',
+        'Book Yield', 'Market Yield', 'Yield Gap', 'Avg Life', 'Eff Duration', 'OAS (bp)', 'Callable']
+    ];
+    (review.holdings || []).forEach(h => rows.push([
+      h.sector, h.cusip, h.description, h.coupon, h.maturity, h.nextCall, h.classification,
+      h.par, h.bookValue, h.marketValue, h.gainLoss, h.gainLossPct, h.bookPrice, h.marketPrice,
+      h.bookYield, h.marketYield, h.yieldGap, h.averageLife, h.effectiveDuration, h.oasBp,
+      h.callable ? 'Yes' : 'No'
+    ]));
+    if ((review.sectors || []).length) {
+      rows.push([], ['Sector Mix'], ['Sector', 'Count', 'Par', 'Market Value', '% of Market']);
+      review.sectors.forEach(se => rows.push([
+        se.sector || se.label, se.count, se.par, se.marketValue,
+        se.pctOfMarket != null ? se.pctOfMarket : se.weight
+      ]));
+    }
+    const stamp = review.reportDate || 'current';
+    downloadCsv(`portfolio_review_${slugifyFilename(review.bankName)}_${stamp}.csv`, rows);
+  }
+
   function setText(id, text) {
     const el = document.getElementById(id);
     if (el) el.textContent = text;
@@ -7389,13 +7467,13 @@
               <label><input type="radio" name="reportsOutputFormat" value="view" checked> In-app view</label>
               <label><input type="radio" name="reportsOutputFormat" value="csv"> CSV</label>
               <label title="Coming soon"><input type="radio" name="reportsOutputFormat" value="xlsx" disabled> XLSX</label>
-              <label title="Coming soon"><input type="radio" name="reportsOutputFormat" value="pdf" disabled> PDF</label>
+              <label${type === 'portfolio-peer' ? '' : ' title="Print/PDF is available for Portfolio Review"'}><input type="radio" name="reportsOutputFormat" value="pdf"${type === 'portfolio-peer' ? '' : ' disabled'}> Print / PDF</label>
             </div>
           </section>
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
             <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Available in Phase 1"'}>Save View</button>
-            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Use the report panel export when available"'}>Export CSV</button>
+            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
             <button type="button" class="small-btn secondary" disabled title="Available in Phase 3">Save &amp; Schedule</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
@@ -8498,8 +8576,8 @@
         return;
       }
       const exportBtn = clickTarget.closest('[data-reports-export]');
-      if (exportBtn && exportBtn.dataset.reportsExport === 'custom-bank') {
-        exportCustomBankReportCsv();
+      if (exportBtn) {
+        exportReport(exportBtn.dataset.reportsExport, 'csv');
         return;
       }
       const customSort = clickTarget.closest('[data-custom-bank-sort]');
@@ -8621,6 +8699,8 @@
       return;
     }
     if (type === 'portfolio-peer') {
+      if (outputFormat === 'csv') { exportReport('portfolio-peer', 'csv'); return; }
+      if (outputFormat === 'pdf') { exportReport('portfolio-peer', 'pdf'); return; }
       runPortfolioReview();
       return;
     }

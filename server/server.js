@@ -152,6 +152,7 @@ const swapMath = require('./swap-math');
 const swapStore = require('./swap-store');
 const reportStore = require('./report-store');
 const { renderProposalHtml } = require('./swap-render');
+const { renderPortfolioReviewHtml } = require('./portfolio-review-render');
 const { rotateFileIfNeeded } = require('./log-rotation');
 const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
@@ -6983,6 +6984,25 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/portfolio-review' && req.method === 'GET') {
       return handlePortfolioReview(res, query);
+    }
+
+    // Printable portfolio review (Save-as-PDF handout). Keyed by bankId like the
+    // JSON route above; renders the same buildPortfolioReview payload.
+    if (pathname === '/api/portfolio-review/render' && req.method === 'GET') {
+      const bankId = String(query.get('bankId') || '').trim();
+      if (!bankId) return sendText(res, 400, 'bankId is required');
+      let review;
+      try {
+        review = buildPortfolioReview(bankId, query);
+      } catch (err) {
+        log('error', `Portfolio review render failed for ${bankId}:`, err.message);
+        return sendText(res, 500, 'Could not build portfolio review');
+      }
+      if (!review) return sendText(res, 404, 'Bank not found');
+      if (review.available === false) return sendText(res, 404, review.notice || 'No portfolio available for this bank');
+      const html = renderPortfolioReviewHtml(review, { bankName: review.bankName });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(html);
     }
 
     // ---- Reports Workspace persistence. Register the literal /api/reports and
