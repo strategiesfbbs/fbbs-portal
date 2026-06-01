@@ -13153,3 +13153,58 @@ body {
     grid-template-columns: 44px 1fr 82px;
   }
 }
+
+/* ===== Daily Package QA dashboard ===== */
+.qa-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.qa-meta > div { display: flex; flex-direction: column; gap: 2px; }
+.qa-meta-lbl {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text3);
+  font-weight: 700;
+}
+.qa-meta strong { font-size: 15px; color: var(--text1); font-variant-numeric: tabular-nums; }
+
+.qa-banner {
+  padding: 9px 14px;
+  margin-bottom: 8px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.qa-banner-ok { background: var(--green-bg); color: var(--green); border-color: var(--green); }
+.qa-banner-warn { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+.qa-banner-info { background: var(--bg-light); color: var(--text2); border-color: var(--border); }
+
+.qa-table { margin-top: 6px; }
+.qa-table td { vertical-align: middle; }
+.qa-row-missing { background: rgba(220, 38, 38, 0.06); }
+.qa-row-warn { background: #fffbeb; }
+
+.qa-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.qa-badge.qa-ok { background: var(--green-bg); color: var(--green); }
+.qa-badge.qa-warn { background: #fef3c7; color: #92400e; }
+.qa-badge.qa-missing { background: rgba(220, 38, 38, 0.12); color: var(--danger); }
+.qa-badge.qa-optional { background: var(--bg-light); color: var(--text3); }
+
+.qa-count-lbl { font-size: 11px; color: var(--text3); font-weight: 500; }
+.qa-note { color: var(--text3); font-style: italic; }
+.qa-issue { color: #92400e; font-size: 12px; }

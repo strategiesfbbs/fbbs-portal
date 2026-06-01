@@ -142,6 +142,10 @@
         <span class="nav-icon">&#8593;</span>
         <span class="nav-label">Upload</span>
       </a>
+      <a class="nav-link" data-page="package-qa" href="#package-qa">
+        <span class="nav-icon">&#10003;</span>
+        <span class="nav-label">Package QA</span>
+      </a>
       <a class="nav-link" data-page="admin" href="#admin">
         <span class="nav-icon">&#9881;</span>
         <span class="nav-label">Admin</span>
@@ -2940,6 +2944,32 @@
   </div>
 </div>
 
+<!-- ========== PACKAGE QA PAGE ========== -->
+<div class="page" id="p-package-qa">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Package <strong>QA</strong></h2>
+        <p class="hero-sub">Post-publish slot review &mdash; what&rsquo;s in today&rsquo;s package and whether it looks right</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="packageQaStat">&mdash;</div>
+        <div class="lbl">Slots Filled</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Today&rsquo;s Package</h3>
+      <div class="kicker">Derived from /api/current</div>
+    </div>
+    <div id="packageQaBody">
+      <div style="text-align:center;padding:40px;color:var(--text3)">Loading package&hellip;</div>
+    </div>
+  </div>
+</div>
+
 <!-- FOOTER -->
 <footer class="footer">
   <div class="footer-inner">
@@ -2967,6 +2997,7 @@
 <div class="toast" id="toast" role="status" aria-live="polite">Action completed</div>
 
 <script src="/vendor/plotly-2.27.0.min.js"></script>
+<script src="/js/modules/muni-tax.js?v=2026-06-01a"></script>
 <script src="/js/portal.js?v=reports-delete-2026-05-26"></script>
 <script src="/js/modules/breadcrumbs.js?v=2026-05-28d"></script>
 </body>

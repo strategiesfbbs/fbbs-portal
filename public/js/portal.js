@@ -136,7 +136,7 @@
   const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'views', 'archive', 'upload', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -164,6 +164,7 @@
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
+    { page: 'package-qa', group: 'Operations', label: 'Package QA', description: 'Post-publish review of today\'s package — slot completeness and row counts', aliases: 'package qa quality review slots counts completeness validation check published treasury muni baird agency corporate' },
     { page: 'admin', group: 'Operations', label: 'Admin', description: 'Review the publish audit log', aliases: 'audit log admin history' }
   ];
 
@@ -1403,6 +1404,7 @@
     }
     if (pageName === 'peer-groups') loadPeerGroups();
     if (pageName === 'upload') loadBankStatus();
+    if (pageName === 'package-qa') renderPackageQa();
     if (pageName === 'admin') loadAuditLog();
   }
 
@@ -13687,131 +13689,47 @@
   }
 
   function clampMuniPercent(value, fallback, max = 100) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.max(0, Math.min(max, n));
+    return window.FbbsMuniTax.clampPercent(value, fallback, max);
+  }
+
+  function muniTaxOptions() {
+    return { asOfDate: muniData && muniData.asOfDate };
   }
 
   function muniDisallowancePct(row) {
-    if (!row || row.section === 'Taxable' || !muniTaxSettings.applyTefra) return 0;
-    return row.section === 'BQ'
-      ? clampMuniPercent(muniTaxSettings.bqDisallowance, 0)
-      : clampMuniPercent(muniTaxSettings.generalDisallowance, 0);
+    return window.FbbsMuniTax.disallowancePct(row, muniTaxSettings);
   }
 
   function muniTefraHaircutBps(row) {
-    const cof = clampMuniPercent(muniTaxSettings.costOfFunds, 0, 20);
-    const taxRate = clampMuniPercent(muniTaxSettings.rate, 0, 99.9);
-    const disallowance = muniDisallowancePct(row);
-    if (!cof || !taxRate || !disallowance) return 0;
-    return cof * (disallowance / 100) * taxRate;
+    return window.FbbsMuniTax.tefraHaircutBps(row, muniTaxSettings);
   }
 
   function muniTey(rowOrYield, rate = muniTaxSettings.rate) {
-    const row = typeof rowOrYield === 'object' ? rowOrYield : null;
-    const y = Number(row ? row.ytw : rowOrYield);
-    const r = Number(rate);
-    if (!Number.isFinite(y) || !Number.isFinite(r) || r >= 100) return null;
-    const adjustedYield = y - (row ? muniTefraHaircutBps(row) / 100 : 0);
-    return adjustedYield / (1 - (r / 100));
+    return window.FbbsMuniTax.tey(rowOrYield, muniTaxSettings, rate);
   }
 
   function yearsToMaturity(row) {
-    if (!row || !row.maturity) return null;
-    const settle = parseIsoDate(row.settle) || new Date();
-    const maturity = parseIsoDate(row.maturity);
-    if (!maturity || maturity <= settle) return null;
-    return (maturity - settle) / (365.25 * 24 * 60 * 60 * 1000);
+    return window.FbbsMuniTax.yearsToMaturity(row, muniTaxOptions());
   }
 
   function muniDeMinimis(row) {
-    if (!row || row.price == null || row.section === 'Taxable') return null;
-    const exactYears = yearsToMaturity(row);
-    if (!Number.isFinite(exactYears) || exactYears <= 0) return null;
-    const fullYears = fullYearsToMaturity(row);
-    if (!Number.isFinite(fullYears) || fullYears <= 0) return null;
-    const threshold = 100 - (0.25 * fullYears);
-    const cushion = Number(row.price) - threshold;
-    return {
-      years: exactYears,
-      fullYears,
-      threshold,
-      cushion,
-      isDiscount: Number(row.price) < 100,
-      isDeMinimis: Number(row.price) < threshold
-    };
+    return window.FbbsMuniTax.deMinimis(row, muniTaxOptions());
   }
 
   function fullYearsToMaturity(row) {
-    if (!row || !row.maturity) return null;
-    const settle = parseIsoDate(row.settle) || new Date();
-    const maturity = parseIsoDate(row.maturity);
-    if (!maturity || maturity <= settle) return null;
-    let years = maturity.getFullYear() - settle.getFullYear();
-    const maturityMonthDay = (maturity.getMonth() * 100) + maturity.getDate();
-    const settleMonthDay = (settle.getMonth() * 100) + settle.getDate();
-    if (maturityMonthDay < settleMonthDay) years -= 1;
-    return Math.max(0, years);
+    return window.FbbsMuniTax.fullYearsToMaturity(row, muniTaxOptions());
   }
 
   function solveBondYieldWithRedemption(couponPct, price, endDateStr, settleDateStr, redemptionValue) {
-    const priceNum = Number(price);
-    const coupon = Number(couponPct);
-    const redemption = Number(redemptionValue);
-    if (!Number.isFinite(priceNum) || priceNum <= 0 || !Number.isFinite(coupon) || !Number.isFinite(redemption)) return null;
-
-    const settle = parseIsoDate(settleDateStr) || new Date();
-    const endDate = parseIsoDate(endDateStr);
-    if (!endDate || endDate <= settle) return null;
-
-    const periods = Math.max(1, Math.ceil(monthsBetween(settle, endDate) / 6));
-    const couponPerPeriod = coupon / 2;
-
-    let low = -0.95;
-    let high = 1.5;
-    for (let i = 0; i < 80; i++) {
-      const mid = (low + high) / 2;
-      const rate = mid / 2;
-      let pv = 0;
-      for (let period = 1; period <= periods; period++) {
-        pv += couponPerPeriod / Math.pow(1 + rate, period);
-      }
-      pv += redemption / Math.pow(1 + rate, periods);
-      if (pv > priceNum) low = mid;
-      else high = mid;
-    }
-    return ((low + high) / 2) * 100;
+    return window.FbbsMuniTax.solveYieldWithRedemption(couponPct, price, endDateStr, settleDateStr, redemptionValue, muniTaxOptions());
   }
 
   function muniAfterTaxYield(row) {
-    const deMin = muniDeMinimis(row);
-    if (!row || row.price == null || row.coupon == null || !deMin || !deMin.isDiscount) return null;
-    const discount = Math.max(0, 100 - Number(row.price));
-    const taxRate = (deMin.isDeMinimis ? muniTaxSettings.rate : muniTaxSettings.capitalGainsRate) / 100;
-    const afterTaxRedemption = 100 - (discount * clampMuniPercent(taxRate * 100, 0, 99.9) / 100);
-    const aty = solveBondYieldWithRedemption(row.coupon, row.price, row.maturity, row.settle, afterTaxRedemption);
-    return aty == null ? null : aty;
+    return window.FbbsMuniTax.afterTaxYield(row, muniTaxSettings, muniTaxOptions());
   }
 
   function muniTaxAdjustedYield(row) {
-    if (!row || row.section === 'Taxable') return null;
-    const taxRate = clampMuniPercent(muniTaxSettings.rate, 0, 99.9);
-    const haircutYield = muniTefraHaircutBps(row) / 100;
-    const deMin = muniDeMinimis(row);
-    if (deMin && deMin.isDiscount) {
-      const aty = muniAfterTaxYield(row);
-      if (aty != null) {
-        const tey = (aty - haircutYield) / (1 - (taxRate / 100));
-        return {
-          label: 'TEY',
-          value: tey,
-          secondaryLabel: 'ATY',
-          secondaryValue: aty
-        };
-      }
-    }
-    const tey = muniTey(row);
-    return tey == null ? null : { label: 'TEY', value: tey };
+    return window.FbbsMuniTax.taxAdjustedYield(row, muniTaxSettings, muniTaxOptions());
   }
 
   function muniAudienceLabel() {
@@ -15704,6 +15622,119 @@
   }
 
   // ============ Admin / Audit Log ============
+
+  // Daily Package QA — a read-only post-publish review of the current package:
+  // which of the canonical slots are filled, the parsed row counts, and a few
+  // sanity flags (empty required slot, parsed 0 rows, file date ≠ package date,
+  // stale package). Derived entirely from the published metadata (/api/current);
+  // server-side validation rules can layer on later.
+  const PACKAGE_QA_SLOTS = [
+    { key: 'dashboard', optional: true },
+    { key: 'econ' },
+    { key: 'cd', dateField: 'brokeredCdAsOfDate', count: p => (p.brokeredCdTerms || []).length, countLabel: 'terms' },
+    { key: 'cdoffers', count: p => p.offeringsCount, countLabel: 'offerings' },
+    { key: 'relativeValue', count: p => p.relativeValueRowsCount, countLabel: 'rows' },
+    { key: 'munioffers', count: p => p.muniOfferingsCount, countLabel: 'offerings' },
+    { key: 'bairdSyndicate', optional: true, note: 'folded into Muni Offerings' },
+    { key: 'mmd', count: p => p.mmdCurveCount, countLabel: 'points' },
+    { key: 'treasuryNotes', count: p => p.treasuryNotesCount, countLabel: 'notes' },
+    { key: 'agenciesBullets', count: p => p.agencyCount, countLabel: 'offerings (combined)', dateField: 'agencyFileDate' },
+    { key: 'agenciesCallables', count: p => p.agencyCount, countLabel: 'offerings (combined)', dateField: 'agencyFileDate' },
+    { key: 'corporates', count: p => p.corporatesCount, countLabel: 'offerings', dateField: 'corporatesFileDate' }
+  ];
+
+  function packageQaStatusBadge(status) {
+    if (status === 'ok') return '<span class="qa-badge qa-ok">&#10003; OK</span>';
+    if (status === 'optional') return '<span class="qa-badge qa-optional">&mdash; optional</span>';
+    if (status === 'missing') return '<span class="qa-badge qa-missing">&#10007; missing</span>';
+    return '<span class="qa-badge qa-warn">&#9888; check</span>';
+  }
+
+  async function renderPackageQa() {
+    const body = document.getElementById('packageQaBody');
+    if (!body) return;
+    // Refresh so QA reflects the most recent publish; fall back to cache on error.
+    try {
+      const res = await fetch('/api/current', { cache: 'no-store' });
+      if (res.ok) currentPackage = await res.json();
+    } catch (e) { /* use cached currentPackage */ }
+    const pkg = currentPackage || {};
+    const today = new Date().toISOString().slice(0, 10);
+
+    const rows = PACKAGE_QA_SLOTS.map(slot => {
+      const meta = DOC_TYPES[slot.key] || { label: slot.key, ext: '' };
+      const filename = pkg[slot.key] || '';
+      const filled = !!filename;
+      const count = filled && slot.count ? slot.count(pkg) : null;
+      const fileDate = slot.dateField ? pkg[slot.dateField] : null;
+      const issues = [];
+      let status = 'ok';
+      if (!filled) {
+        status = slot.optional ? 'optional' : 'missing';
+        if (!slot.optional) issues.push('Slot is empty');
+      } else {
+        if (slot.count && (count == null || count === 0)) {
+          status = 'warn';
+          issues.push('Filled but parsed 0 ' + (slot.countLabel || 'rows'));
+        }
+        if (fileDate && pkg.date && fileDate !== pkg.date) {
+          if (status === 'ok') status = 'warn';
+          issues.push('File date ' + fileDate + ' ≠ package date ' + pkg.date);
+        }
+      }
+      return { slot, meta, filename, filled, count, fileDate, status, issues };
+    });
+
+    const required = rows.filter(r => !r.slot.optional);
+    const filledRequired = required.filter(r => r.filled).length;
+    const warnCount = rows.filter(r => r.status === 'warn').length;
+    const missingCount = rows.filter(r => r.status === 'missing').length;
+    setText('packageQaStat', `${filledRequired}/${required.length}`);
+
+    const banners = [];
+    if (!pkg.date) {
+      banners.push({ level: 'warn', text: 'No package has been published yet.' });
+    } else {
+      if (pkg.date < today) {
+        const days = Math.round((Date.parse(today) - Date.parse(pkg.date)) / 86400000);
+        banners.push({ level: 'info', text: `Package is dated ${pkg.date} — ${days} day${days === 1 ? '' : 's'} old.` });
+      }
+      if (missingCount) banners.push({ level: 'warn', text: `${missingCount} required slot${missingCount === 1 ? '' : 's'} empty.` });
+      if (warnCount) banners.push({ level: 'warn', text: `${warnCount} slot${warnCount === 1 ? '' : 's'} with a data-quality flag — see the table.` });
+      if (!missingCount && !warnCount) banners.push({ level: 'ok', text: 'All required slots filled and row counts look sane.' });
+    }
+
+    body.innerHTML = `
+      <div class="qa-meta">
+        <div><span class="qa-meta-lbl">Package date</span><strong>${escapeHtml(pkg.date || '—')}</strong></div>
+        <div><span class="qa-meta-lbl">Published</span><strong>${pkg.publishedAt ? escapeHtml(formatImportedDate(pkg.publishedAt)) : '—'}</strong></div>
+        <div><span class="qa-meta-lbl">Published by</span><strong>${escapeHtml(pkg.publishedBy || '—')}</strong></div>
+      </div>
+      ${banners.map(b => `<div class="qa-banner qa-banner-${b.level}">${escapeHtml(b.text)}</div>`).join('')}
+      <table class="archive-table qa-table">
+        <thead><tr>
+          <th>Slot</th>
+          <th style="width:70px">Type</th>
+          <th style="width:110px">Status</th>
+          <th style="width:150px;text-align:right">Count</th>
+          <th>Source file</th>
+          <th>Flags</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr class="qa-row-${r.status}">
+              <td><strong>${escapeHtml(r.meta.label)}</strong></td>
+              <td>${escapeHtml(r.meta.ext || '')}</td>
+              <td>${packageQaStatusBadge(r.status)}</td>
+              <td style="text-align:right">${r.count != null ? formatNumber(r.count) + (r.slot.countLabel ? ' <span class="qa-count-lbl">' + escapeHtml(r.slot.countLabel) + '</span>' : '') : '<span class="qa-note">—</span>'}</td>
+              <td>${r.filename ? escapeHtml(r.filename) : (r.slot.note ? '<span class="qa-note">' + escapeHtml(r.slot.note) + '</span>' : '<span class="qa-note">—</span>')}</td>
+              <td>${r.issues.length ? '<span class="qa-issue">' + r.issues.map(escapeHtml).join('; ') + '</span>' : ''}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="legend-box"><strong>Note:</strong> Read-only review derived from the published package metadata (<code>/api/current</code>). Counts come from each slot's parsed JSON; optional slots (dashboard, Baird Syndicate) don't count against completeness.</div>
+    `;
+  }
 
   async function loadAuditLog() {
     const body = document.getElementById('adminBody');
