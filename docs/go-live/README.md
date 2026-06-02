@@ -16,6 +16,7 @@ one page of blanks (admin usernames, publisher, ready-time, notify channel, poli
 | [pre-launch-review.md](pre-launch-review.md) | Claude | **Deep code review** — what's solid, 🔴 fix-before-launch, 🟠 conditions, 🟢 backlog |
 | [codex-handoff.md](codex-handoff.md) | **Codex acts** | Ordered engineering worklist from the review (file:line · fix · done-when) |
 | [codex-full-audit-2026-06-02.md](codex-full-audit-2026-06-02.md) | **Codex** | Full follow-up audit, fixes completed, browser smoke results, Salesforce gap list |
+| [sell-more-bonds-flow.md](sell-more-bonds-flow.md) | Claude | Revenue-flow smoke test + Salesforce report gaps + prioritized "make it flow to sell more bonds" roadmap |
 | [decision-sheet.md](decision-sheet.md) | **FBBS fills** | One-page checklist of every open org decision |
 | [launch-day-script.md](launch-day-script.md) | Joint | Minute-by-minute first-morning checklist (= the smoke test) |
 | [role-matrix.md](role-matrix.md) | Claude | 5 roles × capabilities; **Phase 1 mapping (§2.1)**; enforced-vs-policy; gaps |
