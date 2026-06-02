@@ -3,8 +3,8 @@
 > **Status:** Draft · **Last updated:** 2026-06-02
 > The single umbrella document for the internal launch. It joins the two work lanes:
 > **Claude** (product / workflow / docs / roles spec) and **Codex** (auth / security /
-> deployment / tests / smoke). Claude's sections are filled in below; Codex's sections
-> are stubbed with anchors so the engineering findings drop straight in.
+> deployment / tests / smoke). Both lanes' core engineering and docs are now drafted;
+> what remains is the FBBS [decision sheet](decision-sheet.md) and the smoke-test run.
 
 ---
 
@@ -12,15 +12,16 @@
 
 | Area | Owner | Status | Notes |
 |---|---|---|---|
-| Product & workflow docs | Claude | ✅ Drafted | Role matrix, workflow, runbook, training, boundary |
-| Auth / roles hardening | Codex | ⬜ TODO | IIS auth, admin allowlist, role gates |
-| Admin / upload hardening | Codex | ⬜ TODO | Admin-only actions, audit coverage |
-| Deployment readiness | Codex | ⬜ TODO | web.config, env, DATA_DIR, IIS Windows Auth |
-| Smoke test (today's package) | Codex | ⬜ TODO | Full publish→QA→explorers→banks→strategies→reports |
-| Org decisions (the ‹CONFIRM› list) | FBBS | ⬜ TODO | See §6 |
+| Product & workflow docs | Claude | ✅ Drafted | Role matrix, workflow, runbook, training, boundary, launch-day script |
+| Auth / roles hardening | Codex | ✅ Drafted (code shipped) | IIS auth mode, admin allowlist, override lockout — commit [`49d5e64`] |
+| Admin / upload hardening | Codex | ✅ Drafted (code shipped) | 8 ingest routes admin-gated; admin-aware launch UI — commit [`bf65d6d`] |
+| Deployment readiness | Codex | ✅ Drafted | README + web.config + [engineering checklist](../internal-go-live-engineering-checklist.md) |
+| Smoke test (today's package) | Codex | ⬜ TODO | Run [launch-day-script.md](launch-day-script.md) end-to-end on a real package |
+| Org decisions (decision sheet) | FBBS | ⬜ TODO | [decision-sheet.md](decision-sheet.md) — admin usernames is the config blocker |
 
-**Recommendation:** ⬜ Go / ⬜ Go-with-conditions / ⬜ No-go — *(decide once Codex's
-lanes and the ‹CONFIRM› list are closed).*
+**Recommendation:** ⬜ Go / ⬜ Go-with-conditions / ⬜ No-go — *(decide once the
+[decision sheet](decision-sheet.md) is filled and the smoke test passes; see the
+tiered go/no-go in §8).*
 
 ---
 
@@ -40,8 +41,10 @@ and not anything client-facing.
 | **Role matrix** | [role-matrix.md](role-matrix.md) | 5 business roles mapped to actual routes; honest split of *code-enforced* (admin allowlist on 8 ingest routes; IIS identity) vs *policy-only*; gaps for Codex; go-live env recipe |
 | **Sales workflow map** | [sales-workflow.md](sales-workflow.md) | Rep daily loop, manager oversight loop, strategy lifecycle, bond-swap sub-flow, "where do I go for…" index |
 | **Go-live runbook** | [go-live-runbook.md](go-live-runbook.md) | Daily publish → Package QA → notify; exception handling; pre-launch checklist |
-| **Training (4 one-pagers)** | [training/](training/) | [sales-guide](training/sales-guide.md) · [admin-upload-guide](training/admin-upload-guide.md) · [salesforce-replacement](training/salesforce-replacement.md) · [not-client-facing](training/not-client-facing.md) |
+| **Launch-day script** | [launch-day-script.md](launch-day-script.md) | Minute-by-minute first-morning checklist; doubles as the smoke test |
+| **Training (5 one-pagers)** | [training/](training/) | [sales](training/sales-guide.md) · [manager](training/manager-guide.md) · [admin-upload](training/admin-upload-guide.md) · [salesforce-replacement](training/salesforce-replacement.md) · [not-client-facing](training/not-client-facing.md) |
 | **Client-facing boundary** | [client-facing-boundary.md](client-facing-boundary.md) | What could become client-facing, what stays internal forever, the bar before any external exposure |
+| **Decision sheet** | [decision-sheet.md](decision-sheet.md) | One-page consolidation of every open FBBS decision |
 
 ### Key product findings the team should know
 - The portal has **two enforced access tiers today** (authed rep · admin allowlist),
@@ -54,27 +57,52 @@ and not anything client-facing.
 
 ---
 
-## 3. Codex's lane — engineering / security / deployment *(to be filled by Codex)*
+## 3. Codex's lane — engineering / security / deployment *(drafted — code shipped)*
 
-<!-- CODEX: drop your findings under each heading. Claude's role matrix §5 is the
-     spec for the role-gate work; the runbook §8 lists the deployment preconditions. -->
+Reference: [internal-go-live-engineering-checklist.md](../internal-go-live-engineering-checklist.md)
+· commits [`49d5e64`](https://github.com/strategiesfbbs/fbbs-portal/commit/49d5e64)
+"Add internal production auth guardrails" and
+[`bf65d6d`](https://github.com/strategiesfbbs/fbbs-portal/commit/bf65d6d)
+"Reflect admin permissions in launch UI".
 
-### 3.1 Production auth readiness
-- _Codex: current rep-identity flow review; plan to switch prod identity to IIS/Windows;
-  lock down "Acting as" for normal reps; role gates for admin/upload/report/billing._
+### 3.1 Production auth readiness — ✅ shipped (`49d5e64`)
+- `FBBS_AUTH_MODE=iis` activates IIS Windows identity: `REQUIRE_AUTH` on (401 on `/api/*`
+  except `/api/health` without a resolved Windows user), `ALLOW_REP_OVERRIDE` off,
+  `ALLOW_DEFAULT_REP` off.
+- `/api/me` now returns an `auth` block (`mode`, `requireAuth`, `allowRepOverride`,
+  `isAdmin`, `adminConfigured`) so the client knows the posture.
+- `POST /api/me/override` returns `403 "Manual rep switching is disabled in production
+  mode."` when override is off — the "Acting as" cookie is ignored in IIS mode.
+- Covered by `tests/rep-identity.test.js`.
 
-### 3.2 Admin & upload hardening
-- _Codex: which actions must become admin-only; missing audit events; ingest-route review._
+### 3.2 Admin & upload hardening — ✅ shipped (`49d5e64` + `bf65d6d`)
+- `isAdminOnlyApiWrite()` + `rejectIfUnauthorized()` gate the **8 ingest/publish routes**
+  to `FBBS_ADMIN_USERS` (401 if not logged in, 403 if not on the allowlist, 403 if the
+  allowlist is empty). Enforced whenever IIS mode is on or an allowlist is configured.
+- **Launch UI (`bf65d6d`):** the header reflects admin state — shows "Signed in" vs
+  "Acting as", hides/disables the dead rep picker when override is off, and reflects
+  admin permissions in the launch UI (CSS + `portal.js`). This closes role-matrix gap #2.
 
-### 3.3 Go-live smoke test
-- _Codex: results of the repeatable launch checklist run against today's package._
+### 3.3 Go-live smoke test — ⬜ TODO (procedure ready)
+- Procedure is written: [launch-day-script.md](launch-day-script.md) (Claude) +
+  the "Daily Package / Sales Workflow Smoke Test" sections of the engineering checklist
+  (Codex). **Action:** run it end-to-end against a real published package and record the
+  result here.
 
-### 3.4 Deployment readiness
-- _Codex: web.config, README deploy steps, env vars, upload limits, DATA_DIR; IIS/Windows
-  Auth path confirmed; production env/settings checklist._
+### 3.4 Deployment readiness — ✅ drafted (`49d5e64`)
+- `README.md` deployment steps updated: enable Windows Auth + disable anonymous, set
+  `FBBS_AUTH_MODE=iis`, set `FBBS_ADMIN_USERS`, `DATA_DIR=D:\FBBSPortalData`.
+- Config table + security-posture section rewritten; `web.config` comments updated.
+- "Server And Data Operations" checklist (App Pool write access, audit-log retention,
+  App Pool recycle, backup+restore test, disk monitoring) is in the engineering checklist.
 
-### 3.5 Known gaps from code
-- _Codex: precise "not ready / partial / safe for internal launch" list by route/page._
+### 3.5 Known gaps from code — open items for the role-gate follow-up
+Still **honor-system** (any authed rep), acceptable for internal launch per the role
+matrix, tracked for a later code gate:
+- Cross-rep edits/deletes of coverage, notes, strategies, reports.
+- Billing-queue mutations open to any rep.
+- Swap send/execute open to any rep (pending the §6 policy decision).
+- Audit log / Admin tab readable by any authed rep (pending §6 decision).
 
 ---
 
@@ -123,24 +151,50 @@ boxes are about applying them, plus the one remaining blank (the usernames):*
 (`FBBS_AUTH_MODE=iis`), gated by `FBBS_ADMIN_USERS`, with `DATA_DIR=D:\FBBSPortalData`.
 Those switches are no longer open questions.
 
-Still open — these unblock "final":
-
-1. **The usernames for `FBBS_ADMIN_USERS`** = the "approved upload/import users":
-   Publisher + Backup + whoever runs the quarterly imports (Windows short names).
-   *This is the last blank in the production config.* *(runbook, role matrix)*
-2. **Daily "package ready by" time** + publish/QA/notify clock. *(runbook)*
-3. **Source-file owner per slot** (who to chase when late). *(runbook)*
-4. **Sales-notify channel.** *(runbook)*
-5. **Ops/Billing**: separate person or same as manager? → billing-queue gating. *(role matrix)*
-6. **Swap send/execute**: restricted (rep-owns / manager) or open? *(role matrix)*
-7. **Audit log / Admin tab**: admin-only or visible to all reps? *(role matrix)*
-8. **Manager scope**: can managers edit reps' records, or view only? *(role matrix)*
-9. **Non-daily import cadence** (bank/account-status/peer). *(runbook)*
+Still open — all consolidated into the one-page **[decision sheet](decision-sheet.md)**
+FBBS fills in. The nine items in brief: admin usernames (the config blocker), publisher
++ backup, package-ready time, sales-notify channel, source owner per file, billing owner,
+swap send/execute policy, manager scope, non-daily import cadence.
 
 ---
 
 ## 7. How the two lanes merge into "final"
-1. Codex fills §3 and the engineering items in §4–§5.
-2. FBBS answers §6.
-3. We set the §0 Go/No-Go.
-4. This file becomes the single "Internal Go-Live Readiness" record both agents and FBBS sign off on.
+1. ✅ Codex's engineering shipped — §3 reflects commits `49d5e64` / `bf65d6d` + the engineering checklist.
+2. ✅ Claude's product/workflow docs complete — §2.
+3. ⬜ FBBS fills the **[decision sheet](decision-sheet.md)** (esp. `FBBS_ADMIN_USERS`).
+4. ⬜ Codex runs the **[launch-day script](launch-day-script.md)** smoke test on a real package and records the result in §3.3.
+5. ⬜ Set the §0 + §8 Go/No-Go. This file is the single record both agents and FBBS sign off on.
+
+---
+
+## 8. Go / No-Go scoring
+
+Each item is tiered so we can decide what must be done **before** reps come on vs. what
+can trail. "Launch with condition" = go live, but with a named owner + date to close it.
+
+### 🔴 Required for launch (no-go if any is unchecked)
+- [ ] `FBBS_AUTH_MODE=iis` live on the IIS box; `/api/me` shows `source: "iis"` — *IT/Codex*
+- [ ] `FBBS_ADMIN_USERS` populated with real usernames; admin can publish, non-admin gets 403 — *IT/Codex*
+- [ ] `DATA_DIR=D:\FBBSPortalData` set, writable by the App Pool, and **in the backup job** — *IT*
+- [ ] A real daily package published and **Package QA shows 10/10 required slots** — *Publisher*
+- [ ] Bank call-report + account-status workbooks imported (tear sheets populated) — *Publisher*
+- [ ] `npm test` green; launch-day smoke test passed end-to-end — *Codex*
+- [ ] Publisher + Backup have done a dry-run publish + QA — *Publisher*
+- [ ] Decision sheet items #1–#4 answered (admin users, publisher/backup, ready-time, notify channel) — *FBBS*
+
+### 🟡 Launch with condition (go, but assign an owner + close date)
+- [ ] App restarts cleanly after an IIS App Pool recycle — *IT* — _condition if not yet tested_
+- [ ] Backup **restore** tested (not just backup) — *IT*
+- [ ] Reps trained on the daily loop; managers on oversight — *Manager* — _can be day-1 huddle_
+- [ ] Escalation path documented (parser fail / missing file / server down) — *IT*
+- [ ] Decision sheet items #5–#9 answered (billing owner, swap policy, audit visibility, manager scope, import cadence) — *FBBS*
+
+### 🟢 Post-launch backlog (does not block go-live)
+- [ ] Code-enforce manager-vs-rep scope (cross-rep edits/deletes) — *Codex*
+- [ ] Gate billing-queue mutations and swap send/execute per the §6 policy — *Codex*
+- [ ] Decide audit-log/Admin-tab visibility and gate if needed — *Codex*
+- [ ] Soft-delete (vs hard-delete) for strategies/reports/coverage — *Codex*
+- [ ] Stream large (300 MB) uploads instead of buffering in RAM (known issue) — *Codex*
+- [ ] Disk-space monitoring on the data volume — *IT*
+
+**Decision:** ⬜ Go / ⬜ Go-with-conditions / ⬜ No-go — owner: __________  date: __________

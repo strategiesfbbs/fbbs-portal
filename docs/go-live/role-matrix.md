@@ -56,6 +56,27 @@ Legend used in the matrix:
 > assumption below: Manager and Ops/Billing exist as roles but may be the same
 > 1–2 people at launch.
 
+### 2.1 Phase 1 launch role mapping (what each role *is*, in the shipped system)
+
+This is the actionable version: how the five business roles map onto the **two enforced
+tiers** for the internal launch. "Mechanism" is exactly how the system treats them today
+(after Codex's `49d5e64`/`bf65d6d`).
+
+| Business role | Phase 1 mechanism | How it's set | Enforced by |
+|---|---|---|---|
+| **Sales Rep** | Authenticated user | Windows login (IIS) — automatic | Code (`REQUIRE_AUTH`) |
+| **Sales Manager** | Authenticated user **+ policy** | Windows login; oversight is by convention | Code (login) + policy (oversight) |
+| **Trader/Admin (Publisher)** | **Admin** | Windows username listed in `FBBS_ADMIN_USERS` | Code (allowlist on 8 ingest routes) |
+| **Ops/Billing** | Authenticated user **+ policy** | Windows login; "works the billing queue" is by convention | Code (login) + policy (billing) |
+| **System Admin (IT)** | Outside the app | IIS / App Pool / env vars / `DATA_DIR` / backups | OS + server config |
+
+**Reading it:** in Phase 1 there are really two switches — *are you logged in* (every
+rep, via Windows) and *are you on the admin allowlist* (publishers/importers). Manager
+and Ops/Billing are the **same enforced tier as a rep**; their distinct duties are
+carried by training + the runbook, not by code. Promote any of those policy boundaries
+to code later via the §5 gaps. To **make someone an admin**, add their Windows short
+name to `FBBS_ADMIN_USERS` (§6) — that's the only membership lever at launch.
+
 ---
 
 ## 3. What the portal enforces TODAY (the honest baseline)

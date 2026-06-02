@@ -7,9 +7,14 @@
 > external access today.** See [training/not-client-facing.md](training/not-client-facing.md)
 > for the rule that applies right now.
 
-The portal today is an **internal, trusted-LAN tool** with no app-level auth (Windows
-identity on the FBBS network). That posture is correct for internal use and is the
-single biggest reason nothing is client-facing yet.
+The portal today is an **internal, trusted-LAN tool**. For the internal launch its
+access control is **IIS Windows Authentication** (domain login on the FBBS network)
+plus portal-side production guardrails — required login on the APIs, the "Acting as"
+override disabled, and an admin allowlist (`FBBS_ADMIN_USERS`) gating all publish/import
+actions. That is the right posture for internal use, but it is deliberately **not
+client-grade external authentication**: there's no per-client identity, no per-client
+data isolation, no MFA, and no internet-facing security review. That gap is the single
+biggest reason nothing is client-facing yet.
 
 ---
 

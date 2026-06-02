@@ -40,6 +40,28 @@ Before you tell the desk it's live, confirm:
 | Published the wrong day | Prior package is in **Operations → Archive** (on disk at `D:\FBBSPortalData\archive\YYYY-MM-DD\`); rollback is filesystem-level — call IT. |
 | **Treasury looks sparse** | Expected since 2026-06-01 — the daily Treasury file is now a generic Bloomberg `grid1_*.xlsx` ask export. Not a bug. |
 
+## What good looks like
+**A clean Package QA:**
+- ✅ **10/10 required slots** filled (optional slots like Baird Syndicate may be empty).
+- ✅ Counts in the normal daily range — e.g. CD offers, munis, agencies, corporates all
+  showing the usual order of magnitude, not 0 and not 10× yesterday.
+- ✅ Package **date = today**.
+
+**Acceptable warning** (publish, just note it):
+- *"3 rows skipped: missing CUSIP"* on a 200-row sheet — a few junk rows, data is fine.
+- *Treasury Notes sparse* — expected since 2026-06-01 (the `grid1_*.xlsx` format).
+
+**Blocking warning** (do NOT call it good):
+- A slot count of **0** when the market clearly traded.
+- *"Could not find header row"* / garbled columns — the source format changed; the
+  parser may need a fix. Re-export, or escalate to engineering.
+- Wrong **as-of date** (yesterday's file re-run).
+
+## 📷 Screens to show in training
+- **Operations → Upload** with files dropped and the slot list.
+- **Operations → Package QA** showing 10/10 and the counts.
+- **Operations → Admin** (audit log) confirming the publish was recorded.
+
 ## Notify the desk
 Once QA passes, send the "package is live" message (‹channel›): date, any
 missing/delayed slot + ETA, anything notable.

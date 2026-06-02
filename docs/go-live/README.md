@@ -7,14 +7,23 @@ deployment / tests / smoke).
 **Start here:** [internal-go-live-readiness.md](internal-go-live-readiness.md) — the
 umbrella doc that joins both lanes and holds the Go/No-Go and the open-decisions list.
 
+**FBBS:** the one thing we need from you is the **[decision-sheet.md](decision-sheet.md)** —
+one page of blanks (admin usernames, publisher, ready-time, notify channel, policy).
+
 | Document | Lane | What it is |
 |---|---|---|
-| [internal-go-live-readiness.md](internal-go-live-readiness.md) | Joint | Umbrella: readiness checklist, risks, decisions, Go/No-Go |
-| [role-matrix.md](role-matrix.md) | Claude | 5 roles × portal capabilities; enforced-vs-policy; gaps for Codex |
+| [internal-go-live-readiness.md](internal-go-live-readiness.md) | Joint | Umbrella: readiness, risks, **tiered Go/No-Go (§8)**, both lanes' status |
+| [decision-sheet.md](decision-sheet.md) | **FBBS fills** | One-page checklist of every open org decision |
+| [launch-day-script.md](launch-day-script.md) | Joint | Minute-by-minute first-morning checklist (= the smoke test) |
+| [role-matrix.md](role-matrix.md) | Claude | 5 roles × capabilities; **Phase 1 mapping (§2.1)**; enforced-vs-policy; gaps |
 | [sales-workflow.md](sales-workflow.md) | Claude | Rep & manager daily loops; strategy lifecycle; swap sub-flow |
 | [go-live-runbook.md](go-live-runbook.md) | Claude | Daily publish → QA → notify; exceptions; pre-launch checklist |
 | [client-facing-boundary.md](client-facing-boundary.md) | Claude | What could go client-facing; what stays internal; the bar |
-| [training/](training/) | Claude | 4 one-pagers: sales, admin/upload, Salesforce-replacement, not-client-facing |
+| [training/](training/) | Claude | 5 one-pagers: sales, **manager**, admin/upload, Salesforce-replacement, not-client-facing |
 
-> Items marked **‹CONFIRM›** in the docs need an answer from FBBS — they're
-> consolidated in [internal-go-live-readiness.md §6](internal-go-live-readiness.md#6-decisions-needed-from-fbbs-the-confirm-list).
+**Codex engineering (sibling folder):**
+[../internal-go-live-engineering-checklist.md](../internal-go-live-engineering-checklist.md)
+— production identity, admin allowlist, smoke tests, server/data ops (shipped in commits
+`49d5e64`, `bf65d6d`).
+
+> Items marked **‹CONFIRM›** in the docs all map to the [decision sheet](decision-sheet.md).

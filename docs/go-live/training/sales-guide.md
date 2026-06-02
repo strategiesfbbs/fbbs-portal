@@ -37,6 +37,25 @@ finished work doesn't fall through the cracks.
 (the desk's maturity-vs-breakeven rule auto-applies) or **build your own** → **Size**
 a buy leg to balance cash → **Send** (freezes the one-pager) → **Execute** when done.
 
+## What good looks like
+**A good strategy request:**
+- ✅ Right **Type** (Bond Swap / Muni BCIS / THO / CECL / Misc) and a **Priority** that
+  means something (don't make everything a 1).
+- ✅ A **Summary** that a teammate could pick up cold — what the bank needs and why now.
+- ✅ Source files attached (the portfolio, the call notes) so the analyst isn't chasing you.
+- 🚩 *Weak:* type "Misc", blank summary, no priority — nobody can act on it.
+
+**A good note / follow-up:**
+- ✅ Specific and dated: *"6/2 — called CFO re: 18-mo CD funding; wants a proposal by
+  Fri. Next action: send swap one-pager 6/4."*
+- ✅ Always set the **next action / follow-up date** so it resurfaces in My Work.
+- 🚩 *Weak:* "talked to bank" with no next step — it vanishes from your pipeline.
+
+## 📷 Screens to show in training
+- **Home → My Work** (where your day starts).
+- A **Bank Tear Sheet** with the **Open Strategy Request** button.
+- The **Strategies → Queue** with a request moving through the statuses.
+
 ## Good to know
 - **You can see every bank**, not just yours — My Work is a filter, not a wall.
 - **CSV exports** include the package date in the filename.
