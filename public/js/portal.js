@@ -822,7 +822,10 @@
   }
 
   function csvEscape(value) {
-    const s = String(value ?? '');
+    let s = String(value ?? '');
+    // Neutralize spreadsheet formula injection: a cell starting with = + - @ (or a
+    // leading control char) can execute when the CSV is opened in Excel. Prefix a quote.
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   }
 

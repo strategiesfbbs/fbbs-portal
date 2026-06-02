@@ -6921,7 +6921,10 @@ function logBankActivity(req, payload) {
 
 function escapeCsvCell(value) {
   if (value === null || value === undefined) return '';
-  const s = String(value);
+  let s = String(value);
+  // Neutralize spreadsheet formula injection (leading = + - @ or control char):
+  // such a cell can execute when the CSV is opened in Excel. Prefix a single quote.
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
