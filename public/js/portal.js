@@ -69,6 +69,7 @@
   let strategyNotifications = { requests: [], counts: {} };
   let meState = {
     rep: null,
+    auth: { allowRepOverride: true, mode: 'local', isAdmin: false },
     knownReps: [],
     work: null,
     repsLoaded: false,
@@ -1772,9 +1773,11 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       meState.rep = data.rep || null;
+      meState.auth = data.auth || { allowRepOverride: true, mode: 'local', isAdmin: false };
     } catch (e) {
       console.error('Failed to load /api/me:', e);
       meState.rep = null;
+      meState.auth = { allowRepOverride: true, mode: 'local', isAdmin: false };
     }
     renderRepPicker();
     await loadMyWork();
@@ -1843,6 +1846,13 @@
     const trigger = document.getElementById('repPickerTrigger');
     if (!nameEl || !trigger) return;
     const rep = meState.rep;
+    const allowOverride = !meState.auth || meState.auth.allowRepOverride !== false;
+    const kicker = trigger.querySelector('.rep-picker-kicker');
+    const caret = trigger.querySelector('.rep-picker-caret');
+    if (kicker) kicker.textContent = allowOverride ? 'Acting as' : 'Signed in';
+    if (caret) caret.style.display = allowOverride ? '' : 'none';
+    trigger.disabled = !allowOverride;
+    trigger.setAttribute('aria-haspopup', allowOverride ? 'true' : 'false');
     if (rep) {
       nameEl.textContent = rep.displayName || rep.username;
       trigger.classList.add('is-set');
@@ -1893,6 +1903,7 @@
     const panel = document.getElementById('repPickerPanel');
     const trigger = document.getElementById('repPickerTrigger');
     if (!panel || !trigger) return;
+    if (meState.auth && meState.auth.allowRepOverride === false) return;
     panel.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
     meState.panelOpen = true;
@@ -1923,6 +1934,7 @@
 
     trigger.addEventListener('click', evt => {
       evt.stopPropagation();
+      if (meState.auth && meState.auth.allowRepOverride === false) return;
       if (meState.panelOpen) closeRepPanel();
       else openRepPanel();
     });

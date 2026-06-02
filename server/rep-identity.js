@@ -68,12 +68,13 @@ function buildRep(username, displayName, source) {
 function resolveRequestRep(req, options = {}) {
   const cookies = parseCookies(req && req.headers ? req.headers.cookie : '');
   const cookieValue = cookies[REP_OVERRIDE_COOKIE];
-  if (cookieValue && cookieValue !== '__none__') {
+  const allowCookieOverride = options.allowCookieOverride !== false;
+  if (allowCookieOverride && cookieValue && cookieValue !== '__none__') {
     const parsed = parseRepValue(cookieValue);
     if (parsed) return { ...parsed, source: 'cookie' };
   }
   // Explicit clear sentinel — no fallback to IIS/env. Lets a shared workstation say "act as nobody".
-  if (cookieValue === '__none__') return null;
+  if (allowCookieOverride && cookieValue === '__none__') return null;
 
   const iisHeader = req && req.headers
     ? (req.headers['x-iisnode-logon_user'] ||
@@ -87,7 +88,9 @@ function resolveRequestRep(req, options = {}) {
     if (username) return buildRep(username, display, 'iis');
   }
 
-  const envDefault = options.defaultRep || process.env.FBBS_DEFAULT_REP;
+  const envDefault = options.allowDefaultRep === false
+    ? ''
+    : (options.defaultRep || process.env.FBBS_DEFAULT_REP);
   if (envDefault) {
     const display = stripDomain(envDefault);
     const username = normalizeUsername(envDefault);

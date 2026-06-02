@@ -88,7 +88,9 @@ Use this if your IT team already operates an internal IIS farm and wants this in
 2. IT copies this folder to the IIS site's physical path (e.g. `C:\inetpub\wwwroot\fbbs-portal`).
 3. IT creates an Application in IIS Manager pointing at that folder — `web.config` is included and does the rest.
 4. IT grants the App Pool identity write access to the `data\` subfolder (or points `DATA_DIR` to a shared location — see below).
-5. Optional: IT enables **Windows Authentication** on the site, which restricts access to domain users with no app-level changes.
+5. IT enables **Windows Authentication** on the site and disables anonymous access.
+6. IT sets `FBBS_AUTH_MODE=iis` on the App Pool so the portal trusts the Windows login, ignores local rep override cookies, and requires a logged-in user for API access.
+7. IT sets `FBBS_ADMIN_USERS` to the domain usernames allowed to publish/import production data, for example `mjones,jsmith`.
 
 **Recommended for IIS:** set `DATA_DIR` to a path *outside* the app folder so future code updates don't risk the archive. Example: `DATA_DIR=D:\FBBSPortalData`. Set that as an environment variable on the App Pool.
 
@@ -104,7 +106,14 @@ All settings are environment variables. None are required; defaults are sensible
 | `HOST` | `0.0.0.0` | Bind interface — `0.0.0.0` = all, `127.0.0.1` = localhost only |
 | `DATA_DIR` | `<app>/data` | Where uploaded packages are stored |
 | `MAX_UPLOAD_MB` | `50` | Per-request upload cap |
+| `BANK_UPLOAD_MAX_MB` | `300` | Per-request cap for bank/report import workbooks |
+| `AUDIT_LOG_MAX_MB` | `10` | Audit log rotation size |
+| `AUDIT_LOG_KEEP` | `5` | Rotated audit logs to keep |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
+| `FBBS_AUTH_MODE` | `local` | Use `iis` for internal production with IIS Windows Authentication |
+| `FBBS_ADMIN_USERS` | empty | Comma/space-separated usernames allowed to publish/import; required in `FBBS_AUTH_MODE=iis` for those actions |
+| `FBBS_REQUIRE_AUTH` | `0` | Set `1` to require a resolved user even outside `FBBS_AUTH_MODE=iis` |
+| `FBBS_ALLOW_REP_OVERRIDE` | `1` in local mode | Set `0` to disable the header rep override locally |
 
 Examples:
 
@@ -397,10 +406,11 @@ Bump `MAX_UPLOAD_MB`. If deployed on IIS, also bump `maxAllowedContentLength` in
 
 ## Security posture
 
-This portal has **no built-in authentication**, matching your current "trusted internal network" answer. Before changing that:
+This portal is still designed for a trusted internal network, but it now has production guardrails for IIS deployment:
 
-- **Easiest path to add auth:** deploy on IIS (Option C) and turn on Windows Authentication in IIS Manager. No code changes needed.
-- **If adding auth in code later:** the router is centralized in `server/server.js` — a middleware function at the top of the `createServer` handler is the right place.
+- **Internal go-live path:** deploy on IIS, turn on Windows Authentication, disable anonymous access, and set `FBBS_AUTH_MODE=iis`.
+- **Rep identity:** in `local` mode, the header "Acting as" picker can set a rep override cookie for laptop testing. In `iis` mode, that cookie is ignored and the header shows the signed-in Windows user.
+- **Admin data writes:** in `iis` mode, publishing/import endpoints require `FBBS_ADMIN_USERS` and the signed-in user must be in that allowlist. This covers daily package publish, folder-drop publish, MBS/CMO upload, bank workbook import, account-status import, averaged-series import, bond-accounting import, and WIRP import.
 - Security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: same-origin`) are set on every response.
 - Path traversal is blocked for both `/current/` and `/archive/` file serving, and the static-asset handler stays inside `public/`.
 - Uploads are capped (default 50 MB per request). Filenames are sanitized before being written to disk.

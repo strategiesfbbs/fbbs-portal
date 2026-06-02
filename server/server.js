@@ -127,7 +127,8 @@ const {
   buildRepOverrideCookie,
   clearRepOverrideCookieHeader,
   ownerStringContainsRep,
-  resolveRequestRep
+  normalizeUsername,
+  resolveRequestRep: resolveRequestRepBase
 } = require('./rep-identity');
 const {
   listBankViewSummaries,
@@ -182,6 +183,15 @@ const AUDIT_LOG_KEEP = Math.max(1, parseInt(process.env.AUDIT_LOG_KEEP, 10) || 5
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
 const BANK_UPLOAD_MAX_BYTES = (parseInt(process.env.BANK_UPLOAD_MAX_MB, 10) || 300) * 1024 * 1024;
 const BANK_CACHE_MAX_ENTRIES = 200;
+const AUTH_MODE = String(process.env.FBBS_AUTH_MODE || 'local').trim().toLowerCase();
+const IS_IIS_AUTH_MODE = ['iis', 'windows', 'production'].includes(AUTH_MODE);
+const ALLOW_REP_OVERRIDE = !IS_IIS_AUTH_MODE && process.env.FBBS_ALLOW_REP_OVERRIDE !== '0';
+const ALLOW_DEFAULT_REP = !IS_IIS_AUTH_MODE;
+const REQUIRE_AUTH = IS_IIS_AUTH_MODE || process.env.FBBS_REQUIRE_AUTH === '1';
+const ADMIN_USERS = new Set(String(process.env.FBBS_ADMIN_USERS || '')
+  .split(/[,\s;]+/)
+  .map(normalizeUsername)
+  .filter(Boolean));
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = LOG_LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
@@ -386,6 +396,61 @@ function isSameOriginWrite(req) {
 function isMutatingApiRequest(req, pathname) {
   const method = String(req.method || 'GET').toUpperCase();
   return pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(method);
+}
+
+function resolveRequestRep(req) {
+  return resolveRequestRepBase(req, {
+    allowCookieOverride: ALLOW_REP_OVERRIDE,
+    allowDefaultRep: ALLOW_DEFAULT_REP
+  });
+}
+
+function authInfoForRequest(req) {
+  const rep = resolveRequestRep(req);
+  const isAdmin = Boolean(rep && ADMIN_USERS.has(normalizeUsername(rep.username)));
+  return {
+    rep,
+    auth: {
+      mode: IS_IIS_AUTH_MODE ? 'iis' : 'local',
+      requireAuth: REQUIRE_AUTH,
+      allowRepOverride: ALLOW_REP_OVERRIDE,
+      isAdmin,
+      adminConfigured: ADMIN_USERS.size > 0
+    }
+  };
+}
+
+function isPublicApiPath(pathname) {
+  return pathname === '/api/health';
+}
+
+function isAdminOnlyApiWrite(pathname, method) {
+  const verb = String(method || 'GET').toUpperCase();
+  if (!['POST', 'PATCH', 'DELETE'].includes(verb)) return false;
+  return (
+    pathname === '/api/upload' ||
+    pathname === '/api/folder-drop/publish' ||
+    pathname === '/api/mbs-cmo/upload' ||
+    pathname === '/api/banks/upload' ||
+    pathname === '/api/bank-account-statuses/upload' ||
+    pathname === '/api/banks/averaged-series/upload' ||
+    pathname === '/api/banks/bond-accounting/upload' ||
+    pathname === '/api/brokered-cd/wirp/upload'
+  );
+}
+
+function rejectIfUnauthorized(req, res, pathname) {
+  if (REQUIRE_AUTH && pathname.startsWith('/api/') && !isPublicApiPath(pathname)) {
+    const { rep } = authInfoForRequest(req);
+    if (!rep) return sendJSON(res, 401, { error: 'Windows login is required.' });
+  }
+  if (isAdminOnlyApiWrite(pathname, req.method) && (IS_IIS_AUTH_MODE || ADMIN_USERS.size > 0)) {
+    const { rep, auth } = authInfoForRequest(req);
+    if (!rep) return sendJSON(res, 401, { error: 'Login is required for this action.' });
+    if (ADMIN_USERS.size === 0) return sendJSON(res, 403, { error: 'Admin allowlist is not configured.' });
+    if (!auth.isAdmin) return sendJSON(res, 403, { error: 'Admin permission is required for this action.' });
+  }
+  return null;
 }
 
 function classifyFile(filename, explicitSlot) {
@@ -6772,6 +6837,8 @@ const server = http.createServer(async (req, res) => {
   if (isMutatingApiRequest(req, pathname) && !isSameOriginWrite(req)) {
     return sendJSON(res, 403, { error: 'Cross-site write request blocked' });
   }
+  const authRejection = rejectIfUnauthorized(req, res, pathname);
+  if (authRejection) return authRejection;
 
   try {
     // --- API ---
@@ -6789,8 +6856,8 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/me' && req.method === 'GET') {
-      const rep = resolveRequestRep(req);
-      return sendJSON(res, 200, { rep });
+      const { rep, auth } = authInfoForRequest(req);
+      return sendJSON(res, 200, { rep, auth });
     }
 
     if (pathname === '/api/me/reps' && req.method === 'GET') {
@@ -6798,6 +6865,9 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/me/override' && req.method === 'POST') {
+      if (!ALLOW_REP_OVERRIDE) {
+        return sendJSON(res, 403, { error: 'Manual rep switching is disabled in production mode.' });
+      }
       return await handleMeOverride(req, res);
     }
 

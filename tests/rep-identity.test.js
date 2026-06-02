@@ -99,8 +99,30 @@ test('resolveRequestRep: cookie override wins', () => {
   assert.strictEqual(rep.source, 'cookie');
 });
 
+test('resolveRequestRep: production mode can ignore cookie override', () => {
+  const rep = r.resolveRequestRep({
+    headers: {
+      cookie: 'fbbs_rep_override=Mike%20Jones%7Cmjones',
+      'x-iisnode-logon_user': 'FBBS\\jsmith'
+    }
+  }, { allowCookieOverride: false });
+  assert.strictEqual(rep.username, 'jsmith');
+  assert.strictEqual(rep.source, 'iis');
+});
+
 test('resolveRequestRep: __none__ sentinel forces null (no IIS/env fallback)', () => {
   assert.strictEqual(r.resolveRequestRep({ headers: { cookie: 'fbbs_rep_override=__none__', 'auth-user': 'someone' } }), null);
+});
+
+test('resolveRequestRep: production mode ignores __none__ cookie sentinel', () => {
+  const rep = r.resolveRequestRep({
+    headers: {
+      cookie: 'fbbs_rep_override=__none__',
+      'auth-user': 'FBBS\\someone'
+    }
+  }, { allowCookieOverride: false });
+  assert.strictEqual(rep.username, 'someone');
+  assert.strictEqual(rep.source, 'iis');
 });
 
 test('resolveRequestRep: IIS logon header when no cookie', () => {
@@ -114,6 +136,10 @@ test('resolveRequestRep: env default as last resort, else null', () => {
   assert.strictEqual(rep.username, 'mikejones');
   assert.strictEqual(rep.source, 'env');
   assert.strictEqual(r.resolveRequestRep({ headers: {} }), null);
+});
+
+test('resolveRequestRep: env default can be disabled', () => {
+  assert.strictEqual(r.resolveRequestRep({ headers: {} }, { defaultRep: 'Mike Jones', allowDefaultRep: false }), null);
 });
 
 // ---------- cookie header builders ----------
