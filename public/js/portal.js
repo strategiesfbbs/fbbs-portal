@@ -16858,7 +16858,13 @@
   }
 
   function mapsHasCoords(bank) {
-    return Number.isFinite(Number(bank && bank.latitude)) && Number.isFinite(Number(bank && bank.longitude));
+    const lat = Number(bank && bank.latitude);
+    const lon = Number(bank && bank.longitude);
+    // Treat the (0,0) sentinel — a bank whose ZIP had no centroid, which
+    // arrives as null and coerces to 0 — as unmapped. Otherwise it drops a
+    // phantom pin in the Atlantic and stretches the fit-to-results bounds
+    // across the hemisphere, so a selected state never appears to zoom in.
+    return Number.isFinite(lat) && Number.isFinite(lon) && (lat !== 0 || lon !== 0);
   }
 
   function mapsCoverageOwner(bank) {
@@ -16944,8 +16950,8 @@
 
   function mapsSetViewport(viewport) {
     mapsState.viewport = viewport ? {
-      lon: viewport.lon.slice(),
-      lat: viewport.lat.slice()
+      scale: viewport.scale,
+      center: { lon: viewport.center.lon, lat: viewport.center.lat }
     } : null;
   }
 
@@ -16956,7 +16962,7 @@
   }
 
   function mapsResetUsView() {
-    mapsSetViewport({ lon: MAPS_DEFAULT_LONAXIS, lat: MAPS_DEFAULT_LATAXIS });
+    mapsSetViewport({ scale: 1, center: { lon: MAPS_DEFAULT_CENTER.lon, lat: MAPS_DEFAULT_CENTER.lat } });
     mapsState.mapRevision += 1;
     applyMapsFilters();
   }
@@ -17162,14 +17168,16 @@
   // Default geo extent (continental US) and per-state zoom helpers.
   const MAPS_DEFAULT_LONAXIS = [-126, -66];
   const MAPS_DEFAULT_LATAXIS = [24, 50];
+  // Center the default albers-usa view resolves to at scale 1 (whole US).
+  const MAPS_DEFAULT_CENTER = { lon: -96.6, lat: 38.7 };
 
-  function mapsComputeBounds(rows) {
+  function mapsComputeView(rows) {
     if (!rows || !rows.length) return null;
     let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity, count = 0;
     for (const r of rows) {
-      const lat = Number(r && r.latitude);
-      const lon = Number(r && r.longitude);
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+      if (!mapsHasCoords(r)) continue;
+      const lat = Number(r.latitude);
+      const lon = Number(r.longitude);
       if (lat < minLat) minLat = lat;
       if (lat > maxLat) maxLat = lat;
       if (lon < minLon) minLon = lon;
@@ -17177,14 +17185,20 @@
       count += 1;
     }
     if (!count) return null;
-    const spanLat = maxLat - minLat;
-    const spanLon = maxLon - minLon;
-    const padLat = Math.max(4.5, spanLat * 0.35);
-    const padLon = Math.max(7, spanLon * 0.35);
-    return {
-      lon: [minLon - padLon, maxLon + padLon],
-      lat: [minLat - padLat, maxLat + padLat]
-    };
+    const center = { lon: (minLon + maxLon) / 2, lat: (minLat + maxLat) / 2 };
+    // Zoom the albers-usa projection with projection.scale (1 = whole US) +
+    // center, NOT lon/lat range. Range-based zoom mis-projects the scattergeo
+    // bank pins off-frame when tight (a 50-mile area search would lose every
+    // pin); scale+center keeps them correctly placed. ~26° lat / ~60° lon is
+    // the span the default view shows at scale 1; the +pad/floor keeps a tight
+    // selection (single bank, small area) from zooming in uncomfortably far.
+    const effLat = Math.max((maxLat - minLat) + 1.4, 1.4);
+    const effLon = Math.max((maxLon - minLon) + 2.2, 2.2);
+    // Cap at 6 so a single-bank or very tight result keeps regional context
+    // (a lone pin in a featureless green field is disorienting) rather than
+    // zooming all the way in.
+    const scale = Math.max(1, Math.min(6, Math.min(26 / effLat, 60 / effLon)));
+    return { center, scale };
   }
 
   function mapsFindBank(id) {
@@ -17392,16 +17406,16 @@
       },
       showlegend: false
     });
-    const bounds = showMarkers ? mapsComputeBounds(rows) : null;
     const viewport = mapsState.viewport;
-    const lonRange = viewport ? viewport.lon : (bounds ? bounds.lon : MAPS_DEFAULT_LONAXIS);
-    const latRange = viewport ? viewport.lat : (bounds ? bounds.lat : MAPS_DEFAULT_LATAXIS);
-    const lonaxis = { range: lonRange.slice() };
-    const lataxis = { range: latRange.slice() };
+    const autoView = showMarkers ? mapsComputeView(rows) : null;
+    const view = viewport || autoView;
+    const geoCenter = view && view.center ? view.center : MAPS_DEFAULT_CENTER;
+    const geoScale = view && view.scale ? view.scale : 1;
     const layout = {
       geo: {
         scope: 'usa',
-        projection: { type: 'albers usa' },
+        projection: { type: 'albers usa', scale: geoScale },
+        center: { lon: geoCenter.lon, lat: geoCenter.lat },
         showlakes: true,
         lakecolor: '#b7e1e6',
         showocean: true,
@@ -17412,8 +17426,8 @@
         subunitcolor: '#94afa2',
         showcountries: true,
         showsubunits: true,
-        lonaxis,
-        lataxis
+        lonaxis: { range: MAPS_DEFAULT_LONAXIS.slice() },
+        lataxis: { range: MAPS_DEFAULT_LATAXIS.slice() }
       },
       font: { family: 'inherit', color: '#1f2925' },
       margin: { t: 10, r: 10, b: 10, l: 10 },
