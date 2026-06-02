@@ -4,6 +4,10 @@
 > **State:** `npm test` 17/17 · `npm audit` clean · no Critical issues. Claude already fixed
 > the four cheapest 🔴 items (commit `f16bdfd`). This is the remaining engineering queue,
 > ordered. Each item: where · problem · recommended fix · **done when**.
+>
+> **Codex update, 2026-06-02:** the high-priority handoff items SRV-1, SRV-2,
+> OPS-3, SEC-2, OPS-4, FE-1, TEST-1, SRV-3b busy timeout, FE-2, FE-4, and OPS-6
+> are now addressed. See [codex-full-audit-2026-06-02.md](codex-full-audit-2026-06-02.md).
 
 These are in your lane (server/parsers/deploy). I scoped out the publish-flow and
 data-integrity work deliberately — you own publish semantics and have context I don't.

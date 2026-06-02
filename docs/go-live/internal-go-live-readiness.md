@@ -89,11 +89,15 @@ Reference: [internal-go-live-engineering-checklist.md](../internal-go-live-engin
   "Acting as", hides/disables the dead rep picker when override is off, and reflects
   admin permissions in the launch UI (CSS + `portal.js`). This closes role-matrix gap #2.
 
-### 3.3 Go-live smoke test — ⬜ TODO (procedure ready)
-- Procedure is written: [launch-day-script.md](launch-day-script.md) (Claude) +
-  the "Daily Package / Sales Workflow Smoke Test" sections of the engineering checklist
-  (Codex). **Action:** run it end-to-end against a real published package and record the
-  result here.
+### 3.3 Go-live smoke test — ✅ local pass / ⬜ IIS pass
+- Local pass recorded by Codex on 2026-06-02:
+  [codex-full-audit-2026-06-02.md](codex-full-audit-2026-06-02.md).
+- Covered Home, Daily Intelligence, all offering explorers, Bank Tear Sheets, Map,
+  Saved Views, Strategies, Reports, Package QA, and Admin readiness against the real
+  June 2 package.
+- Remaining final action: run [launch-day-script.md](launch-day-script.md) end-to-end
+  on the IIS box after Windows Auth, `FBBS_ADMIN_USERS`, and production `DATA_DIR` are
+  applied.
 
 ### 3.4 Deployment readiness — ✅ drafted (`49d5e64`)
 - `README.md` deployment steps updated: enable Windows Auth + disable anonymous, set

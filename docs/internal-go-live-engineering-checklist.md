@@ -54,7 +54,15 @@ Windows Authentication, trusted network/VPN access, and no client-facing traffic
 - Confirm App Pool identity has read/write access to `DATA_DIR`.
 - Confirm `AUDIT_LOG_MAX_MB` and `AUDIT_LOG_KEEP` match retention expectations.
 - Confirm app restarts cleanly after an IIS App Pool recycle.
-- Back up `DATA_DIR` and test one restore copy before launch.
+- Back up `DATA_DIR` safely and test one restore copy before launch:
+  - Preferred simple launch procedure: stop or recycle the App Pool, wait for the
+    worker to exit, copy `D:\FBBSPortalData`, then start the App Pool again.
+  - If the app must stay online, do not copy live `*.sqlite` files directly; use
+    SQLite's online backup support (`VACUUM INTO` / `.backup`) for
+    `bank-coverage.sqlite`, `bank-strategies.sqlite`,
+    `swap-proposals.sqlite`, and the other workspace DBs.
+  - Restore test means opening the restored copy with the portal or a SQLite
+    integrity check, not just confirming files exist.
 - Confirm disk-space monitoring exists for the data volume.
 
 ## Known Boundaries For Internal Launch

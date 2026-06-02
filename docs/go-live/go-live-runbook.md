@@ -141,6 +141,10 @@ verbal). Include:
 - Bank workbook / account-status / peer / bond-accounting imports are **not daily** —
   run them on their own cadence (‹CONFIRM› — typically quarterly when new call-report
   data lands). These are also admin-gated and 300 MB-capable; do them off-peak.
+- Backup rule for the SQLite workspaces: either stop/recycle the App Pool before
+  copying `D:\FBBSPortalData`, or use SQLite online backup (`VACUUM INTO` /
+  `.backup`) for the `*.sqlite` files. Do not treat a raw copy of a live SQLite
+  file as a verified backup. Before launch, restore one copy and open it.
 
 ---
 
@@ -153,6 +157,7 @@ it on the IIS box, not deciding it:
 - [ ] `FBBS_ADMIN_USERS=<approved upload/import users>` set — real Publisher + Backup +
       import-runner Windows short names. **Without this, nobody can publish (403).** — *IT/Codex*
 - [ ] `DATA_DIR=D:\FBBSPortalData` set, the folder exists, and it's in the backup job — *IT/Codex*
+- [ ] Backup restore tested from a quiesced copy or SQLite online backup — *IT/Codex*
 - [ ] A real daily package has been published and passes Package QA — *Publisher*
 - [ ] Bank call-report + account-status workbooks imported (tear sheets populated) — *Publisher*
 - [ ] Publisher + Backup have done a dry-run publish and QA — *Publisher*

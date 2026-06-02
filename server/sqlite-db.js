@@ -21,8 +21,14 @@
 
 const Database = require('better-sqlite3');
 
-function execSqlite(dbPath, sql) {
+function openDatabase(dbPath) {
   const db = new Database(dbPath);
+  db.pragma('busy_timeout = 5000');
+  return db;
+}
+
+function execSqlite(dbPath, sql) {
+  const db = openDatabase(dbPath);
   try {
     db.exec(sql);
   } finally {
@@ -31,7 +37,7 @@ function execSqlite(dbPath, sql) {
 }
 
 function querySqliteJson(dbPath, sql, params) {
-  const db = new Database(dbPath);
+  const db = openDatabase(dbPath);
   try {
     const stmt = db.prepare(sql);
     return params === undefined ? stmt.all() : stmt.all(params);
@@ -43,7 +49,7 @@ function querySqliteJson(dbPath, sql, params) {
 // Run a single parameterized write and return the better-sqlite3 RunResult
 // ({ changes, lastInsertRowid }). For statements that bind values.
 function runSqlite(dbPath, sql, params) {
-  const db = new Database(dbPath);
+  const db = openDatabase(dbPath);
   try {
     const stmt = db.prepare(sql);
     return params === undefined ? stmt.run() : stmt.run(params);
@@ -58,7 +64,7 @@ function runSqlite(dbPath, sql, params) {
 // expressed here instead — and gains real transaction semantics it never had
 // under the CLI (the CLI ran them as independent auto-commits).
 function transaction(dbPath, statements) {
-  const db = new Database(dbPath);
+  const db = openDatabase(dbPath);
   try {
     const run = db.transaction((stmts) => {
       for (const s of stmts) {
@@ -80,7 +86,7 @@ function transaction(dbPath, statements) {
 // one prepared INSERT inside a transaction. Everything else should use the
 // statement-shaped helpers above.
 function withDatabase(dbPath, fn) {
-  const db = new Database(dbPath);
+  const db = openDatabase(dbPath);
   try {
     return fn(db);
   } finally {

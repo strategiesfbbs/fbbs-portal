@@ -44,6 +44,10 @@ Mapped to readiness [§8](internal-go-live-readiness.md) "Required for launch." 
 > pinned to `>=20 <25`). `npm test` still 17/17. **Remaining 🔴 for Codex:** **SRV-1** &
 > **SRV-2** (publish-flow robustness — left to Codex as the publish-flow owner) and
 > **OPS-3** (live-SQLite backup procedure — a runbook/process change).
+>
+> **Update 2026-06-02 — Codex follow-up:** SRV-1, SRV-2, OPS-3, SEC-2, OPS-4,
+> FE-1, TEST-1, SRV-3b busy timeout, FE-2, FE-4, and OPS-6 are now addressed in
+> code/docs. See [codex-full-audit-2026-06-02.md](codex-full-audit-2026-06-02.md).
 
 ### SRV-1 ✓ — Same-day re-publish deletes the old slot file *before* validating the new one → silent slot loss
 - **Severity: High · Effort: Low** · `server/server.js:6213-6221` (unlink) vs `:6245-6248` (signature check)
@@ -128,8 +132,8 @@ The offering parsers (CD/treasury/agencies/corporates/muni) anchor on **header n
 
 | Tier | Items |
 |---|---|
-| 🔴 **Required for launch** | ✅ DAT-1, SRV-3, OPS-1, OPS-2 fixed (this commit). **Remaining:** SRV-1 (Codex), SRV-2 (Codex; strongly recommended — if deferred, gate on disk-monitoring + "no recycle during publish" runbook note), OPS-3 (backup procedure). + verify Codex's go-live status panel green at cutover. |
-| 🟠 **Launch-with-condition** | DAT-2…DAT-8 (add the QA data-sanity gate; owner + date), SEC-1 (policy now, code later), SEC-2, OPS-4, OPS-5, FE-1, TEST-1 |
-| 🟢 **Post-launch backlog** | SRV-4/5, SEC-3, FE-2/3/4, DAT-9/10, OPS-6, innerHTML lint |
+| 🔴 **Required for launch** | ✅ DAT-1, SRV-1, SRV-2, SRV-3, OPS-1, OPS-2, OPS-3 addressed. Remaining: production env decisions, backup restore, and IIS smoke. |
+| 🟠 **Launch-with-condition** | DAT-2…DAT-8 (add the QA data-sanity gate; owner + date), SEC-1 (policy now, code later), OPS-5 |
+| 🟢 **Post-launch backlog** | SRV-4/5, SEC-3, DAT-9/10, innerHTML lint, deeper Salesforce-replacement features |
 
 These feed directly into [internal-go-live-readiness.md §8](internal-go-live-readiness.md). Most 🔴 items are **Low/Trivial effort** (a single `web.config` edit covers SRV-3 + OPS-1; two ~2-line CSV fixes cover DAT-1; SRV-1 is a reorder). The biggest *judgment* call is the data-integrity gate (§4) — cheap warnings now, deeper unit-detection later.

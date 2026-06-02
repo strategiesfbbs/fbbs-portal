@@ -125,6 +125,16 @@ test('resolveRequestRep: production mode ignores __none__ cookie sentinel', () =
   assert.strictEqual(rep.source, 'iis');
 });
 
+test('resolveRequestRep: trusted IIS mode ignores spoofable fallback headers', () => {
+  const rep = r.resolveRequestRep({
+    headers: {
+      'auth-user': 'FBBS\\attacker',
+      'x-forwarded-user': 'FBBS\\alsoattacker'
+    }
+  }, { allowCookieOverride: false, allowDefaultRep: false, trustedIisHeadersOnly: true });
+  assert.strictEqual(rep, null);
+});
+
 test('resolveRequestRep: IIS logon header when no cookie', () => {
   const rep = r.resolveRequestRep({ headers: { 'x-iisnode-logon_user': 'FBBS\\mjones' } });
   assert.strictEqual(rep.username, 'mjones');

@@ -403,7 +403,8 @@ function isMutatingApiRequest(req, pathname) {
 function resolveRequestRep(req) {
   return resolveRequestRepBase(req, {
     allowCookieOverride: ALLOW_REP_OVERRIDE,
-    allowDefaultRep: ALLOW_DEFAULT_REP
+    allowDefaultRep: ALLOW_DEFAULT_REP,
+    trustedIisHeadersOnly: IS_IIS_AUTH_MODE
   });
 }
 
@@ -2271,6 +2272,34 @@ function getBankDataStatus() {
     accountStatuses: getBankAccountStatusImportStatus(BANK_REPORTS_DIR),
     averagedSeries: getAveragedSeriesStatus(BANK_REPORTS_DIR),
     bondAccounting: getBondAccountingStatus(BANK_REPORTS_DIR)
+  };
+}
+
+function checkDataDirWritable() {
+  const probe = path.join(DATA_DIR, `_healthcheck_${process.pid}_${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(probe, 'ok');
+    fs.rmSync(probe, { force: true });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+function buildHealthStatus() {
+  const dataDirWritable = checkDataDirWritable();
+  const bankData = getBankDataStatus();
+  const checks = {
+    dataDirWritable,
+    bankDataAvailable: { ok: Boolean(bankData.available), bankCount: bankData.bankCount || 0 },
+    currentPackageReadable: { ok: Boolean(getCurrentPackage()) }
+  };
+  const ready = Object.values(checks).every(check => check && check.ok);
+  return {
+    status: ready ? 'ok' : 'degraded',
+    now: new Date().toISOString(),
+    build: PORTAL_BUILD,
+    checks
   };
 }
 
@@ -6075,6 +6104,50 @@ function ingestFolderDropReferences(scan) {
   return result;
 }
 
+function validatePublishFileSet(files) {
+  let classifiedCount = 0;
+  for (const file of files || []) {
+    const slot = classifyFile(file.filename, file.explicitSlot);
+    if (!slot) continue;
+    classifiedCount++;
+    const signatureError = validateUploadSignature(file, slot);
+    if (signatureError) {
+      const err = new Error(signatureError);
+      err.statusCode = 400;
+      throw err;
+    }
+    if (!safeJoin(CURRENT_DIR, sanitizeFilename(file.filename))) {
+      const err = new Error(`Invalid upload filename: ${file.filename || '(unnamed file)'}`);
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+  if (!classifiedCount) {
+    const err = new Error('No uploaded files could be classified');
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
+function snapshotCurrentPackageDir() {
+  const snapshotDir = path.join(DATA_DIR, `_publish_rollback_${process.pid}_${Date.now()}`);
+  fs.rmSync(snapshotDir, { recursive: true, force: true });
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  if (fs.existsSync(CURRENT_DIR)) {
+    fs.cpSync(CURRENT_DIR, snapshotDir, { recursive: true, force: true });
+  }
+  return snapshotDir;
+}
+
+function restoreCurrentPackageSnapshot(snapshotDir) {
+  fs.rmSync(CURRENT_DIR, { recursive: true, force: true });
+  fs.mkdirSync(CURRENT_DIR, { recursive: true });
+  if (snapshotDir && fs.existsSync(snapshotDir)) {
+    fs.cpSync(snapshotDir, CURRENT_DIR, { recursive: true, force: true });
+  }
+  invalidatePackageCache();
+}
+
 async function handleFolderDropScan(req, res, query) {
   try {
     return sendJSON(res, 200, scanFolderDrop(query.get('date')));
@@ -6124,6 +6197,33 @@ async function handleUpload(req, res) {
 }
 
 async function publishPackageFiles(files, res, options = {}) {
+  let snapshotDir = '';
+  try {
+    validatePublishFileSet(files);
+    snapshotDir = snapshotCurrentPackageDir();
+    return await publishPackageFilesUnsafe(files, res, options);
+  } catch (err) {
+    if (snapshotDir) {
+      try {
+        restoreCurrentPackageSnapshot(snapshotDir);
+        log('warn', 'Publish failed; restored prior current package snapshot:', err.message);
+      } catch (restoreErr) {
+        log('error', 'Publish rollback failed:', restoreErr.message);
+      }
+    }
+    const status = err.statusCode || 500;
+    if (!res.headersSent) {
+      return sendJSON(res, status, { error: err.message || 'Publish failed' });
+    }
+    throw err;
+  } finally {
+    if (snapshotDir) {
+      try { fs.rmSync(snapshotDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+}
+
+async function publishPackageFilesUnsafe(files, res, options = {}) {
   let priorMeta = readMetaFile(CURRENT_DIR);
   let priorMuniOfferingsPayload = loadCurrentMuniOfferings();
   const existingBeforeUpload = fs.existsSync(CURRENT_DIR)
@@ -7038,7 +7138,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/health' && req.method === 'GET') {
-      return sendJSON(res, 200, { status: 'ok', now: new Date().toISOString(), build: PORTAL_BUILD });
+      return sendJSON(res, 200, buildHealthStatus());
     }
 
     if (pathname === '/api/me' && req.method === 'GET') {
@@ -7953,9 +8053,11 @@ process.on('SIGINT',  () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('uncaughtException', err => {
   log('error', 'uncaughtException:', err.stack || err.message);
+  setImmediate(() => process.exit(1));
 });
 process.on('unhandledRejection', reason => {
   log('error', 'unhandledRejection:', reason);
+  setImmediate(() => process.exit(1));
 });
 
 // ---------- Start ----------

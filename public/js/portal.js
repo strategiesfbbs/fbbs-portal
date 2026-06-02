@@ -1371,6 +1371,7 @@
   }
 
   function isAdminUiAllowed() {
+    if (!meState.auth || meState.auth.loadFailed) return false;
     return !isProductionAuthMode() || Boolean(meState.auth && meState.auth.isAdmin);
   }
 
@@ -1805,7 +1806,7 @@
     } catch (e) {
       console.error('Failed to load /api/me:', e);
       meState.rep = null;
-      meState.auth = { allowRepOverride: true, mode: 'local', isAdmin: false };
+      meState.auth = { allowRepOverride: false, mode: 'unknown', isAdmin: false, loadFailed: true };
     }
     renderRepPicker();
     applyAuthUi();
@@ -13826,7 +13827,7 @@
         <td>${formatNumericDate(o.settle)}</td>
         <td>${escapeHtml(o.issuerState)}</td>
         <td>${o.restrictions.length
-          ? `<span class="restrict-chip" title="Not available in: ${o.restrictions.join(', ')}">${o.restrictions.join(', ')}</span>`
+          ? `<span class="restrict-chip" title="Not available in: ${escapeHtml(o.restrictions.join(', '))}">${escapeHtml(o.restrictions.join(', '))}</span>`
           : '<span class="no-restrict">&mdash;</span>'}</td>
         <td class="cpn-cell">${escapeHtml(o.couponFrequency || '')}</td>
         <td style="text-align:right">${formatCdPrice(o.cost)}</td>
@@ -16619,7 +16620,19 @@
     });
   }
 
+  function setupGlobalErrorLogging() {
+    if (window.__fbbsGlobalErrorLoggingBound) return;
+    window.__fbbsGlobalErrorLoggingBound = true;
+    window.addEventListener('error', event => {
+      console.error('[FBBS portal error]', event.message || event.error || event);
+    });
+    window.addEventListener('unhandledrejection', event => {
+      console.error('[FBBS portal promise rejection]', event.reason || event);
+    });
+  }
+
   function init() {
+    setupGlobalErrorLogging();
     setHeaderDate();
     loadCurrent();
     loadStrategyNotifications();

@@ -77,10 +77,12 @@ function resolveRequestRep(req, options = {}) {
   if (allowCookieOverride && cookieValue === '__none__') return null;
 
   const iisHeader = req && req.headers
-    ? (req.headers['x-iisnode-logon_user'] ||
-       req.headers['x-iisnode-auth_user'] ||
-       req.headers['auth-user'] ||
-       req.headers['x-forwarded-user'])
+    ? (options.trustedIisHeadersOnly
+        ? (req.headers['x-iisnode-logon_user'] || req.headers['x-iisnode-auth_user'])
+        : (req.headers['x-iisnode-logon_user'] ||
+           req.headers['x-iisnode-auth_user'] ||
+           req.headers['auth-user'] ||
+           req.headers['x-forwarded-user']))
     : null;
   if (iisHeader) {
     const display = stripDomain(iisHeader);
