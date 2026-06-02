@@ -13,6 +13,7 @@ one page of blanks (admin usernames, publisher, ready-time, notify channel, poli
 | Document | Lane | What it is |
 |---|---|---|
 | [internal-go-live-readiness.md](internal-go-live-readiness.md) | Joint | Umbrella: readiness, risks, **tiered Go/No-Go (§8)**, both lanes' status |
+| [pre-launch-review.md](pre-launch-review.md) | Claude | **Deep code review** — what's solid, 🔴 fix-before-launch, 🟠 conditions, 🟢 backlog |
 | [decision-sheet.md](decision-sheet.md) | **FBBS fills** | One-page checklist of every open org decision |
 | [launch-day-script.md](launch-day-script.md) | Joint | Minute-by-minute first-morning checklist (= the smoke test) |
 | [role-matrix.md](role-matrix.md) | Claude | 5 roles × capabilities; **Phase 1 mapping (§2.1)**; enforced-vs-policy; gaps |

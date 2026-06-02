@@ -20,8 +20,14 @@
 | Org decisions (decision sheet) | FBBS | ⬜ TODO | [decision-sheet.md](decision-sheet.md) — admin usernames is the config blocker |
 
 **Recommendation:** ⬜ Go / ⬜ Go-with-conditions / ⬜ No-go — *(decide once the
-[decision sheet](decision-sheet.md) is filled and the smoke test passes; see the
-tiered go/no-go in §8).*
+[decision sheet](decision-sheet.md) is filled, the [pre-launch review](pre-launch-review.md)
+🔴 items are closed, and the smoke test passes; see the tiered go/no-go in §8).*
+
+> **Deep code review (2026-06-02):** see [pre-launch-review.md](pre-launch-review.md).
+> No Critical issues; the codebase is well-built. 🔴 fix-before-launch items: ✅ **DAT-1**
+> (CSV injection), ✅ **SRV-3** + **OPS-1** (web.config worker pin + log caps), ✅ **OPS-2**
+> (pin Node) are **fixed**. **Remaining for Codex:** SRV-1 & SRV-2 (publish-flow
+> robustness) and OPS-3 (live-SQLite backup procedure).
 
 ---
 
