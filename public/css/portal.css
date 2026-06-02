@@ -11351,13 +11351,14 @@ body {
 }
 .maps-plot {
   width: 100%;
-  flex: 0 0 320px;
-  height: 320px;
-  max-height: 320px;
-  min-height: 280px;
+  flex: 1 1 auto;
+  min-height: 440px;
   overflow: hidden;
   position: relative;
   z-index: 1;
+  border: 1px solid rgba(0, 63, 42, 0.12);
+  border-radius: 10px;
+  background: #f4f8f5;
 }
 .maps-loading-overlay {
   background: rgba(255, 255, 255, 0.9);
@@ -11367,12 +11368,7 @@ body {
 }
 #mapsPlot .svg-container,
 #mapsPlot .plot-container {
-  height: 320px !important;
-  max-height: 320px !important;
-  overflow: hidden !important;
-}
-#mapsPlot .main-svg {
-  max-height: 320px !important;
+  height: 100% !important;
 }
 .maps-area-card {
   align-items: center;
@@ -11505,20 +11501,16 @@ body {
   font-weight: 700;
 }
 .maps-legend {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 4;
-  background: rgba(251, 253, 252, 0.96);
-  border: 1px solid rgba(0, 63, 42, 0.14);
-  border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(15, 32, 22, 0.14);
-  padding: 6px 6px 8px;
-  min-width: 156px;
-  font-size: 12.5px;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 6px 8px;
+  background: #f7faf8;
+  border: 1px solid rgba(0, 63, 42, 0.12);
+  border-radius: 10px;
+  font-size: 12.5px;
 }
 .maps-legend-title {
   text-transform: uppercase;
@@ -11526,43 +11518,41 @@ body {
   font-weight: 700;
   color: var(--text3, #888);
   font-size: 10.5px;
-  padding: 4px 8px 6px;
-  border-bottom: 1px solid rgba(0, 63, 42, 0.09);
-  margin-bottom: 2px;
+  padding: 0 4px 0 2px;
+  margin: 0;
 }
 .maps-legend-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: 7px;
+  gap: 7px;
+  padding: 4px 11px;
+  border-radius: 999px;
   cursor: pointer;
-  border: 0;
-  background: transparent;
-  width: 100%;
+  border: 1px solid var(--line, #e0e6e2);
+  background: #fff;
   text-align: left;
   font: inherit;
   color: var(--text, #1f2925);
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
-.maps-legend-item:hover { background: rgba(0, 63, 42, 0.07); }
+.maps-legend-item:hover { border-color: rgba(0, 63, 42, 0.35); }
 .maps-legend-item.active {
-  background: rgba(0, 63, 42, 0.12);
-  box-shadow: inset 2px 0 0 var(--racing-green);
+  background: rgba(0, 63, 42, 0.08);
+  border-color: rgba(0, 63, 42, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(0, 63, 42, 0.25);
 }
 .maps-legend-dot {
   width: 12px;
-  height: 15px;
+  height: 12px;
   border-radius: 50%;
-  border: 1.5px solid rgba(16, 23, 21, 0.78);
+  border: 1.5px solid rgba(16, 23, 21, 0.45);
   flex: 0 0 auto;
-  transform: rotate(45deg);
 }
 .maps-legend-dot-all {
-  background: linear-gradient(135deg, var(--maps-client) 0 33%, var(--maps-prospect) 33% 66%, var(--maps-open) 66% 100%);
-  border-color: rgba(16, 23, 21, 0.78);
+  background: conic-gradient(var(--maps-open) 0 33.3%, var(--maps-prospect) 33.3% 66.6%, var(--maps-client) 66.6% 100%);
+  border-color: rgba(16, 23, 21, 0.45);
 }
 .maps-legend-label {
-  flex: 1 1 auto;
   font-weight: 600;
 }
 .maps-legend-count {
@@ -11745,6 +11735,7 @@ body {
 .maps-status-pill {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-width: 68px;
   justify-content: center;
   border-radius: 999px;
@@ -11754,24 +11745,50 @@ body {
   font-size: 11.5px;
   font-weight: 700;
   line-height: 1;
-  padding: 5px 8px;
+  padding: 5px 9px;
   white-space: nowrap;
 }
-.maps-status-client {
-  border-color: rgba(24, 115, 90, 0.24);
-  background: #edf7f2;
-  color: #0f5b43;
-}
-.maps-status-prospect {
-  border-color: rgba(201, 151, 47, 0.32);
-  background: #fbf4e5;
-  color: #7a5512;
+/* A small dot before the label echoes the exact marker colour on the map,
+   so a status reads the same here as it does on a pin. */
+.maps-status-pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--maps-open);
+  border: 1px solid rgba(16, 23, 21, 0.28);
 }
 .maps-status-open {
-  border-color: rgba(16, 23, 21, 0.16);
-  background: #f4f7f5;
-  color: #27322e;
+  border-color: rgba(124, 59, 199, 0.28);
+  background: rgba(124, 59, 199, 0.09);
+  color: #5a2a93;
 }
+.maps-status-open::before { background: var(--maps-open); }
+.maps-status-prospect {
+  border-color: rgba(21, 151, 199, 0.30);
+  background: rgba(21, 151, 199, 0.10);
+  color: #0f6f91;
+}
+.maps-status-prospect::before { background: var(--maps-prospect); }
+.maps-status-client {
+  border-color: rgba(186, 47, 37, 0.28);
+  background: rgba(186, 47, 37, 0.09);
+  color: #93251d;
+}
+.maps-status-client::before { background: var(--maps-client); }
+.maps-status-watchlist {
+  border-color: rgba(184, 117, 36, 0.32);
+  background: rgba(184, 117, 36, 0.12);
+  color: #875414;
+}
+.maps-status-watchlist::before { background: var(--maps-watchlist); }
+.maps-status-dormant {
+  border-color: rgba(109, 122, 114, 0.34);
+  background: rgba(109, 122, 114, 0.13);
+  color: #455049;
+}
+.maps-status-dormant::before { background: var(--maps-dormant); }
 .maps-detail-panel {
   border: 1px solid var(--line, #e2e2e2);
   border-radius: 10px;
@@ -11802,12 +11819,21 @@ body {
   margin: 0;
 }
 .maps-detail-status {
+  align-items: center;
   color: var(--text3, #666);
-  display: inline-block;
+  display: inline-flex;
   font-size: 11px;
   font-weight: 800;
+  gap: 6px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+.maps-detail-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid rgba(16, 23, 21, 0.35);
+  flex: 0 0 auto;
 }
 .maps-detail-grid {
   display: grid;

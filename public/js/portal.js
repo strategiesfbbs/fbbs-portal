@@ -17381,7 +17381,7 @@
       marker: {
         size: groups.map(group => group.key === selectedKey ? 24 : Math.min(28, 14 + Math.sqrt(group.banks.length) * 3.5)),
         color: groups.map(group => mapsStatusColor(mapsAccountStatusLabel(group.banks[0]))),
-        opacity: 0.98,
+        opacity: 0.9,
         line: {
           color: '#ffffff',
           width: groups.map(group => group.key === selectedKey ? 4 : 2)
@@ -17452,7 +17452,13 @@
         mapsState.selectedLocationIndex = nextIndex;
         mapsState.selectedBankId = String(group.banks[nextIndex].id || '');
         applyMapsFilters();
-        if (!isFull) openMapsFullView();
+        // Clicking a pin used to force the full-screen modal open. Now that
+        // the inline map is full-size, just surface the bank in the detail
+        // panel and bring it into view — Full View stays one button away.
+        if (!isFull) {
+          const panel = document.getElementById('mapsDetailPanel');
+          if (panel && panel.scrollIntoView) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
       });
     });
   }
@@ -17570,11 +17576,18 @@
     return counts;
   }
 
+  const MAPS_STATUS_ORDER = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
+
   function renderMapsStatusFilters() {
     const el = document.getElementById('mapsLegend');
     if (!el) return;
     const counts = mapsStatusCounts();
-    const statuses = ['Open', 'Prospect', 'Client'];
+    // Show every status that actually appears in the data (canonical order
+    // first, then any unexpected ones) so the legend stays complete and
+    // filterable as Watchlist/Dormant banks get tagged.
+    const statuses = MAPS_STATUS_ORDER.filter(s => counts[s]);
+    Object.keys(counts).forEach(s => { if (!statuses.includes(s)) statuses.push(s); });
+    if (!statuses.length) statuses.push('Open', 'Prospect', 'Client');
     const allActive = mapsState.selectedStatuses.size === 0;
     const total = mapsState.banks.length;
     el.innerHTML = [
@@ -17750,7 +17763,7 @@
     panel.innerHTML = `
       <div class="maps-detail-head">
         <div>
-          <span class="maps-detail-status">Status: ${escapeHtml(status)}</span>
+          <span class="maps-detail-status"><span class="maps-detail-status-dot" style="background:${mapsStatusColor(status)}"></span>Status: ${escapeHtml(status)}</span>
           <h4>${escapeHtml(mapsBankListName(bank))}</h4>
           <p>${escapeHtml(locationLine || [bank.city, bank.state, bank.certNumber ? `FDIC ${bank.certNumber}` : ''].filter(Boolean).join(' - '))}</p>
         </div>
@@ -17820,7 +17833,7 @@
     detail.innerHTML = `
       <div class="maps-detail-head">
         <div>
-          <span class="maps-detail-status">Status: ${escapeHtml(status)}</span>
+          <span class="maps-detail-status"><span class="maps-detail-status-dot" style="background:${mapsStatusColor(status)}"></span>Status: ${escapeHtml(status)}</span>
           <h4>${escapeHtml(mapsBankListName(bank))}</h4>
           <p>${escapeHtml(locationLine || [bank.city, bank.state, bank.certNumber ? `FDIC ${bank.certNumber}` : ''].filter(Boolean).join(' - '))}</p>
         </div>
@@ -17951,10 +17964,12 @@
   function mapsBindHandlers() {
     const search = document.getElementById('mapsSearchBox');
     if (search && !search.dataset.bound) {
+      let searchTimer = null;
       search.addEventListener('input', () => {
         mapsState.search = search.value;
         mapsState.locationFilter = null;
-        applyMapsFilters();
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(applyMapsFilters, 160);
       });
       search.dataset.bound = '1';
     }
