@@ -1363,9 +1363,34 @@
     return Number.isFinite(n) ? n : null;
   }
 
+  function isProductionAuthMode() {
+    return Boolean(meState.auth && meState.auth.mode === 'iis');
+  }
+
+  function isAdminUiAllowed() {
+    return !isProductionAuthMode() || Boolean(meState.auth && meState.auth.isAdmin);
+  }
+
+  function applyAuthUi() {
+    const allowAdmin = isAdminUiAllowed();
+    document.querySelectorAll('[data-page="upload"], [data-goto="upload"], [data-page="admin"], [data-goto="admin"]').forEach(el => {
+      el.hidden = !allowAdmin;
+      el.setAttribute('aria-hidden', allowAdmin ? 'false' : 'true');
+    });
+    const active = parseHashTarget(window.location.hash || '#home').page;
+    if (!allowAdmin && (active === 'upload' || active === 'admin')) {
+      showToast('Admin permission is required for that page.', true);
+      goTo('package-qa');
+    }
+  }
+
   function goTo(pageName, { updateHash = true } = {}) {
     pageName = parseHashTarget(pageName).page;
     if (!VALID_PAGES.includes(pageName)) pageName = 'home';
+    if (!isAdminUiAllowed() && (pageName === 'upload' || pageName === 'admin')) {
+      showToast('Admin permission is required for that page.', true);
+      pageName = 'package-qa';
+    }
 
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
@@ -1780,6 +1805,7 @@
       meState.auth = { allowRepOverride: true, mode: 'local', isAdmin: false };
     }
     renderRepPicker();
+    applyAuthUi();
     await loadMyWork();
   }
 
@@ -16056,6 +16082,15 @@
       if (res.ok) currentPackage = await res.json();
     } catch (e) { /* use cached currentPackage */ }
     const pkg = currentPackage || {};
+    let latestAudit = null;
+    try {
+      const auditRes = await fetch('/api/audit-log?limit=25', { cache: 'no-store' });
+      if (auditRes.ok) {
+        const entries = await auditRes.json();
+        latestAudit = (Array.isArray(entries) ? entries : [])
+          .find(entry => String(entry.packageDate || '').slice(0, 10) === String(pkg.date || '').slice(0, 10)) || null;
+      }
+    } catch (e) { /* audit details are supplemental */ }
     const today = new Date().toISOString().slice(0, 10);
 
     const rows = PACKAGE_QA_SLOTS.map(slot => {
@@ -16090,6 +16125,20 @@
     const filledRequired = required.filter(r => r.filled).length;
     const warnCount = rows.filter(r => r.status === 'warn').length;
     const missingCount = rows.filter(r => r.status === 'missing').length;
+    const publishWarnings = [];
+    if (latestAudit && Array.isArray(latestAudit.warnings)) {
+      latestAudit.warnings.forEach(w => {
+        if (w) publishWarnings.push({ slot: 'Publish', text: String(w) });
+      });
+    }
+    const parserWarnings = latestAudit && latestAudit.parserWarnings && typeof latestAudit.parserWarnings === 'object'
+      ? latestAudit.parserWarnings
+      : {};
+    Object.entries(parserWarnings).forEach(([slot, warnings]) => {
+      (Array.isArray(warnings) ? warnings : []).forEach(w => {
+        if (w) publishWarnings.push({ slot, text: String(w) });
+      });
+    });
     setText('packageQaStat', `${filledRequired}/${required.length}`);
 
     const banners = [];
@@ -16102,7 +16151,8 @@
       }
       if (missingCount) banners.push({ level: 'warn', text: `${missingCount} required slot${missingCount === 1 ? '' : 's'} empty.` });
       if (warnCount) banners.push({ level: 'warn', text: `${warnCount} slot${warnCount === 1 ? '' : 's'} with a data-quality flag — see the table.` });
-      if (!missingCount && !warnCount) banners.push({ level: 'ok', text: 'All required slots filled and row counts look sane.' });
+      if (publishWarnings.length) banners.push({ level: 'warn', text: `${publishWarnings.length} publish/parser warning${publishWarnings.length === 1 ? '' : 's'} from the latest audit entry.` });
+      if (!missingCount && !warnCount && !publishWarnings.length) banners.push({ level: 'ok', text: 'All required slots filled and row counts look sane.' });
     }
 
     body.innerHTML = `
@@ -16112,6 +16162,15 @@
         <div><span class="qa-meta-lbl">Published by</span><strong>${escapeHtml(pkg.publishedBy || '—')}</strong></div>
       </div>
       ${banners.map(b => `<div class="qa-banner qa-banner-${b.level}">${escapeHtml(b.text)}</div>`).join('')}
+      ${publishWarnings.length ? `
+        <div class="qa-warning-list">
+          <strong>Latest publish warnings</strong>
+          ${publishWarnings.slice(0, 12).map(w => `
+            <div><span>${escapeHtml(w.slot)}</span>${escapeHtml(w.text)}</div>
+          `).join('')}
+          ${publishWarnings.length > 12 ? `<em>${publishWarnings.length - 12} more warning${publishWarnings.length - 12 === 1 ? '' : 's'} in Admin.</em>` : ''}
+        </div>
+      ` : ''}
       <table class="archive-table qa-table">
         <thead><tr>
           <th>Slot</th>

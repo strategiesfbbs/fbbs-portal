@@ -13187,6 +13187,38 @@ body {
 .qa-banner-warn { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
 .qa-banner-info { background: var(--bg-light); color: var(--text2); border-color: var(--border); }
 
+.qa-warning-list {
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  margin: 10px 0 14px;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #78350f;
+  font-size: 13px;
+}
+.qa-warning-list strong {
+  color: #78350f;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.qa-warning-list div {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+}
+.qa-warning-list span {
+  color: #92400e;
+  font-weight: 800;
+}
+.qa-warning-list em {
+  color: #92400e;
+  font-style: normal;
+  font-weight: 700;
+}
+
 .qa-table { margin-top: 6px; }
 .qa-table td { vertical-align: middle; }
 .qa-row-missing { background: rgba(220, 38, 38, 0.06); }
