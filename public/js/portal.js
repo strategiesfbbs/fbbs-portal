@@ -17724,16 +17724,11 @@
         <td class="num">${escapeHtml(mapsFormatValue(mapsSecuritiesToAssets(b), securitiesToAssetsDef))}</td>
       </tr>
     `).join('') || '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">No banks match the current filters</td></tr>';
-    const previewBank = btn => {
-      const bank = mapsFindBank(btn.dataset.mapsBankPreview || '');
-      mapsSelectBank(bank, mapsLocationGroups(rows).find(group => group.key === mapsLocationKey(bank)));
-      applyMapsFilters();
-    };
-    body.querySelectorAll('[data-maps-bank-preview]').forEach(btn => {
-      btn.addEventListener('pointerdown', () => previewBank(btn));
-      btn.addEventListener('focus', () => previewBank(btn));
-      btn.addEventListener('click', event => event.stopPropagation());
-    });
+    // Selection happens on explicit click only, via the delegated handler
+    // bound once on #mapsBankBody. Earlier this also fired on pointerdown and
+    // focus, which meant closing the detail panel could immediately re-select
+    // a bank when focus shifted back into the table ("Close" jumped to
+    // another bank instead of dismissing).
     if (rowCountEl) {
       const total = rows.length.toLocaleString();
       const areaPrefix = area ? `within ${formatNumber(area.radiusMiles)} mi · ` : '';
@@ -17767,9 +17762,11 @@
     const bank = mapsFindBank(mapsState.selectedBankId);
     if (!bank) {
       panel.hidden = false;
+      panel.classList.remove('maps-detail-populated');
       panel.innerHTML = '<div class="maps-detail-empty">Select a bank row to preview key map metrics.</div>';
       return;
     }
+    panel.classList.add('maps-detail-populated');
     const assetsDef = mapsState.fieldByKey.totalAssets;
     const depositsDef = mapsState.fieldByKey.totalDeposits;
     const loansToDepositsDef = mapsState.fieldByKey.loansToDeposits;

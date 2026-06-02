@@ -11327,6 +11327,7 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
 }
 .maps-panel h3 {
   margin: 0 0 10px;
@@ -11793,8 +11794,26 @@ body {
   border: 1px solid var(--line, #e2e2e2);
   border-radius: 10px;
   flex: 0 0 auto;
+  min-height: 0;
   margin-top: 10px;
   padding: 12px;
+}
+/* When a bank is selected, float the detail as a bottom-anchored overlay
+   with its own scroll, so all of the bank's metrics + peer deltas are
+   reachable without fighting the table/drilldown for vertical space in an
+   already-crowded column. The table stays full-size behind it; Close
+   dismisses the overlay. When empty the panel is in-flow and compact. */
+.maps-detail-panel.maps-detail-populated {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  max-height: 74%;
+  overflow-y: auto;
+  margin-top: 0;
+  background: #fff;
+  box-shadow: 0 -10px 30px rgba(15, 32, 22, 0.18);
+  z-index: 6;
 }
 .maps-detail-empty {
   color: var(--text3, #666);
@@ -11838,7 +11857,7 @@ body {
 .maps-detail-grid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 12px;
 }
 .maps-detail-carousel {
