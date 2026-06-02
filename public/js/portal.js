@@ -16720,6 +16720,7 @@
     selectedStates: new Set(),
     selectedStatuses: new Set(),
     selectedBankId: '',
+    detailDismissed: false,
     selectedLocationKey: '',
     selectedLocationIndex: 0,
     visibleBanks: [],
@@ -17150,6 +17151,7 @@
 
   function mapsSelectBank(bank, group) {
     if (!bank) return;
+    mapsState.detailDismissed = false;
     mapsState.selectedBankId = String(bank.id || '');
     mapsState.selectedLocationKey = group ? group.key : mapsLocationKey(bank);
     const peers = group ? group.banks : mapsLocationGroups(mapsState.visibleBanks).find(g => g.key === mapsState.selectedLocationKey)?.banks;
@@ -17451,6 +17453,7 @@
         mapsState.selectedLocationKey = key;
         mapsState.selectedLocationIndex = nextIndex;
         mapsState.selectedBankId = String(group.banks[nextIndex].id || '');
+        mapsState.detailDismissed = false;
         applyMapsFilters();
         // Clicking a pin used to force the full-screen modal open. Now that
         // the inline map is full-size, just surface the bank in the detail
@@ -17684,8 +17687,13 @@
     const shown = rows.slice(0, limit);
     const visibleIds = new Set(shown.map(row => String(row.id || '')));
     if (!shown.length) mapsState.selectedBankId = '';
-    else if (!visibleIds.has(String(mapsState.selectedBankId || ''))) {
+    else if (!mapsState.detailDismissed && !visibleIds.has(String(mapsState.selectedBankId || ''))) {
+      // Pre-fill the panel with the top result, but only until the user has
+      // explicitly closed it — otherwise "Close" just re-selects this bank
+      // and the panel can never be dismissed.
       mapsSelectBank(shown[0], mapsLocationGroups(rows).find(group => group.key === mapsLocationKey(shown[0])));
+    } else if (mapsState.detailDismissed && !visibleIds.has(String(mapsState.selectedBankId || ''))) {
+      mapsState.selectedBankId = '';
     }
     renderMapsMarkerMap(rows);
     const assetsDef = mapsState.fieldByKey.totalAssets;
@@ -17791,6 +17799,7 @@
     `;
     const close = document.getElementById('mapsDetailClose');
     if (close) close.addEventListener('click', () => {
+      mapsState.detailDismissed = true;
       mapsState.selectedBankId = '';
       applyMapsFilters();
     });
