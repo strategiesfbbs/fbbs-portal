@@ -16746,7 +16746,11 @@
     for (const [metricKey, info] of Object.entries(peer.byKey)) {
       const delta = bank ? bank[`peerDelta_${metricKey}`] : null;
       const def = mapsState.fieldByKey[metricKey];
-      const label = def ? def.label.replace(/\s*\(.*?\)\s*$/, '').trim() : metricKey;
+      // Prefer the projected map field label, then the server-supplied
+      // BANK_FIELDS/peer label, and only fall back to the raw key as a last
+      // resort. Strip the trailing unit suffix ("($000)", "(%)") either way.
+      const rawLabel = (def && def.label) || info.label || metricKey;
+      const label = String(rawLabel).replace(/\s*\(.*?\)\s*$/, '').trim();
       let signal = 'neutral';
       let arrow = '·';
       let deltaText = '—';

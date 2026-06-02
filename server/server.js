@@ -64,7 +64,8 @@ const {
   importBankWorkbook,
   listBankSummaries,
   queryBankMapDataset,
-  searchBankDatabase
+  searchBankDatabase,
+  BANK_FIELDS
 } = require('./bank-data-importer');
 const {
   getAveragedSeriesStatus,
@@ -3685,16 +3686,29 @@ async function handleBuyerCandidates(req, res) {
 
 let mapBankCache = null;
 
+const BANK_FIELD_LABELS = new Map((BANK_FIELDS || []).map(f => [f.key, f.label]));
+
 function getPeerComparisonForMap() {
   const index = getPeerComparisonIndex();
   if (!index) return null;
   const period = index.periods[0] || '';
+  const rawByKey = index.byPeriod.get(period) || {};
+  // Attach the curated BANK_FIELDS label to each metric so the map's peer
+  // chips render friendly names. The byKey set spans more metrics than the
+  // map's projected fields, so the client can't resolve them all on its own
+  // and was falling back to the raw camelCase key (netIncome, llrToLoans…).
+  // Fall back to the FedFis peer label, then the key, for the few metrics
+  // with no BANK_FIELDS entry.
+  const byKey = {};
+  for (const [key, info] of Object.entries(rawByKey)) {
+    byKey[key] = { ...info, label: BANK_FIELD_LABELS.get(key) || info.peerLabel || key };
+  }
   return {
     peerGroup: index.peerGroup,
     period,
     bankPeriod: '',
     periodAligned: false,
-    byKey: index.byPeriod.get(period) || {}
+    byKey
   };
 }
 
