@@ -26,6 +26,7 @@ const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const { AsyncLocalStorage } = require('async_hooks');
 const { extractPdfText } = require('./pdf-text');
 
 const { parseCdOffersText, parseCdOffersWorkbook } = require('./cd-offers-parser');
@@ -196,6 +197,7 @@ const ADMIN_USERS = new Set(String(process.env.FBBS_ADMIN_USERS || '')
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = LOG_LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
 const PORTAL_BUILD = 'swap-workflow-2026-05-13';
+const auditContext = new AsyncLocalStorage();
 
 // ---------- Logging ----------
 
@@ -417,6 +419,16 @@ function authInfoForRequest(req) {
       isAdmin,
       adminConfigured: ADMIN_USERS.size > 0
     }
+  };
+}
+
+function auditActorForRequest(req) {
+  const rep = resolveRequestRep(req);
+  if (!rep) return null;
+  return {
+    actorUsername: rep.username || '',
+    actorDisplay: rep.displayName || rep.username || '',
+    actorSource: rep.source || ''
   };
 }
 
@@ -2259,6 +2271,173 @@ function getBankDataStatus() {
     accountStatuses: getBankAccountStatusImportStatus(BANK_REPORTS_DIR),
     averagedSeries: getAveragedSeriesStatus(BANK_REPORTS_DIR),
     bondAccounting: getBondAccountingStatus(BANK_REPORTS_DIR)
+  };
+}
+
+const INTERNAL_GO_LIVE_REQUIRED_SLOTS = [
+  'econ',
+  'cd',
+  'cdoffers',
+  'relativeValue',
+  'munioffers',
+  'mmd',
+  'treasuryNotes',
+  'agenciesBullets',
+  'agenciesCallables',
+  'corporates'
+];
+const INTERNAL_GO_LIVE_OPTIONAL_SLOTS = ['dashboard', 'bairdSyndicate'];
+
+function isDataDirExternal() {
+  return path.resolve(DATA_DIR) !== path.resolve(path.join(ROOT, 'data'));
+}
+
+function compactImportStatus(status) {
+  if (!status || typeof status !== 'object') return { available: false };
+  const metadata = status.metadata && typeof status.metadata === 'object' ? status.metadata : {};
+  const dataset = status.dataset && typeof status.dataset === 'object' ? status.dataset : {};
+  return {
+    available: Boolean(status.available || status.exists || status.importedAt || metadata.importedAt || status.updatedAt || status.bankCount || status.statusCount || status.importedCount),
+    sourceFile: status.sourceFile || metadata.sourceFile || status.filename || '',
+    importedAt: status.importedAt || metadata.importedAt || status.updatedAt || '',
+    latestPeriod: status.latestPeriod || metadata.latestPeriod || status.period || '',
+    bankCount: status.bankCount || metadata.bankCount || null,
+    importedCount: status.importedCount || status.statusCount || metadata.importedCount || dataset.seriesRowCount || null,
+    unmatchedCount: status.unmatchedCount || metadata.unmatchedCount || null
+  };
+}
+
+function statusCheck(id, label, state, detail) {
+  return { id, label, state, detail };
+}
+
+function buildGoLiveStatus(req) {
+  const { rep, auth } = authInfoForRequest(req);
+  const pkg = getCurrentPackage() || {};
+  const bankStatus = getBankDataStatus();
+  const auditEntries = readAuditLog({ limit: 50 });
+  const latestPackageAudit = auditEntries.find(entry =>
+    String(entry.packageDate || '').slice(0, 10) === String(pkg.date || '').slice(0, 10)
+  ) || null;
+  const parserWarnings = latestPackageAudit && latestPackageAudit.parserWarnings && typeof latestPackageAudit.parserWarnings === 'object'
+    ? Object.entries(latestPackageAudit.parserWarnings).flatMap(([slot, warnings]) =>
+        (Array.isArray(warnings) ? warnings : [])
+          .filter(Boolean)
+          .map(text => ({ slot, text: String(text) }))
+      )
+    : [];
+  const publishWarnings = [
+    ...((latestPackageAudit && Array.isArray(latestPackageAudit.warnings)) ? latestPackageAudit.warnings.map(text => ({ slot: 'publish', text: String(text) })) : []),
+    ...parserWarnings
+  ];
+  const requiredSlots = INTERNAL_GO_LIVE_REQUIRED_SLOTS.map(key => ({
+    key,
+    label: DOC_TYPES_LABELS[key] || key,
+    filename: pkg[key] || '',
+    ready: Boolean(pkg[key])
+  }));
+  const optionalSlots = INTERNAL_GO_LIVE_OPTIONAL_SLOTS.map(key => ({
+    key,
+    label: DOC_TYPES_LABELS[key] || key,
+    filename: pkg[key] || '',
+    ready: Boolean(pkg[key])
+  }));
+  const missingRequiredSlots = requiredSlots.filter(slot => !slot.ready);
+  const accountStatuses = compactImportStatus(bankStatus.accountStatuses);
+  const bankData = compactImportStatus(bankStatus);
+  const averagedSeries = compactImportStatus(bankStatus.averagedSeries);
+  const bondAccounting = compactImportStatus(bankStatus.bondAccounting);
+
+  const checks = [
+    statusCheck(
+      'auth-mode',
+      'Windows login mode',
+      IS_IIS_AUTH_MODE ? 'ok' : 'warn',
+      IS_IIS_AUTH_MODE ? 'Production auth mode is enabled.' : 'Still running in local auth mode.'
+    ),
+    statusCheck(
+      'admin-users',
+      'Admin allowlist',
+      ADMIN_USERS.size > 0 ? 'ok' : 'fail',
+      ADMIN_USERS.size > 0 ? `${ADMIN_USERS.size} admin user${ADMIN_USERS.size === 1 ? '' : 's'} configured.` : 'Set FBBS_ADMIN_USERS before launch.'
+    ),
+    statusCheck(
+      'data-dir',
+      'External data folder',
+      isDataDirExternal() ? 'ok' : 'warn',
+      isDataDirExternal() ? 'DATA_DIR is outside the app folder.' : 'DATA_DIR is using the app-local data folder.'
+    ),
+    statusCheck(
+      'daily-package',
+      'Daily package',
+      missingRequiredSlots.length ? 'fail' : 'ok',
+      missingRequiredSlots.length
+        ? `${missingRequiredSlots.length} required slot${missingRequiredSlots.length === 1 ? '' : 's'} missing.`
+        : `All ${requiredSlots.length} required internal slots are filled.`
+    ),
+    statusCheck(
+      'publish-warnings',
+      'Publish warnings',
+      publishWarnings.length ? 'warn' : 'ok',
+      publishWarnings.length
+        ? `${publishWarnings.length} warning${publishWarnings.length === 1 ? '' : 's'} from the latest package audit.`
+        : 'No warnings on the latest matching package audit.'
+    ),
+    statusCheck(
+      'bank-data',
+      'Bank tear-sheet data',
+      bankData.available ? 'ok' : 'fail',
+      bankData.available
+        ? `${bankData.bankCount ? `${bankData.bankCount.toLocaleString('en-US')} banks` : 'Bank data'} imported${bankData.latestPeriod ? ` through ${bankData.latestPeriod}` : ''}.`
+        : 'Import the latest bank call-report workbook.'
+    ),
+    statusCheck(
+      'account-statuses',
+      'Sales ownership/statuses',
+      accountStatuses.available ? 'ok' : 'warn',
+      accountStatuses.available
+        ? `${accountStatuses.importedCount ? `${accountStatuses.importedCount.toLocaleString('en-US')} rows` : 'Account statuses'} imported.`
+        : 'Import account ownership/status workbook for sales workflows.'
+    )
+  ];
+  const failCount = checks.filter(check => check.state === 'fail').length;
+  const warnCount = checks.filter(check => check.state === 'warn').length;
+  const summaryState = failCount ? 'fail' : (warnCount ? 'warn' : 'ok');
+
+  return {
+    generatedAt: new Date().toISOString(),
+    state: summaryState,
+    counts: { ok: checks.filter(check => check.state === 'ok').length, warn: warnCount, fail: failCount },
+    rep,
+    auth: {
+      ...auth,
+      adminCount: ADMIN_USERS.size
+    },
+    package: {
+      date: pkg.date || '',
+      publishedAt: pkg.publishedAt || '',
+      publishedBy: pkg.publishedBy || '',
+      requiredSlots,
+      optionalSlots,
+      missingRequiredSlots,
+      publishWarnings: publishWarnings.slice(0, 20),
+      latestAuditActor: latestPackageAudit ? {
+        actorUsername: latestPackageAudit.actorUsername || '',
+        actorDisplay: latestPackageAudit.actorDisplay || '',
+        publishedBy: latestPackageAudit.publishedBy || ''
+      } : null
+    },
+    data: {
+      dataDir: DATA_DIR,
+      dataDirExternal: isDataDirExternal(),
+      maxUploadMb: Math.round(MAX_UPLOAD_BYTES / (1024 * 1024)),
+      bankUploadMaxMb: Math.round(BANK_UPLOAD_MAX_BYTES / (1024 * 1024)),
+      bankData,
+      accountStatuses,
+      averagedSeries,
+      bondAccounting
+    },
+    checks
   };
 }
 
@@ -5683,7 +5862,9 @@ function loadArchivedCorporates(date) {
 // ---------- Audit log ----------
 
 function appendAuditLog(entry) {
-  const line = JSON.stringify({ ...entry, at: new Date().toISOString() }) + '\n';
+  const store = auditContext.getStore() || {};
+  const actor = store.actor || {};
+  const line = JSON.stringify({ ...actor, ...entry, at: new Date().toISOString() }) + '\n';
   try {
     // Rotate before appending so the active file never grows far past the cap.
     rotateFileIfNeeded(AUDIT_LOG_PATH, { maxBytes: AUDIT_LOG_MAX_BYTES, keep: AUDIT_LOG_KEEP });
@@ -6834,6 +7015,8 @@ const server = http.createServer(async (req, res) => {
     return sendText(res, 400, 'Bad request');
   }
 
+  auditContext.enterWith({ actor: auditActorForRequest(req) });
+
   if (isMutatingApiRequest(req, pathname) && !isSameOriginWrite(req)) {
     return sendJSON(res, 403, { error: 'Cross-site write request blocked' });
   }
@@ -6874,6 +7057,14 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/me/work' && req.method === 'GET') {
       const rep = resolveRequestRep(req);
       return sendJSON(res, 200, buildMyWorkResponse(rep));
+    }
+
+    if (pathname === '/api/admin/go-live-status' && req.method === 'GET') {
+      const { auth } = authInfoForRequest(req);
+      if ((IS_IIS_AUTH_MODE || ADMIN_USERS.size > 0) && !auth.isAdmin) {
+        return sendJSON(res, 403, { error: 'Admin permission is required for this view.' });
+      }
+      return sendJSON(res, 200, buildGoLiveStatus(req));
     }
 
     if (pathname === '/api/bank-views' && req.method === 'GET') {

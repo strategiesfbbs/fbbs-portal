@@ -16073,6 +16073,97 @@
     return '<span class="qa-badge qa-warn">&#9888; check</span>';
   }
 
+  function goLiveBadge(state) {
+    if (state === 'ok') return '<span class="qa-badge qa-ok">&#10003; Ready</span>';
+    if (state === 'fail') return '<span class="qa-badge qa-missing">&#10007; Blocked</span>';
+    return '<span class="qa-badge qa-warn">&#9888; Review</span>';
+  }
+
+  function goLiveCheckIcon(state) {
+    if (state === 'ok') return '&#10003;';
+    if (state === 'fail') return '&#10007;';
+    return '&#9888;';
+  }
+
+  function goLiveSlotList(slots, emptyText) {
+    const ready = (slots || []).filter(slot => slot.ready);
+    if (!ready.length) return `<span class="go-live-muted">${escapeHtml(emptyText || 'None yet')}</span>`;
+    return ready.map(slot => `<span class="file-chip" title="${escapeHtml(slot.filename || '')}">${escapeHtml(slot.label)}</span>`).join('');
+  }
+
+  async function loadGoLiveStatus() {
+    const panel = document.getElementById('goLiveStatusPanel');
+    if (!panel) return;
+    try {
+      const res = await fetch('/api/admin/go-live-status', { cache: 'no-store' });
+      if (!res.ok) throw new Error(res.status === 403 ? 'Admin permission required' : 'HTTP ' + res.status);
+      const status = await res.json();
+      const missing = status.package && Array.isArray(status.package.missingRequiredSlots)
+        ? status.package.missingRequiredSlots
+        : [];
+      const warnings = status.package && Array.isArray(status.package.publishWarnings)
+        ? status.package.publishWarnings
+        : [];
+      const checks = Array.isArray(status.checks) ? status.checks : [];
+      const attention = checks.filter(check => check.state !== 'ok');
+      const packageInfo = status.package || {};
+      const dataInfo = status.data || {};
+      panel.innerHTML = `
+        <div class="go-live-summary go-live-${escapeHtml(status.state || 'warn')}">
+          <div>
+            <strong>${escapeHtml(status.state === 'ok' ? 'Ready for internal launch' : status.state === 'fail' ? 'Launch blockers remain' : 'Nearly ready')}</strong>
+            <span>${escapeHtml(packageInfo.date ? `Package ${formatShortDate(packageInfo.date)}` : 'No current package date')}</span>
+          </div>
+          <div class="go-live-counts">
+            <span>${formatNumber((status.counts && status.counts.ok) || 0)} OK</span>
+            <span>${formatNumber((status.counts && status.counts.warn) || 0)} Review</span>
+            <span>${formatNumber((status.counts && status.counts.fail) || 0)} Blocked</span>
+          </div>
+          ${goLiveBadge(status.state)}
+        </div>
+        <div class="go-live-grid">
+          ${checks.map(check => `
+            <div class="go-live-check go-live-check-${escapeHtml(check.state || 'warn')}">
+              <b>${goLiveCheckIcon(check.state)}</b>
+              <div>
+                <strong>${escapeHtml(check.label || '')}</strong>
+                <span>${escapeHtml(check.detail || '')}</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="go-live-details">
+          <div>
+            <strong>Required Slots</strong>
+            <p>${goLiveSlotList(packageInfo.requiredSlots, 'No required slots filled')}</p>
+          </div>
+          <div>
+            <strong>Optional Slots</strong>
+            <p>${goLiveSlotList(packageInfo.optionalSlots, 'Optional slots not published')}</p>
+          </div>
+          <div>
+            <strong>Data Imports</strong>
+            <p>
+              <span class="file-chip">Bank data ${dataInfo.bankData && dataInfo.bankData.latestPeriod ? escapeHtml(dataInfo.bankData.latestPeriod) : 'pending'}</span>
+              <span class="file-chip">Account status ${dataInfo.accountStatuses && dataInfo.accountStatuses.available ? 'loaded' : 'pending'}</span>
+              <span class="file-chip">Bond accounting ${dataInfo.bondAccounting && dataInfo.bondAccounting.available ? 'loaded' : 'pending'}</span>
+            </p>
+          </div>
+        </div>
+        ${(missing.length || warnings.length || attention.length) ? `
+          <div class="go-live-attention">
+            <strong>Attention Items</strong>
+            ${missing.map(slot => `<div><span>Missing</span>${escapeHtml(slot.label || slot.key)}</div>`).join('')}
+            ${warnings.slice(0, 8).map(w => `<div><span>${escapeHtml(DOC_TYPES[w.slot] ? DOC_TYPES[w.slot].label : w.slot || 'Warning')}</span>${escapeHtml(w.text || '')}</div>`).join('')}
+            ${warnings.length > 8 ? `<em>${warnings.length - 8} more warning${warnings.length - 8 === 1 ? '' : 's'} in the audit log.</em>` : ''}
+          </div>
+        ` : ''}
+      `;
+    } catch (err) {
+      panel.innerHTML = `<div class="go-live-error">Could not load launch status: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
   async function renderPackageQa() {
     const body = document.getElementById('packageQaBody');
     if (!body) return;
@@ -16199,6 +16290,7 @@
   async function loadAuditLog() {
     const body = document.getElementById('adminBody');
     const stat = document.getElementById('adminStat');
+    loadGoLiveStatus();
     try {
       const res = await fetch('/api/audit-log', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -16206,7 +16298,7 @@
       stat.textContent = entries.length;
 
       if (entries.length === 0) {
-        body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
           No publishes recorded yet.
         </td></tr>`;
         return;
@@ -16223,11 +16315,13 @@
         const muniCount = e.muniOfferingsCount != null ? e.muniOfferingsCount : '—';
         const agencyCountCell = e.agencyCount != null ? e.agencyCount : '—';
         const corpCountCell = e.corporatesCount != null ? e.corporatesCount : '—';
+        const actor = e.actorDisplay || e.actorUsername || '';
         return `
           <tr>
             <td>${formatFullTimestamp(e.at)}</td>
             <td class="arch-date-cell">${formatShortDate(e.packageDate)}</td>
             <td>${escapeHtml(e.publishedBy || '—')}</td>
+            <td>${actor ? escapeHtml(actor) : '<span class="qa-note">legacy</span>'}</td>
             <td>${files}${warnings}</td>
             <td style="text-align:right">${cdCount}</td>
             <td style="text-align:right">${muniCount}</td>
@@ -16238,7 +16332,7 @@
       }).join('');
     } catch (err) {
       console.error('Failed to load audit log:', err);
-      body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load audit log: ${escapeHtml(err.message)}
       </td></tr>`;
     }
