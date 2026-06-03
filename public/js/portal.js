@@ -5252,7 +5252,7 @@
         <div class="knob"><label>Max $ loss (000)</label><input type="number" step="1" min="0" id="kbMaxDol" value="${escapeHtml(String(k.maxDollarLossK ?? 10))}"></div>
         <div class="knob"><label>Min position (000)</label><input type="number" step="25" min="0" id="kbMinPar" value="${escapeHtml(String(k.minParK ?? 100))}"></div>
         <div class="knob"><button type="button" class="small-btn primary" data-rerun-knobs>Re-run ideas</button></div>
-        <div class="swap-knobs-note">Drop-in Portfolio Filtering screen: every idea is <b>sell &rarr; reinvest the proceeds at the target rate</b> (a real same-sector buy is shown when one beats the held bond). Filters: % loss within max, $ loss under max, position &ge; min, nothing maturing inside 12 months, then names yielding <b>below the ${Number(reinvVal).toFixed(2)}% reinvest target</b> — exempt munis compared on a tax-equivalent basis via <code>(YTW&nbsp;&minus;&nbsp;COF&middot;t&middot;q)/(1&minus;t)</code> (q=0.20 BQ&nbsp;/&nbsp;1.00 non-BQ). Ranked lowest-yield first. Set min position to 0 to include odd-lots.</div>
+        <div class="swap-knobs-note">Drop-in Portfolio Filtering screen: every idea is <b>sell &rarr; reinvest the proceeds at the target rate</b> (a real same-sector buy is shown when one beats the held bond). Filters: % loss within max, $ loss under max, position &ge; min, nothing maturing inside 12 months, then names yielding <b>below the ${Number(reinvVal).toFixed(2)}% reinvest target</b> — exempt munis compared on a tax-equivalent basis via <code>(YTW&nbsp;&minus;&nbsp;COF&middot;t&middot;q)/(1&minus;t)</code> (C-corp BQ q=0.20, Sub-S BQ q=0, non-BQ q=1.00). Ranked lowest-yield first. Set min position to 0 to include odd-lots.</div>
       </div>`;
   }
 
@@ -5593,9 +5593,9 @@
           par: candidate.economics && candidate.economics.replacementPar || sellRow.par || candidate.held.par,
           marketPrice: candidate.offering.price || 100,
           marketYieldYtw: candidate.offering.yield,
-          sourceKind: 'daily-package',
+          sourceKind: candidate.offering.generic ? 'reinvest-target' : 'daily-package',
           sourceRef: candidate.offering.sourceRef || 'daily-package',
-          sourceDate: new Date().toISOString().slice(0, 10)
+          sourceDate: candidate.offering.generic ? '' : new Date().toISOString().slice(0, 10)
         })
       });
       if (!buyRes.ok) {

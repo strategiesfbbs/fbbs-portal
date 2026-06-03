@@ -3137,45 +3137,6 @@ function roundMoney(value) {
   return n === null ? null : Math.round(n);
 }
 
-function swapEconomics(held, offering, map, pickYield, asOfDate, bookYieldOverride) {
-  const bookYield = bookYieldOverride != null
-    ? bookYieldOverride
-    : numericValue(held.bookYieldYtm ?? held.bookYieldYtw);
-  if (bookYield === null || pickYield === null) return null;
-  const par = numericValue(held.par) || 0;
-  const bookValue = numericValue(held.bookValue) || (par && numericValue(held.bookPrice) !== null ? par * numericValue(held.bookPrice) / 100 : par);
-  const marketValue = numericValue(held.marketValue) || (par && numericValue(held.marketPrice) !== null ? par * numericValue(held.marketPrice) / 100 : par);
-  if (!bookValue || !marketValue) return null;
-
-  const gainLoss = numericValue(held.gainLoss);
-  const realizedGainLoss = gainLoss !== null ? gainLoss : marketValue - bookValue;
-  const horizonYears = Math.max(0.1, holdingHorizonYears(held, offering, asOfDate));
-  const annualIncomeGivenUp = bookValue * bookYield / 100;
-  const annualBuyIncome = marketValue * pickYield / 100;
-  const annualIncomePickup = annualBuyIncome - annualIncomeGivenUp;
-  const interestGivenUp = -annualIncomeGivenUp * horizonYears;
-  const buyIncome = annualBuyIncome * horizonYears;
-  const netInterestToHorizon = annualIncomePickup * horizonYears;
-  const netBenefitToHorizon = netInterestToHorizon + realizedGainLoss;
-  const lossToEarnBack = realizedGainLoss < 0 ? -realizedGainLoss : 0;
-  const breakevenMonths = lossToEarnBack > 0 && annualIncomePickup > 0
-    ? lossToEarnBack / (annualIncomePickup / 12)
-    : null;
-  const price = offeringPrice(offering, map.type);
-  const replacementPar = price && price > 0 ? marketValue / price * 100 : null;
-
-  return {
-    horizonYears: Number(horizonYears.toFixed(2)),
-    realizedGainLoss: roundMoney(realizedGainLoss),
-    interestGivenUp: roundMoney(interestGivenUp),
-    buyIncome: roundMoney(buyIncome),
-    annualIncomePickup: roundMoney(annualIncomePickup),
-    netInterestToHorizon: roundMoney(netInterestToHorizon),
-    netBenefitToHorizon: roundMoney(netBenefitToHorizon),
-    breakevenMonths: breakevenMonths === null ? null : Number(breakevenMonths.toFixed(1)),
-    replacementPar: replacementPar === null ? null : Math.round(replacementPar)
-  };
-}
 
 // Economics for "sell and reinvest the proceeds at the target rate." Income basis
 // mirrors the Master Swap Template's Hand Income / BM-BO columns *exactly*:
@@ -3264,8 +3225,7 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   for (const [sector, holdings] of Object.entries(parsedHoldings.sectors)) {
     const map = SWAP_SECTOR_MAP[sector];
     if (!map) continue;
-    const rows = inventory.rows[map.rowsKey];
-    if (!Array.isArray(rows) || !rows.length) continue;
+    const rows = Array.isArray(inventory.rows[map.rowsKey]) ? inventory.rows[map.rowsKey] : [];
     const candidateRows = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
       ? inventory.rows.stateMunis
       : rows;
@@ -3454,7 +3414,10 @@ function formatSwapCandidateLine(c) {
   const econ = c.economics || {};
   const breakeven = econ.breakevenMonths !== null && econ.breakevenMonths !== undefined ? ` · breakeven ${econ.breakevenMonths.toFixed(1)} mo` : '';
   const net = econ.netBenefitToHorizon ? ` · est. net $${Math.round(econ.netBenefitToHorizon / 1000)}K` : '';
-  return `${heldLeft} (${heldYld}) → ${c.offering.label} · +${c.yieldPickupVsBook.toFixed(2)}% pickup${breakeven}${net}`;
+  const pickup = c.yieldPickupVsBook != null
+    ? ` · +${c.yieldPickupVsBook.toFixed(2)}% buy pickup`
+    : (c.pickupVsReinvest != null ? ` · +${c.pickupVsReinvest.toFixed(2)}% vs reinvest target` : '');
+  return `${heldLeft} (${heldYld}) → ${c.offering.label}${pickup}${breakeven}${net}`;
 }
 
 function filterExamplesAgainstHoldings(examples, holdings) {
@@ -3547,7 +3510,10 @@ function buildBankAssistantResponse(bankData, action) {
   if (holdings) noteLines.push(`Holdings: bond accounting file on disk through ${holdings.latestReportDate || 'recent'} — review before pitching.`);
   if (swapCandidates.length) {
     const top = swapCandidates[0];
-    noteLines.push(`Swap: ${top.held.cusip} (${top.held.bookYield.toFixed(2)}% book) → ${top.offering.label} · +${top.yieldPickupVsBook.toFixed(2)}% pickup`);
+    const pickup = top.yieldPickupVsBook != null
+      ? `+${top.yieldPickupVsBook.toFixed(2)}% buy pickup`
+      : (top.pickupVsReinvest != null ? `+${top.pickupVsReinvest.toFixed(2)}% vs reinvest target` : 'pickup n/a');
+    noteLines.push(`Swap: ${top.held.cusip} (${top.held.bookYield.toFixed(2)}% book) → ${top.offering.label} · ${pickup}`);
   }
   const callNote = noteLines.join('\n');
 
@@ -5938,16 +5904,21 @@ function handleSwapSuggested(res, bankId, query) {
     return Number.isFinite(n) ? n : undefined;
   };
   const isSubS = ctx.summary.subchapterS === 'Yes';
+  // Tax rate: default from the bank's Sub-S election, rep-overridable.
+  const taxRatePct = optNum(query.get('taxRate')) ?? (isSubS ? 29.6 : 21);
   // BQ disallowance factor q — exactly the Master Swap Template's CQ cell:
   //   C-Corp: bank-qualified 0.20 / non-BQ 1.00; S-Corp: BQ 0 / non-BQ 1.00.
-  // The `bq` query param carries the rep's BQ choice (<=0.5 means bank-qualified).
+  // The template drives corp type and tax rate from one switch (D28), so we key
+  // q off the effective tax rate (29.6% Sub-S vs 21% C-corp) — overriding the
+  // rate to the Sub-S level flips q too, like the template. `bq` carries the
+  // rep's bank-qualified choice (<=0.5 means bank-qualified).
+  const isSubSRate = taxRatePct >= 25;
   const bqChoice = optNum(query.get('bq'));
   const isBankQualified = bqChoice == null ? true : bqChoice <= 0.5;
-  const bqFactor = isBankQualified ? (isSubS ? 0 : 0.20) : 1.0;
-  // Knobs — default tax rate from the bank's Sub-S election; the rest mirror the
-  // Portfolio Filtering prototype. Blank query params fall back to these.
+  const bqFactor = isBankQualified ? (isSubSRate ? 0 : 0.20) : 1.0;
+  // Knobs — the rest mirror the Portfolio Filtering prototype. Blank params fall back.
   const knobs = {
-    taxRatePct: optNum(query.get('taxRate')) ?? (isSubS ? 29.6 : 21),
+    taxRatePct,
     cofPct: optNum(query.get('cof')) ?? 1.5,
     bqFactor,
     isBankQualified,
@@ -8670,6 +8641,8 @@ module.exports = {
   readPackageDir,
   collectAgencyPackageFiles,
   findPackageFileForSlot,
+  findSwapCandidates,
+  formatSwapCandidateLine,
   mapSwapHoldingPosition,
   startServer
 };
