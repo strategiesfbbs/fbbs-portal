@@ -5238,8 +5238,8 @@
   function renderSwapKnobs(data) {
     const k = data.knobs || {};
     const bq = Number(k.bqFactor);
-    const reinvVal = k.reinvestRateUserSet && k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) : '';
-    const reinvPlaceholder = k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) : 'auto';
+    // A single flat reinvest target the rep sets (defaults to 5.00%).
+    const reinvVal = k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) : '5.00';
     return `
       <div class="swap-knobs">
         <div class="knob"><label>Tax rate %</label><input type="number" step="1" min="0" max="99" id="kbTax" value="${escapeHtml(String(k.taxRatePct ?? 21))}"></div>
@@ -5247,12 +5247,12 @@
         <div class="knob"><label>Muni BQ</label><select id="kbBq">
           <option value="0.20"${bq !== 1 ? ' selected' : ''}>Bank-Qualified</option>
           <option value="1.00"${bq === 1 ? ' selected' : ''}>Non-BQ</option></select></div>
-        <div class="knob"><label>Reinvest YTW %</label><input type="number" step="0.05" min="0" max="15" id="kbReinv" value="${escapeHtml(reinvVal)}" placeholder="${escapeHtml(reinvPlaceholder)}"></div>
+        <div class="knob"><label>Reinvest YTW %</label><input type="number" step="0.05" min="0" max="15" id="kbReinv" value="${escapeHtml(reinvVal)}"></div>
         <div class="knob"><label>Max % loss</label><input type="number" step="0.5" min="0" id="kbMaxPct" value="${escapeHtml(String(k.maxPctLoss ?? 4))}"></div>
         <div class="knob"><label>Max $ loss (000)</label><input type="number" step="1" min="0" id="kbMaxDol" value="${escapeHtml(String(k.maxDollarLossK ?? 10))}"></div>
         <div class="knob"><label>Min position (000)</label><input type="number" step="25" min="0" id="kbMinPar" value="${escapeHtml(String(k.minParK ?? 100))}"></div>
         <div class="knob"><button type="button" class="small-btn primary" data-rerun-knobs>Re-run ideas</button></div>
-        <div class="swap-knobs-note">TEY uses the verified FBBS form <code>(YTW&nbsp;&minus;&nbsp;COF&middot;t&middot;q)/(1&minus;t)</code>, q=0.20 BQ&nbsp;/&nbsp;1.00 non-BQ. Screen mirrors Portfolio Filtering: % loss within max, $ loss under max, position &ge; min, then names yielding below the reinvest target (exempt munis on a tax-equivalent basis). Reinvest target ${k.reinvestRateUserSet ? 'set by you' : 'auto from today’s inventory'} at <b>${k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) + '%' : '—'}</b>. Set min position to 0 to include odd-lots.</div>
+        <div class="swap-knobs-note">Drop-in Portfolio Filtering screen: every idea is <b>sell &rarr; reinvest the proceeds at the target rate</b> (a real same-sector buy is shown when one beats the held bond). Filters: % loss within max, $ loss under max, position &ge; min, nothing maturing inside 12 months, then names yielding <b>below the ${Number(reinvVal).toFixed(2)}% reinvest target</b> — exempt munis compared on a tax-equivalent basis via <code>(YTW&nbsp;&minus;&nbsp;COF&middot;t&middot;q)/(1&minus;t)</code> (q=0.20 BQ&nbsp;/&nbsp;1.00 non-BQ). Ranked lowest-yield first. Set min position to 0 to include odd-lots.</div>
       </div>`;
   }
 
@@ -5459,11 +5459,15 @@
     const beYrs = c.reinvestBreakevenYears != null
       ? Number(c.reinvestBreakevenYears).toFixed(1) + ' yr'
       : (econ.breakevenMonths == null ? '—' : (Number(econ.breakevenMonths) / 12).toFixed(1) + ' yr');
+    const matched = c.offering && !c.offering.generic;
     const fitBits = [];
-    if (c.offering.fitSummary) fitBits.push(c.offering.fitSummary);
     if (c.reinvestRate != null) {
       const effTxt = c.held.isExemptMuni ? `held TE ${Number(c.held.effYield).toFixed(2)}%` : `held ${Number(c.held.bookYield).toFixed(2)}%`;
-      fitBits.push(`${effTxt} → reinvest ${Number(c.reinvestRate).toFixed(2)}% · buy ${Number(c.offering.yield).toFixed(2)}%`);
+      let line = `${effTxt} → reinvest ${Number(c.reinvestRate).toFixed(2)}%`;
+      if (matched) line += ` · available today: buy ${Number(c.offering.yield).toFixed(2)}%`;
+      fitBits.push(line);
+    } else if (c.offering.fitSummary) {
+      fitBits.push(c.offering.fitSummary);
     }
     const sellBits = [
       c.held.par ? compactCurrency(c.held.par) + ' par' : '',
@@ -5480,7 +5484,7 @@
         ${renderSwapTags(c.tags)}
         <div class="swap-card-legs">
           <div><span>Sell</span><strong>${escapeHtml(heldTitle)}</strong><em>${escapeHtml(sellBits)}</em></div>
-          <div><span>Buy</span><strong>${escapeHtml(c.offering.label || 'Replacement offering')}</strong><em>${escapeHtml(`${Number(c.offering.yield).toFixed(3)}% YTW · CUSIP ${c.offering.cusip || '—'}`)}</em></div>
+          <div><span>Buy</span><strong>${escapeHtml(c.offering.label || 'Reinvest at target')}</strong><em>${escapeHtml(matched ? `${Number(c.offering.yield).toFixed(3)}% YTW · CUSIP ${c.offering.cusip || '—'}` : `${Number(c.offering.yield).toFixed(2)}% target · pick the buy`)}</em></div>
         </div>
         ${fitBits.length ? `<div class="swap-fit-note">${escapeHtml(fitBits.join(' · '))}</div>` : ''}
         <dl class="swap-card-metrics">
@@ -5488,7 +5492,7 @@
           <div><dt>Added income/yr</dt><dd>${compactCurrency(c.addedAnnualIncome)}</dd></div>
           <div><dt>Breakeven</dt><dd>${beYrs}</dd></div>
           <div><dt>Gain/Loss</dt><dd>${compactCurrency(c.held.gainLoss)}${glLabel}</dd></div>
-          <div><dt>Buy pickup vs book</dt><dd>+${Number(c.yieldPickupVsBook).toFixed(2)}%</dd></div>
+          <div><dt>Buy pickup vs book</dt><dd>${c.yieldPickupVsBook == null ? '—' : '+' + Number(c.yieldPickupVsBook).toFixed(2) + '%'}</dd></div>
           <div><dt>Net benefit</dt><dd>${compactCurrency(econ.netBenefitToHorizon)}</dd></div>
         </dl>
         ${warnings.length ? `<ul class="swap-card-warnings">${warnings.map(w => `<li>${escapeHtml(w.message)}</li>`).join('')}</ul>` : ''}

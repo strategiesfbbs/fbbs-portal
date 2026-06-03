@@ -3207,50 +3207,33 @@ function reinvestTargetEconomics(held, effYield, marketValue, gainLossDollars, r
   };
 }
 
-// Find swap candidates by walking the bank's parsed holdings against today's
-// inventory. The desk has exactly ONE hard rule for auto-suggested swaps:
-// the held bond can't mature before the breakeven (otherwise the loss can't
-// be recouped before the bond is gone). Everything else — breakeven cap,
-// maturity floor, requiring annual pickup — is a soft "thinking point"
-// returned as warning chips on the candidate, not a filter reason.
+// Find swap candidates — a server-side port of the standalone "Portfolio Idea
+// Engine" Portfolio Filtering screen. It is purely a SELL-SIDE screen: every idea
+// is "sell this underearning bond and reinvest the proceeds at the target rate."
+// There is no inventory dependency for the idea itself; a concrete same-sector buy
+// from today's package is attached only as an "available today" hint when one
+// beats the held bond.
 //
-// The ENTRY screen (which held positions are even worth scoring) mirrors the
-// desk's Portfolio Filtering workflow: position size ≥ the min, any realized
-// loss within the % / $ loss budget, then a UNION of "worth a look" reasons —
-// underearning vs. the reinvestment target (TEY basis for exempt munis), cheap
-// to move (small unrealized gain or loss), or a recoupable loss. Each surviving
-// candidate is tagged with WHY it surfaced and still faces the one hard rule.
-// Every swap and portfolio is different; the rep decides per situation.
+// The screen, in the prototype's order:
+//   1. position size ≥ min,
+//   2. any realized loss within the % / $ loss budget (gains pass — we also keep
+//      small gains per the desk's preference),
+//   3. not maturing within 12 months,
+//   4. effective yield (TEY for exempt munis) is BELOW the reinvest target
+//      (pickup = target − eff > 0) — i.e. genuinely underearning.
+// Candidates are ranked lowest effective yield first; breakeven = |%loss| / pickup.
+// The reinvest target is a single flat rate the rep sets (default 5.00%).
+//
+// The one HARD rule still drops a candidate into `dropped[]`: the held bond can't
+// mature before its breakeven (the loss can't be recouped from a bond already gone).
 //
 // `options.includeRejected = true` returns `{ kept, dropped, rules, reinvestTarget,
-// reinvestTargetSource }` where kept candidates may carry warnings and dropped only
-// contains hard-rule failures. The Build-your-own (manual) flow bypasses this
-// entirely and lets the rep build any swap they want.
-// Best attainable taxable reinvestment yield across today's buy universe
-// (agencies / treasuries / corporates / CDs) — the single rate the held book's
-// yields are screened against when the rep hasn't pinned a target. Muni proceeds
-// are assumed to reinvest into this taxable target, which is why held munis are
-// compared on a tax-equivalent basis.
-function autoReinvestTargetFromInventory(inventory, pct) {
-  const keys = [['agencies', 'ytm'], ['treasuries', 'yield'], ['corporates', 'ytm'], ['cds', 'rate']];
-  const ys = [];
-  for (const [rowsKey, yieldKey] of keys) {
-    for (const row of (inventory.rows[rowsKey] || [])) {
-      const n = numericValue(row[yieldKey]);
-      if (n != null && n > 0 && n <= 15) ys.push(n);
-    }
-  }
-  return percentile(ys, pct == null ? 0.9 : pct);
-}
-
+// reinvestTargetSource }`. The Build-your-own (manual) flow bypasses this entirely.
 function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   const empty = options.includeRejected ? { kept: [], dropped: [], reinvestTarget: null } : [];
   if (!parsedHoldings || !parsedHoldings.sectors || !inventory || !inventory.rows) return empty;
-  const minPickupVsBook = options.minPickupVsBook ?? 0.25;
-  const reinvestMargin = options.reinvestMargin ?? 0.10;
-  const smallGlPct = options.smallGlPct ?? 2.0;
-  const lossHarvestGap = options.lossHarvestGap ?? 1.0;
-  const reinvestPct = options.reinvestPercentile ?? 0.9;
+  const minPickupVsBook = options.minPickupVsBook ?? 0.25; // a matched buy must beat book by this to show as a hint
+  const smallGlPct = options.smallGlPct ?? 2.0;            // |G/L%| at/under this tags as a small gain/loss
   // TEY knobs (Portfolio Filtering workflow). Defaults mirror the prototype.
   const taxRatePct = options.taxRatePct ?? 21;
   const cofPct = options.cofPct ?? 1.5;
@@ -3260,14 +3243,14 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   const maxPctLoss = options.maxPctLoss ?? 4.0;
   const maxDollarLossDollars = options.maxDollarLoss == null ? null : options.maxDollarLoss * 1000;
   const minParDollars = (options.minParThousands == null ? 0 : options.minParThousands) * 1000;
+  const skipMaturingWithinMonths = options.skipMaturingWithinMonths ?? 12;
   const flatReinvest = (typeof options.reinvestRate === 'number' && options.reinvestRate > 0)
     ? options.reinvestRate : null;
   const rules = options.rules || swapMath.DEFAULT_FBBS_RULES;
   const limit = Math.max(1, parseInt(options.limit, 10) || 12);
-  const reinvestTarget = flatReinvest != null
-    ? flatReinvest
-    : autoReinvestTargetFromInventory(inventory, reinvestPct);
-  const reinvestTargetSource = flatReinvest != null ? 'knob' : 'auto';
+  // A single flat reinvestment target the rep chooses; defaults to the prototype's 5.00%.
+  const reinvestTarget = flatReinvest != null ? flatReinvest : (options.defaultReinvest ?? 5.0);
+  const reinvestTargetSource = flatReinvest != null ? 'knob' : 'default';
   const kept = [];
   const dropped = [];
   const fitProfile = buildInvestmentFitProfile(parsedHoldings, inventory.asOfDate);
@@ -3304,8 +3287,6 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
           maturity: held.maturity, settleDate: inventory.asOfDate
         });
       }
-      const heldGap = mktYld == null ? null : mktYld - bookYld;
-
       // Effective yield: exempt munis are gross-up'd to a tax-equivalent basis
       // (FBBS verified form, COF + BQ disallowance) so they compare like-for-like
       // against the taxable reinvestment target. Everything else is its book yield.
@@ -3314,7 +3295,7 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
         : null;
       const effYield = (isExemptMuni && teY != null) ? teY : bookYld;
 
-      // Gain/loss as a % of book — small |G/L%| means the bond is cheap to move.
+      // Gain/loss as a % of book.
       const bookValueForGl = numericValue(held.bookValue)
         || (numericValue(held.par) != null && numericValue(held.bookPrice) != null
             ? numericValue(held.par) * numericValue(held.bookPrice) / 100 : null);
@@ -3325,50 +3306,42 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       if (mv == null) mv = (bookValueForGl != null ? bookValueForGl : 0) + (glDollars || 0);
       if (!mv) mv = par;
 
-      // Loss-budget + position-size gates (Portfolio Filtering workflow). The
-      // loss caps only bite when the position is actually at a loss; gains pass.
+      const pickupVsReinvest = reinvestTarget - effYield;
+      const monthsToMaturity = swapMath.monthsUntilMaturity(held.maturity, inventory.asOfDate);
+
+      // --- Portfolio Filtering screen, in the prototype's order ---
+      // 1) meaningful position size
       if (par < minParDollars) continue;
+      // 2) any realized loss within the % / $ loss budget (gains pass)
       if (glPct != null && glPct < 0) {
         if (maxPctLoss != null && Math.abs(glPct) > maxPctLoss) continue;
         if (maxDollarLossDollars != null && Math.abs(glDollars || 0) > maxDollarLossDollars) continue;
       }
+      // 3) skip anything maturing in the near term — it self-liquidates anyway
+      if (skipMaturingWithinMonths && monthsToMaturity != null && monthsToMaturity <= skipMaturingWithinMonths) continue;
+      // 4) must be underearning: effective yield (TEY for munis) below the target
+      if (!(pickupVsReinvest > 0)) continue;
 
-      // Entry screen — a UNION of "worth a look" reasons (not the old AND chain):
-      //   (1) underearning vs. the reinvestment target (TEY basis for munis),
-      //   (2) cheap to move — small unrealized gain or loss, or
-      //   (3) sitting on a recoupable loss (legacy loss-harvest path).
-      // Each surviving candidate still faces the one hard rule below.
-      const belowReinvest = reinvestTarget != null && effYield < (reinvestTarget - reinvestMargin);
-      const lowGl = glPct != null && Math.abs(glPct) <= smallGlPct;
-      const lossHarvest = heldGap != null && heldGap >= lossHarvestGap;
-      if (!belowReinvest && !lowGl && !lossHarvest) continue;
-
-      // Reinvestment economics (vs the target rate, TEY basis for munis):
-      // the annual income lift and the years to earn back any realized loss.
-      // Computed up front — drives both the matched-buy and generic paths.
-      const pickupVsReinvest = reinvestTarget != null ? reinvestTarget - effYield : null;
-      const addedAnnualIncome = pickupVsReinvest != null ? mv * pickupVsReinvest / 100 : null;
-      const reinvestBeYears = (glPct != null && glPct < 0 && pickupVsReinvest != null)
+      // Reinvestment economics: sell and redeploy the proceeds at the target rate.
+      const economics = reinvestTargetEconomics(held, effYield, mv, glDollars, reinvestTarget, inventory.asOfDate);
+      if (!economics) continue;
+      const addedAnnualIncome = mv * pickupVsReinvest / 100;
+      const reinvestBeYears = (glPct != null && glPct < 0)
         ? swapMath.reinvestBreakevenYears(glPct, pickupVsReinvest)
         : null;
 
-      // Prefer a concrete same-sector buy from today's inventory that beats the
-      // held book yield. If none does, a below-reinvest position is still a valid
-      // sell-and-reinvest idea — fall back to a generic "reinvest at target" buy.
-      // (This is what surfaces munis: few muni offerings beat a held muni's
-      // nominal yield, yet on a tax-equivalent basis it's underearning vs taxable.)
+      // Attach a concrete same-sector buy from today's package as an "available
+      // today" hint when one beats the held book yield; otherwise the idea stands
+      // on its own as a generic reinvest at the target rate.
       const pick = pickBestOffering(candidateRows, map.yieldKey, held.cusip ? String(held.cusip).toUpperCase() : null, {
         fitProfile, held, sector, map, minYield: bookYld + minPickupVsBook
       });
       const matchedPickup = pick ? pick.yld - bookYld : null;
       const hasMatchedBuy = pick && matchedPickup >= minPickupVsBook;
-
-      let economics, offeringObj, yieldPickupVsBook, fitScore = 0;
+      let offeringObj;
+      let yieldPickupVsBook = null;
       if (hasMatchedBuy) {
-        economics = swapEconomics(held, pick.row, map, pick.yld, inventory.asOfDate, bookYld);
-        if (!economics) continue;
         yieldPickupVsBook = Number(matchedPickup.toFixed(2));
-        fitScore = (pick.fit && pick.fit.score) || 0;
         offeringObj = {
           label: offeringLabel(pick.row, map.type),
           cusip: pick.row.cusip || '',
@@ -3381,25 +3354,21 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
           sourceRef,
           fitYear: pick.fit && pick.fit.year || null,
           fitSummary: pick.fit && pick.fit.summary || '',
-          structure: pick.row.structure || ''
+          structure: pick.row.structure || '',
+          generic: false,
+          availableToday: true
         };
-      } else if (belowReinvest && pickupVsReinvest != null && pickupVsReinvest > 0) {
-        economics = reinvestTargetEconomics(held, effYield, mv, glDollars, reinvestTarget, inventory.asOfDate);
-        if (!economics) continue;
-        yieldPickupVsBook = Number(pickupVsReinvest.toFixed(2));
+      } else {
         offeringObj = {
           label: `Reinvest at ${reinvestTarget.toFixed(2)}% target`,
           cusip: '', yield: Number(reinvestTarget.toFixed(3)), price: 100,
           coupon: null, maturity: '', callDate: '', sector: map.type,
           sourceRef: 'reinvest-target', fitYear: null,
-          fitSummary: 'No same-sector buy beats the held yield — reinvest proceeds at the target rate.',
+          fitSummary: 'No same-sector buy beats the held yield today — reinvest the proceeds at the target rate.',
           structure: '', generic: true
         };
-      } else {
-        continue;
       }
 
-      const monthsToMaturity = swapMath.monthsUntilMaturity(held.maturity, inventory.asOfDate);
       const ruleEval = swapMath.evaluateSwapAgainstRules({
         breakevenMonths: economics.breakevenMonths,
         monthsToMaturity,
@@ -3407,16 +3376,12 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
         rules
       });
 
-      const tags = [];
-      if (belowReinvest) tags.push('below-reinvest');
-      if (lowGl) tags.push(glPct >= 0 ? 'small-gain' : 'small-loss');
-      if (lossHarvest) tags.push('loss-harvest');
-      if (yieldPickupVsBook >= 0.5) tags.push('yield-pickup');
-
-      const reinvestGap = belowReinvest ? (reinvestTarget - effYield) : 0;
-      const parWeight = par / 1000;
-      const breakevenPenalty = economics.breakevenMonths === null ? 0 : Math.min(economics.breakevenMonths, 120) * 2;
-      const netBenefitScore = Math.max(economics.netBenefitToHorizon || 0, 0) / 1000;
+      const tags = ['below-reinvest'];
+      if (glPct != null) {
+        if (glPct < 0) tags.push('small-loss');
+        else if (glPct <= smallGlPct) tags.push('small-gain');
+      }
+      if (yieldPickupVsBook != null && yieldPickupVsBook >= 0.5) tags.push('yield-pickup');
       const candidate = {
         sector,
         tags,
@@ -3441,25 +3406,25 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
         },
         offering: offeringObj,
         yieldPickupVsBook,
-        pickupVsReinvest: pickupVsReinvest == null ? null : Number(pickupVsReinvest.toFixed(2)),
-        addedAnnualIncome: addedAnnualIncome == null ? null : Math.round(addedAnnualIncome),
+        pickupVsReinvest: Number(pickupVsReinvest.toFixed(2)),
+        addedAnnualIncome: Math.round(addedAnnualIncome),
         reinvestBreakevenYears: reinvestBeYears == null ? null : Number(reinvestBeYears.toFixed(1)),
         economics,
         rule: {
           hardPass: ruleEval.hardPass,
           hardReason: ruleEval.hardReason,
           warnings: ruleEval.warnings
-        },
-        priority: parWeight * yieldPickupVsBook + netBenefitScore - breakevenPenalty
-          + reinvestGap * 5 + fitScore
+        }
       };
 
       if (ruleEval.hardPass) kept.push(candidate);
       else dropped.push(candidate);
     }
   }
-  kept.sort((a, b) => b.priority - a.priority);
-  dropped.sort((a, b) => b.priority - a.priority);
+  // Rank lowest effective yield first — the worst earners are the best swaps.
+  const byEffYield = (a, b) => a.held.effYield - b.held.effYield;
+  kept.sort(byEffYield);
+  dropped.sort(byEffYield);
   const trimmedKept = kept.slice(0, limit);
   if (options.includeRejected) {
     return {
