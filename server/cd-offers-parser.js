@@ -434,11 +434,18 @@ function isBlankRow(row) {
 
 function toPercentNumber(value) {
   if (value == null || value === '') return null;
+  const str = String(value);
+  // A literal "%" in the source (PDF text or a percent-formatted-as-text cell)
+  // means the number is already in percent terms — never scale it.
+  const hasPercentSign = str.includes('%');
   const n = typeof value === 'number'
     ? value
-    : parseFloat(String(value).replace(/[%,$]/g, '').replace(/,/g, ''));
+    : parseFloat(str.replace(/[%,$]/g, '').replace(/,/g, ''));
   if (!isFinite(n)) return null;
-  return n > 0 && n <= 1 ? roundRate(n * 100) : roundRate(n);
+  if (hasPercentSign) return roundRate(n);
+  // Only a strict fraction (0 < n < 1) is a decimal rate to scale up. An exact
+  // 1.0 (or any n >= 1) is already a percent — a 1.00% rate must NOT become 100%.
+  return n > 0 && n < 1 ? roundRate(n * 100) : roundRate(n);
 }
 
 function toPriceNumber(value) {
