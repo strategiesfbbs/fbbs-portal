@@ -691,7 +691,7 @@ function validateUploadSignature(file, slot) {
     }
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF or Excel file.`;
   }
-  if (['econ', 'relativeValue', 'cd', 'munioffers'].includes(slot)) {
+  if (['econ', 'relativeValue', 'cd', 'munioffers', 'mmd'].includes(slot)) {
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
   }
   if (slot === 'bairdSyndicate') {
