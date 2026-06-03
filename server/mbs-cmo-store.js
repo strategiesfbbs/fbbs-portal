@@ -52,7 +52,13 @@ function loadMbsCmoInventory(baseDir) {
 
 function writeInventory(baseDir, inventory) {
   ensureDir(baseDir);
-  fs.writeFileSync(inventoryPath(baseDir), JSON.stringify(inventory, null, 2));
+  // Write to a temp file and rename — an atomic swap on the same filesystem.
+  // A direct writeFileSync that crashes mid-write leaves a truncated JSON that
+  // loadMbsCmoInventory can't parse, silently wiping the whole offer inventory.
+  const target = inventoryPath(baseDir);
+  const tmp = `${target}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(inventory, null, 2));
+  fs.renameSync(tmp, target);
 }
 
 function getMbsCmoSourceFile(baseDir, fileId) {
