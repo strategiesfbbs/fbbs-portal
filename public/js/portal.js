@@ -13656,7 +13656,14 @@
       body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:36px;color:var(--text3)">Loading weekly CD recap&hellip;</td></tr>';
     }
     try {
-      const res = await fetch('/api/cd-recap/weekly', { cache: 'no-store' });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 20000);
+      let res;
+      try {
+        res = await fetch('/api/cd-recap/weekly', { cache: 'no-store', signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const recap = await res.json();
       cdRecapData = recap;
@@ -13797,7 +13804,7 @@
 
     const comparisonPeriods = periods.filter(period => period.key !== 'today');
     const validPeriods = comparisonPeriods.filter(period =>
-      terms.some(row => cdRateValue(row.rates && row.rates.today) != null)
+      terms.some(row => cdRateValue(row.rates && row.rates[period.key]) != null)
     );
     if (!validPeriods.length) {
       if (legend) legend.innerHTML = '';
@@ -16360,9 +16367,14 @@
       const sourceLink = source ? `<a class="source-chip" href="/api/structured-notes/files/${encodeURIComponent(source.id)}" target="_blank" rel="noopener">eml</a>` : '<span class="no-restrict">&mdash;</span>';
       const priceDisplay = structuredNotePriceDisplay(note);
       const pricingDisplay = structuredNotePricingDisplay(note);
+      // When the parser couldn't isolate an issuer, fall back to the email
+      // subject as the primary label rather than printing the literal word
+      // "Issuer" — and don't repeat the subject on the sub-line.
+      const issuerPrimary = note.issuer || note.emailSubject || 'Unspecified issuer';
+      const issuerSub = note.issuer ? (note.emailSubject || '') : '';
       return `
         <tr>
-          <td class="issuer-cell"><strong>${escapeHtml(note.issuer || 'Issuer')}</strong><div class="mbs-note">${escapeHtml(note.emailSubject || '')}</div></td>
+          <td class="issuer-cell"><strong>${escapeHtml(issuerPrimary)}</strong>${issuerSub ? `<div class="mbs-note">${escapeHtml(issuerSub)}</div>` : ''}</td>
           <td>${escapeHtml(note.rating || '')}</td>
           <td><span class="term-pill">${escapeHtml(note.term || '')}</span></td>
           <td>${escapeHtml(note.coupon || note.structure || '')}<div class="mbs-note">${escapeHtml(note.structure || '')}</div></td>
