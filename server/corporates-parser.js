@@ -84,6 +84,20 @@ function buildHeaderMap(headers) {
   return map;
 }
 
+function detectHeaderRow(rows, required) {
+  let best = { index: -1, score: 0 };
+  rows.slice(0, 30).forEach((row, index) => {
+    const headers = (row || []).map(value => value == null ? '' : String(value).trim());
+    const map = buildHeaderMap(headers);
+    const requiredCount = required.filter(key => map[key]).length;
+    const score = Object.keys(map).length + requiredCount * 3;
+    if (score > best.score) best = { index, score };
+  });
+  if (best.index < 0) return -1;
+  const map = buildHeaderMap((rows[best.index] || []).map(value => value == null ? '' : String(value).trim()));
+  return required.every(key => map[key]) ? best.index : -1;
+}
+
 function toIsoDate(val) {
   if (val == null || val === '') return null;
   if (val instanceof Date && !isNaN(val)) {
@@ -173,26 +187,26 @@ function isInvestmentGrade(moody, sp) {
 }
 
 function parseCorporatesSheet(worksheet, warnings) {
-  const rows = XLSX.utils.sheet_to_json(worksheet, { raw: true, defval: null });
+  const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: null });
   if (rows.length === 0) return [];
 
-  const headers = Object.keys(rows[0]);
-  const map = buildHeaderMap(headers);
-
   const required = ['cusip', 'issuerName', 'coupon', 'maturity'];
-  const missing = required.filter(k => !map[k]);
-  if (missing.length) {
-    warnings.push(`Corporates sheet missing required columns: ${missing.join(', ')}`);
+  const headerIndex = detectHeaderRow(rows, required);
+  if (headerIndex === -1) {
+    warnings.push(`Corporates sheet missing required columns: ${required.join(', ')}`);
     return [];
   }
+  const headers = (rows[headerIndex] || []).map(value => value == null ? '' : String(value).trim());
+  const map = buildHeaderMap(headers);
 
   const out = [];
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = headerIndex + 1; i < rows.length; i++) {
     const row = rows[i];
-    const get = key => map[key] ? row[map[key]] : null;
+    const get = key => map[key] ? row[headers.indexOf(map[key])] : null;
 
     const cusip = get('cusip');
     if (!cusip) continue;  // skip trailing blank rows / totals
+    const rowNum = i + 1;
 
     const moodysRating = get('moodysRating') != null ? String(get('moodysRating')).trim() : null;
     const spRating     = get('spRating')     != null ? String(get('spRating')).trim()     : null;
@@ -224,11 +238,11 @@ function parseCorporatesSheet(worksheet, warnings) {
     };
 
     if (!record.issuerName || record.coupon == null || record.maturity == null) {
-      warnings.push(`Row ${i+2}: skipped (missing issuer/coupon/maturity)`);
+      warnings.push(`Row ${rowNum}: skipped (missing issuer/coupon/maturity)`);
       continue;
     }
-    warnYieldBand(record.ytm, 'ytm', i + 2, warnings);
-    warnYieldBand(record.ytnc, 'ytnc', i + 2, warnings);
+    warnYieldBand(record.ytm, 'ytm', rowNum, warnings);
+    warnYieldBand(record.ytnc, 'ytnc', rowNum, warnings);
     out.push(record);
   }
   return out;

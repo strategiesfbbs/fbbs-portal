@@ -81,6 +81,20 @@ function buildHeaderMap(headers) {
   return map;
 }
 
+function detectHeaderRow(rows, required) {
+  let best = { index: -1, score: 0 };
+  rows.slice(0, 30).forEach((row, index) => {
+    const headers = (row || []).map(value => value == null ? '' : String(value).trim());
+    const map = buildHeaderMap(headers);
+    const requiredCount = required.filter(key => map[key]).length;
+    const score = Object.keys(map).length + requiredCount * 3;
+    if (score > best.score) best = { index, score };
+  });
+  if (best.index < 0) return -1;
+  const map = buildHeaderMap((rows[best.index] || []).map(value => value == null ? '' : String(value).trim()));
+  return required.every(key => map[key]) ? best.index : -1;
+}
+
 function toIsoDate(val) {
   if (val == null || val === '') return null;
   if (val instanceof Date && !isNaN(val)) {
@@ -139,28 +153,27 @@ function warnYieldBand(value, field, structure, rowNum, warnings) {
  * Parse one worksheet into an array of unified offering records.
  */
 function parseSheet(worksheet, structure, warnings) {
-  const rows = XLSX.utils.sheet_to_json(worksheet, { raw: true, defval: null });
+  const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: null });
   if (rows.length === 0) return [];
 
-  const headers = Object.keys(rows[0]);
-  const map = buildHeaderMap(headers);
-
-  // Minimal required columns
   const required = ['cusip', 'ticker', 'coupon', 'maturity'];
-  const missing = required.filter(k => !map[k]);
-  if (missing.length) {
-    warnings.push(`${structure} sheet is missing required columns: ${missing.join(', ')}`);
+  const headerIndex = detectHeaderRow(rows, required);
+  if (headerIndex === -1) {
+    warnings.push(`${structure} sheet is missing required columns: ${required.join(', ')}`);
     return [];
   }
+  const headers = (rows[headerIndex] || []).map(value => value == null ? '' : String(value).trim());
+  const map = buildHeaderMap(headers);
 
   const out = [];
-  for (let i = 0; i < rows.length; i++) {
+  for (let i = headerIndex + 1; i < rows.length; i++) {
     const row = rows[i];
 
-    const get = key => map[key] ? row[map[key]] : null;
+    const get = key => map[key] ? row[headers.indexOf(map[key])] : null;
 
     const cusip = get('cusip');
     if (!cusip) continue;  // skip trailing blank rows / totals
+    const rowNum = i + 1;
 
     const record = {
       structure,
@@ -188,12 +201,12 @@ function parseSheet(worksheet, structure, warnings) {
     };
 
     if (!record.ticker || record.coupon == null || record.maturity == null) {
-      warnings.push(`${structure} row ${i+2}: skipped (missing ticker/coupon/maturity)`);
+      warnings.push(`${structure} row ${rowNum}: skipped (missing ticker/coupon/maturity)`);
       continue;
     }
 
-    warnYieldBand(record.ytm, 'ytm', structure, i + 2, warnings);
-    warnYieldBand(record.ytnc, 'ytnc', structure, i + 2, warnings);
+    warnYieldBand(record.ytm, 'ytm', structure, rowNum, warnings);
+    warnYieldBand(record.ytnc, 'ytnc', structure, rowNum, warnings);
     out.push(record);
   }
 
@@ -213,9 +226,9 @@ function detectStructure(workbook, filenameHint) {
   // Inspect headers of first sheet for distinguishing columns
   const ws = workbook.Sheets[sheetName];
   if (ws) {
-    const rows = XLSX.utils.sheet_to_json(ws, { raw: true, defval: null });
-    if (rows.length) {
-      const headers = Object.keys(rows[0]).map(normKey);
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+    for (const row of rows.slice(0, 30)) {
+      const headers = (row || []).map(normKey);
       // Callable-specific columns
       if (headers.includes('nxt call') || headers.includes('call typ') ||
           headers.includes('next call') || headers.includes('call type')) {
