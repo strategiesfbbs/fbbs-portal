@@ -140,6 +140,7 @@ Every mutating route writes to `data/audit.log`.
 ## Known issues / open work
 
 - **Multipart parser buffers entire body in RAM.** OK for 50 MB; the 300 MB bank-workbook ceiling is heavier — switch to streaming if/when memory pressure shows.
+- **Open: 6 parser/classification behavior fixes for Codex** — from the 2026-06-03 review. All 10 mediums + 9 safe lows are fixed (origin/main; see `docs/go-live/final-review-2026-06-03.md`). The remaining six (L14 econ-update index pairing, L15 agencies/corporates header-row scan, L16 treasury findAsOfDate, L17 bank-importer sheet9 fallback, L19 internal-CD misclassify, L20 stale-package merge) need real source workbooks/PDFs as fixtures — full spec + verifier refinements in `docs/go-live/codex-handoff-parser-lows-2026-06-03.md`.
 
 _(Resolved since this list was written: `getCurrentPackage()` / `getArchiveList()` are now cached and invalidated via `invalidatePackageCache()` on upload success; the audit-log read is a tail-read (`readFileTail()`), not whole-file; the audit log now rotates by size — `server/log-rotation.js`, env `AUDIT_LOG_MAX_MB` / `AUDIT_LOG_KEEP`; the bank-search account-status enrichment batches its coverage/status lookups once per query, so the old `effectiveAccountStatus()` N+1 no longer applies.)_
 
