@@ -113,6 +113,18 @@ function toYieldPct(val, treatment) {
   return n <= 1 ? n * 100 : n;
 }
 
+// Sanity band for published yields — warn (never alter) when a computed yield
+// lands outside ~0.1–25%, the signature of a misread column or a decimal/percent
+// scaling slip. The go-live smoke step keys off these warnings.
+const YIELD_BAND_MIN = 0.1;
+const YIELD_BAND_MAX = 25;
+function warnYieldBand(value, field, rowNum, warnings) {
+  if (value == null) return;
+  if (value < YIELD_BAND_MIN || value > YIELD_BAND_MAX) {
+    warnings.push(`Row ${rowNum}: ${field} ${value}% is outside the expected ${YIELD_BAND_MIN}–${YIELD_BAND_MAX}% band — check the source column for a decimal/percent or column-alignment slip`);
+  }
+}
+
 /**
  * Parse amount outstanding strings like "550MM", "3MMM", "1.15MMM" into
  * a number in MILLIONS. The convention is:
@@ -215,6 +227,8 @@ function parseCorporatesSheet(worksheet, warnings) {
       warnings.push(`Row ${i+2}: skipped (missing issuer/coupon/maturity)`);
       continue;
     }
+    warnYieldBand(record.ytm, 'ytm', i + 2, warnings);
+    warnYieldBand(record.ytnc, 'ytnc', i + 2, warnings);
     out.push(record);
   }
   return out;

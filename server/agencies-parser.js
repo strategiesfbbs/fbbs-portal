@@ -121,6 +121,20 @@ function toYieldPct(val, treatment) {
   return n;
 }
 
+// Sanity band for published yields. A computed yield outside ~0.1–25% almost
+// always means a misread column or a decimal/percent scaling slip — the most
+// dangerous parser failure (a fully-populated sheet of wrong numbers that looks
+// healthy). We warn but never alter the value; the go-live smoke step keys off
+// these warnings.
+const YIELD_BAND_MIN = 0.1;
+const YIELD_BAND_MAX = 25;
+function warnYieldBand(value, field, structure, rowNum, warnings) {
+  if (value == null) return;
+  if (value < YIELD_BAND_MIN || value > YIELD_BAND_MAX) {
+    warnings.push(`${structure} row ${rowNum}: ${field} ${value}% is outside the expected ${YIELD_BAND_MIN}–${YIELD_BAND_MAX}% band — check the source column for a decimal/percent or column-alignment slip`);
+  }
+}
+
 /**
  * Parse one worksheet into an array of unified offering records.
  */
@@ -178,6 +192,8 @@ function parseSheet(worksheet, structure, warnings) {
       continue;
     }
 
+    warnYieldBand(record.ytm, 'ytm', structure, i + 2, warnings);
+    warnYieldBand(record.ytnc, 'ytnc', structure, i + 2, warnings);
     out.push(record);
   }
 
