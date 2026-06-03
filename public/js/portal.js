@@ -5426,12 +5426,11 @@
     const sel = selectedSwapCands();
     if (!sel.length) { showToast('No names selected to export', true); return; }
     const head = ['CUSIP', 'Description', 'Sector', 'Maturity', 'Par', 'Book Px', 'Mkt Px', 'Book Yield', 'Eff Yield (TEY if exempt)', '% G/L', '$ G/L', 'Market Value', 'Buy CUSIP', 'Buy Yield', 'Pickup vs Reinvest %', 'Reinvest Breakeven (yrs)'];
-    const esc = x => `"${String(x == null ? '' : x).replace(/"/g, '""')}"`;
     const lines = [head.join(',')].concat(sel.map(c => [
       c.held.cusip, c.held.description, c.sector, c.held.maturity, c.held.par, c.held.bookPrice,
       c.held.marketPrice, c.held.bookYield, c.held.effYield, c.held.gainLossPct, c.held.gainLoss, c.held.marketValue,
       c.offering.cusip, c.offering.yield, c.pickupVsReinvest, c.reinvestBreakevenYears
-    ].map(esc).join(',')));
+    ].map(csvEscape).join(',')));
     const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -14561,10 +14560,7 @@
       o.commission != null ? Number(o.commission).toFixed(2) : ''
     ]);
     const csv = [header, ...rows]
-      .map(r => r.map(cell => {
-        const s = String(cell ?? '');
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-      }).join(','))
+      .map(r => r.map(csvEscape).join(','))
       .join('\n');
 
     const stamp = offeringsData.asOfDate || 'offerings';
@@ -15116,10 +15112,7 @@
       ];
     });
     const csv = [header, ...rows]
-      .map(r => r.map(cell => {
-        const s = String(cell ?? '');
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-      }).join(','))
+      .map(r => r.map(csvEscape).join(','))
       .join('\n');
 
     const stamp = muniData.asOfDate || 'muni_offerings';
@@ -15635,10 +15628,7 @@
       ];
     });
     const csv = [header, ...rows]
-      .map(r => r.map(cell => {
-        const s = String(cell ?? '');
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-      }).join(','))
+      .map(r => r.map(csvEscape).join(','))
       .join('\n');
 
     const stamp = (agencyData.fileDate || 'agencies').replace(/[^a-z0-9_-]/gi, '_');
@@ -16034,10 +16024,7 @@
       ];
     });
     const csv = [header, ...rows]
-      .map(r => r.map(cell => {
-        const s = String(cell ?? '');
-        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-      }).join(','))
+      .map(r => r.map(csvEscape).join(','))
       .join('\n');
 
     const stamp = (corpData.fileDate || 'corporates').replace(/[^a-z0-9_-]/gi, '_');
