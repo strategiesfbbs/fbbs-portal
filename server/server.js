@@ -561,6 +561,7 @@ function classifyFile(filename, explicitSlot) {
         lower.includes('cds - cost')) {
       return 'cdoffers';
     }
+    if (looksLikeInternalCdWorkbook(filename)) return null;
     if (lower.includes('corporate') || lower.includes('corp_')) return 'corporates';
     if (lower.includes('callable') || lower.includes('call')) return 'agenciesCallables';
     if (lower.includes('bullet')) return 'agenciesBullets';

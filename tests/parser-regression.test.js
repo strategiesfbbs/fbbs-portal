@@ -123,6 +123,9 @@ function assertClassification() {
   assert.strictEqual(classifyFile('20260424_CD_Offers.pdf'), 'cdoffers');
   assert.strictEqual(classifyFile('20260424_CD_Offers.xlsx'), 'cdoffers');
   assert.strictEqual(classifyFile('new issue cds - cost - 5.8.26.xlsx'), 'cdoffers');
+  assert.strictEqual(classifyFile('CDs - Cost.xlsx'), 'cdoffers');
+  assert.strictEqual(classifyFile('20260512_MASTER.xls'), null);
+  assert.strictEqual(classifyFile('dealer commission spreadsheet.xlsx'), null);
   assert.strictEqual(classifyFile('20260424_FBBS_Offerings.pdf'), 'munioffers');
   assert.strictEqual(classifyFile('grid1_twjtolp5.xlsx'), 'agenciesBullets');
   assert.strictEqual(classifyFile('Baird Syndicate Munis.xlsx'), 'bairdSyndicate');
