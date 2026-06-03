@@ -393,6 +393,14 @@ function assertTreasuryNotesParser() {
     ['US TREASURY N/B', 0.625, '7/31/2026', 99.532, 3.507, '06/02/26', '91282CCP4', 2]
   ]), { filename: 'grid1_q0b0wejm.xlsx' });
   assert.strictEqual(genericNameParsed.notes[0].description, 'Treasury Note 0.625% due 2026-07-31');
+
+  const explicitAsOfParsed = parseTreasuryNotesWorkbook(workbookBuffer([
+    ['Trade Date', '05/01/2026'],
+    ['As Of', '05/07/2026'],
+    ['CUSIP(s)', 'Cpn(s)', 'Maturity(s)', 'Ask Amt', 'NET OFFER COST', 'NET OFFER YTM'],
+    ['912828U24', 2, '11/15/2026', 5000, 99.20292663574219, 3.562]
+  ]), { filename: 'grid1_treasury.xlsx' });
+  assert.strictEqual(explicitAsOfParsed.asOfDate, '2026-05-07');
 }
 
 function workbookBuffer(rows) {

@@ -158,18 +158,21 @@ function buildHeaderMap(headers) {
 }
 
 function findAsOfDate(rows) {
+  const candidates = [];
   for (const row of rows) {
     for (let i = 0; i < (row || []).length; i++) {
       const cell = row[i];
       const iso = toIsoDate(cell);
-      if (iso && /as\s*of|date/i.test(String(row[i - 1] || '') + ' ' + String(cell || ''))) return iso;
+      const context = String(row[i - 1] || '') + ' ' + String(cell || '');
       if (typeof cell === 'string') {
         const m = cell.match(/as\s*of\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
         if (m) return toIsoDate(m[1]);
       }
+      if (iso && /as\s*of/i.test(context)) return iso;
+      if (iso && /date/i.test(context)) candidates.push(iso);
     }
   }
-  return null;
+  return candidates[0] || null;
 }
 
 function inferDescription(row) {
