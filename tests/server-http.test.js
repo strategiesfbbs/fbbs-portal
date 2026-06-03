@@ -140,6 +140,28 @@ test('same-day corrupt replacement preserves existing current slot', async () =>
   });
 });
 
+test('dateless current package archives using existing file date', async () => {
+  await withServer({}, async ({ port, dataDir }) => {
+    const currentDir = path.join(dataDir, 'current');
+    const oldPath = path.join(currentDir, 'FBBS_Dashboard_20260501.html');
+    fs.writeFileSync(oldPath, '<!doctype html><html><body>old dateless dashboard</body></html>');
+    const oldDate = new Date('2026-05-01T12:00:00');
+    fs.utimesSync(oldPath, oldDate, oldDate);
+
+    const next = multipartFile('dashboard', 'dashboard.html', '<!doctype html><html><body>new dashboard</body></html>');
+    const published = await request(port, {
+      method: 'POST',
+      path: '/api/upload',
+      headers: next.headers,
+      body: next.body
+    });
+    assert.strictEqual(published.status, 200, published.text);
+    assert.ok(fs.existsSync(path.join(dataDir, 'archive', '2026-05-01', 'FBBS_Dashboard_20260501.html')));
+    assert.ok(fs.readFileSync(path.join(currentDir, 'dashboard.html'), 'utf8').includes('new dashboard'));
+    assert.strictEqual(fs.existsSync(oldPath), false);
+  });
+});
+
 test('iis admin ingest routes reject non-admins before parsing', async () => {
   await withServer({ FBBS_AUTH_MODE: 'iis', FBBS_ADMIN_USERS: 'adminuser' }, async ({ port }) => {
     const ingestRoutes = [

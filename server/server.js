@@ -780,6 +780,11 @@ function todayStamp() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+function dateStampFromDate(date) {
+  if (!(date instanceof Date) || isNaN(date)) return null;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 /**
  * Sniff the likely document date from a filename.
  * Recognizes YYYYMMDD, MM_DD_YYYY, MM-DD-YYYY, MM.DD.YYYY,
@@ -814,6 +819,28 @@ function sniffDateFromFilename(filename) {
   }
 
   return null;
+}
+
+function deriveCurrentPackageDateFromFiles(dir, filenames = null) {
+  const names = (filenames || (fs.existsSync(dir) ? fs.readdirSync(dir) : []))
+    .filter(name => name && name !== '.gitkeep' && name !== '.DS_Store' && !name.startsWith('_'));
+  if (!names.length) return null;
+
+  let newestMtime = null;
+  const sniffedDates = new Set();
+  for (const name of names) {
+    const sniffed = sniffDateFromFilename(name);
+    if (sniffed) sniffedDates.add(sniffed);
+    try {
+      const stat = fs.statSync(path.join(dir, name));
+      if (stat.isFile() && (!newestMtime || stat.mtimeMs > newestMtime.mtimeMs)) newestMtime = stat;
+    } catch (_) {}
+  }
+
+  const mtimeDate = newestMtime ? dateStampFromDate(newestMtime.mtime) : null;
+  const agreedSniffDate = sniffedDates.size === 1 ? [...sniffedDates][0] : null;
+  if (mtimeDate && mtimeDate !== todayStamp()) return mtimeDate;
+  return agreedSniffDate || mtimeDate || null;
 }
 
 function isValidYmd(y, mm, dd) {
@@ -6834,7 +6861,7 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
   if (touchesAgencies) {
     const missingAgencyUploads = ['agenciesBullets', 'agenciesCallables']
       .filter(slot => !incomingSlots.has(slot));
-    const existingPackageDate = priorMeta.date || (existingBeforeUpload.length > 0 ? todayStamp() : null);
+    const existingPackageDate = priorMeta.date || deriveCurrentPackageDateFromFiles(CURRENT_DIR, existingBeforeUpload) || (existingBeforeUpload.length > 0 ? todayStamp() : null);
     const currentPackageWillArchive = existingBeforeUpload.length > 0 && existingPackageDate !== todayStamp();
     const missingCanUseCurrentFiles = !currentPackageWillArchive &&
       missingAgencyUploads.every(slot => findPackageFileForSlot(CURRENT_DIR, slot, priorMeta));
@@ -6858,7 +6885,7 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
       if (fs.existsSync(metaPath)) {
         archiveDate = priorMeta.date || null;
       }
-      if (!archiveDate) archiveDate = todayStamp();
+      if (!archiveDate) archiveDate = deriveCurrentPackageDateFromFiles(CURRENT_DIR, existing) || todayStamp();
 
       const newToday = todayStamp();
       if (archiveDate !== newToday) {
