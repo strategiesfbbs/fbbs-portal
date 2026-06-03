@@ -126,6 +126,21 @@ test('accruedInterest infers last coupon from maturity if missing', () => {
   assert.ok(accrued > 4500 && accrued < 8000, `accrued ${accrued} not in plausible muni window`);
 });
 
+test('inferLastCouponDate keeps month-end coupons month-end (no setUTCMonth drift)', () => {
+  // Maturity 2030-08-31 (month-end), semi-annual → coupon dates 2/28-29 & 8/31.
+  // Settle 2026-05-13 → last coupon must be 2026-02-28, NOT a March overflow.
+  assert.strictEqual(m.ymd(m.inferLastCouponDate('2030-08-31', '2026-05-13', 2)), '2026-02-28');
+  // 2030-03-31 maturity, settle 2026-05-13 → last coupon 2026-03-31 (not 04-01).
+  assert.strictEqual(m.ymd(m.inferLastCouponDate('2030-03-31', '2026-05-13', 2)), '2026-03-31');
+  // Accrued off the 2/28 last-coupon (30/360) is ~$8,333 on $1MM 4% — the old
+  // overflow walk produced ~$7,778 (a ~$555 error per $1MM).
+  const accrued = m.accruedInterest({
+    par: 1_000_000, coupon: 4, maturity: '2030-08-31',
+    settleDate: '2026-05-13', dayCount: '30/360', frequency: 2,
+  });
+  near(accrued, 8333, 40, 'month-end accrued');
+});
+
 test('accruedInterest returns 0 for zero/missing par or coupon', () => {
   assert.strictEqual(m.accruedInterest({ par: 0, coupon: 4, settleDate: '2026-05-13' }), 0);
   assert.strictEqual(m.accruedInterest({ par: 1000, coupon: 0, settleDate: '2026-05-13' }), 0);

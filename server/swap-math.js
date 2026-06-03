@@ -66,6 +66,22 @@ function addBusinessDays(date, days) {
   return d;
 }
 
+// Add `months` (may be negative) to a UTC date, anchored on the original
+// day-of-month and clamped to the target month's last valid day. Plain
+// `setUTCMonth` overflows the day when the target month is shorter (stepping
+// back 6mo from Aug-31 lands on Mar-03, not Feb-28), which silently corrupts
+// coupon-date walks, accrued interest, and the yield/duration solvers.
+function addMonthsUTC(date, months) {
+  const base = (date instanceof Date) ? date : toDate(date);
+  if (!base) return null;
+  const targetDay = base.getUTCDate();
+  const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1));
+  d.setUTCMonth(d.getUTCMonth() + months);
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(targetDay, lastDay));
+  return d;
+}
+
 function monthsBetween(startDate, endDate) {
   const a = toDate(startDate);
   const b = toDate(endDate);
@@ -99,7 +115,10 @@ function defaultSettleDate(asOfDate, sector) {
 // ---------- Day count ----------
 //
 // 30/360 (bond basis): standard for muni, corporate, CD.
-// Actual/Actual (ISMA): standard for treasuries and agencies.
+// "actual/actual": used for treasuries and agencies. NOTE: accruedInterest
+// implements this as Actual/365-fixed (actual days accrued over a constant 365
+// denominator), not strict ACT/ACT-ISMA, so a full coupon period won't tie out
+// to coupon/freq to the penny. Accepted desk convention; advisory, not booked.
 
 function days30_360(start, end) {
   const a = toDate(start);
@@ -138,9 +157,13 @@ function inferLastCouponDate(maturityDate, settleDate, frequency) {
   const settle = toDate(settleDate);
   if (!mat || !settle) return null;
   const monthsPerCoupon = 12 / (frequency || 2);
+  // Anchor every step on maturity's day-of-month (re-derive from `mat`, don't
+  // mutate the previous candidate) so a month-end coupon date stays month-end.
+  let steps = 0;
   let candidate = new Date(mat.getTime());
   while (candidate > settle) {
-    candidate.setUTCMonth(candidate.getUTCMonth() - monthsPerCoupon);
+    steps++;
+    candidate = addMonthsUTC(mat, -monthsPerCoupon * steps);
   }
   return candidate;
 }
@@ -223,17 +246,18 @@ function yieldFromPriceAndMaturity({ price, coupon, maturity, settleDate, freque
   // Start from maturity, walk back; count the dates strictly after settle.
   let periodsRemaining = 0;
   let lastCouponBeforeSettle = new Date(mat.getTime());
-  // Move back until we cross settle
+  // Move back until we cross settle, re-anchoring each step on maturity's
+  // day-of-month so month-end coupon dates don't drift (see addMonthsUTC).
   const monthsPerCoupon = 12 / freq;
   while (lastCouponBeforeSettle > settle) {
     periodsRemaining++;
-    lastCouponBeforeSettle = new Date(lastCouponBeforeSettle.getTime());
-    lastCouponBeforeSettle.setUTCMonth(lastCouponBeforeSettle.getUTCMonth() - monthsPerCoupon);
+    lastCouponBeforeSettle = addMonthsUTC(mat, -monthsPerCoupon * periodsRemaining);
   }
   if (periodsRemaining < 1) return null;
-  // periodFraction = days from settle to next coupon / days in full period
-  const nextCoupon = new Date(lastCouponBeforeSettle.getTime());
-  nextCoupon.setUTCMonth(nextCoupon.getUTCMonth() + monthsPerCoupon);
+  // periodFraction = days from settle to next coupon / days in full period.
+  // nextCoupon is one period forward from lastCouponBeforeSettle = mat back
+  // (periodsRemaining - 1) periods.
+  const nextCoupon = addMonthsUTC(mat, -monthsPerCoupon * (periodsRemaining - 1));
   const fullPeriodDays = (nextCoupon.getTime() - lastCouponBeforeSettle.getTime()) / (1000 * 60 * 60 * 24);
   const remainingDays = (nextCoupon.getTime() - settle.getTime()) / (1000 * 60 * 60 * 24);
   const periodFraction = fullPeriodDays > 0 ? Math.max(0, Math.min(1, remainingDays / fullPeriodDays)) : 1;
@@ -271,11 +295,10 @@ function modifiedDurationFromYield({ yieldPct, coupon, maturity, settleDate, fre
   const monthsPerCoupon = 12 / freq;
   while (cursor > settle) {
     periodsRemaining++;
-    cursor.setUTCMonth(cursor.getUTCMonth() - monthsPerCoupon);
+    cursor = addMonthsUTC(mat, -monthsPerCoupon * periodsRemaining);
   }
   if (periodsRemaining < 1) return null;
-  const nextCoupon = new Date(cursor.getTime());
-  nextCoupon.setUTCMonth(nextCoupon.getUTCMonth() + monthsPerCoupon);
+  const nextCoupon = addMonthsUTC(mat, -monthsPerCoupon * (periodsRemaining - 1));
   const fullPeriodDays = (nextCoupon.getTime() - cursor.getTime()) / (1000 * 60 * 60 * 24);
   const remainingDays = (nextCoupon.getTime() - settle.getTime()) / (1000 * 60 * 60 * 24);
   const periodFraction = fullPeriodDays > 0 ? Math.max(0, Math.min(1, remainingDays / fullPeriodDays)) : 1;
