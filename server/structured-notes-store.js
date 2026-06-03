@@ -7,6 +7,7 @@ const {
   attachmentFilenames,
   decodeHtmlEntities,
   emailBody,
+  emailHtmlBody,
   emailSummary
 } = require('./email-source-utils');
 
@@ -238,8 +239,63 @@ function makeNote(row, source, summary, attachments, index) {
   };
 }
 
-function parseStructuredNotesEmail(text, source, warnings = []) {
-  const summary = emailSummary(text, source.filename);
+// Strip tags + decode entities from one HTML table cell to its plain text.
+function htmlCellText(inner) {
+  return decodeHtmlEntities(String(inner || '').replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Normalize a label cell ("First Pay:", "Coupons:") to a lookup key.
+function normalizeLabel(value) {
+  return String(value || '').replace(/[:\s]+$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+// Parse the email's HTML <table> into { label -> [value cells] }. Each offering
+// grid is one <tr> per field (Issuer, Ratings, …, CUSIP, Price); cell[0] is the
+// label and the rest are one cell per note, so columns align 1:1 with the CUSIP
+// row by construction — no whitespace-splitting ambiguity. Returns null when the
+// email has no usable HTML table (caller falls back to the text/plain grid).
+function htmlTableFields(text) {
+  const html = emailHtmlBody(text);
+  if (!html) return null;
+  const byLabel = new Map();
+  const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let row;
+  while ((row = rowRe.exec(html))) {
+    const cells = [...row[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(c => htmlCellText(c[1]));
+    if (!cells.some(Boolean)) continue;
+    const label = normalizeLabel(cells[0]);
+    if (!label || byLabel.has(label)) continue;
+    byLabel.set(label, cells.slice(1));
+  }
+  const pick = (...aliases) => {
+    for (const alias of aliases) {
+      if (byLabel.has(alias)) return byLabel.get(alias);
+    }
+    return [];
+  };
+  const cusips = pick('cusip').map(v => (v.match(/[A-Z0-9]{9}/i) || [])[0]).filter(Boolean);
+  if (!cusips.length) return null;
+  return {
+    issuer: pick('issuer').map(cleanFieldValue),
+    rating: pick('ratings', 'rating').map(cleanRating),
+    term: pick('term'),
+    settlement: pick('settlement', 'settle'),
+    maturity: pick('maturity'),
+    coupon: pick('coupons', 'coupon'),
+    firstPay: pick('first pay'),
+    firstCall: pick('first call'),
+    pricing: pick('pricing date', 'pricing'),
+    cusip: cusips,
+    price: pick('price').map(v => String(v).trim())
+  };
+}
+
+// Fallback grid: the whitespace-padded text/plain part. Columns here can merge
+// when a long value eats its trailing padding, so this is only used when the
+// email has no HTML table.
+function textBodyFields(text) {
   const body = decodeHtmlEntities(emailBody(text))
     .replace(/<[^>]+>/g, ' ')
     .replace(/\r/g, '');
@@ -247,11 +303,9 @@ function parseStructuredNotesEmail(text, source, warnings = []) {
     .map(line => line.replace(/\t/g, ' ').trim())
     .filter(Boolean);
   const cusips = fieldValues(lines, 'CUSIP').map(v => (v.match(/[A-Z0-9]{9}/i) || [])[0]).filter(Boolean);
-  if (!cusips.length) return [];
-
-  const attachments = attachmentFilenames(text);
+  if (!cusips.length) return null;
   const coupons = collectSection(lines, 'Coupon', ['First Pay', 'First Call', 'Pricing', 'Pricing Date', 'CUSIP', 'Price']);
-  const fields = {
+  return {
     issuer: fieldValues(lines, 'Issuer').map(cleanFieldValue),
     rating: [...fieldValues(lines, 'Ratings'), ...fieldValues(lines, 'Rating')].map(cleanRating),
     term: fieldValues(lines, 'Term'),
@@ -264,6 +318,15 @@ function parseStructuredNotesEmail(text, source, warnings = []) {
     cusip: cusips,
     price: priceValues(lines)
   };
+}
+
+function parseStructuredNotesEmail(text, source, warnings = []) {
+  const summary = emailSummary(text, source.filename);
+  const fields = htmlTableFields(text) || textBodyFields(text);
+  if (!fields || !fields.cusip.length) return [];
+
+  const attachments = attachmentFilenames(text);
+  const cusips = fields.cusip;
 
   const notes = cusips.map((cusip, index) => makeNote({
     issuer: fields.issuer[index] || (fields.issuer.length === 1 ? fields.issuer[0] : ''),

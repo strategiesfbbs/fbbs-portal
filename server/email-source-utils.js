@@ -68,6 +68,23 @@ function emailBody(text) {
   return idx === -1 ? normalized : normalized.slice(idx).trim();
 }
 
+// The new-issue note emails carry the same offering grid twice: a whitespace-
+// padded text/plain part and an HTML <table>. The text/plain columns are
+// ambiguous (a long issuer name can eat its trailing padding and merge with the
+// next column), so callers that need clean per-column alignment read the HTML
+// part instead. Returns '' when there is no text/html part.
+function emailHtmlBody(text) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n');
+  const htmlHeader = normalized.match(/Content-Type:\s*text\/html[\s\S]*?\n\n/i);
+  if (!htmlHeader) return '';
+  const start = htmlHeader.index + htmlHeader[0].length;
+  const tail = normalized.slice(start);
+  const end = tail.search(/\n--[^\n]+/);
+  const raw = end === -1 ? tail : tail.slice(0, end);
+  const transfer = (htmlHeader[0].match(/Content-Transfer-Encoding:\s*([^\n;]+)/i) || [])[1] || '';
+  return decodeTransfer(raw, transfer);
+}
+
 function cleanEmailText(text) {
   return decodeHtmlEntities(String(text || ''))
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -113,6 +130,7 @@ module.exports = {
   cleanEmailText,
   decodeHtmlEntities,
   emailBody,
+  emailHtmlBody,
   emailHeader,
   emailSummary
 };

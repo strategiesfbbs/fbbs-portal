@@ -1470,6 +1470,91 @@ function assertReferenceIntakeParsers() {
   assert.deepStrictEqual(parsed[0].restrictions, ['TX', 'CA']);
 }
 
+// Regression for the 13-CUSIP / 12-issuer misalignment: the whitespace-padded
+// text/plain grid merges two adjacent issuers ("National Bank of Canada" +
+// "Bank of Montreal" separated by a single space), so the trailing CUSIP
+// (05552WS92) loses its issuer. The parser must read the HTML <table> instead,
+// where every field is one <td> per note and columns align 1:1 with CUSIPs.
+function assertStructuredNotesColumnAlignment() {
+  const { parseStructuredNotesEmail } = require('../server/structured-notes-store');
+
+  // 13 notes. Issuer #6 ("Bank of Montreal") follows issuer #5 with only a
+  // single space in the text/plain grid, so text/plain yields 12 issuer tokens.
+  const issuers = [
+    'Aardvark Bank', 'Beaver Bank', 'Cobra Capital, Inc.', 'Dingo Securities, B.V.',
+    'National Bank of Canada', 'Bank of Montreal', 'Eagle Bank AG', 'Falcon Group, Inc.',
+    'Gecko Bank', 'Heron Financial', 'Ibis Bank', 'Jaguar Securities, B.V.',
+    'BBVA Global Securities, B.V.'
+  ];
+  const ratings = ['A1/A', 'A2/A-', 'Aa2/A+', 'A2/A-', 'Aa2/A+', 'A2/A-', 'A1/A', 'A2/BBB+', 'A1/A', 'A3/A+', 's:', 'A2/A-', 'A3/A+'];
+  const cusips = [
+    '11111AA10', '22222BB20', '33333CC30', '44444DD40', '55555EE50', '66666FF60', '77777GG70',
+    '88888HH80', '99999II90', '12121JJ10', '34343KK20', '56565LL30', '05552WS92'
+  ];
+  const coupons = ['4.15%', '4.75%', '5.00%', '5.10%', '4.95%', '5.00%', '5.25%', '5.30%', '5.40%', '5.50%', '5.55%', '6.25%', '6.50%'];
+
+  // text/plain grid: pad columns with 3 spaces, EXCEPT a single space between
+  // issuer #5 and #6 so the column collapses and the row under-counts.
+  const issuerCells = issuers.map((name, i) => (i === 5 ? ' ' : '   ') + name);
+  const plainLines = [
+    'Issuer:' + issuerCells.join(''),
+    'Ratings:   ' + ratings.join('   '),
+    'Coupons:   ' + coupons.join('   '),
+    'CUSIP:   ' + cusips.join('   ')
+  ].join('\r\n');
+
+  // HTML table: one <tr> per field, cell[0] is the label, the rest one per note.
+  const htmlRow = (label, vals) => '<tr><td>' + label + '</td>' + vals.map(v => '<td><span>' + v + '</span></td>').join('') + '</tr>';
+  const html = '<table>' +
+    htmlRow('Issuer:', issuers) +
+    htmlRow('Ratings:', ratings) +
+    htmlRow('Coupons:', coupons) +
+    htmlRow('CUSIP:', cusips) +
+    '</table>';
+
+  const buildEmail = (includeHtml) => [
+    'Subject: *FBBS NEW ISSUE NOTES*',
+    'From: Desk <desk@example.com>',
+    'Date: Wed, 03 Jun 2026 12:00:00 +0000',
+    'Content-Type: multipart/alternative; boundary="b"',
+    '',
+    '--b',
+    'Content-Type: text/plain; charset="utf-8"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(plainLines, 'utf8').toString('base64'),
+    ...(includeHtml ? [
+      '--b',
+      'Content-Type: text/html; charset="utf-8"',
+      'Content-Transfer-Encoding: base64',
+      '',
+      Buffer.from(html, 'utf8').toString('base64')
+    ] : []),
+    '--b--'
+  ].join('\r\n');
+
+  // Text/plain alone reproduces the bug: 13 CUSIPs but the last issuer is lost
+  // and the merge shifts every issuer from #6 onward.
+  const broken = parseStructuredNotesEmail(buildEmail(false), { id: 'plain', filename: 'plain.eml', extension: 'eml', uploadedAt: '2026-06-03T12:00:00Z' });
+  assert.strictEqual(broken.length, 13, 'text/plain still yields 13 notes');
+  assert.strictEqual(broken[12].cusip, '05552WS92');
+  assert.strictEqual(broken[12].issuer, '', 'text/plain misalignment leaves the 13th issuer blank');
+
+  // With the HTML table present, every CUSIP gets its correct issuer.
+  const notes = parseStructuredNotesEmail(buildEmail(true), { id: 'html', filename: 'html.eml', extension: 'eml', uploadedAt: '2026-06-03T12:00:00Z' });
+  assert.strictEqual(notes.length, 13);
+  assert.deepStrictEqual(notes.map(n => n.cusip), cusips);
+  assert.deepStrictEqual(notes.map(n => n.issuer), issuers, 'every note aligns 1:1 with its issuer');
+  assert.strictEqual(notes[12].issuer, 'BBVA Global Securities, B.V.');
+  assert.strictEqual(notes[5].issuer, 'Bank of Montreal', 'the merged pair is recovered');
+
+  // cleanRating is not regressed: the stray "s:" label fragment (note #11) blanks
+  // out, while real agency grades pass through untouched.
+  assert.strictEqual(notes[10].rating, '', 'label-fragment rating is dropped');
+  assert.strictEqual(notes[0].rating, 'A1/A');
+  assert.strictEqual(notes[12].rating, 'A3/A+');
+}
+
 (async function run() {
   assertDateSniffing();
   assertClassification();
@@ -1482,6 +1567,7 @@ function assertReferenceIntakeParsers() {
   await assertEconomicUpdateParser();
   assertMmdParser();
   assertReferenceIntakeParsers();
+  assertStructuredNotesColumnAlignment();
   assertTreasuryNotesParser();
   assertWorkbookContentSniffing();
   assertAgenciesParser();
