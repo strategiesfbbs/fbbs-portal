@@ -322,6 +322,22 @@ async function assertEconomicUpdateParser() {
   assert.strictEqual(parsed.releases[0].dateTime, '04/29/26 7:30 AM');
   assert(parsed.releases.some(row => row.event === 'Housing Starts'));
   assert(!parsed.releases.some(row => /^Apr\b/.test(row.event)));
+
+  const separated = parseEconomicUpdateText(`
+    ECONOMIC UPDATE 05/01/2026
+    ECONOMIC RELEASES
+    EVENT
+    DATE/TIME
+    Durable Goods Orders
+    Consumer Confidence
+    05/02/26 7:30 AM
+    TREASURY YIELD CURVE
+  `);
+  assert.deepStrictEqual(separated.releases, [
+    { event: 'Durable Goods Orders', dateTime: null },
+    { event: 'Consumer Confidence', dateTime: null }
+  ]);
+  assert(separated.warnings.some(warning => warning.includes('separate event names') && warning.includes('date/time rows')));
 }
 
 function assertAgenciesParser() {

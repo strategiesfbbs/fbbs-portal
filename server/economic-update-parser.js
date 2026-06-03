@@ -166,7 +166,7 @@ function isEconomicEventName(line) {
   return true;
 }
 
-function parseEconomicEvents(lines) {
+function parseEconomicEvents(lines, warnings = []) {
   const start = lines.findIndex(line => /^ECONOMIC RELEASES$/i.test(line));
   if (start < 0) return [];
 
@@ -193,8 +193,12 @@ function parseEconomicEvents(lines) {
     if (isEconomicEventName(line)) pendingNames.push(line);
   }
 
-  pendingNames.forEach((event, index) => {
-    events.push({ event, dateTime: pendingDates[index] || null });
+  if (pendingDates.length !== pendingNames.length) {
+    warnings.push(`Economic releases had ${pendingNames.length} separate event names and ${pendingDates.length} separate date/time rows; unpaired events were left as Watch.`);
+  }
+
+  pendingNames.forEach(event => {
+    events.push({ event, dateTime: null });
   });
 
   return events.slice(0, 16);
@@ -249,7 +253,11 @@ function parseEconomicUpdateText(text, options = {}) {
   const marketRates = parseLabelTable(lines, RATE_LABELS, { percent: true });
   const bondIndices = parseLabelTable(lines, BOND_LABELS);
   const headlines = parseHeadlines(text);
-  const releases = parseEconomicEvents(lines);
+  const warnings = [
+    treasuries.length ? null : 'No Treasury rate rows were extracted.',
+    headlines.length ? null : 'No headline highlights were extracted.'
+  ].filter(Boolean);
+  const releases = parseEconomicEvents(lines, warnings);
   const salesCues = buildSalesCues(treasuries, marketRates, marketData);
 
   return {
@@ -263,10 +271,7 @@ function parseEconomicUpdateText(text, options = {}) {
     headlines,
     releases,
     salesCues,
-    warnings: [
-      treasuries.length ? null : 'No Treasury rate rows were extracted.',
-      headlines.length ? null : 'No headline highlights were extracted.'
-    ].filter(Boolean)
+    warnings
   };
 }
 
