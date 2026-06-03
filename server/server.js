@@ -62,6 +62,7 @@ const { emailSummary } = require('./email-source-utils');
 const {
   getBankDatabaseStatus,
   getBankFromDatabase,
+  getBankSummariesByIds,
   importBankWorkbook,
   listBankSummaries,
   queryBankMapDataset,
@@ -1317,10 +1318,33 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
 
 let currentPackageCache = null;
 let archiveListCache = null;
+// Parsed per-slot JSON for the current package (cd/muni/treasury/agencies/
+// corporates), keyed by slot filename. Avoids re-reading + re-parsing the same
+// five files on every swap/inventory request. Cleared on every publish.
+const currentSlotCache = new Map();
 
 function invalidatePackageCache() {
   currentPackageCache = null;
   archiveListCache = null;
+  currentSlotCache.clear();
+}
+
+// Read + parse a current-package slot JSON file, memoized until the next publish.
+// Returns the parsed object, or null if the file is absent/unreadable.
+function readCurrentSlotJson(filename, label) {
+  if (currentSlotCache.has(filename)) return currentSlotCache.get(filename);
+  let value = null;
+  const p = path.join(CURRENT_DIR, filename);
+  if (fs.existsSync(p)) {
+    try {
+      value = JSON.parse(fs.readFileSync(p, 'utf-8'));
+    } catch (e) {
+      log('warn', `Could not read ${label} file:`, e.message);
+      value = null;
+    }
+  }
+  currentSlotCache.set(filename, value);
+  return value;
 }
 
 function getCurrentPackage() {
@@ -1345,14 +1369,7 @@ function getArchiveList() {
 }
 
 function loadCurrentOfferings() {
-  const offPath = path.join(CURRENT_DIR, OFFERINGS_FILENAME);
-  if (!fs.existsSync(offPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(offPath, 'utf-8'));
-  } catch (e) {
-    log('warn', 'Could not read offerings file:', e.message);
-    return null;
-  }
+  return readCurrentSlotJson(OFFERINGS_FILENAME, 'offerings');
 }
 
 async function loadEconomicUpdateFromDir(dirPath) {
@@ -1418,14 +1435,7 @@ function loadArchivedOfferings(date) {
 }
 
 function loadCurrentMuniOfferings() {
-  const offPath = path.join(CURRENT_DIR, MUNI_OFFERINGS_FILENAME);
-  if (!fs.existsSync(offPath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(offPath, 'utf-8'));
-  } catch (e) {
-    log('warn', 'Could not read muni offerings file:', e.message);
-    return null;
-  }
+  return readCurrentSlotJson(MUNI_OFFERINGS_FILENAME, 'muni offerings');
 }
 
 function loadArchivedMuniOfferings(date) {
@@ -1480,14 +1490,7 @@ function loadArchivedMmdCurve(date) {
 }
 
 function loadCurrentTreasuryNotes() {
-  const p = path.join(CURRENT_DIR, TREASURY_NOTES_FILENAME);
-  if (!fs.existsSync(p)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8'));
-  } catch (e) {
-    log('warn', 'Could not read treasury notes file:', e.message);
-    return null;
-  }
+  return readCurrentSlotJson(TREASURY_NOTES_FILENAME, 'treasury notes');
 }
 
 function loadArchivedTreasuryNotes(date) {
@@ -1618,14 +1621,7 @@ function loadArchivedRelativeValueSnapshot(date) {
 }
 
 function loadCurrentAgencies() {
-  const p = path.join(CURRENT_DIR, AGENCIES_FILENAME);
-  if (!fs.existsSync(p)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8'));
-  } catch (e) {
-    log('warn', 'Could not read agencies file:', e.message);
-    return null;
-  }
+  return readCurrentSlotJson(AGENCIES_FILENAME, 'agencies');
 }
 
 function loadArchivedAgencies(date) {
@@ -1640,14 +1636,7 @@ function loadArchivedAgencies(date) {
 }
 
 function loadCurrentCorporates() {
-  const p = path.join(CURRENT_DIR, CORPORATES_FILENAME);
-  if (!fs.existsSync(p)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8'));
-  } catch (e) {
-    log('warn', 'Could not read corporates file:', e.message);
-    return null;
-  }
+  return readCurrentSlotJson(CORPORATES_FILENAME, 'corporates');
 }
 
 function numericValue(value) {
@@ -2626,11 +2615,14 @@ function currentInventorySnapshot(bankState) {
   const treasury = loadCurrentTreasuryNotes();
   const agencies = loadCurrentAgencies();
   const corporates = loadCurrentCorporates();
-  const cdRows = Array.isArray(cd && cd.offerings) ? cd.offerings : [];
-  const muniRows = Array.isArray(muni && muni.offerings) ? muni.offerings : [];
-  const treasuryRows = Array.isArray(treasury && treasury.notes) ? treasury.notes : [];
-  const agencyRows = Array.isArray(agencies && agencies.offerings) ? agencies.offerings : [];
-  const corporateRows = Array.isArray(corporates && corporates.offerings) ? corporates.offerings : [];
+  // Shallow-copy each array: the loaders are now memoized, so handing out the
+  // live reference would let any downstream in-place sort/push corrupt the
+  // shared cache across requests.
+  const cdRows = Array.isArray(cd && cd.offerings) ? cd.offerings.slice() : [];
+  const muniRows = Array.isArray(muni && muni.offerings) ? muni.offerings.slice() : [];
+  const treasuryRows = Array.isArray(treasury && treasury.notes) ? treasury.notes.slice() : [];
+  const agencyRows = Array.isArray(agencies && agencies.offerings) ? agencies.offerings.slice() : [];
+  const corporateRows = Array.isArray(corporates && corporates.offerings) ? corporates.offerings.slice() : [];
   const state = String(bankState || '').toUpperCase();
   const stateMunis = state ? muniRows.filter(row => String(row.issuerState || '').toUpperCase() === state) : [];
 
@@ -4658,12 +4650,18 @@ async function handleUploadStrategyRequestFile(req, res, id) {
 function listSwapEligibleBanks() {
   const manifest = loadBondAccountingManifest(BANK_REPORTS_DIR);
   if (!manifest || !Array.isArray(manifest.matches)) return [];
+  // One batched summary lookup for all matched banks, instead of one SQLite
+  // query + full detail_json parse per bank (the old N+1).
+  const matchIds = manifest.matches
+    .filter(row => row && row.bankId)
+    .map(row => String(row.bankId));
+  const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, matchIds);
   const seen = new Map();
   for (const row of manifest.matches) {
     if (!row || !row.bankId) continue;
     const id = String(row.bankId);
     if (seen.has(id)) continue;
-    const summary = getBankSummaryForCoverage(id);
+    const summary = summaries.get(id);
     if (!summary) continue;
     seen.set(id, {
       id,

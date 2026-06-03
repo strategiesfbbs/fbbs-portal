@@ -595,6 +595,29 @@ function getBankFromDatabase(outputDir, id) {
   return { metadata, bank: JSON.parse(rows[0].detail_json) };
 }
 
+// Batched lookup of the slim summary blob for many banks in one query — avoids
+// the N+1 of getBankFromDatabase (which parses each bank's full detail_json) when
+// a caller only needs summary fields. Returns Map(id -> parsed summary).
+function getBankSummariesByIds(outputDir, ids) {
+  const out = new Map();
+  const dbPath = databasePathForDir(outputDir);
+  if (!fs.existsSync(dbPath)) return out;
+  const unique = [...new Set((ids || []).map(id => String(id || '')).filter(Boolean))];
+  if (!unique.length) return out;
+  const placeholders = unique.map(() => '?').join(',');
+  const rows = querySqliteJson(
+    dbPath,
+    `SELECT id, summary_json FROM banks WHERE id IN (${placeholders});`,
+    unique
+  );
+  for (const row of rows) {
+    try {
+      out.set(String(row.id), JSON.parse(row.summary_json));
+    } catch (_) { /* skip an unparseable row rather than fail the whole batch */ }
+  }
+  return out;
+}
+
 function listBankSummaries(outputDir) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return [];
@@ -753,6 +776,7 @@ module.exports = {
   databasePathForDir,
   getBankDatabaseStatus,
   getBankFromDatabase,
+  getBankSummariesByIds,
   importBankWorkbook,
   listBankSummaries,
   parseBankWorkbook,
