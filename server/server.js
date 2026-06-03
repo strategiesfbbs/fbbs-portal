@@ -26,6 +26,7 @@ const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 const { AsyncLocalStorage } = require('async_hooks');
 const { extractPdfText } = require('./pdf-text');
 
@@ -288,6 +289,17 @@ function sendJSON(res, status, data) {
   res.end(body);
 }
 
+// Send an already-serialized JSON string — lets a large, cacheable payload
+// (e.g. the bank map dataset) skip re-stringifying on every request.
+function sendJSONRaw(res, status, body) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store'
+  });
+  res.end(body);
+}
+
 function sendText(res, status, text) {
   res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(text);
@@ -325,16 +337,30 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
     // URL — cache them hard so a 3.5 MB Plotly doesn't re-download every visit.
     const isVendorAsset = !noStoreAppShell &&
       appShellFile.startsWith(path.resolve(PUBLIC_DIR, 'vendor') + path.sep);
+    const contentType = getContentType(filePath);
+    // gzip text-y assets when the client accepts it (downloads stay raw, and
+    // already-compressed binaries like pdf/xlsx/png are left untouched).
+    const wantsGzip = !!req && !download &&
+      /\bgzip\b/.test(String(req.headers['accept-encoding'] || '')) &&
+      /^(?:text\/|application\/(?:javascript|json)|image\/svg)/.test(contentType);
     // Validators for conditional GETs (skip the always-fresh app-shell trio).
+    // The ETag is encoding-specific so a gzipped and identity copy never collide
+    // in a shared cache.
     const lastModified = stat.mtime.toUTCString();
-    const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+    const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}${wantsGzip ? '-gzip' : ''}"`;
     const headers = {
-      'Content-Type': getContentType(filePath),
-      'Content-Length': stat.size,
+      'Content-Type': contentType,
       'Cache-Control': noStoreAppShell ? 'no-store'
         : isVendorAsset ? 'public, max-age=31536000, immutable'
         : 'no-cache'
     };
+    if (wantsGzip) {
+      headers['Content-Encoding'] = 'gzip';
+      headers['Vary'] = 'Accept-Encoding';
+    } else {
+      // Length is known only for the identity (un-gzipped) body.
+      headers['Content-Length'] = stat.size;
+    }
     if (!noStoreAppShell) {
       headers['Last-Modified'] = lastModified;
       headers['ETag'] = etag;
@@ -348,11 +374,13 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
       const notSinceModified = !inm && ims &&
         new Date(ims).getTime() >= Math.floor(stat.mtimeMs / 1000) * 1000;
       if (matchesEtag || notSinceModified) {
-        res.writeHead(304, {
+        const h304 = {
           'ETag': etag,
           'Last-Modified': lastModified,
           'Cache-Control': headers['Cache-Control']
-        });
+        };
+        if (wantsGzip) h304['Vary'] = 'Accept-Encoding';
+        res.writeHead(304, h304);
         return res.end();
       }
     }
@@ -369,11 +397,20 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
       return res.end();
     }
     const stream = fs.createReadStream(filePath);
-    stream.pipe(res);
     stream.on('error', e => {
       log('error', 'Stream error for', filePath, e.message);
       try { res.destroy(); } catch (_) {}
     });
+    if (wantsGzip) {
+      const gzip = zlib.createGzip();
+      gzip.on('error', e => {
+        log('error', 'gzip error for', filePath, e.message);
+        try { res.destroy(); } catch (_) {}
+      });
+      stream.pipe(gzip).pipe(res);
+    } else {
+      stream.pipe(res);
+    }
   });
 }
 
@@ -3845,6 +3882,7 @@ async function handleBuyerCandidates(req, res) {
 }
 
 let mapBankCache = null;
+let mapBankCacheBody = null; // pre-serialized JSON for /api/banks/map (large payload)
 
 const BANK_FIELD_LABELS = new Map((BANK_FIELDS || []).map(f => [f.key, f.label]));
 
@@ -3910,6 +3948,7 @@ function getMapBankData() {
 
 function invalidateMapBankCache() {
   mapBankCache = null;
+  mapBankCacheBody = null;
 }
 
 // Tear-sheet peer comparison: maps BANK_FIELDS keys to FedFis "Averaged Series"
@@ -8430,7 +8469,8 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/banks/map' && req.method === 'GET') {
       const data = getMapBankData();
       if (!data) return sendJSON(res, 404, { error: 'No bank data has been imported yet' });
-      return sendJSON(res, 200, data);
+      if (!mapBankCacheBody) mapBankCacheBody = JSON.stringify(data);
+      return sendJSONRaw(res, 200, mapBankCacheBody);
     }
 
     if (pathname === '/api/banks/averaged-series/upload' && req.method === 'POST') {
