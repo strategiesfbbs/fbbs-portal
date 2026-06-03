@@ -5163,8 +5163,14 @@
         if (k[sk] != null && k[sk] !== '') params.set(qp, k[sk]);
       }
       const res = await fetch('/api/swap-proposals/suggested?' + params.toString(), { cache: 'no-store' });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (swapBuilderState.bankId !== bankId || swapBuilderState.view !== 'home') return;
+      if (!res.ok) {
+        // A server error must not masquerade as "this bank has no ideas" — the
+        // rep would loosen knobs against a screen that can never populate.
+        renderSwapBuilderEmpty('Could not load portfolio ideas: ' + (data.error || ('HTTP ' + res.status)));
+        return;
+      }
       swapBuilderState.suggestion = data;
       swapBuilderState.screenCands = Array.isArray(data.kept) ? data.kept : [];
       renderSuggestedSwaps(data);
@@ -17880,11 +17886,16 @@
   }
 
   function renderMapsMarkerMap(rows, options = {}) {
-    if (typeof Plotly === 'undefined') return;
     const plotId = options.plotId || 'mapsPlot';
     const isFull = options.full === true;
     const el = document.getElementById(plotId);
     if (!el) return;
+    if (typeof Plotly === 'undefined') {
+      // Vendored Plotly didn't load — don't leave a blank square; the filterable
+      // bank list below is still fully usable.
+      el.innerHTML = '<div class="bank-search-empty">The map library could not be loaded. The bank list below is still available — reload the page to retry the map.</div>';
+      return;
+    }
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
     if (!el.style.position) el.style.position = 'relative';
     const showMarkers = mapsState.selectedStates.size > 0 || mapsAreaIsActive() || (mapsState.search || '').trim().length >= 2;
