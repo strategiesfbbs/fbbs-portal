@@ -5557,6 +5557,15 @@ function handleCancelSwapProposal(req, res, id) {
   try {
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
     if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
+    // An executed (settled) trade is booked — it can't be reverted to cancelled,
+    // which would desync the record, the Strategies queue, and the real trade.
+    if (current.proposal.status === 'executed') {
+      return sendJSON(res, 409, { error: 'Executed proposals cannot be cancelled' });
+    }
+    // Already cancelled → idempotent no-op (don't overwrite cancelled_at).
+    if (current.proposal.status === 'cancelled') {
+      return sendJSON(res, 200, withComputedSummary(current));
+    }
     const cancelled = swapStore.cancelProposal(BANK_REPORTS_DIR, id);
     // If a strategy was created on send, archive it so the queue doesn't
     // dangle. Editing+executing happens through the existing Strategies tab.
