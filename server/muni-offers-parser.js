@@ -396,6 +396,9 @@ function parseMuniOffersText(text) {
     if (rec) result.offerings.push(rec);
   }
 
+  if (result.offerings.length === 0) {
+    result.warnings.push('No municipal offerings rows were extracted — the PDF may be scanned/image-only or not the expected document.');
+  }
   return result;
 }
 

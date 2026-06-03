@@ -187,6 +187,9 @@ function parseCdOffersText(text) {
     });
   }
 
+  if (result.offerings.length === 0) {
+    result.warnings.push('No CD offerings rows were extracted — the PDF may be scanned/image-only or not the expected document.');
+  }
   return result;
 }
 
