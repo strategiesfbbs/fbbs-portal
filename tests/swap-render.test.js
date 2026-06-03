@@ -101,6 +101,24 @@ test('a sent proposal renders from the snapshot, not the live legs', () => {
   assert.ok(!html.includes('class="watermark"'), 'no DRAFT watermark on a sent proposal');
 });
 
+test('an executed proposal still renders from the snapshot, not drifted live legs', () => {
+  // The executed copy is the one reprinted for compliance — it must stay frozen.
+  const liveSell = Object.assign({}, SELL, { cusip: 'LIVEONLYSELL' });
+  const liveBuy = Object.assign({}, BUY, { cusip: 'LIVEONLYBUY' });
+  const snapSell = Object.assign({}, SELL, { cusip: 'SNAPONLYSELL' });
+  const snapBuy = Object.assign({}, BUY, { cusip: 'SNAPONLYBUY' });
+  const summary = swapMath.swapSummary({ sells: [snapSell], buys: [snapBuy], horizonYears: 3, taxRate: 21 });
+  const record = {
+    proposal: Object.assign(draftRecord().proposal, { status: 'executed' }),
+    legs: [liveSell, liveBuy],
+    snapshot: { frozenAt: '2026-05-20T12:00:00.000Z', data: { sells: [snapSell], buys: [snapBuy], summary } }
+  };
+  const html = renderProposalHtml(record);
+  assert.ok(html.includes('SNAPONLYSELL') && html.includes('SNAPONLYBUY'), 'snapshot legs present for executed');
+  assert.ok(!html.includes('LIVEONLYSELL') && !html.includes('LIVEONLYBUY'), 'live legs must NOT appear for executed');
+  assert.ok(html.includes('source: snapshot'), 'snapshot source label for executed');
+});
+
 test('formats money (thousands separators, parenthesized losses)', () => {
   // par 1,000,000 @ book 100 / market 98 → market value 980,000, G/L (20,000).
   const html = renderProposalHtml(draftRecord([SELL]));

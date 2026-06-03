@@ -334,10 +334,13 @@ function renderProposalHtml(record, opts = {}) {
   }
 
   const { proposal } = record;
-  // Use snapshot when sent (numbers must not silently change); otherwise
-  // compute live from current legs.
+  // Use the frozen snapshot for any non-draft proposal that has one (sent,
+  // executed, or cancelled-from-sent) — its printed numbers must not silently
+  // drift as market data moves, especially the executed copy reprinted for
+  // compliance. Only true drafts (and cancelled-from-draft, where snapshot is
+  // null) compute live from current legs.
   let sells, buys, summary, source = 'live';
-  if (record.snapshot && proposal.status === 'sent') {
+  if (record.snapshot && proposal.status !== 'draft') {
     const s = record.snapshot.data || {};
     sells = s.sells || [];
     buys = s.buys || [];
