@@ -12,7 +12,7 @@ Internal web app for publishing the daily FBBS document package:
 - **Agencies** (Excel — bullets + callables) — parsed into a **searchable Agencies Explorer**
 - **Corporates** (Excel) — parsed into a **searchable Corporates Explorer**
 
-Built on Node.js 20+ with two npm dependencies: `pdf-parse` for PDF text extraction and `better-sqlite3` for the portal's SQLite-backed workspaces. Excel parsing uses a pinned vendored SheetJS build in `vendor/sheetjs/xlsx-0.20.3/`. Runs the same way on a laptop, a dedicated workstation, or behind IIS.
+Built on Node.js 20–24 LTS with two npm dependencies: `pdf-parse` for PDF text extraction and `better-sqlite3` for the portal's SQLite-backed workspaces. Excel parsing uses a pinned vendored SheetJS build in `vendor/sheetjs/xlsx-0.20.3/`. Runs the same way on a laptop, a dedicated workstation, or behind IIS.
 
 ---
 
@@ -20,7 +20,7 @@ Built on Node.js 20+ with two npm dependencies: `pdf-parse` for PDF text extract
 
 ### 1. Install Node.js (one-time)
 
-Grab the current Node.js LTS from [nodejs.org](https://nodejs.org), run the installer, accept defaults. Use Node 20 or newer. Restart if prompted.
+Grab the current Node.js LTS from [nodejs.org](https://nodejs.org), run the installer, accept defaults. Use Node 20–24 LTS (the tested range; `npm install` hard-fails outside it). Restart if prompted.
 
 ### 2. Install dependencies (one-time)
 
@@ -388,7 +388,7 @@ Uploaded data is untouched — it stays in `DATA_DIR`.
 ## Troubleshooting
 
 **"Node is not recognized"**
-Install/reinstall Node 20 or newer from nodejs.org and restart the machine.
+Install/reinstall Node 20–24 LTS (the tested range; `npm install` hard-fails outside it) from nodejs.org and restart the machine.
 
 **"Port 3000 is already in use"**
 Set `PORT` to something else: `PORT=3001 npm start`.
