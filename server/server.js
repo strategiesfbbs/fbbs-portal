@@ -310,7 +310,7 @@ function sendPrintableHtml(res, html) {
   res.end(html);
 }
 
-function sendFile(res, filePath, { download = false, sandboxHtml = false, filename = '' } = {}) {
+function sendFile(res, filePath, { download = false, sandboxHtml = false, filename = '', req = null } = {}) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
       return sendText(res, 404, 'Not found');
@@ -321,11 +321,41 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
       path.join(PUBLIC_DIR, 'js', 'portal.js'),
       path.join(PUBLIC_DIR, 'css', 'portal.css')
     ].some(staticPath => path.resolve(staticPath) === appShellFile);
+    // Version-pinned vendored assets (public/vendor/*) never change for a given
+    // URL — cache them hard so a 3.5 MB Plotly doesn't re-download every visit.
+    const isVendorAsset = !noStoreAppShell &&
+      appShellFile.startsWith(path.resolve(PUBLIC_DIR, 'vendor') + path.sep);
+    // Validators for conditional GETs (skip the always-fresh app-shell trio).
+    const lastModified = stat.mtime.toUTCString();
+    const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
     const headers = {
       'Content-Type': getContentType(filePath),
       'Content-Length': stat.size,
-      'Cache-Control': noStoreAppShell ? 'no-store' : 'no-cache'
+      'Cache-Control': noStoreAppShell ? 'no-store'
+        : isVendorAsset ? 'public, max-age=31536000, immutable'
+        : 'no-cache'
     };
+    if (!noStoreAppShell) {
+      headers['Last-Modified'] = lastModified;
+      headers['ETag'] = etag;
+    }
+    // Answer 304 when the client's validators still match (not for downloads or
+    // the no-store app shell). Cheap stat-based revalidation; body never streams.
+    if (req && !download && !noStoreAppShell) {
+      const inm = req.headers['if-none-match'];
+      const ims = req.headers['if-modified-since'];
+      const matchesEtag = inm && inm.split(',').some(t => t.trim() === etag);
+      const notSinceModified = !inm && ims &&
+        new Date(ims).getTime() >= Math.floor(stat.mtimeMs / 1000) * 1000;
+      if (matchesEtag || notSinceModified) {
+        res.writeHead(304, {
+          'ETag': etag,
+          'Last-Modified': lastModified,
+          'Cache-Control': headers['Cache-Control']
+        });
+        return res.end();
+      }
+    }
     if (download) {
       const downloadName = path.basename(filename || filePath).replace(/["\r\n]/g, '');
       headers['Content-Disposition'] =
@@ -335,6 +365,9 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
       headers['Content-Security-Policy'] = 'sandbox allow-scripts';
     }
     res.writeHead(200, headers);
+    if (req && req.method === 'HEAD') {
+      return res.end();
+    }
     const stream = fs.createReadStream(filePath);
     stream.pipe(res);
     stream.on('error', e => {
@@ -8540,9 +8573,9 @@ const server = http.createServer(async (req, res) => {
 
     fs.stat(staticPath, (err, stat) => {
       if (err || !stat.isFile()) {
-        return sendFile(res, path.join(PUBLIC_DIR, 'index.html'));
+        return sendFile(res, path.join(PUBLIC_DIR, 'index.html'), { req });
       }
-      sendFile(res, staticPath);
+      sendFile(res, staticPath, { req });
     });
   } catch (err) {
     log('error', 'Unhandled request error:', err.stack || err.message);
