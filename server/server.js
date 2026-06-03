@@ -3314,11 +3314,12 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       // --- Portfolio Filtering screen, in the prototype's order ---
       // 1) meaningful position size
       if (par < minParDollars) continue;
-      // 2) any realized loss within the % / $ loss budget (gains pass)
-      if (glPct != null && glPct < 0) {
-        if (maxPctLoss != null && Math.abs(glPct) > maxPctLoss) continue;
-        if (maxDollarLossDollars != null && Math.abs(glDollars || 0) > maxDollarLossDollars) continue;
-      }
+      // 2) any realized loss within the % / $ loss budget (gains pass). Apply
+      //    each budget independently whenever ITS input is known — a missing
+      //    book value (null glPct) must not let a large dollar loss skip the
+      //    dollar budget entirely.
+      if (maxPctLoss != null && glPct != null && glPct < 0 && Math.abs(glPct) > maxPctLoss) continue;
+      if (maxDollarLossDollars != null && glDollars != null && glDollars < 0 && Math.abs(glDollars) > maxDollarLossDollars) continue;
       // 3) skip anything maturing in the near term — it self-liquidates anyway
       if (skipMaturingWithinMonths && monthsToMaturity != null && monthsToMaturity <= skipMaturingWithinMonths) continue;
       // 4) must be underearning: effective yield (TEY for munis) below the target
