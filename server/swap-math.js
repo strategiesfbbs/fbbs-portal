@@ -355,6 +355,35 @@ function teYield(yieldPct, taxRatePct) {
   return y / (1 - taxFrac);
 }
 
+// FBBS verified tax-equivalent yield for (bank-qualified) municipals. Beyond the
+// plain gross-up `teYield`, this nets the TEFRA interest-expense disallowance the
+// desk uses on the Portfolio Filtering tab:
+//   TEY = (YTW − COF·t·q) / (1 − t)
+// where t = marginal tax rate (decimal), COF = cost of funds %, and
+// q = 0.20 for bank-qualified bonds / 1.00 for non-BQ. Returns null on bad input.
+function municipalTeYield(ytwPct, { cofPct = 0, taxRatePct = 0, bqFactor = 0.20 } = {}) {
+  const y = num(ytwPct);
+  if (y == null) return null;
+  const tRaw = num(taxRatePct);
+  if (tRaw == null) return null;
+  const t = Math.max(0, tRaw) / 100;
+  if (t >= 1) return null; // a 100%+ rate makes the gross-up undefined
+  const cof = num(cofPct) || 0;
+  const qRaw = num(bqFactor);
+  const q = qRaw == null ? 0.20 : qRaw;
+  return (y - cof * t * q) / (1 - t);
+}
+
+// Reinvestment breakeven in YEARS: the unrealized percentage loss recouped by the
+// annual yield pickup from reinvesting. |%loss| ÷ (reinvest − current yield, in
+// percentage points). Returns null when there's no positive pickup to earn it back.
+function reinvestBreakevenYears(pctLoss, annualPickupPct) {
+  const loss = num(pctLoss);
+  const pickup = num(annualPickupPct);
+  if (loss == null || pickup == null || pickup <= 0) return null;
+  return Math.abs(loss) / pickup;
+}
+
 // ---------- Per-leg derivations ----------
 
 function legBookValue({ par, bookPrice, bookValue }) {
@@ -883,6 +912,8 @@ module.exports = {
   inferLastCouponDate,
   // Yield
   teYield,
+  municipalTeYield,
+  reinvestBreakevenYears,
   yieldFromPriceAndMaturity,
   modifiedDurationFromYield,
   enrichLegWithComputedFields,

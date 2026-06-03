@@ -97,7 +97,7 @@
   let reportsLoadPromise = null;
   let reportsAppEventsBound = false;
   let coverageBookState = { loaded: false, loading: false, banks: [], strategyCounts: {}, search: '', expanded: new Set(), detail: {} };
-  let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
+  let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, bankPickerCollapsed: false, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
   let customBankReportState = {
     loading: false,
     dataset: null,
@@ -4962,6 +4962,8 @@
     bankName: '',
     suggestion: null,
     suggestionLoading: false,
+    knobs: null,          // desk overrides for the Portfolio Filtering screen; null = server defaults
+    screenCands: [],      // full screened candidate list backing the blotter + CSV
     recentLoading: false,
     view: 'home',         // 'home' or 'editor'
     proposalId: null,
@@ -5140,15 +5142,23 @@
     const body = document.getElementById('swapBuilderBody');
     if (!body || !bankId) return;
     swapBuilderState.suggestionLoading = true;
-    body.innerHTML = `<div class="bank-search-empty">Loading suggested swaps for ${escapeHtml(swapBuilderState.bankName || bankId)}&hellip;</div>`;
+    body.innerHTML = `<div class="bank-search-empty">Loading portfolio ideas for ${escapeHtml(swapBuilderState.bankName || bankId)}&hellip;</div>`;
     try {
-      const res = await fetch('/api/swap-proposals/suggested?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' });
+      const params = new URLSearchParams({ bankId });
+      const k = swapBuilderState.knobs || {};
+      // state key → query param. Blank/undefined falls back to the server default.
+      const knobMap = { reinvestRate: 'reinvestRate', taxRate: 'taxRate', cof: 'cof', bq: 'bq', maxPctLoss: 'maxPctLoss', maxDollarLoss: 'maxDollarLoss', minPar: 'minPar' };
+      for (const [sk, qp] of Object.entries(knobMap)) {
+        if (k[sk] != null && k[sk] !== '') params.set(qp, k[sk]);
+      }
+      const res = await fetch('/api/swap-proposals/suggested?' + params.toString(), { cache: 'no-store' });
       const data = await res.json();
       if (swapBuilderState.bankId !== bankId || swapBuilderState.view !== 'home') return;
       swapBuilderState.suggestion = data;
+      swapBuilderState.screenCands = Array.isArray(data.kept) ? data.kept : [];
       renderSuggestedSwaps(data);
     } catch (err) {
-      renderSwapBuilderEmpty('Failed to load suggested swaps: ' + (err.message || 'error'));
+      renderSwapBuilderEmpty('Failed to load portfolio ideas: ' + (err.message || 'error'));
     } finally {
       swapBuilderState.suggestionLoading = false;
     }
@@ -5171,7 +5181,8 @@
     }
     const kept = Array.isArray(data.kept) ? data.kept : [];
     const dropped = Array.isArray(data.dropped) ? data.dropped : [];
-    const teLabel = data.isSubchapterS ? 'TE @ 29.6%' : 'TE @ 21%';
+    const cards = kept.slice(0, 12);
+    const teLabel = data.isSubchapterS ? 'Sub-S · TE @ 29.6%' : 'C-corp · TE @ 21%';
     body.innerHTML = `
       <div class="swap-bank-banner">
         <div>
@@ -5183,12 +5194,21 @@
           <button type="button" class="small-btn" data-swap-manual="1">Build manual proposal</button>
         </div>
       </div>
-      <h3 class="swap-section-head">Suggested swaps <span class="swap-count">${kept.length}</span></h3>
-      ${kept.length
-        ? `<div class="swap-card-grid">${kept.map((c, i) => renderSwapCandidateCardForTab(c, i)).join('')}</div>`
-        : `<div class="bank-search-empty">No swap candidates pass the hard rule for this bank's current holdings.</div>`}
+      ${renderSwapKnobs(data)}
+      ${renderSwapHero(data)}
+      ${renderSwapSnapshot(data)}
+      ${renderSwapSectorBars(data)}
+      ${renderSwapRunoffTable(data)}
+      <h3 class="swap-section-head">Top swap ideas <span class="swap-count">${kept.length}</span></h3>
+      ${cards.length
+        ? `<div class="swap-card-grid">${cards.map((c, i) => renderSwapCandidateCardForTab(c, i)).join('')}</div>`
+        : `<div class="bank-search-empty">No positions clear the current screen. Loosen the loss thresholds or lower the minimum position size above.</div>`}
+      ${kept.length ? renderSwapBlotter(data, kept) : ''}
+      ${renderSwapFindings(data)}
       ${dropped.length ? renderDroppedSwapsSection(dropped) : ''}`;
     bindBuildManual(body);
+    bindSwapKnobs(body);
+    bindSwapBlotter(body);
     body.querySelectorAll('[data-build-from-candidate]').forEach(btn => {
       btn.addEventListener('click', () => {
         const idx = Number(btn.dataset.buildFromCandidate);
@@ -5214,33 +5234,262 @@
     btn.addEventListener('click', () => createManualSwapProposal());
   }
 
+  // ---- Portfolio Filtering knobs (tax / COF / BQ / reinvest target / loss budget) ----
+  function renderSwapKnobs(data) {
+    const k = data.knobs || {};
+    const bq = Number(k.bqFactor);
+    const reinvVal = k.reinvestRateUserSet && k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) : '';
+    const reinvPlaceholder = k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) : 'auto';
+    return `
+      <div class="swap-knobs">
+        <div class="knob"><label>Tax rate %</label><input type="number" step="1" min="0" max="99" id="kbTax" value="${escapeHtml(String(k.taxRatePct ?? 21))}"></div>
+        <div class="knob"><label>Cost of funds %</label><input type="number" step="0.05" min="0" id="kbCof" value="${escapeHtml(String(k.cofPct ?? 1.5))}"></div>
+        <div class="knob"><label>Muni BQ</label><select id="kbBq">
+          <option value="0.20"${bq !== 1 ? ' selected' : ''}>Bank-Qualified</option>
+          <option value="1.00"${bq === 1 ? ' selected' : ''}>Non-BQ</option></select></div>
+        <div class="knob"><label>Reinvest YTW %</label><input type="number" step="0.05" min="0" max="15" id="kbReinv" value="${escapeHtml(reinvVal)}" placeholder="${escapeHtml(reinvPlaceholder)}"></div>
+        <div class="knob"><label>Max % loss</label><input type="number" step="0.5" min="0" id="kbMaxPct" value="${escapeHtml(String(k.maxPctLoss ?? 4))}"></div>
+        <div class="knob"><label>Max $ loss (000)</label><input type="number" step="1" min="0" id="kbMaxDol" value="${escapeHtml(String(k.maxDollarLossK ?? 10))}"></div>
+        <div class="knob"><label>Min position (000)</label><input type="number" step="25" min="0" id="kbMinPar" value="${escapeHtml(String(k.minParK ?? 100))}"></div>
+        <div class="knob"><button type="button" class="small-btn primary" data-rerun-knobs>Re-run ideas</button></div>
+        <div class="swap-knobs-note">TEY uses the verified FBBS form <code>(YTW&nbsp;&minus;&nbsp;COF&middot;t&middot;q)/(1&minus;t)</code>, q=0.20 BQ&nbsp;/&nbsp;1.00 non-BQ. Screen mirrors Portfolio Filtering: % loss within max, $ loss under max, position &ge; min, then names yielding below the reinvest target (exempt munis on a tax-equivalent basis). Reinvest target ${k.reinvestRateUserSet ? 'set by you' : 'auto from today’s inventory'} at <b>${k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) + '%' : '—'}</b>. Set min position to 0 to include odd-lots.</div>
+      </div>`;
+  }
+
+  function bindSwapKnobs(scope) {
+    const rerun = scope.querySelector('[data-rerun-knobs]');
+    if (!rerun) return;
+    const val = id => { const el = document.getElementById(id); if (!el) return undefined; const v = String(el.value).trim(); return v === '' ? undefined : v; };
+    rerun.addEventListener('click', () => {
+      const bqEl = document.getElementById('kbBq');
+      swapBuilderState.knobs = {
+        taxRate: val('kbTax'), cof: val('kbCof'), bq: bqEl ? bqEl.value : undefined,
+        reinvestRate: val('kbReinv'), maxPctLoss: val('kbMaxPct'),
+        maxDollarLoss: val('kbMaxDol'), minPar: val('kbMinPar')
+      };
+      loadSuggestedSwapsForBank(swapBuilderState.bankId);
+    });
+  }
+
+  // ---- Opportunity hero ----
+  function renderSwapHero(data) {
+    const h = data.hero || {};
+    const m = (lab, num, sub) => `<div class="swap-hero-m"><div class="lab">${lab}</div><div class="num">${num}</div>${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ''}</div>`;
+    return `<div class="swap-hero"><div class="swap-hero-hk">Opportunity Summary</div><div class="swap-hero-grid">
+      ${m('Executable Volume', compactCurrency(h.executableVolume), `${Number(h.count || 0)} swap tickets`)}
+      ${m('Added Annual Income', compactCurrency(h.addedAnnualIncome), `vs ${compactCurrency(h.realizedLoss)} realized loss`)}
+      ${m('Blended Breakeven', h.blendedBreakevenYears == null ? '—' : Number(h.blendedBreakevenYears).toFixed(1) + ' yrs', 'loss ÷ income pickup')}
+      ${m('Reinvest Pipeline', h.reinvestPipeline12 == null ? '—' : compactCurrency(h.reinvestPipeline12), 'runoff to redeploy, 12mo')}
+    </div></div>`;
+  }
+
+  // ---- Portfolio snapshot cells ----
+  function renderSwapSnapshot(data) {
+    const p = data.profile || {}, r = data.runoff || {};
+    const ub = (p.totalGainLoss || 0) < 0;
+    const cell = (kk, v, neg) => `<div class="swap-snap-cell"><div class="k">${kk}</div><div class="v${neg ? ' neg' : ''}">${v}</div></div>`;
+    return `<div class="swap-snap">
+      ${cell('Book Value', compactCurrency(p.totalBook))}
+      ${cell('Market Value', compactCurrency(p.totalMarket))}
+      ${cell('Unrealized G/L', compactCurrency(p.totalGainLoss), ub)}
+      ${cell('% of Book', p.pctOfBook == null ? '—' : Number(p.pctOfBook).toFixed(2) + '%', ub)}
+      ${cell('Positions', p.positions == null ? '—' : p.positions)}
+      ${cell('WAvg Coupon', p.wCoupon == null ? '—' : Number(p.wCoupon).toFixed(2) + '%')}
+      ${cell('WAL', p.wWal == null ? '—' : Number(p.wWal).toFixed(1) + 'y')}
+      ${cell('Eff. Duration', p.wDuration == null ? '—' : Number(p.wDuration).toFixed(1))}
+      ${cell('Maturing ≤6mo', compactCurrency(r.mat6))}
+      ${cell('Proj. Runoff ≤6mo', r.hasCashflow ? compactCurrency(r.run6) : '—')}
+    </div>`;
+  }
+
+  // ---- Sector composition bars ----
+  function renderSwapSectorBars(data) {
+    const secs = (data.profile && data.profile.sectors) || [];
+    if (!secs.length) return '';
+    const max = Math.max.apply(null, secs.map(s => s.pctPar || 0)) || 1;
+    return `<h3 class="swap-section-head">Sector composition</h3>
+      <div class="swap-bars">${secs.map(s => `<div class="swap-barrow">
+        <span class="lab">${escapeHtml(s.sector)}</span>
+        <span class="track"><span class="fill" style="width:${((s.pctPar || 0) / max * 100).toFixed(1)}%"></span></span>
+        <span class="val">${compactCurrency(s.par)} · ${Number(s.pctPar || 0).toFixed(1)}%</span>
+      </div>`).join('')}</div>`;
+  }
+
+  // ---- Maturity & call runoff table ----
+  function renderSwapRunoffTable(data) {
+    const r = data.runoff || {};
+    const row = (lbl, mat, run) => `<tr><td>${lbl}</td><td class="r">${compactCurrency(mat)}</td>
+      <td class="r">${r.hasCashflow ? compactCurrency(run) : '—'}</td>
+      <td class="r">${r.hasCashflow ? compactCurrency((run || 0) - (mat || 0)) : '—'}</td></tr>`;
+    return `<h3 class="swap-section-head">Maturity &amp; call runoff</h3>
+      <table class="swap-runoff-tbl">
+        <tr><th>Horizon</th><th class="r">Maturities</th><th class="r">Projected runoff</th><th class="r">Calls + paydowns add'l</th></tr>
+        ${row('Within 6 months', r.mat6, r.run6)}
+        ${row('Within 12 months', r.mat12, r.run12)}
+        ${row('Within 24 months', r.mat24, r.run24)}
+      </table>
+      <p class="swap-runoff-note">Maturities reflect final stated maturity dates. Projected runoff is read from the workbook's own <b>cashflow-data</b> sheet (base scenario) — already incorporating calls, scheduled amortization, and maturities.</p>`;
+  }
+
+  // ---- Interactive swap blotter (select names → live package totals → CSV) ----
+  function renderSwapBlotter(data, kept) {
+    const top = kept.slice(0, 40);
+    const rows = top.map((c, i) => {
+      const glPctNeg = (c.held.gainLossPct || 0) < 0;
+      const glNeg = (c.held.gainLoss || 0) < 0;
+      const checked = c.pickupVsReinvest != null && c.pickupVsReinvest > 0 ? ' checked' : '';
+      return `<tr data-ci="${i}">
+        <td class="ck"><input type="checkbox" class="swap-cand" data-ci="${i}"${checked}></td>
+        <td class="cu">${escapeHtml(c.held.cusip || '')}</td>
+        <td>${escapeHtml((c.held.description || '').slice(0, 26))}</td>
+        <td>${escapeHtml(c.sector || '')}</td>
+        <td class="r">${compactCurrency(c.held.par)}</td>
+        <td class="r">${escapeHtml(c.held.maturity || '—')}</td>
+        <td class="r">${c.held.effYield == null ? '—' : Number(c.held.effYield).toFixed(2) + '%'}${c.held.isExemptMuni ? '<span class="te-star">*</span>' : ''}</td>
+        <td class="r ${glPctNeg ? 'negc' : 'posc'}">${c.held.gainLossPct == null ? '—' : Number(c.held.gainLossPct).toFixed(2) + '%'}</td>
+        <td class="r ${glNeg ? 'negc' : 'posc'}">${compactCurrency(c.held.gainLoss)}</td>
+        <td class="r posc">${c.pickupVsReinvest == null ? '—' : '+' + Number(c.pickupVsReinvest).toFixed(2) + '%'}</td>
+        <td class="r">${c.reinvestBreakevenYears == null ? '—' : Number(c.reinvestBreakevenYears).toFixed(1) + 'y'}</td>
+      </tr>`;
+    }).join('');
+    const more = kept.length > top.length ? `<p class="swap-blotter-more">Showing the ${top.length} highest-priority of ${kept.length} candidates; CSV exports all selected.</p>` : '';
+    return `<h3 class="swap-section-head">Swap blotter <span class="swap-count">${kept.length}</span></h3>
+      <div class="swap-toolbar">
+        <label class="sa"><input type="checkbox" id="swapSelAll" checked data-toggle-all> Select all shown</label>
+        <button type="button" class="small-btn" data-export-csv>Export selected to CSV</button>
+        <span class="te-note">Yield* = book YTW (taxable) / tax-equivalent YTW (exempt munis<span class="te-star">*</span>).</span>
+      </div>
+      <div class="swap-blotter-scroll"><table class="swap-blotter-tbl">
+        <tr><th class="ck"></th><th>CUSIP</th><th>Description</th><th>Sector</th><th class="r">Par</th><th class="r">Maturity</th><th class="r">Yield*</th><th class="r">% Loss</th><th class="r">$ G/L</th><th class="r">Pickup</th><th class="r">Breakeven</th></tr>
+        ${rows}
+      </table></div>${more}
+      <div class="swap-package"><div class="bh">Selected swap package</div><div class="bg" id="swapPackage"></div></div>`;
+  }
+
+  function bindSwapBlotter(scope) {
+    const pkg = scope.querySelector('#swapPackage');
+    if (!pkg) return;
+    scope.querySelectorAll('input.swap-cand').forEach(cb => cb.addEventListener('change', updateSwapPackage));
+    const selAll = scope.querySelector('[data-toggle-all]');
+    if (selAll) selAll.addEventListener('change', () => {
+      scope.querySelectorAll('input.swap-cand').forEach(cb => { cb.checked = selAll.checked; });
+      updateSwapPackage();
+    });
+    const exp = scope.querySelector('[data-export-csv]');
+    if (exp) exp.addEventListener('click', exportSwapCsv);
+    updateSwapPackage();
+  }
+
+  function selectedSwapCands() {
+    const cands = swapBuilderState.screenCands || [];
+    return [...document.querySelectorAll('input.swap-cand:checked')].map(cb => cands[+cb.dataset.ci]).filter(Boolean);
+  }
+
+  function updateSwapPackage() {
+    const el = document.getElementById('swapPackage');
+    if (!el) return;
+    document.querySelectorAll('input.swap-cand').forEach(cb => { const tr = cb.closest('tr'); if (tr) tr.classList.toggle('off', !cb.checked); });
+    const sel = selectedSwapCands();
+    const sum = f => sel.reduce((a, c) => a + (Number(f(c)) || 0), 0);
+    const par = sum(c => c.held.par);
+    const proceeds = sum(c => c.held.marketValue);
+    const loss = sum(c => c.held.gainLoss);
+    const lift = sum(c => (c.pickupVsReinvest > 0 ? c.addedAnnualIncome : 0));
+    const be = lift > 0 ? Math.abs(loss) / lift : null;
+    const cell = (lab, num, neg) => `<div class="b"><div class="lab">${lab}</div><div class="num${neg ? ' neg' : ''}">${num}</div></div>`;
+    el.innerHTML = cell('Names', sel.length)
+      + cell('Sell Par', compactCurrency(par))
+      + cell('Proceeds to Reinvest', compactCurrency(proceeds))
+      + cell('Realized Loss', compactCurrency(loss), true)
+      + cell('Added Annual Income', compactCurrency(lift))
+      + cell('Blended Breakeven', be == null ? '—' : be.toFixed(1) + ' yrs');
+  }
+
+  function exportSwapCsv() {
+    const sel = selectedSwapCands();
+    if (!sel.length) { showToast('No names selected to export', true); return; }
+    const head = ['CUSIP', 'Description', 'Sector', 'Maturity', 'Par', 'Book Yield', 'Eff Yield (TEY if exempt)', '% G/L', '$ G/L', 'Market Value', 'Buy CUSIP', 'Buy Yield', 'Pickup vs Reinvest %', 'Reinvest Breakeven (yrs)'];
+    const esc = x => `"${String(x == null ? '' : x).replace(/"/g, '""')}"`;
+    const lines = [head.join(',')].concat(sel.map(c => [
+      c.held.cusip, c.held.description, c.sector, c.held.maturity, c.held.par, c.held.bookYield,
+      c.held.effYield, c.held.gainLossPct, c.held.gainLoss, c.held.marketValue,
+      c.offering.cusip, c.offering.yield, c.pickupVsReinvest, c.reinvestBreakevenYears
+    ].map(esc).join(',')));
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (swapBuilderState.bankName || 'portfolio').replace(/\s+/g, '_') + '_swap_candidates.csv';
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  // ---- Portfolio-specific findings (server-composed prose) ----
+  function renderSwapFindings(data) {
+    const fs = data.findings || [];
+    if (!fs.length) return '';
+    return `<h3 class="swap-section-head">Portfolio-specific ideas</h3>`
+      + fs.map(f => `<div class="swap-finding sev-${escapeHtml(f.sev)}">
+        <div class="ft"><span class="swap-badge b-${escapeHtml(f.sev)}">${escapeHtml(f.badge)}</span><h4>${escapeHtml(f.title)}</h4></div>
+        <p>${f.body}</p>
+      </div>`).join('');
+  }
+
+  // Why a held bond surfaced as a swap idea. These map the server `tags`.
+  const SWAP_TAG_LABELS = {
+    'below-reinvest': 'Below reinvest',
+    'small-loss': 'Small loss',
+    'small-gain': 'Small gain',
+    'loss-harvest': 'Loss harvest',
+    'yield-pickup': 'Yield pickup'
+  };
+
+  function renderSwapTags(tags) {
+    if (!Array.isArray(tags) || !tags.length) return '';
+    return `<div class="swap-card-tags">${tags.map(t =>
+      `<span class="swap-tag swap-tag-${escapeHtml(t)}">${escapeHtml(SWAP_TAG_LABELS[t] || t)}</span>`
+    ).join('')}</div>`;
+  }
+
   function renderSwapCandidateCardForTab(c, index) {
     const econ = c.economics || {};
     const warnings = (c.rule && c.rule.warnings) || [];
     const heldTitle = [c.held.cusip, c.held.description].filter(Boolean).join(' · ') || 'Current holding';
+    const glPct = c.held.gainLossPct;
+    const glLabel = glPct == null ? '' : ` (${glPct > 0 ? '+' : ''}${Number(glPct).toFixed(1)}%)`;
+    const beYrs = c.reinvestBreakevenYears != null
+      ? Number(c.reinvestBreakevenYears).toFixed(1) + ' yr'
+      : (econ.breakevenMonths == null ? '—' : (Number(econ.breakevenMonths) / 12).toFixed(1) + ' yr');
+    const fitBits = [];
+    if (c.offering.fitSummary) fitBits.push(c.offering.fitSummary);
+    if (c.reinvestRate != null) {
+      const effTxt = c.held.isExemptMuni ? `held TE ${Number(c.held.effYield).toFixed(2)}%` : `held ${Number(c.held.bookYield).toFixed(2)}%`;
+      fitBits.push(`${effTxt} → reinvest ${Number(c.reinvestRate).toFixed(2)}% · buy ${Number(c.offering.yield).toFixed(2)}%`);
+    }
+    const sellBits = [
+      c.held.par ? compactCurrency(c.held.par) + ' par' : '',
+      `${Number(c.held.bookYield).toFixed(2)}% book`,
+      c.held.isExemptMuni && c.held.effYield != null ? `${Number(c.held.effYield).toFixed(2)}% TE` : '',
+      c.held.maturity ? 'matures ' + c.held.maturity : ''
+    ].filter(Boolean).join(' · ');
     return `
       <article class="swap-card">
         <header>
           <span class="swap-card-num">Swap ${index + 1}</span>
           <strong>${escapeHtml(c.sector || 'Portfolio')}</strong>
         </header>
+        ${renderSwapTags(c.tags)}
         <div class="swap-card-legs">
-          <div><span>Sell</span><strong>${escapeHtml(heldTitle)}</strong><em>${escapeHtml([
-            c.held.par ? compactCurrency(c.held.par) + ' par' : '',
-            `${Number(c.held.bookYield).toFixed(2)}% book`,
-            `${Number(c.held.marketYield).toFixed(2)}% market`,
-            c.held.maturity ? 'matures ' + c.held.maturity : ''
-          ].filter(Boolean).join(' · '))}</em></div>
+          <div><span>Sell</span><strong>${escapeHtml(heldTitle)}</strong><em>${escapeHtml(sellBits)}</em></div>
           <div><span>Buy</span><strong>${escapeHtml(c.offering.label || 'Replacement offering')}</strong><em>${escapeHtml(`${Number(c.offering.yield).toFixed(3)}% YTW · CUSIP ${c.offering.cusip || '—'}`)}</em></div>
         </div>
-        ${c.offering.fitSummary ? `<div class="swap-fit-note">${escapeHtml(c.offering.fitSummary)}</div>` : ''}
+        ${fitBits.length ? `<div class="swap-fit-note">${escapeHtml(fitBits.join(' · '))}</div>` : ''}
         <dl class="swap-card-metrics">
-          <div><dt>Pickup</dt><dd>+${Number(c.yieldPickupVsBook).toFixed(2)}%</dd></div>
-          <div><dt>Breakeven</dt><dd>${econ.breakevenMonths == null ? '—' : Number(econ.breakevenMonths).toFixed(1) + ' mo'}</dd></div>
-          <div><dt>Gain/Loss</dt><dd>${compactCurrency(econ.realizedGainLoss)}</dd></div>
-          <div><dt>Annual pickup</dt><dd>${compactCurrency(econ.annualIncomePickup)}</dd></div>
+          <div><dt>Pickup vs reinvest</dt><dd>${c.pickupVsReinvest == null ? '—' : '+' + Number(c.pickupVsReinvest).toFixed(2) + '%'}</dd></div>
+          <div><dt>Added income/yr</dt><dd>${compactCurrency(c.addedAnnualIncome)}</dd></div>
+          <div><dt>Breakeven</dt><dd>${beYrs}</dd></div>
+          <div><dt>Gain/Loss</dt><dd>${compactCurrency(c.held.gainLoss)}${glLabel}</dd></div>
+          <div><dt>Buy pickup vs book</dt><dd>+${Number(c.yieldPickupVsBook).toFixed(2)}%</dd></div>
           <div><dt>Net benefit</dt><dd>${compactCurrency(econ.netBenefitToHorizon)}</dd></div>
-          <div><dt>Horizon</dt><dd>${econ.horizonYears == null ? '—' : Number(econ.horizonYears).toFixed(2) + ' yr'}</dd></div>
         </dl>
         ${warnings.length ? `<ul class="swap-card-warnings">${warnings.map(w => `<li>${escapeHtml(w.message)}</li>`).join('')}</ul>` : ''}
         <div class="swap-card-actions">
@@ -7673,6 +7922,28 @@
       .filter(Boolean).join(' · ');
   }
 
+  function selectedPortfolioReviewBank() {
+    const id = portfolioReviewState.selectedBankId;
+    return (portfolioReviewState.banks || []).find(bank => bank.id === id) || null;
+  }
+
+  function portfolioReviewPickerSummary() {
+    const bank = selectedPortfolioReviewBank();
+    const review = portfolioReviewState.review || {};
+    const name = (bank && bank.name) || review.bankName || 'Selected bank';
+    const meta = bank ? portfolioReviewMetaLine(bank) : [review.city, review.state, review.certNumber ? `Cert ${review.certNumber}` : '', review.reportDate ? `Portfolio ${review.reportDate}` : ''].filter(Boolean).join(' · ');
+    return `
+      <div class="portfolio-review-picker-summary">
+        <div>
+          <span>Portfolio review ready</span>
+          <strong>${escapeHtml(name)}</strong>
+          ${meta ? `<em>${escapeHtml(meta)}</em>` : ''}
+        </div>
+        <button type="button" class="small-btn secondary" id="portfolioReviewChangeBankBtn">Change bank</button>
+      </div>
+    `;
+  }
+
   function portfolioReviewBankOptions() {
     if (portfolioReviewState.loading && !portfolioReviewState.banks.length) {
       return '<div class="bank-search-empty">Loading banks with matched portfolio files...</div>';
@@ -7698,13 +7969,16 @@
   }
 
   function portfolioReviewPanelHtml() {
+    const canCollapsePicker = portfolioReviewState.review && portfolioReviewState.bankPickerCollapsed;
     return `
       <section class="portfolio-review-tool">
-        <div class="reports-peer-search">
-          <input type="search" id="portfolioReviewBankSearchInput" placeholder="Search banks with matched bond-accounting files..." value="${escapeHtml(portfolioReviewState.search || '')}" autocomplete="off">
-          <button type="button" class="small-btn" id="portfolioReviewRefreshBanksBtn">Refresh</button>
-        </div>
-        <div class="portfolio-review-picker" id="portfolioReviewBankResults">${portfolioReviewBankOptions()}</div>
+        ${canCollapsePicker ? portfolioReviewPickerSummary() : `
+          <div class="reports-peer-search">
+            <input type="search" id="portfolioReviewBankSearchInput" placeholder="Search banks with matched bond-accounting files..." value="${escapeHtml(portfolioReviewState.search || '')}" autocomplete="off">
+            <button type="button" class="small-btn" id="portfolioReviewRefreshBanksBtn">Refresh</button>
+          </div>
+          <div class="portfolio-review-picker" id="portfolioReviewBankResults">${portfolioReviewBankOptions()}</div>
+        `}
         <div class="portfolio-review-output" id="portfolioReviewOutput">
           ${portfolioReviewState.review ? portfolioReviewHtml(portfolioReviewState.review) : '<div class="bank-search-empty">Select a bank to build a portfolio review from its latest matched bond-accounting file.</div>'}
         </div>
@@ -7770,6 +8044,7 @@
       return;
     }
     portfolioReviewState.selectedBankId = id;
+    portfolioReviewState.bankPickerCollapsed = true;
     const output = document.getElementById('portfolioReviewOutput');
     if (output) output.innerHTML = '<div class="bank-search-empty">Building portfolio review...</div>';
     try {
@@ -8970,6 +9245,11 @@
       const portfolioBank = clickTarget.closest('[data-portfolio-bank]');
       if (portfolioBank) {
         runPortfolioReview(portfolioBank.dataset.portfolioBank);
+        return;
+      }
+      if (clickTarget.closest('#portfolioReviewChangeBankBtn')) {
+        portfolioReviewState.bankPickerCollapsed = false;
+        renderPortfolioReviewMount();
         return;
       }
       const portfolioExport = clickTarget.closest('[data-portfolio-export]');

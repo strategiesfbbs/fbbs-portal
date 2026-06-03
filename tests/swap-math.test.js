@@ -545,6 +545,38 @@ test('solveBuyParForProceeds reports actionable reasons when it cannot solve', (
   }).reason));
 });
 
+// ---------- Municipal TEY (FBBS verified form) ----------
+
+test('municipalTeYield matches the verified FBBS form (YTW - COF*t*q)/(1-t)', () => {
+  // 3.50% BQ muni, 21% tax, 1.50% COF, q=0.20 → (3.5 - 1.5*0.21*0.20)/0.79
+  near(m.municipalTeYield(3.5, { cofPct: 1.5, taxRatePct: 21, bqFactor: 0.20 }), 4.3506, 0.001, 'BQ muni TEY');
+  // Non-BQ (q=1.00) carries a larger disallowance → lower TEY
+  near(m.municipalTeYield(3.5, { cofPct: 1.5, taxRatePct: 21, bqFactor: 1.00 }), 4.0316, 0.001, 'non-BQ muni TEY');
+  // Sub-S rate 29.6%
+  near(m.municipalTeYield(3.5, { cofPct: 1.5, taxRatePct: 29.6, bqFactor: 0.20 }), 4.8455, 0.001, 'Sub-S muni TEY');
+});
+
+test('municipalTeYield with zero COF reduces to the plain gross-up', () => {
+  near(m.municipalTeYield(4, { cofPct: 0, taxRatePct: 21, bqFactor: 0.20 }), m.teYield(4, 21), 0.0001, 'zero-COF TEY');
+});
+
+test('municipalTeYield guards bad input', () => {
+  assert.strictEqual(m.municipalTeYield(null, { taxRatePct: 21 }), null);
+  assert.strictEqual(m.municipalTeYield(3.5, { taxRatePct: 100 }), null);
+  // Missing options default to COF 0 / q 0.20 / tax 0 → returns the raw yield
+  near(m.municipalTeYield(3.5), 3.5, 0.0001, 'no-options TEY');
+});
+
+// ---------- Reinvestment breakeven (years) ----------
+
+test('reinvestBreakevenYears = |%loss| / annual pickup', () => {
+  near(m.reinvestBreakevenYears(-3, 1.5), 2.0, 0.0001, 'breakeven years');
+  near(m.reinvestBreakevenYears(-1, 2), 0.5, 0.0001, 'breakeven years 2');
+  assert.strictEqual(m.reinvestBreakevenYears(-3, 0), null, 'no pickup → null');
+  assert.strictEqual(m.reinvestBreakevenYears(-3, -1), null, 'negative pickup → null');
+  assert.strictEqual(m.reinvestBreakevenYears(null, 1.5), null, 'no loss → null');
+});
+
 // ---------- Done ----------
 
 console.log(`swap-math tests: ${passed} passed.`);

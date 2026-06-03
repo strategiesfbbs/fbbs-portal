@@ -17,7 +17,7 @@ const SECTOR_SHEETS = [
   'Corporate', 'Exempt Muni', 'Taxable Muni', 'SBA', 'ABS', 'Other'
 ];
 
-const PARSED_PORTFOLIO_SCHEMA_VERSION = 2;
+const PARSED_PORTFOLIO_SCHEMA_VERSION = 4;
 
 // Map common header-cell variants to canonical field names. THC's templates
 // embed newlines and trailing spaces — normalize and match loosely.
@@ -46,6 +46,12 @@ const HEADER_MAP = {
   'bk ytm (%)': 'bookYieldYtm',
   'mkt ytw (%)': 'marketYieldYtw',
   'mkt ytm (%)': 'marketYieldYtm',
+  // The Exempt/Taxable Muni sheets omit the space before the percent paren
+  // (e.g. "Bk YTW(%)"); capture those variants so muni yields aren't lost.
+  'bk ytw(%)': 'bookYieldYtw',
+  'bk ytm(%)': 'bookYieldYtm',
+  'mkt ytw(%)': 'marketYieldYtw',
+  'mkt ytm(%)': 'marketYieldYtm',
   'book yield (%)': 'bookYieldYtm',
   'avg life': 'averageLife',
   'average life': 'averageLife',
@@ -243,6 +249,48 @@ function sheetRows(sheet) {
   });
 }
 
+// The workbook's "cashflow data" sheet projects the portfolio's outstanding
+// balance month-by-month under the base scenario — already embedding calls,
+// scheduled amortization, and maturities. We capture the (date, base) series
+// in $000 so the portal can show projected runoff (decline in balance) over a
+// horizon, which is a truer reinvestment pipeline than stated maturities alone.
+function findCashflowSheet(wb) {
+  const exact = wb.SheetNames.find(n => /^cashflow data$/i.test(n));
+  if (exact) return wb.Sheets[exact];
+  const loose = wb.SheetNames.find(n => /cashflow data/i.test(n));
+  return loose ? wb.Sheets[loose] : null;
+}
+
+function parseCashflowData(wb) {
+  const sheet = findCashflowSheet(wb);
+  if (!sheet) return null;
+  const XLSX = require('./xlsx');
+  const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+  if (!grid || !grid.length) return null;
+  // Header row sits within the first few rows and carries both "date" and "base".
+  let hr = -1;
+  for (let r = 0; r < Math.min(grid.length, 6); r += 1) {
+    const norm = (grid[r] || []).map(normalizeHeader);
+    if (norm.includes('date') && norm.includes('base')) { hr = r; break; }
+  }
+  if (hr < 0) return null;
+  const hdr = (grid[hr] || []).map(normalizeHeader);
+  const dc = hdr.indexOf('date');
+  const bc = hdr.indexOf('base');
+  if (dc < 0 || bc < 0) return null;
+  const dates = [];
+  const baseThousands = [];
+  for (let r = hr + 1; r < grid.length; r += 1) {
+    const row = grid[r];
+    if (!row) continue;
+    const iso = toIsoDate(row[dc]);
+    const base = toNumber(row[bc]);
+    if (iso && base != null) { dates.push(iso); baseThousands.push(base); }
+  }
+  if (!dates.length) return null;
+  return { asOfDate: dates[0], dates, baseThousands };
+}
+
 function parseScenarioSummary(sheet) {
   const rows = sheetRows(sheet);
   const scenarioRows = [];
@@ -388,6 +436,7 @@ function parsePortfolioWorkbook(filePath) {
   const totals = parseLinkedDataTotals(wb.Sheets['linked data']);
   const asOfDate = parseAsOfDate(wb);
   const analytics = parseWorkbookAnalytics(wb);
+  const cashflow = parseCashflowData(wb);
   // Derive helpful aggregates.
   const totalPositions = allHoldings.length;
   const sumPar = allHoldings.reduce((acc, h) => acc + (h.par || 0), 0);
@@ -415,6 +464,7 @@ function parsePortfolioWorkbook(filePath) {
       gainLoss: sumGainLoss
     },
     analytics,
+    cashflow: cashflow || null,
     cusipIndex
   };
 }
@@ -430,7 +480,8 @@ function parsedPortfolioCacheIsFresh(cached) {
     && Array.isArray(cached.analytics.scenarioSummary)
     && Array.isArray(cached.analytics.totalReturn)
     && Array.isArray(cached.analytics.peerReview)
-    && Array.isArray(cached.analytics.keyRateDuration);
+    && Array.isArray(cached.analytics.keyRateDuration)
+    && ('cashflow' in cached);
 }
 
 function loadParsedPortfolio(portfolioXlsmPath, options = {}) {

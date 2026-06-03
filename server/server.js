@@ -3137,8 +3137,10 @@ function roundMoney(value) {
   return n === null ? null : Math.round(n);
 }
 
-function swapEconomics(held, offering, map, pickYield, asOfDate) {
-  const bookYield = numericValue(held.bookYieldYtm ?? held.bookYieldYtw);
+function swapEconomics(held, offering, map, pickYield, asOfDate, bookYieldOverride) {
+  const bookYield = bookYieldOverride != null
+    ? bookYieldOverride
+    : numericValue(held.bookYieldYtm ?? held.bookYieldYtw);
   if (bookYield === null || pickYield === null) return null;
   const par = numericValue(held.par) || 0;
   const bookValue = numericValue(held.bookValue) || (par && numericValue(held.bookPrice) !== null ? par * numericValue(held.bookPrice) / 100 : par);
@@ -3175,25 +3177,97 @@ function swapEconomics(held, offering, map, pickYield, asOfDate) {
   };
 }
 
+// Economics for a generic "sell and reinvest the proceeds at the target rate" idea
+// — used when no concrete same-sector buy beats the held bond. Everything is on the
+// effective-yield basis (TEY for munis) so the income pickup is apples-to-apples
+// with the taxable reinvestment target, mirroring the prototype's screen math.
+function reinvestTargetEconomics(held, effYield, marketValue, gainLossDollars, reinvestTarget, asOfDate) {
+  if (effYield == null || reinvestTarget == null || !marketValue) return null;
+  const realizedGainLoss = gainLossDollars != null ? gainLossDollars : 0;
+  const horizonYears = Math.max(0.1, holdingHorizonYears(held, null, asOfDate));
+  const annualIncomeGivenUp = marketValue * effYield / 100;
+  const annualBuyIncome = marketValue * reinvestTarget / 100;
+  const annualIncomePickup = annualBuyIncome - annualIncomeGivenUp;
+  const netInterestToHorizon = annualIncomePickup * horizonYears;
+  const netBenefitToHorizon = netInterestToHorizon + realizedGainLoss;
+  const lossToEarnBack = realizedGainLoss < 0 ? -realizedGainLoss : 0;
+  const breakevenMonths = lossToEarnBack > 0 && annualIncomePickup > 0
+    ? lossToEarnBack / (annualIncomePickup / 12)
+    : null;
+  return {
+    horizonYears: Number(horizonYears.toFixed(2)),
+    realizedGainLoss: roundMoney(realizedGainLoss),
+    interestGivenUp: roundMoney(-annualIncomeGivenUp * horizonYears),
+    buyIncome: roundMoney(annualBuyIncome * horizonYears),
+    annualIncomePickup: roundMoney(annualIncomePickup),
+    netInterestToHorizon: roundMoney(netInterestToHorizon),
+    netBenefitToHorizon: roundMoney(netBenefitToHorizon),
+    breakevenMonths: breakevenMonths === null ? null : Number(breakevenMonths.toFixed(1)),
+    replacementPar: Math.round(marketValue)
+  };
+}
+
 // Find swap candidates by walking the bank's parsed holdings against today's
 // inventory. The desk has exactly ONE hard rule for auto-suggested swaps:
 // the held bond can't mature before the breakeven (otherwise the loss can't
 // be recouped before the bond is gone). Everything else — breakeven cap,
 // maturity floor, requiring annual pickup — is a soft "thinking point"
 // returned as warning chips on the candidate, not a filter reason.
+//
+// The ENTRY screen (which held positions are even worth scoring) mirrors the
+// desk's Portfolio Filtering workflow: position size ≥ the min, any realized
+// loss within the % / $ loss budget, then a UNION of "worth a look" reasons —
+// underearning vs. the reinvestment target (TEY basis for exempt munis), cheap
+// to move (small unrealized gain or loss), or a recoupable loss. Each surviving
+// candidate is tagged with WHY it surfaced and still faces the one hard rule.
 // Every swap and portfolio is different; the rep decides per situation.
 //
-// `options.includeRejected = true` returns `{ kept, dropped, rules }` where
-// kept candidates may carry warnings and dropped only contains hard-rule
-// failures. The Build-your-own (manual) flow bypasses this entirely and
-// lets the rep build any swap they want.
+// `options.includeRejected = true` returns `{ kept, dropped, rules, reinvestTarget,
+// reinvestTargetSource }` where kept candidates may carry warnings and dropped only
+// contains hard-rule failures. The Build-your-own (manual) flow bypasses this
+// entirely and lets the rep build any swap they want.
+// Best attainable taxable reinvestment yield across today's buy universe
+// (agencies / treasuries / corporates / CDs) — the single rate the held book's
+// yields are screened against when the rep hasn't pinned a target. Muni proceeds
+// are assumed to reinvest into this taxable target, which is why held munis are
+// compared on a tax-equivalent basis.
+function autoReinvestTargetFromInventory(inventory, pct) {
+  const keys = [['agencies', 'ytm'], ['treasuries', 'yield'], ['corporates', 'ytm'], ['cds', 'rate']];
+  const ys = [];
+  for (const [rowsKey, yieldKey] of keys) {
+    for (const row of (inventory.rows[rowsKey] || [])) {
+      const n = numericValue(row[yieldKey]);
+      if (n != null && n > 0 && n <= 15) ys.push(n);
+    }
+  }
+  return percentile(ys, pct == null ? 0.9 : pct);
+}
+
 function findSwapCandidates(parsedHoldings, inventory, options = {}) {
-  const empty = options.includeRejected ? { kept: [], dropped: [] } : [];
+  const empty = options.includeRejected ? { kept: [], dropped: [], reinvestTarget: null } : [];
   if (!parsedHoldings || !parsedHoldings.sectors || !inventory || !inventory.rows) return empty;
-  const minHeldYieldGap = options.minHeldYieldGap ?? 1.0;
-  const minPickupVsBook = options.minPickupVsBook ?? 0.5;
+  const minPickupVsBook = options.minPickupVsBook ?? 0.25;
+  const reinvestMargin = options.reinvestMargin ?? 0.10;
+  const smallGlPct = options.smallGlPct ?? 2.0;
+  const lossHarvestGap = options.lossHarvestGap ?? 1.0;
+  const reinvestPct = options.reinvestPercentile ?? 0.9;
+  // TEY knobs (Portfolio Filtering workflow). Defaults mirror the prototype.
+  const taxRatePct = options.taxRatePct ?? 21;
+  const cofPct = options.cofPct ?? 1.5;
+  const bqFactor = options.bqFactor ?? 0.20;
+  // Loss-budget knobs — what loss the desk will realize, and the floor position
+  // size worth a ticket. maxDollarLoss / minParThousands are in $000.
+  const maxPctLoss = options.maxPctLoss ?? 4.0;
+  const maxDollarLossDollars = options.maxDollarLoss == null ? null : options.maxDollarLoss * 1000;
+  const minParDollars = (options.minParThousands == null ? 0 : options.minParThousands) * 1000;
+  const flatReinvest = (typeof options.reinvestRate === 'number' && options.reinvestRate > 0)
+    ? options.reinvestRate : null;
   const rules = options.rules || swapMath.DEFAULT_FBBS_RULES;
-  const limit = Math.max(1, parseInt(options.limit, 10) || 5);
+  const limit = Math.max(1, parseInt(options.limit, 10) || 12);
+  const reinvestTarget = flatReinvest != null
+    ? flatReinvest
+    : autoReinvestTargetFromInventory(inventory, reinvestPct);
+  const reinvestTargetSource = flatReinvest != null ? 'knob' : 'auto';
   const kept = [];
   const dropped = [];
   const fitProfile = buildInvestmentFitProfile(parsedHoldings, inventory.asOfDate);
@@ -3209,53 +3283,93 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
     const sourceRef = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
       ? '_muni_offerings.json#stateMunis'
       : map.sourceRef;
+    const isExemptMuni = /exempt muni/i.test(sector);
 
     for (const held of holdings) {
-      const bookYld = held.bookYieldYtm ?? held.bookYieldYtw;
-      const mktYld = held.marketYieldYtw ?? held.marketYieldYtm;
-      if (bookYld == null || mktYld == null) continue;
-      const heldGap = mktYld - bookYld;
-      if (heldGap < minHeldYieldGap) continue;
+      // Nominal book yield. Some sheets (notably the muni sheets) leave the raw
+      // Bk YTW column blank and only carry the tax-equivalent column, so fall
+      // back to solving YTM from book price + coupon + maturity.
+      let bookYld = numericValue(held.bookYieldYtm ?? held.bookYieldYtw);
+      if (bookYld == null) {
+        bookYld = swapMath.yieldFromPriceAndMaturity({
+          price: numericValue(held.bookPrice), coupon: numericValue(held.coupon),
+          maturity: held.maturity, settleDate: inventory.asOfDate
+        });
+      }
+      if (bookYld == null) continue;
+      let mktYld = numericValue(held.marketYieldYtw ?? held.marketYieldYtm);
+      if (mktYld == null) {
+        mktYld = swapMath.yieldFromPriceAndMaturity({
+          price: numericValue(held.marketPrice), coupon: numericValue(held.coupon),
+          maturity: held.maturity, settleDate: inventory.asOfDate
+        });
+      }
+      const heldGap = mktYld == null ? null : mktYld - bookYld;
 
+      // Effective yield: exempt munis are gross-up'd to a tax-equivalent basis
+      // (FBBS verified form, COF + BQ disallowance) so they compare like-for-like
+      // against the taxable reinvestment target. Everything else is its book yield.
+      const teY = isExemptMuni
+        ? swapMath.municipalTeYield(bookYld, { cofPct, taxRatePct, bqFactor })
+        : null;
+      const effYield = (isExemptMuni && teY != null) ? teY : bookYld;
+
+      // Gain/loss as a % of book — small |G/L%| means the bond is cheap to move.
+      const bookValueForGl = numericValue(held.bookValue)
+        || (numericValue(held.par) != null && numericValue(held.bookPrice) != null
+            ? numericValue(held.par) * numericValue(held.bookPrice) / 100 : null);
+      const glDollars = numericValue(held.gainLoss);
+      const glPct = bookValueForGl ? ((glDollars != null ? glDollars : 0) / bookValueForGl) * 100 : null;
+      const par = numericValue(held.par) || 0;
+      let mv = numericValue(held.marketValue);
+      if (mv == null) mv = (bookValueForGl != null ? bookValueForGl : 0) + (glDollars || 0);
+      if (!mv) mv = par;
+
+      // Loss-budget + position-size gates (Portfolio Filtering workflow). The
+      // loss caps only bite when the position is actually at a loss; gains pass.
+      if (par < minParDollars) continue;
+      if (glPct != null && glPct < 0) {
+        if (maxPctLoss != null && Math.abs(glPct) > maxPctLoss) continue;
+        if (maxDollarLossDollars != null && Math.abs(glDollars || 0) > maxDollarLossDollars) continue;
+      }
+
+      // Entry screen — a UNION of "worth a look" reasons (not the old AND chain):
+      //   (1) underearning vs. the reinvestment target (TEY basis for munis),
+      //   (2) cheap to move — small unrealized gain or loss, or
+      //   (3) sitting on a recoupable loss (legacy loss-harvest path).
+      // Each surviving candidate still faces the one hard rule below.
+      const belowReinvest = reinvestTarget != null && effYield < (reinvestTarget - reinvestMargin);
+      const lowGl = glPct != null && Math.abs(glPct) <= smallGlPct;
+      const lossHarvest = heldGap != null && heldGap >= lossHarvestGap;
+      if (!belowReinvest && !lowGl && !lossHarvest) continue;
+
+      // Reinvestment economics (vs the target rate, TEY basis for munis):
+      // the annual income lift and the years to earn back any realized loss.
+      // Computed up front — drives both the matched-buy and generic paths.
+      const pickupVsReinvest = reinvestTarget != null ? reinvestTarget - effYield : null;
+      const addedAnnualIncome = pickupVsReinvest != null ? mv * pickupVsReinvest / 100 : null;
+      const reinvestBeYears = (glPct != null && glPct < 0 && pickupVsReinvest != null)
+        ? swapMath.reinvestBreakevenYears(glPct, pickupVsReinvest)
+        : null;
+
+      // Prefer a concrete same-sector buy from today's inventory that beats the
+      // held book yield. If none does, a below-reinvest position is still a valid
+      // sell-and-reinvest idea — fall back to a generic "reinvest at target" buy.
+      // (This is what surfaces munis: few muni offerings beat a held muni's
+      // nominal yield, yet on a tax-equivalent basis it's underearning vs taxable.)
       const pick = pickBestOffering(candidateRows, map.yieldKey, held.cusip ? String(held.cusip).toUpperCase() : null, {
-        fitProfile,
-        held,
-        sector,
-        map,
-        minYield: bookYld + minPickupVsBook
+        fitProfile, held, sector, map, minYield: bookYld + minPickupVsBook
       });
-      if (!pick) continue;
-      const pickup = pick.yld - bookYld;
-      if (pickup < minPickupVsBook) continue;
-      const economics = swapEconomics(held, pick.row, map, pick.yld, inventory.asOfDate);
-      if (!economics) continue;
+      const matchedPickup = pick ? pick.yld - bookYld : null;
+      const hasMatchedBuy = pick && matchedPickup >= minPickupVsBook;
 
-      const monthsToMaturity = swapMath.monthsUntilMaturity(held.maturity, inventory.asOfDate);
-      const ruleEval = swapMath.evaluateSwapAgainstRules({
-        breakevenMonths: economics.breakevenMonths,
-        monthsToMaturity,
-        annualIncomePickup: economics.annualIncomePickup,
-        rules
-      });
-
-      const parWeight = (held.par || 0) / 1000;
-      const breakevenPenalty = economics.breakevenMonths === null ? 0 : Math.min(economics.breakevenMonths, 120) * 2;
-      const netBenefitScore = Math.max(economics.netBenefitToHorizon || 0, 0) / 1000;
-      const candidate = {
-        sector,
-        held: {
-          cusip: held.cusip || '',
-          description: held.description || '',
-          par: held.par || 0,
-          bookValue: held.bookValue || 0,
-          marketValue: held.marketValue || 0,
-          bookYield: Number(bookYld.toFixed(3)),
-          marketYield: Number(mktYld.toFixed(3)),
-          gainLoss: held.gainLoss || 0,
-          maturity: held.maturity || '',
-          monthsToMaturity: monthsToMaturity == null ? null : Number(monthsToMaturity.toFixed(1))
-        },
-        offering: {
+      let economics, offeringObj, yieldPickupVsBook, fitScore = 0;
+      if (hasMatchedBuy) {
+        economics = swapEconomics(held, pick.row, map, pick.yld, inventory.asOfDate, bookYld);
+        if (!economics) continue;
+        yieldPickupVsBook = Number(matchedPickup.toFixed(2));
+        fitScore = (pick.fit && pick.fit.score) || 0;
+        offeringObj = {
           label: offeringLabel(pick.row, map.type),
           cusip: pick.row.cusip || '',
           yield: Number(pick.yld.toFixed(3)),
@@ -3268,15 +3382,76 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
           fitYear: pick.fit && pick.fit.year || null,
           fitSummary: pick.fit && pick.fit.summary || '',
           structure: pick.row.structure || ''
+        };
+      } else if (belowReinvest && pickupVsReinvest != null && pickupVsReinvest > 0) {
+        economics = reinvestTargetEconomics(held, effYield, mv, glDollars, reinvestTarget, inventory.asOfDate);
+        if (!economics) continue;
+        yieldPickupVsBook = Number(pickupVsReinvest.toFixed(2));
+        offeringObj = {
+          label: `Reinvest at ${reinvestTarget.toFixed(2)}% target`,
+          cusip: '', yield: Number(reinvestTarget.toFixed(3)), price: 100,
+          coupon: null, maturity: '', callDate: '', sector: map.type,
+          sourceRef: 'reinvest-target', fitYear: null,
+          fitSummary: 'No same-sector buy beats the held yield — reinvest proceeds at the target rate.',
+          structure: '', generic: true
+        };
+      } else {
+        continue;
+      }
+
+      const monthsToMaturity = swapMath.monthsUntilMaturity(held.maturity, inventory.asOfDate);
+      const ruleEval = swapMath.evaluateSwapAgainstRules({
+        breakevenMonths: economics.breakevenMonths,
+        monthsToMaturity,
+        annualIncomePickup: economics.annualIncomePickup,
+        rules
+      });
+
+      const tags = [];
+      if (belowReinvest) tags.push('below-reinvest');
+      if (lowGl) tags.push(glPct >= 0 ? 'small-gain' : 'small-loss');
+      if (lossHarvest) tags.push('loss-harvest');
+      if (yieldPickupVsBook >= 0.5) tags.push('yield-pickup');
+
+      const reinvestGap = belowReinvest ? (reinvestTarget - effYield) : 0;
+      const parWeight = par / 1000;
+      const breakevenPenalty = economics.breakevenMonths === null ? 0 : Math.min(economics.breakevenMonths, 120) * 2;
+      const netBenefitScore = Math.max(economics.netBenefitToHorizon || 0, 0) / 1000;
+      const candidate = {
+        sector,
+        tags,
+        reinvestRate: reinvestTarget == null ? null : Number(reinvestTarget.toFixed(3)),
+        held: {
+          cusip: held.cusip || '',
+          description: held.description || '',
+          par,
+          bookValue: numericValue(held.bookValue) || 0,
+          marketValue: mv,
+          bookYield: Number(bookYld.toFixed(3)),
+          marketYield: mktYld == null ? null : Number(mktYld.toFixed(3)),
+          effYield: Number(effYield.toFixed(3)),
+          teYield: teY == null ? null : Number(teY.toFixed(3)),
+          isExemptMuni,
+          gainLoss: glDollars || 0,
+          gainLossPct: glPct == null ? null : Number(glPct.toFixed(2)),
+          maturity: held.maturity || '',
+          monthsToMaturity: monthsToMaturity == null ? null : Number(monthsToMaturity.toFixed(1)),
+          wal: numericValue(held.averageLife),
+          effDuration: numericValue(held.effectiveDuration)
         },
-        yieldPickupVsBook: Number(pickup.toFixed(2)),
+        offering: offeringObj,
+        yieldPickupVsBook,
+        pickupVsReinvest: pickupVsReinvest == null ? null : Number(pickupVsReinvest.toFixed(2)),
+        addedAnnualIncome: addedAnnualIncome == null ? null : Math.round(addedAnnualIncome),
+        reinvestBreakevenYears: reinvestBeYears == null ? null : Number(reinvestBeYears.toFixed(1)),
         economics,
         rule: {
           hardPass: ruleEval.hardPass,
           hardReason: ruleEval.hardReason,
           warnings: ruleEval.warnings
         },
-        priority: parWeight * pickup + netBenefitScore - breakevenPenalty + ((pick.fit && pick.fit.score) || 0)
+        priority: parWeight * yieldPickupVsBook + netBenefitScore - breakevenPenalty
+          + reinvestGap * 5 + fitScore
       };
 
       if (ruleEval.hardPass) kept.push(candidate);
@@ -3287,7 +3462,13 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   dropped.sort((a, b) => b.priority - a.priority);
   const trimmedKept = kept.slice(0, limit);
   if (options.includeRejected) {
-    return { kept: trimmedKept, dropped: dropped.slice(0, 20), rules };
+    return {
+      kept: trimmedKept,
+      dropped: dropped.slice(0, 30),
+      rules,
+      reinvestTarget: reinvestTarget == null ? null : Number(reinvestTarget.toFixed(3)),
+      reinvestTargetSource
+    };
   }
   return trimmedKept;
 }
@@ -3296,7 +3477,8 @@ function formatSwapCandidateLine(c) {
   const heldDescr = c.held.description ? c.held.description.slice(0, 36) : c.held.cusip;
   const parK = c.held.par ? `$${Math.round(c.held.par / 1000)}K` : '';
   const heldLeft = `${c.held.cusip || 'held'} ${heldDescr}`.trim();
-  const heldYld = `${c.held.bookYield.toFixed(2)}% book / ${c.held.marketYield.toFixed(2)}% market${parK ? ` · ${parK}` : ''}`;
+  const mkt = c.held.marketYield == null ? '' : ` / ${c.held.marketYield.toFixed(2)}% market`;
+  const heldYld = `${c.held.bookYield.toFixed(2)}% book${mkt}${parK ? ` · ${parK}` : ''}`;
   const econ = c.economics || {};
   const breakeven = econ.breakevenMonths !== null && econ.breakevenMonths !== undefined ? ` · breakeven ${econ.breakevenMonths.toFixed(1)} mo` : '';
   const net = econ.netBenefitToHorizon ? ` · est. net $${Math.round(econ.netBenefitToHorizon / 1000)}K` : '';
@@ -5455,6 +5637,307 @@ function handleCancelSwapProposal(req, res, id) {
   }
 }
 
+// ============================================================
+// Portfolio Idea Engine report — profile, runoff, hero, and the
+// narrative findings that surround the swap blotter. Mirrors the
+// standalone "FBBS Portfolio Idea Engine" prototype but runs server-side
+// off the already-parsed bond-accounting holdings + cashflow series.
+// ============================================================
+
+function htmlEsc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+// Dollar / percent formatters for the server-composed finding prose.
+const rNum0 = n => (n == null || !Number.isFinite(n)) ? '—' : Math.round(n).toLocaleString('en-US');
+const rNum1 = n => (n == null || !Number.isFinite(n)) ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const rNum2 = n => (n == null || !Number.isFinite(n)) ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const rPct = n => (n == null || !Number.isFinite(n)) ? '—' : rNum2(n) + '%';
+const rMM = n => (n == null || !Number.isFinite(n)) ? '—' : (n < 0 ? '-' : '') + '$' + rNum1(Math.abs(n) / 1e6) + 'MM';
+const rK = n => (n == null || !Number.isFinite(n)) ? '—' : (n < 0 ? '-' : '') + '$' + rNum0(Math.abs(n) / 1e3) + 'K';
+const nNum = (cls, s) => `<span class="${cls}">${s}</span>`;
+
+// In-state muni detection (skips SD/IN which collide with school-dist / preposition).
+const US_STATE_CODES = new Set('AL AK AZ AR CA CO CT DE FL GA HI ID IL IA KS KY LA MA MD MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC TN TX UT VT VA WA WV WI WY ME'.split(' '));
+function muniStateOf(desc) {
+  const toks = String(desc || '').toUpperCase().match(/\b[A-Z]{2}\b/g) || [];
+  for (const t of toks) { if (US_STATE_CODES.has(t) && t !== 'SD' && t !== 'IN') return t; }
+  return null;
+}
+
+function flattenHoldings(parsedHoldings) {
+  const all = [];
+  for (const rows of Object.values(parsedHoldings.sectors || {})) {
+    for (const h of (rows || [])) all.push(h);
+  }
+  return all;
+}
+
+function holdingGlPct(h) {
+  const gl = numericValue(h.gainLoss);
+  const bk = numericValue(h.bookValue);
+  if (gl == null || !bk) return null;
+  return (gl / bk) * 100;
+}
+
+function portfolioProfile(parsedHoldings, knobs) {
+  const all = flattenHoldings(parsedHoldings);
+  const n0 = x => { const v = numericValue(x); return v == null ? 0 : v; };
+  const sum = f => all.reduce((a, b) => a + n0(f(b)), 0);
+  const totpar = sum(b => b.par);
+  const totbk = sum(b => b.bookValue);
+  const totmkt = sum(b => b.marketValue);
+  const totgl = sum(b => b.gainLoss);
+  // Par-weighted average over only the holdings that actually report the field —
+  // treating a missing WAL/duration as 0 would understate the book average (e.g.
+  // some sector sheets don't carry a WAL column).
+  const wavg = f => {
+    let numr = 0, den = 0;
+    for (const b of all) {
+      const v = numericValue(f(b));
+      const pr = numericValue(b.par);
+      if (v != null && pr) { numr += pr * v; den += pr; }
+    }
+    return den ? numr / den : null;
+  };
+  const heldBookYtw = b => b.bookYieldYtw ?? b.bookYieldYtm;
+  const heldMktYtw = b => b.marketYieldYtw ?? b.marketYieldYtm;
+
+  const secMap = {};
+  for (const b of all) {
+    const s = b.sector || 'Other';
+    const e = secMap[s] || (secMap[s] = { sector: s, n: 0, par: 0, gainLoss: 0, bookValue: 0 });
+    e.n += 1; e.par += n0(b.par); e.gainLoss += n0(b.gainLoss); e.bookValue += n0(b.bookValue);
+  }
+  const sectors = Object.values(secMap)
+    .map(e => ({ ...e, pctPar: totpar ? 100 * e.par / totpar : 0 }))
+    .sort((a, b) => b.par - a.par);
+
+  // Exempt-muni tax-equivalent context.
+  const exemptMunis = all.filter(b => /exempt muni/i.test(b.sector || ''));
+  const exemptPar = exemptMunis.reduce((a, b) => a + n0(b.par), 0);
+  const exemptWBookYtw = exemptPar
+    ? exemptMunis.reduce((a, b) => a + n0(b.par) * n0(heldBookYtw(b)), 0) / exemptPar
+    : null;
+  const exemptTey = exemptWBookYtw == null ? null
+    : swapMath.municipalTeYield(exemptWBookYtw, { cofPct: knobs.cofPct, taxRatePct: knobs.taxRatePct, bqFactor: knobs.bqFactor });
+
+  return {
+    totalPar: totpar,
+    totalBook: totbk,
+    totalMarket: totmkt,
+    totalGainLoss: totgl,
+    pctOfBook: totbk ? 100 * totgl / totbk : 0,
+    positions: all.length,
+    wCoupon: wavg(b => b.coupon),
+    wWal: wavg(b => b.averageLife),
+    wDuration: wavg(b => b.effectiveDuration),
+    wBookYtw: wavg(heldBookYtw),
+    wMarketYtw: wavg(heldMktYtw),
+    sectors,
+    nLoss: all.filter(b => n0(b.gainLoss) < 0).length,
+    isAFS: all.some(b => /afs/i.test(b.classification || '')),
+    exemptMuni: exemptPar ? { par: exemptPar, wBookYtw: exemptWBookYtw, tey: exemptTey } : null
+  };
+}
+
+function isoAddMonths(iso, months) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString().slice(0, 10);
+}
+
+function portfolioRunoff(parsedHoldings) {
+  const all = flattenHoldings(parsedHoldings);
+  const cf = parsedHoldings.cashflow;
+  const start = (cf && cf.dates && cf.dates[0]) || parsedHoldings.asOfDate || '';
+  const maturingBy = months => {
+    if (!start) return null;
+    const cut = isoAddMonths(start, months);
+    if (!cut) return null;
+    return all.reduce((a, b) => {
+      const m = b.maturity;
+      return a + ((m && m >= start && m <= cut) ? (numericValue(b.par) || 0) : 0);
+    }, 0);
+  };
+  const runBy = months => {
+    if (!cf || !cf.dates || !cf.dates.length) return null;
+    const cut = isoAddMonths(start, months);
+    if (!cut) return null;
+    const startBal = cf.baseThousands[0];
+    let endBal = startBal;
+    for (let i = 0; i < cf.dates.length; i += 1) { if (cf.dates[i] <= cut) endBal = cf.baseThousands[i]; }
+    return (startBal - endBal) * 1000; // $000 → dollars
+  };
+  return {
+    hasCashflow: !!(cf && cf.dates && cf.dates.length),
+    asOf: start,
+    mat6: maturingBy(6), mat12: maturingBy(12), mat24: maturingBy(24),
+    run6: runBy(6), run12: runBy(12), run24: runBy(24)
+  };
+}
+
+function swapHero(screen, runoff) {
+  const cands = (screen && screen.kept) || [];
+  // The reinvestment package is the subset genuinely below the target.
+  const pkg = cands.filter(c => c.pickupVsReinvest != null && c.pickupVsReinvest > 0);
+  const sum = f => pkg.reduce((a, c) => a + (Number(f(c)) || 0), 0);
+  const executableVolume = sum(c => c.held.marketValue);
+  const addedAnnualIncome = sum(c => c.addedAnnualIncome);
+  const realizedLoss = sum(c => c.held.gainLoss);
+  return {
+    count: pkg.length,
+    executableVolume,
+    addedAnnualIncome,
+    realizedLoss,
+    blendedBreakevenYears: addedAnnualIncome > 0 ? Math.abs(realizedLoss) / addedAnnualIncome : null,
+    reinvestPipeline12: runoff.hasCashflow ? runoff.run12 : null
+  };
+}
+
+function buildPortfolioFindings(profile, runoff, knobs) {
+  const out = [];
+  const P = profile;
+
+  // 1 — Posture (always)
+  {
+    let teyTxt = '';
+    if (P.exemptMuni && P.exemptMuni.tey != null) {
+      teyTxt = ` Tax-exempt holdings carry a book YTW of ${nNum('fr-num', rPct(P.exemptMuni.wBookYtw))}, a taxable-equivalent ${nNum('fr-num', rPct(P.exemptMuni.tey))} at a ${rNum0(knobs.taxRatePct)}% rate and ${rNum2(knobs.cofPct)}% cost of funds.`;
+    }
+    const glNeg = P.totalGainLoss < 0;
+    out.push({
+      sev: 'info', badge: 'Snapshot', title: 'Portfolio posture',
+      body: `The book totals ${nNum('fr-num', rMM(P.totalBook))} across ${nNum('fr-num', rNum0(P.positions))} positions, marked at ${nNum('fr-num', rMM(P.totalMarket))} — an unrealized ${glNeg ? 'loss' : 'gain'} of ${nNum(glNeg ? 'fr-neg' : 'fr-num', rMM(P.totalGainLoss))}, or ${nNum(glNeg ? 'fr-neg' : 'fr-num', rNum2(Math.abs(P.pctOfBook)) + '%')} of book. Weighted-average coupon is ${nNum('fr-num', rPct(P.wCoupon))}, WAL ${nNum('fr-num', rNum1(P.wWal) + ' yrs')}, effective duration ${nNum('fr-num', rNum1(P.wDuration))}, book YTW ${nNum('fr-num', rPct(P.wBookYtw))} versus a market YTW of ${nNum('fr-num', rPct(P.wMarketYtw))}.${P.isAFS ? ' Holdings are carried <b>available-for-sale</b>, so the markdown sits in OCI and is not a realized hit unless positions are sold.' : ''}${teyTxt}`
+    });
+  }
+
+  // 2 — Sector concentration
+  {
+    const top = P.sectors[0];
+    if (top) {
+      const sev = top.pctPar >= 55 ? 'high' : top.pctPar >= 38 ? 'med' : 'info';
+      const phrase = top.pctPar >= 55 ? 'is heavily concentrated in' : top.pctPar >= 38 ? 'carries a meaningful tilt toward' : 'is most weighted to';
+      const guide = top.pctPar >= 55 ? ' That is well above the 30–40% range typical for a community-bank book and concentrates spread, credit and liquidity exposure in a single sector.'
+        : top.pctPar >= 38 ? ' That sits at the upper end of a typical allocation; further additions here would deepen single-sector exposure.' : '';
+      const trade = top.pctPar >= 38 ? ` Trimming even a tenth of that sleeve frees up roughly ${nNum('fr-num', rMM(top.par * 0.1))} to diversify into other sectors — a clean rebalancing pitch.` : '';
+      const others = P.sectors.slice(1, 3).map(s => `${htmlEsc(s.sector)} at ${rNum1(s.pctPar)}%`).join(' and ');
+      out.push({
+        sev, badge: sev === 'high' ? 'Concentration' : 'Allocation', title: `${htmlEsc(top.sector)} dominates the allocation`,
+        body: `This portfolio ${phrase} <b>${htmlEsc(top.sector)}</b>, at ${nNum(sev === 'high' ? 'fr-neg' : 'fr-num', rNum1(top.pctPar) + '%')} of par (${nNum('fr-num', rMM(top.par))} across ${nNum('fr-num', rNum0(top.n))} positions).${guide}${others ? ` The next-largest sleeves are ${others}.` : ''}${trade}`
+      });
+    }
+  }
+
+  // 3 — Unrealized loss posture
+  {
+    const u = Math.abs(P.pctOfBook);
+    if (P.totalGainLoss < 0) {
+      const sev = u >= 5 ? 'high' : u >= 2 ? 'med' : 'info';
+      const tone = u >= 5 ? 'a sizeable drag' : u >= 2 ? 'a moderate drawdown' : 'a modest markdown';
+      out.push({
+        sev, badge: 'Mark-to-Market', title: `Unrealized loss of ${rNum2(u)}% of book`,
+        body: `The book is underwater by ${nNum('fr-neg', rMM(P.totalGainLoss))} (${tone}). ${nNum('fr-num', rNum0(P.nLoss))} of ${nNum('fr-num', rNum0(P.positions))} positions show a loss. Because losses live in OCI under AFS, restructuring is a balance-sheet optimization rather than a P&L event — the relevant test for any sell is whether the swap's breakeven lands inside the average life of what's sold, with positive net income to that point.`
+      });
+    }
+  }
+
+  return out;
+}
+
+function buildSwapPortfolioReport(parsedHoldings, screen, knobs) {
+  const profile = portfolioProfile(parsedHoldings, knobs);
+  const runoff = portfolioRunoff(parsedHoldings);
+  const hero = swapHero(screen, runoff);
+  const findings = buildPortfolioFindings(profile, runoff, knobs);
+  // Findings that need the raw holdings (geo concentration, deep-discount holds,
+  // extension, callable, runoff) are appended here where the holdings are in scope.
+  appendHoldingFindings(findings, parsedHoldings, profile, runoff, knobs);
+  // Stable ordering for display: high → med → opp → info.
+  const order = { high: 0, med: 1, opp: 2, info: 3 };
+  findings.sort((a, b) => (order[a.sev] ?? 9) - (order[b.sev] ?? 9));
+  return { profile, runoff, hero, findings };
+}
+
+function appendHoldingFindings(out, parsedHoldings, P, runoff, knobs) {
+  const all = flattenHoldings(parsedHoldings);
+  const n0 = x => { const v = numericValue(x); return v == null ? 0 : v; };
+
+  // 2b — Geographic (in-state) muni concentration
+  {
+    const munis = all.filter(b => /muni/i.test(b.sector || ''));
+    const muniPar = munis.reduce((a, b) => a + n0(b.par), 0);
+    if (muniPar > 0) {
+      const st = {};
+      munis.forEach(b => { const s = muniStateOf(b.description) || 'Other'; st[s] = (st[s] || 0) + n0(b.par); });
+      const arr = Object.entries(st).map(([k, v]) => ({ st: k, par: v, pct: 100 * v / muniPar })).sort((a, b) => b.par - a.par);
+      const home = arr.find(x => x.st !== 'Other') || arr[0];
+      if (home && home.pct >= 40) {
+        const sev = home.pct >= 60 ? 'med' : 'info';
+        const others = arr.filter(x => x.st !== 'Other' && x.st !== home.st).slice(0, 3).map(x => `${htmlEsc(x.st)} ${rNum0(x.pct)}%`).join(', ');
+        out.push({
+          sev, badge: 'Geographic', title: `Municipals are ${rNum0(home.pct)}% concentrated in ${htmlEsc(home.st)}`,
+          body: `Of the ${nNum('fr-num', rMM(muniPar))} muni book, ${nNum(sev === 'med' ? 'fr-neg' : 'fr-num', rNum1(home.pct) + '%')} (${nNum('fr-num', rMM(home.par))}) sits in <b>${htmlEsc(home.st)}</b> issuers${others ? `, with the rest scattered across ${others} and others` : ''}. Single-state concentration ties the book to one region's economy and tax base. Rotating a slice into comparable out-of-state GOs diversifies the credit exposure and puts a clean sell/buy pair in motion.`
+        });
+      }
+    }
+  }
+
+  // 5 — Deep-discount holds (avoid swapping)
+  {
+    const withPct = all.map(b => ({ b, pct: holdingGlPct(b) })).filter(x => x.pct != null && x.pct < -15);
+    const deep = withPct.sort((a, b) => a.pct - b.pct).slice(0, 5);
+    if (deep.length) {
+      const names = deep.map(x => `${htmlEsc(String(x.b.description || x.b.cusip || '').slice(0, 26))} (${rNum2(x.pct)}%, ${rK(Math.abs(n0(x.b.gainLoss)))})`).join('; ');
+      out.push({
+        sev: 'med', badge: 'Hold / Avoid', title: `${withPct.length} deep-discount positions to leave in place`,
+        body: `Several positions show large <i>dollar</i> losses but at deep percentage discounts — selling them rarely passes the breakeven test, since the income lost over the bond's average life outweighs the reinvestment pickup. Examples to hold rather than swap: ${names}. The large dollar loss is tempting but the percentage loss makes breakeven too slow.`
+      });
+    }
+  }
+
+  // 6 — Extension / long-WAL exposure
+  {
+    const long = all.filter(b => n0(b.averageLife) >= 15).sort((a, b) => n0(b.averageLife) - n0(a.averageLife));
+    if (long.length) {
+      const lpar = long.reduce((a, b) => a + n0(b.par), 0);
+      const longest = long[0];
+      out.push({
+        sev: P.totalPar && lpar / P.totalPar > 0.15 ? 'med' : 'info', badge: 'Extension Risk', title: `${long.length} positions beyond 15-yr average life`,
+        body: `${nNum('fr-num', rMM(lpar))} (${nNum('fr-num', rNum1(P.totalPar ? 100 * lpar / P.totalPar : 0) + '%')} of par) sits past a 15-year WAL, led by ${htmlEsc(String(longest.description || '').slice(0, 30))} at ${nNum('fr-num', rNum1(n0(longest.averageLife)) + ' yrs')}. This is the part of the book most exposed to extension and the slowest to reprice if rates stay elevated — a natural source of swap sells when paired with low percentage losses.`
+      });
+    }
+  }
+
+  // 7 — Callable / negative convexity
+  {
+    const callable = all.filter(b => (b.nextCall && String(b.nextCall).trim()) || /call/i.test(b.couponType || ''));
+    const negconv = all.filter(b => n0(b.effectiveConvexity) < 0);
+    if (callable.length) {
+      const cpar = callable.reduce((a, b) => a + n0(b.par), 0);
+      out.push({
+        sev: 'info', badge: 'Convexity', title: `Callable exposure of ${rMM(cpar)}`,
+        body: `${nNum('fr-num', rNum0(callable.length))} positions (${nNum('fr-num', rMM(cpar))} par) are callable${negconv.length ? `, and ${negconv.length} carry negative convexity` : ''}. In a rally these get called away at the worst time for reinvestment; in a sell-off they extend. Worth confirming the call schedules before counting their yield as locked-in.`
+      });
+    }
+  }
+
+  // 9 — Runoff: maturities vs. modeled runoff (cashflow page)
+  {
+    const r = runoff;
+    const h6label = r.asOf ? (() => { const d = new Date(`${r.asOf}T00:00:00Z`); d.setUTCMonth(d.getUTCMonth() + 6); return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }); })() : '6 months out';
+    const sev = (P.totalPar && (r.mat6 / P.totalPar) < 0.01) ? 'med' : 'info';
+    const matTxt = `<b>Maturing within 6 months:</b> ${nNum('fr-num', rMM(r.mat6))} (${nNum('fr-num', rNum1(P.totalPar ? 100 * r.mat6 / P.totalPar : 0) + '%')} of par) reaches final stated maturity by ${h6label}.`;
+    const runTxt = r.hasCashflow
+      ? ` <b>Projected runoff (cashflow page, base case):</b> the portfolio's own projection — already embedding calls and amortization — returns ${nNum('fr-num', rMM(r.run6))} within 6 months and ${nNum('fr-num', rMM(r.run12))} within 12 months. That is a ${nNum('fr-num', rMM(r.run12))} reinvestment pipeline to fill over the next year, landing in pieces rather than at maturity. At ${nNum('fr-num', rPct(knobs.reinvestTarget))} versus the book's ${nNum('fr-num', rPct(P.wBookYtw))} yield, redeploying this runoff lifts portfolio income without realizing a dollar of loss — the easiest buy conversation on the page.`
+      : ` <i>(No cashflow-data sheet found in this file, so modeled runoff incl. calls could not be read — maturities shown reflect stated maturity dates only.)</i>`;
+    out.push({ sev, badge: 'Runoff', title: 'Near-term runoff vs. stated maturities', body: matTxt + runTxt });
+  }
+}
+
 function handleSwapSuggested(res, bankId, query) {
   const ctx = getSwapBankContext(bankId);
   if (!ctx) return sendJSON(res, 404, { error: 'Bank not found' });
@@ -5476,21 +5959,74 @@ function handleSwapSuggested(res, bankId, query) {
     maturitySoftFloorMonths: parseInt(query.get('maturitySoftFloor'), 10)
       || swapMath.DEFAULT_FBBS_RULES.maturitySoftFloorMonths
   };
+  // Optional tuning knobs — blank/absent means "use the detector defaults".
+  const optNum = (raw) => {
+    if (raw == null || String(raw).trim() === '') return undefined;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const isSubS = ctx.summary.subchapterS === 'Yes';
+  // Knobs — default tax rate from the bank's Sub-S election; the rest mirror the
+  // Portfolio Filtering prototype. Blank query params fall back to these.
+  const knobs = {
+    taxRatePct: optNum(query.get('taxRate')) ?? (isSubS ? 29.6 : 21),
+    cofPct: optNum(query.get('cof')) ?? 1.5,
+    bqFactor: optNum(query.get('bq')) ?? 0.20,
+    maxPctLoss: optNum(query.get('maxPctLoss')) ?? 4.0,
+    maxDollarLoss: optNum(query.get('maxDollarLoss')) ?? 10,   // $000
+    minParThousands: optNum(query.get('minPar')) ?? 100,       // $000
+    reinvestRate: undefined
+  };
+  const reinvestRate = optNum(query.get('reinvestRate'));
+  if (reinvestRate != null && reinvestRate > 0) knobs.reinvestRate = reinvestRate;
+
   const result = findSwapCandidates(ctx.parsedHoldings, ctx.inventory, {
     includeRejected: true,
     rules,
-    limit: parseInt(query.get('limit'), 10) || 5
+    // Pull the full screened set so the blotter + CSV see everything; the UI
+    // renders the top handful as cards.
+    limit: parseInt(query.get('limit'), 10) || 200,
+    reinvestRate: knobs.reinvestRate,
+    minPickupVsBook: optNum(query.get('minPickup')),
+    smallGlPct: optNum(query.get('smallGlPct')),
+    taxRatePct: knobs.taxRatePct,
+    cofPct: knobs.cofPct,
+    bqFactor: knobs.bqFactor,
+    maxPctLoss: knobs.maxPctLoss,
+    maxDollarLoss: knobs.maxDollarLoss,
+    minParThousands: knobs.minParThousands
   });
+
+  // The reinvestment target actually used (knob, else auto from inventory).
+  knobs.reinvestTarget = result.reinvestTarget;
+  const report = buildSwapPortfolioReport(ctx.parsedHoldings, result, knobs);
+
   return sendJSON(res, 200, {
     bankId,
     bankName: ctx.summary.displayName || ctx.summary.name || 'Bank',
-    isSubchapterS: ctx.summary.subchapterS === 'Yes',
-    taxRate: ctx.summary.subchapterS === 'Yes' ? 29.6 : 21,
+    isSubchapterS: isSubS,
+    taxRate: knobs.taxRatePct,
     holdingsAvailable: true,
     holdingsReportDate: ctx.parsedHoldings.asOfDate || '',
     holdingsTotalPositions: ctx.parsedHoldings.aggregates ? ctx.parsedHoldings.aggregates.totalPositions : 0,
     kept: result.kept,
     dropped: result.dropped,
+    reinvestTarget: result.reinvestTarget,
+    reinvestTargetSource: result.reinvestTargetSource,
+    knobs: {
+      taxRatePct: knobs.taxRatePct,
+      cofPct: knobs.cofPct,
+      bqFactor: knobs.bqFactor,
+      reinvestRatePct: knobs.reinvestTarget,
+      reinvestRateUserSet: knobs.reinvestRate != null,
+      maxPctLoss: knobs.maxPctLoss,
+      maxDollarLossK: knobs.maxDollarLoss,
+      minParK: knobs.minParThousands
+    },
+    profile: report.profile,
+    runoff: report.runoff,
+    hero: report.hero,
+    findings: report.findings,
     rules
   });
 }
