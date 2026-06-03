@@ -3177,16 +3177,22 @@ function swapEconomics(held, offering, map, pickYield, asOfDate, bookYieldOverri
   };
 }
 
-// Economics for a generic "sell and reinvest the proceeds at the target rate" idea
-// — used when no concrete same-sector buy beats the held bond. Everything is on the
-// effective-yield basis (TEY for munis) so the income pickup is apples-to-apples
-// with the taxable reinvestment target, mirroring the prototype's screen math.
-function reinvestTargetEconomics(held, effYield, marketValue, gainLossDollars, reinvestTarget, asOfDate) {
+// Economics for "sell and reinvest the proceeds at the target rate." Income basis
+// mirrors the Master Swap Template's Hand Income / BM-BO columns *exactly*:
+//   income given up = (Book Value + Accrued) x effective yield   [what you book today]
+//   income gained   = Proceeds (Market Value + Accrued) x target [redeploy proceeds]
+// Yields are TEY for exempt munis (D32 = Tax-EQ mode) so the comparison is
+// apples-to-apples against the taxable target. Breakeven (mo) = -G/L / (net annual
+// income / 12), matching the template's AK19 / AP23.
+function reinvestTargetEconomics(held, effYield, marketValue, bookValue, accrued, gainLossDollars, reinvestTarget, asOfDate) {
   if (effYield == null || reinvestTarget == null || !marketValue) return null;
-  const realizedGainLoss = gainLossDollars != null ? gainLossDollars : 0;
+  const bv = (bookValue != null && bookValue) ? bookValue : marketValue;
+  const acc = numericValue(accrued) || 0;
+  const proceeds = marketValue + acc;
+  const realizedGainLoss = gainLossDollars != null ? gainLossDollars : (marketValue - bv);
   const horizonYears = Math.max(0.1, holdingHorizonYears(held, null, asOfDate));
-  const annualIncomeGivenUp = marketValue * effYield / 100;
-  const annualBuyIncome = marketValue * reinvestTarget / 100;
+  const annualIncomeGivenUp = (bv + acc) * effYield / 100;
+  const annualBuyIncome = proceeds * reinvestTarget / 100;
   const annualIncomePickup = annualBuyIncome - annualIncomeGivenUp;
   const netInterestToHorizon = annualIncomePickup * horizonYears;
   const netBenefitToHorizon = netInterestToHorizon + realizedGainLoss;
@@ -3203,7 +3209,7 @@ function reinvestTargetEconomics(held, effYield, marketValue, gainLossDollars, r
     netInterestToHorizon: roundMoney(netInterestToHorizon),
     netBenefitToHorizon: roundMoney(netBenefitToHorizon),
     breakevenMonths: breakevenMonths === null ? null : Number(breakevenMonths.toFixed(1)),
-    replacementPar: Math.round(marketValue)
+    replacementPar: Math.round(proceeds)
   };
 }
 
@@ -3323,12 +3329,13 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       if (!(pickupVsReinvest > 0)) continue;
 
       // Reinvestment economics: sell and redeploy the proceeds at the target rate.
-      const economics = reinvestTargetEconomics(held, effYield, mv, glDollars, reinvestTarget, inventory.asOfDate);
+      // Income basis matches the Master Swap Template (Book Value+Accrued x eff yield
+      // given up vs Proceeds x target gained), so added income + breakeven tie out.
+      const accrued = numericValue(held.accruedInterest) || 0;
+      const economics = reinvestTargetEconomics(held, effYield, mv, bookValueForGl, accrued, glDollars, reinvestTarget, inventory.asOfDate);
       if (!economics) continue;
-      const addedAnnualIncome = mv * pickupVsReinvest / 100;
-      const reinvestBeYears = (glPct != null && glPct < 0)
-        ? swapMath.reinvestBreakevenYears(glPct, pickupVsReinvest)
-        : null;
+      const addedAnnualIncome = economics.annualIncomePickup;
+      const reinvestBeYears = economics.breakevenMonths == null ? null : economics.breakevenMonths / 12;
 
       // Attach a concrete same-sector buy from today's package as an "available
       // today" hint when one beats the held book yield; otherwise the idea stands
@@ -5931,12 +5938,19 @@ function handleSwapSuggested(res, bankId, query) {
     return Number.isFinite(n) ? n : undefined;
   };
   const isSubS = ctx.summary.subchapterS === 'Yes';
+  // BQ disallowance factor q — exactly the Master Swap Template's CQ cell:
+  //   C-Corp: bank-qualified 0.20 / non-BQ 1.00; S-Corp: BQ 0 / non-BQ 1.00.
+  // The `bq` query param carries the rep's BQ choice (<=0.5 means bank-qualified).
+  const bqChoice = optNum(query.get('bq'));
+  const isBankQualified = bqChoice == null ? true : bqChoice <= 0.5;
+  const bqFactor = isBankQualified ? (isSubS ? 0 : 0.20) : 1.0;
   // Knobs — default tax rate from the bank's Sub-S election; the rest mirror the
   // Portfolio Filtering prototype. Blank query params fall back to these.
   const knobs = {
     taxRatePct: optNum(query.get('taxRate')) ?? (isSubS ? 29.6 : 21),
     cofPct: optNum(query.get('cof')) ?? 1.5,
-    bqFactor: optNum(query.get('bq')) ?? 0.20,
+    bqFactor,
+    isBankQualified,
     maxPctLoss: optNum(query.get('maxPctLoss')) ?? 4.0,
     maxDollarLoss: optNum(query.get('maxDollarLoss')) ?? 10,   // $000
     minParThousands: optNum(query.get('minPar')) ?? 100,       // $000
