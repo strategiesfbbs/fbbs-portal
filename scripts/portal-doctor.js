@@ -6,6 +6,7 @@ const http = require('http');
 const port = process.env.PORT || '3000';
 const expectedBuild = 'swap-workflow-2026-05-13';
 const minNodeMajor = 20;
+const maxNodeMajor = 24; // engines: ">=20 <25" — above this, npm install may fall to a node-gyp build
 
 function execFileText(cmd, args) {
   return new Promise(resolve => {
@@ -36,20 +37,36 @@ function getHealth(hostname) {
   });
 }
 
-function uniquePids(lsofText) {
-  return [...new Set(lsofText
-    .split(/\r?\n/)
-    .slice(1)
-    .map(line => line.trim().split(/\s+/)[1])
-    .filter(Boolean))];
+// lsof (macOS/Linux): skip the header row; PID is the 2nd whitespace column.
+function parseLsofListeners(stdout) {
+  const body = stdout.split(/\r?\n/).filter(Boolean).slice(1);
+  const pids = [...new Set(body.map(line => line.trim().split(/\s+/)[1]).filter(Boolean))];
+  return { text: body.join('\n'), pids };
+}
+
+// netstat -ano (Windows): keep LISTENING rows for our port; PID is the LAST column.
+function parseNetstatListeners(stdout, listenPort) {
+  const portRe = new RegExp(':' + listenPort + '\\b');
+  const lines = stdout.split(/\r?\n/).filter(line => /LISTENING/i.test(line) && portRe.test(line));
+  const pids = [...new Set(lines.map(line => line.trim().split(/\s+/).pop()).filter(p => /^\d+$/.test(p)))];
+  return { text: lines.join('\n'), pids };
+}
+
+// Enumerate the processes listening on `listenPort`, using a tool that exists on
+// the host OS — lsof is Unix-only, so the Windows production box uses netstat.
+async function listListeners(listenPort) {
+  if (process.platform === 'win32') {
+    const r = await execFileText('netstat', ['-ano']);
+    return parseNetstatListeners(r.stdout, listenPort);
+  }
+  const r = await execFileText('lsof', ['-nP', `-iTCP:${listenPort}`, '-sTCP:LISTEN']);
+  return parseLsofListeners(r.stdout);
 }
 
 async function main() {
   const nodeMajor = Number(process.versions.node.split('.')[0]);
   let hasRuntimeProblem = false;
-  const lsof = await execFileText('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN']);
-  const listeners = lsof.stdout.trim();
-  const pids = uniquePids(listeners);
+  const { text: listeners, pids } = await listListeners(port);
 
   console.log(`FBBS Portal Doctor`);
   console.log(`Port: ${port}`);
@@ -60,6 +77,10 @@ async function main() {
   if (!Number.isFinite(nodeMajor) || nodeMajor < minNodeMajor) {
     hasRuntimeProblem = true;
     console.log(`WARNING: Node ${minNodeMajor}+ is required. Install the current Node.js LTS before running the portal.`);
+    console.log('');
+  } else if (nodeMajor > maxNodeMajor) {
+    hasRuntimeProblem = true;
+    console.log(`WARNING: Node ${nodeMajor} is newer than the tested range (${minNodeMajor}-${maxNodeMajor}). better-sqlite3 may have no prebuilt binary and fall back to a node-gyp compile (needs build tools). Install Node ${maxNodeMajor} LTS.`);
     console.log('');
   }
 
