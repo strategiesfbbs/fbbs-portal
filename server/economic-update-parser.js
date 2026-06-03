@@ -102,13 +102,23 @@ function parseLabelTable(lines, labels, { percent = false } = {}) {
 }
 
 function parseHeadlines(text) {
-  const match = String(text || '').match(/TREASURY YIELD CURVE\s+([\s\S]*?)(?:The information set forth|-- 1 of 1 --)/i);
-  if (!match) return [];
-  return match[1]
+  const src = String(text || '');
+  const anchor = src.search(/TREASURY YIELD CURVE/i);
+  if (anchor === -1) return [];
+  // Headlines are the bulleted block that follows the "TREASURY YIELD CURVE"
+  // marker. The disclaimer/footer terminators ("The information set forth",
+  // "-- 1 of 1 --", "FOR INSTITUTIONAL USE") used to sit *after* the bullets,
+  // but in the current Bloomberg export they can land *before* the marker — so
+  // only honor a terminator that actually appears after the anchor; otherwise
+  // run to the end of the document.
+  let body = src.slice(anchor).replace(/^TREASURY YIELD CURVE\s*/i, '');
+  const stop = body.search(/The information set forth|-- 1 of 1 --|FOR INSTITUTIONAL USE/i);
+  if (stop !== -1) body = body.slice(0, stop);
+  return body
     .split(/\n\s*\*\s+/)
     .map(item => item.replace(/^\*\s*/, '').replace(/\s+/g, ' ').trim())
     .filter(item => item.length > 40)
-    .slice(0, 4);
+    .slice(0, 6);
 }
 
 const DATE_TIME_RE = /(\d{2}\/\d{2}\/\d{2}\s+\d{1,2}:\d{2}\s+[AP]M)/i;
