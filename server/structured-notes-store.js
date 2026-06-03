@@ -154,6 +154,34 @@ function fieldValues(lines, label) {
   return findLine(lines, label).values;
 }
 
+// A field value that is really just a leftover label fragment — e.g. the stray
+// "s:" split off a "Moody's / S&P:" header, or a bare "Issuer" / "Rating:" — must
+// not surface as data. Detected by shape, not value, so it generalizes.
+const LABEL_FRAGMENT_RE = /^(issuer|ratings?|term|maturity|settlement|settle|coupon|first\s*pay|first\s*call|pricing(?:\s*date)?|cusip|price)\s*:?\s*$/i;
+
+function isLabelFragment(value) {
+  const v = String(value || '').trim();
+  if (!v) return false;
+  if (LABEL_FRAGMENT_RE.test(v)) return true;
+  // Short alpha fragments ending in a colon are split debris (e.g. "s:" from "S&P:").
+  return /^[A-Za-z]{0,3}:$/.test(v);
+}
+
+// Generic cleaner: blank a value that is only a label fragment, keep real data.
+function cleanFieldValue(value) {
+  return isLabelFragment(value) ? '' : String(value || '').trim();
+}
+
+// A real rating carries a recognizable agency grade. Anything else (a label
+// fragment, an empty cell, stray punctuation) is treated as "no rating" so a
+// CUSIP without a matched rating shows blank instead of garbage.
+const RATING_GRADE_RE = /(?:Aaa|Aa\d|A\d|Baa\d?|Ba\d?|B\d|Caa\d?|Ca|AAA|AA[+-]?|A[+-]?|BBB[+-]?|BB[+-]?|B[+-]?|CCC[+-]?|CC|NR|WR)/;
+
+function cleanRating(value) {
+  const v = cleanFieldValue(value);
+  return v && RATING_GRADE_RE.test(v) ? v : '';
+}
+
 function priceValues(lines) {
   const { index } = findLine(lines, 'Price');
   if (index === -1) return [];
@@ -224,8 +252,8 @@ function parseStructuredNotesEmail(text, source, warnings = []) {
   const attachments = attachmentFilenames(text);
   const coupons = collectSection(lines, 'Coupon', ['First Pay', 'First Call', 'Pricing', 'Pricing Date', 'CUSIP', 'Price']);
   const fields = {
-    issuer: fieldValues(lines, 'Issuer'),
-    rating: [...fieldValues(lines, 'Ratings'), ...fieldValues(lines, 'Rating')],
+    issuer: fieldValues(lines, 'Issuer').map(cleanFieldValue),
+    rating: [...fieldValues(lines, 'Ratings'), ...fieldValues(lines, 'Rating')].map(cleanRating),
     term: fieldValues(lines, 'Term'),
     settlement: [...fieldValues(lines, 'Settlement'), ...fieldValues(lines, 'Settle')],
     maturity: fieldValues(lines, 'Maturity'),
