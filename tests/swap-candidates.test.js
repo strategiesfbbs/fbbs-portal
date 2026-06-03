@@ -37,6 +37,8 @@ test('findSwapCandidates still creates generic reinvestment ideas without invent
         bookValue: 1_000_000,
         marketValue: 995_000,
         gainLoss: -5_000,
+        bookPrice: 100,
+        marketPrice: 99.5,
         bookYieldYtm: 3.0,
         marketYieldYtm: 4.25,
         maturity: '2031-06-15',
@@ -59,6 +61,8 @@ test('findSwapCandidates still creates generic reinvestment ideas without invent
   assert.strictEqual(result.kept[0].offering.sourceRef, 'reinvest-target');
   assert.strictEqual(result.kept[0].yieldPickupVsBook, null);
   assert.strictEqual(result.kept[0].pickupVsReinvest, 2);
+  assert.strictEqual(result.kept[0].held.bookPrice, 100);
+  assert.strictEqual(result.kept[0].held.marketPrice, 99.5);
   assert.ok(result.kept[0].addedAnnualIncome > 0);
 });
 

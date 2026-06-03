@@ -3223,23 +3223,26 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
   const fitProfile = buildInvestmentFitProfile(parsedHoldings, inventory.asOfDate);
 
   for (const [sector, holdings] of Object.entries(parsedHoldings.sectors)) {
-    const map = SWAP_SECTOR_MAP[sector];
-    if (!map) continue;
-    const rows = Array.isArray(inventory.rows[map.rowsKey]) ? inventory.rows[map.rowsKey] : [];
-    const candidateRows = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
-      ? inventory.rows.stateMunis
-      : rows;
-    const sourceRef = (sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length)
-      ? '_muni_offerings.json#stateMunis'
-      : map.sourceRef;
+    // Every sector is screened (sell → reinvest at target), like the prototype.
+    // Mapped sectors can additionally attach a concrete same-sector buy from
+    // today's package; non-mapped sectors (MBS/CMO/CMBS/SBA/ABS/Other) surface
+    // as generic reinvest ideas.
+    const map = SWAP_SECTOR_MAP[sector] || null;
+    const rows = (map && Array.isArray(inventory.rows[map.rowsKey])) ? inventory.rows[map.rowsKey] : [];
+    const useStateMunis = sector.includes('Muni') && inventory.rows.stateMunis && inventory.rows.stateMunis.length;
+    const candidateRows = useStateMunis ? inventory.rows.stateMunis : rows;
+    const sourceRef = useStateMunis ? '_muni_offerings.json#stateMunis' : (map ? map.sourceRef : 'reinvest-target');
     const isExemptMuni = /exempt muni/i.test(sector);
+    // Amortizing sectors carry their book yield in the file; never solve YTM from
+    // price for them (the bullet formula is wrong for amortizers).
+    const isAmortizing = /\b(MBS|CMO|CMBS|SBA|ABS|POOL)\b/i.test(sector);
 
     for (const held of holdings) {
       // Nominal book yield. Some sheets (notably the muni sheets) leave the raw
       // Bk YTW column blank and only carry the tax-equivalent column, so fall
-      // back to solving YTM from book price + coupon + maturity.
+      // back to solving YTM from book price + coupon + maturity (bullets only).
       let bookYld = numericValue(held.bookYieldYtm ?? held.bookYieldYtw);
-      if (bookYld == null) {
+      if (bookYld == null && !isAmortizing) {
         bookYld = swapMath.yieldFromPriceAndMaturity({
           price: numericValue(held.bookPrice), coupon: numericValue(held.coupon),
           maturity: held.maturity, settleDate: inventory.asOfDate
@@ -3247,7 +3250,7 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
       }
       if (bookYld == null) continue;
       let mktYld = numericValue(held.marketYieldYtw ?? held.marketYieldYtm);
-      if (mktYld == null) {
+      if (mktYld == null && !isAmortizing) {
         mktYld = swapMath.yieldFromPriceAndMaturity({
           price: numericValue(held.marketPrice), coupon: numericValue(held.coupon),
           maturity: held.maturity, settleDate: inventory.asOfDate
@@ -3299,10 +3302,11 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
 
       // Attach a concrete same-sector buy from today's package as an "available
       // today" hint when one beats the held book yield; otherwise the idea stands
-      // on its own as a generic reinvest at the target rate.
-      const pick = pickBestOffering(candidateRows, map.yieldKey, held.cusip ? String(held.cusip).toUpperCase() : null, {
+      // on its own as a generic reinvest at the target rate. Non-mapped sectors
+      // (MBS/CMO/etc.) have no buy universe, so they're always generic.
+      const pick = map ? pickBestOffering(candidateRows, map.yieldKey, held.cusip ? String(held.cusip).toUpperCase() : null, {
         fitProfile, held, sector, map, minYield: bookYld + minPickupVsBook
-      });
+      }) : null;
       const matchedPickup = pick ? pick.yld - bookYld : null;
       const hasMatchedBuy = pick && matchedPickup >= minPickupVsBook;
       let offeringObj;
@@ -3329,7 +3333,7 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
         offeringObj = {
           label: `Reinvest at ${reinvestTarget.toFixed(2)}% target`,
           cusip: '', yield: Number(reinvestTarget.toFixed(3)), price: 100,
-          coupon: null, maturity: '', callDate: '', sector: map.type,
+          coupon: null, maturity: '', callDate: '', sector: (map ? map.type : sector),
           sourceRef: 'reinvest-target', fitYear: null,
           fitSummary: 'No same-sector buy beats the held yield today — reinvest the proceeds at the target rate.',
           structure: '', generic: true
@@ -3357,6 +3361,8 @@ function findSwapCandidates(parsedHoldings, inventory, options = {}) {
           cusip: held.cusip || '',
           description: held.description || '',
           par,
+          bookPrice: numericValue(held.bookPrice),
+          marketPrice: numericValue(held.marketPrice),
           bookValue: numericValue(held.bookValue) || 0,
           marketValue: mv,
           bookYield: Number(bookYld.toFixed(3)),

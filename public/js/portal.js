@@ -5408,11 +5408,11 @@
   function exportSwapCsv() {
     const sel = selectedSwapCands();
     if (!sel.length) { showToast('No names selected to export', true); return; }
-    const head = ['CUSIP', 'Description', 'Sector', 'Maturity', 'Par', 'Book Yield', 'Eff Yield (TEY if exempt)', '% G/L', '$ G/L', 'Market Value', 'Buy CUSIP', 'Buy Yield', 'Pickup vs Reinvest %', 'Reinvest Breakeven (yrs)'];
+    const head = ['CUSIP', 'Description', 'Sector', 'Maturity', 'Par', 'Book Px', 'Mkt Px', 'Book Yield', 'Eff Yield (TEY if exempt)', '% G/L', '$ G/L', 'Market Value', 'Buy CUSIP', 'Buy Yield', 'Pickup vs Reinvest %', 'Reinvest Breakeven (yrs)'];
     const esc = x => `"${String(x == null ? '' : x).replace(/"/g, '""')}"`;
     const lines = [head.join(',')].concat(sel.map(c => [
-      c.held.cusip, c.held.description, c.sector, c.held.maturity, c.held.par, c.held.bookYield,
-      c.held.effYield, c.held.gainLossPct, c.held.gainLoss, c.held.marketValue,
+      c.held.cusip, c.held.description, c.sector, c.held.maturity, c.held.par, c.held.bookPrice,
+      c.held.marketPrice, c.held.bookYield, c.held.effYield, c.held.gainLossPct, c.held.gainLoss, c.held.marketValue,
       c.offering.cusip, c.offering.yield, c.pickupVsReinvest, c.reinvestBreakevenYears
     ].map(esc).join(',')));
     const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
