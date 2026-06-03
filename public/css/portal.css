@@ -7974,6 +7974,17 @@ body {
   margin-left: 4px;
 }
 
+.reports-freshness-warning {
+  background: #fff7e6;
+  border-top: 1px solid #efd6a5;
+  color: #7a4f00;
+  font-size: 12px;
+  font-weight: 700;
+  grid-column: 1 / -1;
+  line-height: 1.4;
+  padding: 10px 14px;
+}
+
 .reports-list-wrap {
   background: #fff;
   border: 1px solid var(--line);

@@ -7289,12 +7289,29 @@
     return rows;
   }
 
+  function reportQuarterRank(period) {
+    const m = String(period || '').trim().match(/^(\d{4})Q([1-4])$/i);
+    if (!m) return null;
+    return Number(m[1]) * 4 + Number(m[2]);
+  }
+
+  function reportsPeerFreshnessWarning(averagedMeta) {
+    const bankMeta = bankDataStatus && bankDataStatus.metadata ? bankDataStatus.metadata : {};
+    const bankPeriod = bankMeta.latestPeriod || '';
+    const peerPeriod = averagedMeta && averagedMeta.latestPeriod ? averagedMeta.latestPeriod : '';
+    const bankRank = reportQuarterRank(bankPeriod);
+    const peerRank = reportQuarterRank(peerPeriod);
+    if (bankRank === null || peerRank === null || peerRank >= bankRank) return '';
+    return `Peer averages lag bank data: bank ${bankPeriod}, peer ${peerPeriod}. Re-import the averaged-series workbook before relying on peer comparisons.`;
+  }
+
   function reportsFreshnessHtml() {
     const averaged = bankDataStatus && bankDataStatus.averagedSeries ? bankDataStatus.averagedSeries : {};
     const averagedMeta = averaged.metadata || {};
     const averagedDataset = averaged.dataset || {};
     const bond = bankDataStatus && bankDataStatus.bondAccounting ? bankDataStatus.bondAccounting : {};
     const bondCounts = bondAccountingReviewCounts(bond);
+    const peerWarning = reportsPeerFreshnessWarning(averagedMeta);
     const peerText = averaged.available
       ? `Peer averages: ${escapeHtml(averagedMeta.latestPeriod || 'latest')} · imported ${escapeHtml(formatImportedDate(averagedMeta.importedAt))} · ${escapeHtml(formatNumber(averagedDataset.metricCount || averagedMeta.metricCount || 0))} metrics · ${escapeHtml(formatNumber(averagedDataset.seriesRowCount || averagedMeta.seriesRowCount || 0))} peer rows`
       : 'Peer averages: —';
@@ -7305,6 +7322,7 @@
       <div class="reports-freshness">
         <a href="#reports/data">${peerText} <span>Manage</span></a>
         <a href="#reports/data/files">${bondText} <span>Manage</span></a>
+        ${peerWarning ? `<div class="reports-freshness-warning">${escapeHtml(peerWarning)}</div>` : ''}
       </div>
     `;
   }
@@ -11810,6 +11828,18 @@
     }
   }
 
+  function wireBuyersButtons(container, rows) {
+    if (!container) return;
+    container.querySelectorAll('[data-buyers-product]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.dataset.buyersIdx);
+        const productType = btn.dataset.buyersProduct;
+        const offering = rows[idx];
+        if (productType && offering) openBuyersDrawer(productType, offering);
+      });
+    });
+  }
+
   async function copyBankAssistantNote() {
     const note = bankAssistantLastResponse && bankAssistantLastResponse.callNote;
     const btn = document.getElementById('bankAssistantCopyBtn');
@@ -14009,7 +14039,7 @@
       const res = await fetch('/api/treasury-notes', { cache: 'no-store' });
       if (res.status === 404) {
         treasuryData = null;
-        body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
           No treasury notes data yet. Upload today's Treasury Notes Excel file on the Upload page and notes will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No treasury notes data';
@@ -14026,7 +14056,7 @@
       treasuryData = await res.json();
     } catch (e) {
       console.error('Failed to load treasury notes:', e);
-      body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load treasury notes: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading treasury notes';
@@ -14073,13 +14103,13 @@
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
         No treasury notes match the current filters.
       </td></tr>`;
       return;
     }
 
-    body.innerHTML = filtered.map(n => `
+    body.innerHTML = filtered.map((n, idx) => `
       <tr>
         <td class="issuer-cell">${escapeHtml(n.description || 'Treasury Note')}</td>
         <td class="cusip-cell">${escapeHtml(n.cusip || '')}</td>
@@ -14089,8 +14119,10 @@
         <td style="text-align:right">${n.price == null ? '—' : Number(n.price).toFixed(3)}</td>
         <td style="text-align:right">${n.spread == null ? '—' : formatNumber(n.spread)}</td>
         <td>${escapeHtml(n.benchmark || '')}</td>
+        <td><button type="button" class="small-btn buyers-btn" data-buyers-product="treasury" data-buyers-idx="${idx}">Find buyers</button></td>
       </tr>
     `).join('');
+    wireBuyersButtons(body, filtered);
   }
 
   function applyTreasuryFilters(notes) {
@@ -14260,7 +14292,7 @@
       const res = await fetch('/api/offerings', { cache: 'no-store' });
       if (res.status === 404) {
         offeringsData = null;
-        body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">
           No offerings data yet. Upload today's CD Offerings PDF on the Upload page and offerings will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No offerings data';
@@ -14279,7 +14311,7 @@
       offeringsData = await res.json();
     } catch (e) {
       console.error('Failed to load offerings:', e);
-      body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load offerings: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading offerings';
@@ -14342,13 +14374,13 @@
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">
         No offerings match the current filters.
       </td></tr>`;
       return;
     }
 
-    body.innerHTML = filtered.map(o => `
+    body.innerHTML = filtered.map((o, idx) => `
       <tr>
         <td><span class="term-pill">${escapeHtml(o.term)}</span></td>
         <td class="issuer-cell">${escapeHtml(o.name)}</td>
@@ -14363,8 +14395,10 @@
         <td class="cpn-cell">${escapeHtml(o.couponFrequency || '')}</td>
         <td style="text-align:right">${formatCdPrice(o.cost)}</td>
         <td style="text-align:right">${formatCdCommission(o.commission)}</td>
+        <td><button type="button" class="small-btn buyers-btn" data-buyers-product="cd" data-buyers-idx="${idx}">Find buyers</button></td>
       </tr>
     `).join('');
+    wireBuyersButtons(body, filtered);
   }
 
   function formatCdPrice(value) {
@@ -14596,7 +14630,7 @@
       const res = await fetch('/api/muni-offerings', { cache: 'no-store' });
       if (res.status === 404) {
         muniData = null;
-        body.innerHTML = `<tr><td colspan="17" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="18" style="text-align:center;padding:40px;color:var(--text3)">
           No muni offerings yet. Upload the Muni Offerings PDF on the Upload page and offerings will appear here automatically.
         </td></tr>`;
         sub.textContent = 'No muni offerings data';
@@ -14614,7 +14648,7 @@
       muniData = await res.json();
     } catch (e) {
       console.error('Failed to load muni offerings:', e);
-      body.innerHTML = `<tr><td colspan="17" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="18" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load muni offerings: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error loading offerings';
@@ -14739,13 +14773,13 @@
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="17" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="18" style="text-align:center;padding:40px;color:var(--text3)">
         No offerings match the current filters.
       </td></tr>`;
       return;
     }
 
-    body.innerHTML = filtered.map(o => {
+    body.innerHTML = filtered.map((o, idx) => {
       const ratings = [];
       if (o.moodysRating) ratings.push(`<span class="rating-moody" title="Moody's">${escapeHtml(o.moodysRating)}</span>`);
       if (o.spRating)     ratings.push(`<span class="rating-sp" title="S&amp;P">${escapeHtml(o.spRating)}</span>`);
@@ -14810,9 +14844,11 @@
           <td style="text-align:right">${priceCell}</td>
           <td class="cusip-cell">${escapeHtml(o.cusip)}</td>
           <td>${creditCell}</td>
+          <td><button type="button" class="small-btn buyers-btn" data-buyers-product="muni" data-buyers-idx="${idx}">Find buyers</button></td>
         </tr>
       `;
     }).join('');
+    wireBuyersButtons(body, filtered);
   }
 
   function applyMuniFilters(offerings) {
@@ -15465,13 +15501,7 @@
         </tr>`;
     }).join('');
 
-    body.querySelectorAll('[data-buyers-product="agency"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const idx = Number(btn.dataset.buyersIdx);
-        const offering = filtered[idx];
-        if (offering) openBuyersDrawer('agency', offering);
-      });
-    });
+    wireBuyersButtons(body, filtered);
   }
 
   function setupAgencyFilters() {
@@ -15701,7 +15731,7 @@
       const res = await fetch('/api/corporates', { cache: 'no-store' });
       if (res.status === 404) {
         corpData = null;
-        body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
+        body.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--text3)">
           No corporate offerings uploaded yet. Drop the corporates Excel file on the Upload page.
         </td></tr>`;
         sub.textContent = 'No corporate data';
@@ -15719,7 +15749,7 @@
       corpData = await res.json();
     } catch (e) {
       console.error('Failed to load corporates:', e);
-      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load corporates: ${escapeHtml(e.message)}
       </td></tr>`;
       sub.textContent = 'Error';
@@ -15834,7 +15864,7 @@
     ]);
 
     if (filtered.length === 0) {
-      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--text3)">
         No corporates match the current filters.
       </td></tr>`;
       return;
@@ -15850,7 +15880,7 @@
       'NR': 'tier-nr'
     })[t] || 'tier-nr';
 
-    body.innerHTML = filtered.map(o => {
+    body.innerHTML = filtered.map((o, idx) => {
       const ratings = [];
       if (o.moodysRating) ratings.push(`<span class="rating-moody">${escapeHtml(o.moodysRating)}</span>`);
       if (o.spRating)     ratings.push(`<span class="rating-sp">${escapeHtml(o.spRating)}</span>`);
@@ -15872,8 +15902,10 @@
           <td style="text-align:right">${commissionPriceHtml('corporates', o, o.askPrice, 3)}</td>
           <td style="text-align:right" class="qnty-cell">${fmt(o.availableSize, 0)}</td>
           <td class="cusip-cell">${escapeHtml(o.cusip || '')}</td>
+          <td><button type="button" class="small-btn buyers-btn" data-buyers-product="corporate" data-buyers-idx="${idx}">Find buyers</button></td>
         </tr>`;
     }).join('');
+    wireBuyersButtons(body, filtered);
   }
 
   function setupCorpFilters() {
@@ -16035,7 +16067,7 @@
       mbsCmoData = await res.json();
     } catch (e) {
       console.error('Failed to load MBS/CMO:', e);
-      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--danger)">
+      body.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load MBS/CMO inventory: ${escapeHtml(e.message)}
       </td></tr>`;
       return;
@@ -16177,13 +16209,13 @@
 
     setText('mbsCmoStat', formatNumber(filtered.length));
     if (!offers.length) {
-      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--text3)">
         No MBS/CMO sources uploaded yet. Use the source drop above to add Bloomberg workbooks, PDFs, offer emails, or screenshots.
       </td></tr>`;
       return;
     }
     if (!filtered.length) {
-      body.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:40px;color:var(--text3)">
+      body.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--text3)">
         No MBS/CMO rows match the current filters.
       </td></tr>`;
       return;
@@ -16194,7 +16226,7 @@
     const fmtDate = v => v ? formatNumericDate(v) : '<span class="no-restrict">&mdash;</span>';
     const pillClass = p => p === 'CMO' ? 'tier-a' : p === 'MBS' ? 'tier-bbb' : 'tier-nr';
 
-    body.innerHTML = filtered.map(o => {
+    body.innerHTML = filtered.map((o, idx) => {
       const files = (o.sourceFiles || []).map(file => `
         <a class="source-chip" href="/api/mbs-cmo/files/${encodeURIComponent(file.id)}" target="_blank" rel="noopener">
           ${escapeHtml(file.extension || 'file')}
@@ -16217,8 +16249,10 @@
           <td>${fmtDate(o.settleDate)}</td>
           <td><span class="rank-chip">${escapeHtml(o.sourceType || '')}</span></td>
           <td>${files || '<span class="no-restrict">&mdash;</span>'}</td>
+          <td><button type="button" class="small-btn buyers-btn" data-buyers-product="mbs" data-buyers-idx="${idx}">Find buyers</button></td>
         </tr>`;
     }).join('');
+    wireBuyersButtons(body, filtered);
   }
 
   async function loadCdInternal() {
