@@ -1,0 +1,12 @@
+{
+  "name": "fbbs-tools",
+  "description": "Internal Claude Code plugins for the FBBS Market Intelligence Portal.",
+  "owner": { "name": "FBBS Portal" },
+  "plugins": [
+    {
+      "name": "fbbs",
+      "source": "./tools/fbbs-plugin",
+      "description": "Shared FBBS portal dev commands (test, preview-verify, daily-package ops, trader-email triage), Reports/Data Analytics context, plus a trunk-protection pre-commit test gate."
+    }
+  ]
+}

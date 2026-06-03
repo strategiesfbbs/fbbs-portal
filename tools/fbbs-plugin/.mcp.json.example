@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "TEMPLATE — not loaded until you rename this file to `.mcp.json`.",
+    "The Gmail connector used for trader-email triage is currently an Anthropic-managed",
+    "connector already available at the session level, so the /fbbs:trader-emails command",
+    "works WITHOUT this file. Activate this only if you want the plugin to declare its own",
+    "Gmail MCP server (e.g. a self-hosted one). Fill in the real command/url for your server.",
+    "Per docs/company-portal-context.md, automated mailbox INGESTION into the portal stays",
+    "deferred until the IIS/Windows-auth deployment story lands — this is read triage only."
+  ],
+  "mcpServers": {
+    "fbbs-gmail": {
+      "type": "http",
+      "url": "https://REPLACE-WITH-YOUR-GMAIL-MCP-ENDPOINT/mcp",
+      "headers": {
+        "Authorization": "Bearer ${FBBS_GMAIL_MCP_TOKEN}"
+      }
+    }
+  }
+}

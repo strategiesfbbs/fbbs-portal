@@ -1,0 +1,6 @@
+{
+  "name": "fbbs",
+  "description": "Shared FBBS Market Intelligence Portal dev commands: test, preview-verify, daily-package ops, trader-email triage, Reports/Data Analytics context, and a trunk-protection pre-commit test gate.",
+  "version": "0.1.0",
+  "author": { "name": "FBBS Portal" }
+}

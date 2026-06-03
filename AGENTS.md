@@ -157,6 +157,7 @@ _(Resolved since this list was written: `getCurrentPackage()` / `getArchiveList(
 - Single trunk: `main`. Both Codex and Claude Code commit here. Keep commits small and self-contained so the other agent can `git log` and pick up where you left off.
 - Tests: `npm test` (runs `tests/parser-regression.test.js`, `tests/swap-math.test.js`, `tests/swap-store.test.js`).
 - Start: `npm start` or `node server/server.js`, or double-click the platform launcher.
+- Shared Claude Code plugin: `tools/fbbs-plugin/` (marketplace at `.claude-plugin/marketplace.json`). Install with `/plugin marketplace add .` then `/plugin install fbbs@fbbs-tools`. Commands: `/fbbs:test`, `/fbbs:verify`, `/fbbs:package-status`, `/fbbs:publish`, `/fbbs:trader-emails`, `/fbbs:reports-context`. A `PreToolUse(Bash)` hook runs `npm test` and blocks any `git commit` on `main` that fails — Claude Code only, so Codex must keep running `npm test` before committing. See `tools/fbbs-plugin/README.md` (also carries the feature-backlog work split).
 
 ## Dual-agent workflow (Codex + Claude Code)
 
