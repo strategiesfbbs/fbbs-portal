@@ -97,6 +97,7 @@
   let reportsLoadPromise = null;
   let reportsAppEventsBound = false;
   let coverageBookState = { loaded: false, loading: false, banks: [], strategyCounts: {}, search: '', expanded: new Set(), detail: {} };
+  let billingQueueState = { loaded: false, loading: false, requests: [], counts: {}, search: '', requestType: '', assignedTo: '' };
   let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, bankPickerCollapsed: false, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
   let customBankReportState = {
     loading: false,
@@ -324,6 +325,14 @@
       category: 'Sales',
       folder: 'Coverage',
       description: 'Summarize saved banks, statuses, notes, strategy requests, latest call-report period, and report availability.'
+    },
+    'billing-queue': {
+      slug: 'billing-queue',
+      name: 'Billing Queue',
+      shortName: 'Billing',
+      category: 'Billing & Ops',
+      folder: 'Billing & Ops',
+      description: 'Review strategy requests waiting to be billed, grouped by request type, owner, invoice contact, and age.'
     }
   };
   const REPORT_FIXTURES = [
@@ -331,7 +340,8 @@
     { id: 'fixture-bank-peer', name: 'Bank Peer Analysis - Coverage Baseline', type: 'bank-peer', folder: 'Coverage', description: REPORT_TYPE_META['bank-peer'].description, lastRunAt: '2026-05-13T08:15:00.000Z', lastRunBy: 'You', pinned: true },
     { id: 'fixture-opportunity', name: 'Midwest Opportunity Scan', type: 'opportunity', folder: 'Sales Strategy', description: REPORT_TYPE_META.opportunity.description, lastRunAt: '2026-05-12T15:40:00.000Z', lastRunBy: 'You', pinned: false },
     { id: 'fixture-portfolio', name: 'Portfolio Review Workbench - Matched Files', type: 'portfolio-peer', folder: 'Portfolio Reviews', description: REPORT_TYPE_META['portfolio-peer'].description, lastRunAt: '2026-05-12T10:05:00.000Z', lastRunBy: 'You', pinned: false },
-    { id: 'fixture-coverage', name: 'Coverage Book - Saved Banks', type: 'coverage', folder: 'Coverage', description: REPORT_TYPE_META.coverage.description, lastRunAt: '2026-05-11T16:25:00.000Z', lastRunBy: 'You', pinned: false }
+    { id: 'fixture-coverage', name: 'Coverage Book - Saved Banks', type: 'coverage', folder: 'Coverage', description: REPORT_TYPE_META.coverage.description, lastRunAt: '2026-05-11T16:25:00.000Z', lastRunBy: 'You', pinned: false },
+    { id: 'fixture-billing', name: 'Billing Queue - Strategy Requests', type: 'billing-queue', folder: 'Billing & Ops', description: REPORT_TYPE_META['billing-queue'].description, lastRunAt: '2026-05-11T14:35:00.000Z', lastRunBy: 'You', pinned: false }
   ];
   const SAVED_REPORTS_STORAGE_KEY = 'fbbs.reports.savedDefinitions';
   const HIDDEN_REPORTS_STORAGE_KEY = 'fbbs.reports.hiddenRows';
@@ -901,6 +911,7 @@
     if (type === 'bank-peer') return exportPeerAnalysisCsv();
     if (type === 'opportunity') return exportOpportunityReportCsv();
     if (type === 'portfolio-peer') return exportPortfolioReviewCsv();
+    if (type === 'billing-queue') return exportBillingQueueCsv();
     return showToast('CSV export is not available for this report type yet', true);
   }
 
@@ -7754,6 +7765,7 @@
     if (type === 'portfolio-peer') return '<div id="reportsPortfolioReviewMount"></div>';
     if (type === 'opportunity') return '<div id="reportsOpportunityMount"></div>';
     if (type === 'coverage') return '<div id="reportsCoverageBookMount"></div>';
+    if (type === 'billing-queue') return '<div id="reportsBillingQueueMount"></div>';
     return '<p class="reports-muted">Select a report type to begin.</p>';
   }
 
@@ -7780,7 +7792,9 @@
             <h4>Filters &amp; Grouping</h4>
             ${type === 'custom-bank'
               ? '<p class="reports-muted">Filters, column selection, and sorting are managed in the custom builder above.</p>'
-              : type === 'opportunity' ? '<p class="reports-muted">Min flags, state, and saved-only filters are in the scan panel above.</p>' : '<p class="reports-muted">No additional filters for this report type yet.</p>'}
+              : type === 'opportunity' ? '<p class="reports-muted">Min flags, state, and saved-only filters are in the scan panel above.</p>'
+              : type === 'billing-queue' ? '<p class="reports-muted">Search, request type, and assignee filters are in the billing queue panel above.</p>'
+              : '<p class="reports-muted">No additional filters for this report type yet.</p>'}
           </section>
           <section class="reports-builder-section">
             <h4>Output</h4>
@@ -7794,7 +7808,7 @@
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
             <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Available in Phase 1"'}>Save View</button>
-            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
+            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
             <button type="button" class="small-btn secondary" disabled title="Available in Phase 3">Save &amp; Schedule</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
@@ -8730,6 +8744,7 @@
       }
       if (type === 'opportunity') mountReportPanel('opportunityReportPanel', 'reportsOpportunityMount');
       if (type === 'coverage') renderCoverageBookMount();
+      if (type === 'billing-queue') renderBillingQueueMount();
       if (autorun && !handledAutorun) setTimeout(() => runReportBuilder(type), 0);
     } else if (path === 'data/files') {
       app.innerHTML = reportsDataHtml(true);
@@ -8963,6 +8978,200 @@
     loadCoverageBook(true);
   }
 
+  // ===== Billing Queue report =====
+  // Uses the canonical Strategies queue status. The source route already limits
+  // results to active (non-archived) requests unless archived=all is passed.
+  async function loadBillingQueue(force) {
+    if (billingQueueState.loading) return;
+    if (billingQueueState.loaded && !force) return;
+    billingQueueState.loading = true;
+    renderBillingQueueMount();
+    try {
+      const data = await fetch('/api/strategies?status=Needs%20Billed', { cache: 'no-store' }).then(readBankJson);
+      billingQueueState.requests = Array.isArray(data.requests) ? data.requests : [];
+      billingQueueState.counts = data.counts || {};
+      billingQueueState.loaded = true;
+    } catch (e) {
+      showToast('Could not load billing queue: ' + (e && e.message || ''), true);
+    } finally {
+      billingQueueState.loading = false;
+      renderBillingQueueMount();
+    }
+  }
+
+  function billingQueueAgeDays(row) {
+    const anchor = row && (row.billedAt || row.updatedAt || row.createdAt);
+    if (!anchor) return null;
+    const t = new Date(anchor).getTime();
+    if (!Number.isFinite(t)) return null;
+    return Math.max(0, Math.floor((Date.now() - t) / 86400000));
+  }
+
+  function billingQueueRows() {
+    const q = billingQueueState.search.trim().toLowerCase();
+    const type = billingQueueState.requestType;
+    const owner = billingQueueState.assignedTo;
+    return billingQueueState.requests
+      .filter(row => {
+        if (type && row.requestType !== type) return false;
+        if (owner && (row.assignedTo || 'Unassigned') !== owner) return false;
+        if (!q) return true;
+        return [
+          row.id, row.displayName, row.legalName, row.city, row.state, row.certNumber,
+          row.requestType, row.priority, row.requestedBy, row.assignedTo,
+          row.invoiceContact, row.summary, row.comments
+        ].filter(Boolean).join(' ').toLowerCase().includes(q);
+      })
+      .sort((a, b) => {
+        const ageDiff = (billingQueueAgeDays(b) || 0) - (billingQueueAgeDays(a) || 0);
+        if (ageDiff) return ageDiff;
+        return Number(a.priority || 9) - Number(b.priority || 9);
+      });
+  }
+
+  function billingQueueOptions(key, fallback) {
+    const values = new Set();
+    billingQueueState.requests.forEach(row => values.add(row[key] || fallback));
+    return [...values].filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)));
+  }
+
+  function billingQueueSummary(rows) {
+    const aged = rows.map(billingQueueAgeDays).filter(n => n != null);
+    const total = rows.length;
+    const highPriority = rows.filter(row => Number(row.priority || 9) <= 2).length;
+    const missingInvoice = rows.filter(row => !row.invoiceContact).length;
+    const oldest = aged.length ? Math.max(...aged) : null;
+    const byType = {};
+    rows.forEach(row => {
+      const type = row.requestType || 'Miscellaneous';
+      byType[type] = (byType[type] || 0) + 1;
+    });
+    const topType = Object.entries(byType).sort((a, b) => b[1] - a[1])[0];
+    return { total, highPriority, missingInvoice, oldest, topType };
+  }
+
+  function billingAgeClass(days) {
+    if (days == null) return '';
+    if (days >= 14) return 'billing-age-high';
+    if (days >= 7) return 'billing-age-watch';
+    return 'billing-age-fresh';
+  }
+
+  function renderBillingQueueMount() {
+    const mount = document.getElementById('reportsBillingQueueMount');
+    if (!mount) return;
+    if (!billingQueueState.loaded && !billingQueueState.loading) { loadBillingQueue(); return; }
+    if (billingQueueState.loading && !billingQueueState.loaded) {
+      mount.innerHTML = '<div class="bank-search-empty">Loading billing queue...</div>';
+      return;
+    }
+    const rows = billingQueueRows();
+    const total = billingQueueState.requests.length;
+    const summary = billingQueueSummary(rows);
+    const requestTypes = billingQueueOptions('requestType', 'Miscellaneous');
+    const assignees = billingQueueOptions('assignedTo', 'Unassigned');
+    mount.innerHTML = `
+      <article class="billing-queue-report">
+        <header class="coverage-book-head">
+          <div>
+            <span>Billing &amp; Ops</span>
+            <h3>Needs Billed</h3>
+            <p>${escapeHtml(formatNumber(rows.length))} of ${escapeHtml(formatNumber(total))} active request${total === 1 ? '' : 's'} waiting on billing</p>
+          </div>
+          <div class="coverage-book-actions">
+            <input type="search" id="billingQueueSearch" placeholder="Search bank, owner, invoice..." value="${escapeHtml(billingQueueState.search)}">
+            <select id="billingQueueTypeFilter" aria-label="Billing request type">
+              <option value="">All request types</option>
+              ${requestTypes.map(type => `<option value="${escapeHtml(type)}" ${billingQueueState.requestType === type ? 'selected' : ''}>${escapeHtml(type)}</option>`).join('')}
+            </select>
+            <select id="billingQueueAssigneeFilter" aria-label="Billing assignee">
+              <option value="">All assignees</option>
+              ${assignees.map(owner => `<option value="${escapeHtml(owner)}" ${billingQueueState.assignedTo === owner ? 'selected' : ''}>${escapeHtml(owner)}</option>`).join('')}
+            </select>
+            <button type="button" class="small-btn secondary" data-billing-export>Export CSV</button>
+            <button type="button" class="small-btn secondary" data-billing-open-queue>Open Strategies</button>
+          </div>
+        </header>
+        <div class="reports-readiness billing-queue-summary">
+          <div><strong>${escapeHtml(formatNumber(summary.total))}</strong><span>Needs billed</span></div>
+          <div><strong>${escapeHtml(formatNumber(summary.highPriority))}</strong><span>Priority 1-2</span></div>
+          <div><strong>${summary.oldest == null ? '—' : escapeHtml(String(summary.oldest))}</strong><span>Oldest age days</span></div>
+          <div><strong>${escapeHtml(formatNumber(summary.missingInvoice))}</strong><span>Missing invoice contact</span></div>
+          <div><strong>${escapeHtml(summary.topType ? summary.topType[0] : '—')}</strong><span>Largest request type${summary.topType ? ` (${escapeHtml(formatNumber(summary.topType[1]))})` : ''}</span></div>
+        </div>
+        ${rows.length ? `
+          <div class="reports-list-wrap">
+            <table class="reports-list billing-queue-table">
+              <thead>
+                <tr>
+                  <th>Bank</th>
+                  <th>Request</th>
+                  <th>Owner</th>
+                  <th>Invoice Contact</th>
+                  <th>Priority</th>
+                  <th>Age</th>
+                  <th>Updated</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows.map(row => {
+                  const days = billingQueueAgeDays(row);
+                  return `
+                    <tr>
+                      <td><strong>${escapeHtml(row.displayName || row.legalName || 'Bank')}</strong><span class="reports-desc">${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span></td>
+                      <td><strong>${escapeHtml(row.requestType || 'Miscellaneous')}</strong><span class="reports-desc">${escapeHtml(row.summary || '')}</span></td>
+                      <td>${escapeHtml(row.assignedTo || 'Unassigned')}</td>
+                      <td>${escapeHtml(row.invoiceContact || '—')}</td>
+                      <td>${escapeHtml(row.priority || '3')}</td>
+                      <td><span class="billing-age ${billingAgeClass(days)}">${days == null ? '—' : `${escapeHtml(String(days))}d`}</span></td>
+                      <td>${escapeHtml(formatFullTimestamp(row.updatedAt || row.billedAt || row.createdAt))}</td>
+                      <td><button type="button" class="text-btn" data-billing-open-bank="${escapeHtml(row.bankId || '')}">Open</button></td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : '<div class="bank-search-empty">No active billing requests match those filters.</div>'}
+      </article>
+    `;
+  }
+
+  function runBillingQueue() {
+    loadBillingQueue(true);
+    addSessionReport('billing-queue');
+  }
+
+  function exportBillingQueueCsv() {
+    const rows = billingQueueRows();
+    if (!rows.length) return showToast('No billing rows to export', true);
+    const out = [[
+      'Bank', 'Legal Name', 'City', 'State', 'Cert', 'Request Type', 'Summary',
+      'Priority', 'Requested By', 'Assigned To', 'Invoice Contact',
+      'Needs Billed Since', 'Age Days', 'Updated', 'Comments'
+    ]];
+    rows.forEach(row => out.push([
+      row.displayName || '',
+      row.legalName || '',
+      row.city || '',
+      row.state || '',
+      row.certNumber || '',
+      row.requestType || '',
+      row.summary || '',
+      row.priority || '',
+      row.requestedBy || '',
+      row.assignedTo || '',
+      row.invoiceContact || '',
+      row.billedAt || '',
+      billingQueueAgeDays(row),
+      row.updatedAt || '',
+      row.comments || ''
+    ]));
+    downloadCsv('billing_queue_' + new Date().toISOString().slice(0, 10) + '.csv', out);
+    showToast(`Exported ${formatNumber(rows.length)} billing rows`);
+  }
+
   function setupReportsAppEvents() {
     if (reportsAppEventsBound) return;
     reportsAppEventsBound = true;
@@ -9015,6 +9224,15 @@
           nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
         }
       }
+      if (target.id === 'billingQueueSearch') {
+        billingQueueState.search = target.value || '';
+        renderBillingQueueMount();
+        const nextInput = document.getElementById('billingQueueSearch');
+        if (nextInput) {
+          nextInput.focus();
+          nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+        }
+      }
       if (['customBankSearchInput', 'customBankStatesInput', 'customBankMinAssetsInput', 'customBankMaxAssetsInput'].includes(target.id)) {
         const keyById = {
           customBankSearchInput: 'search',
@@ -9050,6 +9268,14 @@
       if (target.id === 'customBankStatusFilter') {
         customBankReportState.filters.statuses = Array.from(target.selectedOptions || []).map(opt => opt.value).join(',');
         renderCustomBankReportMount();
+      }
+      if (target.id === 'billingQueueTypeFilter') {
+        billingQueueState.requestType = target.value || '';
+        renderBillingQueueMount();
+      }
+      if (target.id === 'billingQueueAssigneeFilter') {
+        billingQueueState.assignedTo = target.value || '';
+        renderBillingQueueMount();
       }
       if (target.id === 'customBankSavedOnly') {
         customBankReportState.filters.savedOnly = Boolean(target.checked);
@@ -9239,6 +9465,24 @@
         printCoverageBook();
         return;
       }
+      if (clickTarget.closest('[data-billing-export]')) {
+        exportBillingQueueCsv();
+        return;
+      }
+      if (clickTarget.closest('[data-billing-open-queue]')) {
+        goTo('strategies');
+        const statusFilter = document.getElementById('strategyArchiveFilter');
+        if (statusFilter) statusFilter.value = '';
+        loadStrategies();
+        return;
+      }
+      const billingOpen = clickTarget.closest('[data-billing-open-bank]');
+      if (billingOpen) {
+        event.preventDefault();
+        goTo('banks');
+        loadBank(billingOpen.dataset.billingOpenBank, { collapseResults: true });
+        return;
+      }
       const coverageOpen = clickTarget.closest('[data-coverage-open]');
       if (coverageOpen) {
         event.preventDefault();
@@ -9337,6 +9581,9 @@
     if (type === 'coverage') {
       runCoverageBook();
       addSessionReport(type);
+    }
+    if (type === 'billing-queue') {
+      runBillingQueue();
     }
   }
   // ----------------------------------------------------------------------

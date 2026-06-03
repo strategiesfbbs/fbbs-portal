@@ -13675,13 +13675,15 @@ body {
 .coverage-book-head h3 { margin: 2px 0; }
 .coverage-book-head p { margin: 0; color: var(--text2); font-size: 13px; }
 .coverage-book-actions { display: flex; gap: 8px; align-items: center; }
-.coverage-book-actions input[type="search"] {
+.coverage-book-actions input[type="search"],
+.coverage-book-actions select {
   padding: 7px 11px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  min-width: 240px;
   font-size: 13px;
 }
+.coverage-book-actions input[type="search"] { min-width: 240px; }
+.coverage-book-actions select { min-width: 150px; background: #fff; }
 .coverage-book-row.expanded > td { border-bottom: 0; }
 .coverage-book-detail-row > td { background: var(--bg-soft); padding: 0; }
 .coverage-book-detail { padding: 14px 16px; }
@@ -13721,5 +13723,29 @@ body {
   text-transform: uppercase;
 }
 .coverage-book-detail-foot { margin-top: 10px; }
+
+/* ===== Billing Queue report ===== */
+.billing-queue-summary {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 12px;
+}
+.billing-queue-table td:first-child strong,
+.billing-queue-table td:nth-child(2) strong {
+  display: block;
+  margin-bottom: 2px;
+}
+.billing-age {
+  display: inline-block;
+  min-width: 38px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.billing-age-fresh { background: var(--green-bg); color: var(--green); }
+.billing-age-watch { background: #fef3c7; color: #92400e; }
+.billing-age-high { background: rgba(220, 38, 38, 0.12); color: var(--danger); }
 
 .reports-head-btns { display: flex; gap: 8px; align-items: center; }
