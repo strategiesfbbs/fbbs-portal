@@ -31,6 +31,8 @@ const { importWeeklyCdWorksheet } = require('../server/cd-history-importer');
 const {
   getBankDatabaseStatus,
   getBankFromDatabase,
+  importBankWorkbook,
+  parseBankWorkbook,
   searchBankDatabase,
   writeBankDatabase
 } = require('../server/bank-data-importer');
@@ -617,6 +619,39 @@ function assertBankDatabaseRoundTrip() {
     const detail = getBankFromDatabase(tmp, 'bank-1');
     assert.strictEqual(detail.bank.periods.length, 1);
     assert.strictEqual(detail.bank.summary.displayName, 'Sample Bank, Springfield, IL');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+async function assertBankWorkbookRequiresAllDataSheet() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-bank-workbook-'));
+  const workbookPath = path.join(tmp, 'wrong-sheet.xlsx');
+  const emptyWorkbookPath = path.join(tmp, 'empty-all-data.xlsx');
+  const outputDir = path.join(tmp, 'out');
+  try {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['Not', 'ALL_DATA'],
+      ['Sample', 'Row']
+    ]), 'SUMMARY');
+    fs.writeFileSync(workbookPath, XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }));
+    assert.throws(
+      () => parseBankWorkbook(workbookPath),
+      /Could not locate ALL_DATA worksheet in workbook/
+    );
+
+    const emptyWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(emptyWorkbook, XLSX.utils.aoa_to_sheet([
+      ['ALL_DATA'],
+      ['No usable bank rows']
+    ]), 'ALL_DATA');
+    fs.writeFileSync(emptyWorkbookPath, XLSX.write(emptyWorkbook, { type: 'buffer', bookType: 'xlsx' }));
+    await assert.rejects(
+      () => importBankWorkbook(emptyWorkbookPath, outputDir),
+      /No bank rows parsed/
+    );
+    assert.strictEqual(fs.existsSync(path.join(outputDir, 'bank-data.sqlite')), false);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -1455,6 +1490,7 @@ function assertReferenceIntakeParsers() {
   assertPackageReaderRecoversStaleMmdMetadata();
   assertAgencyCollectionPreservesCounterpart();
   assertBankDatabaseRoundTrip();
+  await assertBankWorkbookRequiresAllDataSheet();
   assertBankCoverageStore();
   assertBankAccountStatusStore();
   assertStrategyStore();

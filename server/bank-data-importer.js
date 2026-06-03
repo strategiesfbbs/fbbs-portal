@@ -146,7 +146,8 @@ function loadSharedStrings(workbookPath) {
   let xml = '';
   try {
     xml = childProcess.execFileSync('unzip', ['-p', workbookPath, 'xl/sharedStrings.xml'], {
-      maxBuffer: 80 * 1024 * 1024
+      maxBuffer: 80 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'ignore']
     }).toString('utf8');
   } catch (err) {
     return [];
@@ -190,9 +191,9 @@ function findWorksheetPath(workbookPath, sheetName) {
       }
     }
   } catch (err) {
-    // Fall through to the historical workbook layout below.
+    throw new Error(`Could not locate ${sheetName} worksheet in workbook: ${err.message}`);
   }
-  return 'xl/worksheets/sheet9.xml';
+  throw new Error(`Could not locate ${sheetName} worksheet in workbook`);
 }
 
 function parseCellValue(body, type, sharedStrings) {
@@ -465,6 +466,11 @@ function parseBankWorkbook(workbookPath, options = {}) {
 
 async function importBankWorkbook(workbookPath, outputDir, options = {}) {
   const parsed = await parseBankWorkbook(workbookPath, options);
+  if (!parsed.metadata.rowCount || !parsed.metadata.bankCount) {
+    const err = new Error('No bank rows parsed — wrong worksheet or unexpected layout.');
+    err.statusCode = 400;
+    throw err;
+  }
   fs.mkdirSync(outputDir, { recursive: true });
   writeBankDatabase(parsed, outputDir);
   writeJsonAtomic(path.join(outputDir, 'bank-manifest.json'), { metadata: parsed.metadata }, 2);
