@@ -20,6 +20,10 @@
     </div>
   </div>
 
+  <!-- Rep picker is relocated here from the top strip on mobile (≤900px),
+       where the top-strip links are hidden. See placeRepPicker() in portal.js. -->
+  <div class="sidebar-rep-slot" id="sidebarRepSlot"></div>
+
   <nav class="sidebar-nav">
     <div class="nav-section">
       <a class="nav-link" data-page="home" href="#home">
@@ -186,6 +190,7 @@
     <a class="top-primary-link" href="#maps" data-page="maps">Map</a>
     <a class="top-primary-link" href="#reports" data-page="reports">Reports</a>
     <a class="top-primary-link" href="#strategies" data-page="strategies">Strategies</a>
+    <a class="top-primary-link" href="#bond-swap" data-page="bond-swap">Bond Swap</a>
     <div class="top-link-menu">
       <button class="top-link-trigger" type="button">
         Offerings
@@ -764,11 +769,6 @@
   </section>
 
   <div class="container">
-    <nav class="strategy-tabs" role="tablist" aria-label="Strategies view">
-      <button type="button" class="strategy-tab active" role="tab" aria-selected="true" data-strategies-tab="queue">Queue</button>
-      <button type="button" class="strategy-tab" role="tab" aria-selected="false" data-strategies-tab="bond-swap">Bond Swap</button>
-    </nav>
-
     <div class="strategy-tab-panel" data-strategies-panel="queue">
       <div class="strategy-toolbar">
         <div class="strategy-filter-row">
@@ -796,30 +796,43 @@
       </div>
     </div>
 
-    <div class="strategy-tab-panel" data-strategies-panel="bond-swap" hidden>
-      <div class="swap-builder-toolbar">
-        <label class="swap-bank-picker">
-          <span>Bank</span>
-          <select id="swapBankSelect">
-            <option value="">Choose a bank with a bond-accounting file…</option>
-          </select>
-        </label>
-        <span class="swap-bank-meta" id="swapBankMeta">Banks shown have a parsed portfolio on file. Suggested swaps come from holdings against today's offerings.</span>
+  </div>
+</div>
+
+<!-- ========== BOND SWAP PAGE ========== -->
+<div class="page" id="p-bond-swap">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Bond <strong>Swap</strong></h2>
+        <p class="hero-sub">Portfolio Idea Engine and multi-leg swap-proposal builder for banks with a bond-accounting file on record.</p>
       </div>
-      <div class="swap-builder-body" id="swapBuilderBody">
-        <div class="empty-state">
-          <div class="empty-state-icon" aria-hidden="true">⇄</div>
-          <h3>No bank selected</h3>
-          <p>Choose a bank with a bond-accounting file on record to see suggested swaps, or build your own proposal by CUSIP.</p>
-          <div class="empty-state-action">
-            <button type="button" class="small-btn" data-swap-pick-bank>Choose a bank</button>
-          </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="swap-builder-toolbar">
+      <label class="swap-bank-picker">
+        <span>Bank</span>
+        <select id="swapBankSelect">
+          <option value="">Choose a bank with a bond-accounting file…</option>
+        </select>
+      </label>
+      <span class="swap-bank-meta" id="swapBankMeta">Banks shown have a parsed portfolio on file. Suggested swaps come from holdings against today's offerings.</span>
+    </div>
+    <div class="swap-builder-body" id="swapBuilderBody">
+      <div class="empty-state">
+        <div class="empty-state-icon" aria-hidden="true">⇄</div>
+        <h3>No bank selected</h3>
+        <p>Choose a bank with a bond-accounting file on record to see suggested swaps, or build your own proposal by CUSIP.</p>
+        <div class="empty-state-action">
+          <button type="button" class="small-btn" data-swap-pick-bank>Choose a bank</button>
         </div>
       </div>
-      <div class="swap-recent" id="swapRecentProposals" hidden>
-        <h3>Recent proposals</h3>
-        <ul id="swapRecentList"></ul>
-      </div>
+    </div>
+    <div class="swap-recent" id="swapRecentProposals" hidden>
+      <h3>Recent proposals</h3>
+      <ul id="swapRecentList"></ul>
     </div>
   </div>
 </div>

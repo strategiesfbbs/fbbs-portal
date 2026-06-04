@@ -139,7 +139,7 @@
   const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'views', 'archive', 'upload', 'package-qa', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -165,6 +165,7 @@
     { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
     { page: 'peer-groups', group: 'Banks', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
+    { page: 'bond-swap', group: 'Strategies', label: 'Bond Swap', description: 'Portfolio Idea Engine and multi-leg swap-proposal builder', aliases: 'bond swap proposal portfolio idea engine swap builder cusip leg reinvest blotter' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
     { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
     { page: 'package-qa', group: 'Operations', label: 'Package QA', description: 'Post-publish review of today\'s package — slot completeness and row counts', aliases: 'package qa quality review slots counts completeness validation check published treasury muni baird agency corporate' },
@@ -1169,6 +1170,7 @@
     const strategyCounts = strategyNotifications.counts || {};
     const cards = [
       { page: 'strategies', label: 'Strategies', title: 'Strategies Queue', detail: 'Track Bond Swap, Muni BCIS, THO, CECL, miscellaneous, and billing requests.', metric: `${formatNumber(strategyCounts.Open || 0)} open` },
+      { page: 'bond-swap', label: 'Bond Swap', title: 'Bond Swap', detail: 'Portfolio Idea Engine and multi-leg swap-proposal builder for bond-accounting banks.', metric: 'Swap builder' },
       { page: 'banks', label: 'Banks', title: 'Bank Tear Sheets', detail: 'Call report tear sheets, saved banks, notes, and coverage status.', metric: 'Coverage workspace' },
       { page: 'treasury-explorer', label: 'Treasuries', title: 'Treasury Explorer', detail: 'Review uploaded Treasury Notes by CUSIP, coupon, maturity, yield, price, and spread.', metric: `${formatNumber(treasuries.length)} notes` },
       { page: 'explorer', label: 'CDs', title: 'CD Explorer', detail: 'Search daily CD offerings by issuer, CUSIP, term, rate, and restrictions.', metric: `${formatNumber(cds.length)} CDs` },
@@ -1473,10 +1475,19 @@
       renderReportsWorkspace();
     }
     if (pageName === 'strategies') {
+      // Back-compat: Bond Swap used to live under #strategies?tab=bond-swap.
+      // It's now its own top-level page — forward old deep links to it.
+      const sp = hashParamsForPage('strategies');
+      if (sp.get('tab') === 'bond-swap') {
+        const fwd = new URLSearchParams();
+        if (sp.get('bank')) fwd.set('bank', sp.get('bank'));
+        if (sp.get('proposal')) fwd.set('proposal', sp.get('proposal'));
+        window.location.hash = '#bond-swap' + (fwd.toString() ? '?' + fwd.toString() : '');
+        return;
+      }
       loadStrategies();
-      const tabFromHash = hashParamsForPage('strategies').get('tab');
-      switchStrategiesTab(tabFromHash === 'bond-swap' ? 'bond-swap' : 'queue');
     }
+    if (pageName === 'bond-swap') enterBondSwapPage();
     if (pageName === 'peer-groups') loadPeerGroups();
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'package-qa') renderPackageQa();
@@ -4987,9 +4998,6 @@
   };
 
   function setupSwapBuilderTab() {
-    document.querySelectorAll('[data-strategies-tab]').forEach(btn => {
-      btn.addEventListener('click', () => switchStrategiesTab(btn.dataset.strategiesTab));
-    });
     const picker = document.getElementById('swapBankSelect');
     const handleBankSelection = () => {
       const id = picker.value || null;
@@ -4998,7 +5006,7 @@
       swapBuilderState.view = 'home';
       swapBuilderState.proposalId = null;
       swapBuilderState.record = null;
-      replaceHashParams('strategies', { tab: 'bond-swap', bank: id || '' });
+      replaceHashParams('bond-swap', { bank: id || '' });
       if (id) loadSuggestedSwapsForBank(id);
       else renderSwapBuilderEmpty();
       loadRecentSwapProposals(id);
@@ -5044,50 +5052,31 @@
     }
   }
 
-  function switchStrategiesTab(tab) {
-    const valid = tab === 'bond-swap' ? 'bond-swap' : 'queue';
-    document.querySelectorAll('[data-strategies-tab]').forEach(btn => {
-      const active = btn.dataset.strategiesTab === valid;
-      btn.classList.toggle('active', active);
-      btn.setAttribute('aria-selected', active ? 'true' : 'false');
-    });
-    document.querySelectorAll('[data-strategies-panel]').forEach(panel => {
-      panel.hidden = panel.dataset.strategiesPanel !== valid;
-    });
-    // Capture deep-link params BEFORE overwriting the hash, otherwise
-    // replaceHashParams clobbers ?bank= and ?proposal= on activation.
-    const params = hashParamsForPage('strategies');
+  // Entry point fired by goTo() when the Bond Swap page activates. Reads the
+  // bank / proposal deep-link params off the #bond-swap hash and restores the
+  // matching view (suggested-swaps home, or an open proposal in the editor).
+  function enterBondSwapPage() {
+    const params = hashParamsForPage('bond-swap');
     const proposalFromHash = params.get('proposal') || '';
     const bankFromHash = params.get('bank') || swapBuilderState.bankId || '';
-    replaceHashParams('strategies', {
-      tab: valid === 'queue' ? '' : valid,
-      bank: bankFromHash,
-      proposal: proposalFromHash
-    });
-    if (valid === 'bond-swap') {
-      const banksLoaded = !!swapBuilderState.eligibleBanks;
-      if (bankFromHash) setSwapSelectedBank(bankFromHash);
-      if (!banksLoaded) loadSwapEligibleBanks();
-      if (proposalFromHash && swapBuilderState.proposalId !== proposalFromHash) {
-        openProposalInEditor(proposalFromHash);
-      } else if (!proposalFromHash) {
-        swapBuilderState.view = 'home';
-        swapBuilderState.proposalId = null;
-        swapBuilderState.record = null;
-        if (bankFromHash) {
-          if (banksLoaded) {
-            loadSuggestedSwapsForBank(bankFromHash);
-            loadRecentSwapProposals(bankFromHash);
-          }
-        } else {
-          renderSwapBuilderEmpty();
-          loadRecentSwapProposals(null);
+    const banksLoaded = !!swapBuilderState.eligibleBanks;
+    if (bankFromHash) setSwapSelectedBank(bankFromHash);
+    if (!banksLoaded) loadSwapEligibleBanks();
+    if (proposalFromHash && swapBuilderState.proposalId !== proposalFromHash) {
+      openProposalInEditor(proposalFromHash);
+    } else if (!proposalFromHash) {
+      swapBuilderState.view = 'home';
+      swapBuilderState.proposalId = null;
+      swapBuilderState.record = null;
+      if (bankFromHash) {
+        if (banksLoaded) {
+          loadSuggestedSwapsForBank(bankFromHash);
+          loadRecentSwapProposals(bankFromHash);
         }
+      } else {
+        renderSwapBuilderEmpty();
+        loadRecentSwapProposals(null);
       }
-    } else if (valid === 'queue') {
-      // Re-fetch in case the user just sent a swap proposal from the
-      // Bond Swap tab; the Queue would otherwise show stale counts.
-      loadStrategies();
     }
   }
 
@@ -5103,7 +5092,7 @@
             `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)} · ${escapeHtml(b.city || '')}${b.state ? ', ' + escapeHtml(b.state) : ''} · ${b.isSubchapterS ? 'Sub-S' : 'C-corp'}</option>`
           ).join('');
       // Restore selection from hash if present
-      const params = hashParamsForPage('strategies');
+      const params = hashParamsForPage('bond-swap');
       const bankFromHash = params.get('bank') || '';
       const proposalFromHash = params.get('proposal') || '';
       if (bankFromHash && swapBuilderState.eligibleBanks.some(b => b.id === bankFromHash)) {
@@ -5213,6 +5202,7 @@
       </div>
       ${renderSwapKnobs(data)}
       ${renderSwapHero(data)}
+      ${renderSwapPackages(data)}
       ${renderSwapSnapshot(data)}
       ${renderSwapSectorBars(data)}
       ${renderSwapRunoffTable(data)}
@@ -5233,6 +5223,7 @@
         if (candidate) buildProposalFromCandidate(data.bankId, candidate);
       });
     });
+    bindSwapPackages(body, data);
     const droppedToggle = body.querySelector('[data-toggle-dropped]');
     if (droppedToggle) {
       droppedToggle.addEventListener('click', () => {
@@ -5298,6 +5289,171 @@
       ${m('Blended Breakeven', h.blendedBreakevenYears == null ? '—' : Number(h.blendedBreakevenYears).toFixed(1) + ' yrs', 'loss ÷ income pickup')}
       ${m('Reinvest Pipeline', h.reinvestPipeline12 == null ? '—' : compactCurrency(h.reinvestPipeline12), 'runoff to redeploy, 12mo')}
     </div></div>`;
+  }
+
+  // ---- Auto-suggested multi-sell packages ----
+  // Sell several underearning lots (possibly across sectors) into one best-fit
+  // buy. Only packages that clear net-income, breakeven, and horizon gates reach
+  // here (server-side), so this is a "here's a restructuring worth doing" block.
+  function renderSwapPackages(data) {
+    const packages = Array.isArray(data.packages) ? data.packages : [];
+    if (!packages.length) return '';
+    return `
+      <h3 class="swap-section-head">Multi-bond swap packages <span class="swap-count">${packages.length}</span></h3>
+      <div class="swap-pkg-grid">
+        ${packages.map((pkg, i) => renderSwapPackageCard(pkg, i)).join('')}
+      </div>`;
+  }
+
+  function renderSwapPackageCard(pkg, idx) {
+    const offering = pkg.offering || {};
+    const sells = Array.isArray(pkg.sells) ? pkg.sells : [];
+    const cap = pkg.breakevenCapMonths || 24;
+    const buyYield = Number(offering.yield) || 0;
+    const econ = computePackageEconomics(sells, buyYield, cap); // all lots selected initially
+    const buyTxt = offering.generic
+      ? `Reinvest at ${buyYield.toFixed(2)}% target`
+      : `${escapeHtml(offering.label || offering.cusip || 'buy')} @ ${buyYield.toFixed(2)}%`;
+    const fit = offering.fitSummary ? `<div class="swap-pkg-fit">${escapeHtml(offering.fitSummary)}</div>` : '';
+    const sectorsTxt = (pkg.sectorsSold || []).join(' · ');
+    const sellRows = sells.map((s, mi) => {
+      const h = s.held || {};
+      return `<tr data-mi="${mi}">
+        <td class="ck"><input type="checkbox" class="swap-pkg-cand" data-pkg="${idx}" data-mi="${mi}" checked></td>
+        <td class="cusip">${escapeHtml(h.cusip || '—')}</td>
+        <td>${escapeHtml((h.description || '').slice(0, 30))}</td>
+        <td class="num">${compactCurrency(h.par)}</td>
+        <td class="num">${h.effYield == null ? '—' : Number(h.effYield).toFixed(2) + '%'}</td>
+        <td class="num${(h.gainLoss || 0) < 0 ? ' neg' : ''}">${compactCurrency(h.gainLoss)}</td>
+        <td class="num">${h.monthsToMaturity == null ? '—' : Math.round(h.monthsToMaturity) + 'mo'}</td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="swap-pkg-card" data-pkg="${idx}" data-pkg-buy-yield="${buyYield}" data-pkg-cap="${cap}">
+        <header class="swap-pkg-head">
+          <div>
+            <strong>${escapeHtml(pkg.title || `Sell ${sells.length} lots`)}</strong>
+            <span class="swap-pkg-sub">${sectorsTxt ? escapeHtml(sectorsTxt) + ' → ' : ''}${buyTxt}</span>
+          </div>
+          <button type="button" class="small-btn primary" data-build-from-package="${idx}">Build proposal (${sells.length})</button>
+        </header>
+        <div class="swap-pkg-warn" data-pkg-warn="${idx}" hidden></div>
+        <div class="swap-pkg-stats" data-pkg-stats="${idx}">${swapPackageStatsHtml(econ, cap)}</div>
+        ${fit}
+        <table class="swap-pkg-sells">
+          <thead><tr>
+            <th class="ck"><label class="sa-mini"><input type="checkbox" class="swap-pkg-all" data-pkg="${idx}" checked> All</label></th>
+            <th>CUSIP</th><th>Description</th><th class="num">Par</th><th class="num">Eff yld</th><th class="num">G/L</th><th class="num">Mat</th>
+          </tr></thead>
+          <tbody>${sellRows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  // Client-side mirror of swapMath.summarizeReinvestPackage — recomputes the
+  // package economics live as the rep checks/unchecks lots. Same summable math:
+  // income given up + realized G/L + proceeds are per-lot sums; income gained =
+  // Σproceeds × buy yield; breakeven = Σloss ÷ (pickup ÷ 12).
+  function computePackageEconomics(members, buyYieldPct, capMonths) {
+    const list = (members || []).filter(Boolean);
+    const cap = Number(capMonths) || 24;
+    const buyYield = Number(buyYieldPct) || 0;
+    if (!list.length) return { count: 0, passes: false, reasons: ['no lots selected'] };
+    let proceeds = 0, givenUp = 0, realized = 0, par = 0, marketValue = 0, wH = 0, hW = 0, minMonths = Infinity;
+    for (const c of list) {
+      const e = c.economics || {}, h = c.held || {};
+      const p = Number(e.replacementPar) || Number(h.marketValue) || 0;
+      proceeds += p;
+      givenUp += Number(e.annualIncomeGivenUp) || 0;
+      realized += Number(e.realizedGainLoss != null ? e.realizedGainLoss : h.gainLoss) || 0;
+      par += Number(h.par) || 0;
+      marketValue += Number(h.marketValue) || 0;
+      const hy = Number(e.horizonYears);
+      if (hy > 0 && p > 0) { wH += hy * p; hW += p; }
+      const mtm = Number(h.monthsToMaturity);
+      if (Number.isFinite(mtm)) minMonths = Math.min(minMonths, mtm);
+    }
+    if (minMonths === Infinity) minMonths = null;
+    const horizon = hW ? wH / hW : 1;
+    const annualBuyIncome = proceeds * buyYield / 100;
+    const pickup = annualBuyIncome - givenUp;
+    const lossToEarnBack = realized < 0 ? -realized : 0;
+    const breakevenMonths = lossToEarnBack > 0 ? (pickup > 0 ? lossToEarnBack / (pickup / 12) : null) : 0;
+    const netBenefitToHorizon = pickup * horizon + realized;
+    const reasons = [];
+    if (!(pickup > 0)) reasons.push('no net annual income pickup');
+    if (breakevenMonths === null) reasons.push('realized loss is never recouped');
+    if (breakevenMonths != null && breakevenMonths > cap) reasons.push(`breakeven over the ${cap}mo cap`);
+    if (breakevenMonths != null && minMonths != null && breakevenMonths > minMonths) reasons.push('a sold bond matures before breakeven');
+    if (!(netBenefitToHorizon > 0)) reasons.push('net benefit to horizon is not positive');
+    return {
+      count: list.length, passes: reasons.length === 0, reasons,
+      par, marketValue, proceeds, realizedGainLoss: realized,
+      annualIncomePickup: pickup, breakevenMonths,
+      netBenefitToHorizon, horizonYears: horizon, minMonthsToMaturity: minMonths
+    };
+  }
+
+  function swapPackageStatsHtml(e, cap) {
+    const beMonths = e.breakevenMonths;
+    const beTxt = beMonths == null ? '—' : (beMonths <= 0 ? 'immediate' : Number(beMonths).toFixed(1) + ' mo');
+    const beBad = beMonths == null || beMonths > cap;
+    const matBad = beMonths != null && e.minMonthsToMaturity != null && beMonths > e.minMonthsToMaturity;
+    const stat = (lab, val, neg) => `<div class="swap-pkg-stat"><span class="lab">${lab}</span><span class="val${neg ? ' neg' : ''}">${val}</span></div>`;
+    return stat('Added annual income', compactCurrency(e.annualIncomePickup), !(e.annualIncomePickup > 0))
+      + stat('Realized loss', compactCurrency(e.realizedGainLoss), (e.realizedGainLoss || 0) < 0)
+      + stat('Breakeven', beTxt + (beMonths != null && beMonths > 0 ? ` (cap ${cap}mo)` : ''), beBad)
+      + stat('Earliest maturity', e.minMonthsToMaturity == null ? '—' : Math.round(e.minMonthsToMaturity) + ' mo', matBad)
+      + stat('Net benefit @' + (e.horizonYears == null ? '—' : Number(e.horizonYears).toFixed(1) + 'y'), compactCurrency(e.netBenefitToHorizon), !(e.netBenefitToHorizon > 0))
+      + stat('Proceeds to redeploy', compactCurrency(e.proceeds));
+  }
+
+  // Wire each package card's checkboxes + select-all so the rep can drop CUSIPs
+  // and watch the economics update; "Build proposal" uses only the checked lots.
+  function bindSwapPackages(scope, data) {
+    const packages = Array.isArray(data.packages) ? data.packages : [];
+    scope.querySelectorAll('.swap-pkg-card').forEach(card => {
+      const idx = Number(card.dataset.pkg);
+      const pkg = packages[idx];
+      if (!pkg) return;
+      const buyYield = Number(card.dataset.pkgBuyYield) || 0;
+      const cap = Number(card.dataset.pkgCap) || 24;
+      const boxes = () => Array.from(card.querySelectorAll('.swap-pkg-cand'));
+      const checkedMembers = () => boxes().filter(cb => cb.checked).map(cb => pkg.sells[Number(cb.dataset.mi)]).filter(Boolean);
+
+      const recompute = () => {
+        boxes().forEach(cb => { const tr = cb.closest('tr'); if (tr) tr.classList.toggle('off', !cb.checked); });
+        const members = checkedMembers();
+        const econ = computePackageEconomics(members, buyYield, cap);
+        const statsEl = card.querySelector('[data-pkg-stats]');
+        if (statsEl) statsEl.innerHTML = swapPackageStatsHtml(econ, cap);
+        const warnEl = card.querySelector('[data-pkg-warn]');
+        if (warnEl) {
+          if (members.length >= 2 && !econ.passes) {
+            warnEl.hidden = false;
+            warnEl.textContent = '⚠ Edited package no longer clears the desk gates: ' + econ.reasons.join('; ') + '. You can still build it — review before sending.';
+          } else { warnEl.hidden = true; warnEl.textContent = ''; }
+        }
+        const all = card.querySelector('.swap-pkg-all');
+        if (all) { all.checked = members.length === boxes().length; all.indeterminate = members.length > 0 && members.length < boxes().length; }
+        const build = card.querySelector('[data-build-from-package]');
+        if (build) {
+          build.disabled = members.length < 2;
+          build.textContent = members.length < 2 ? 'Select ≥2 lots' : `Build proposal (${members.length})`;
+        }
+      };
+
+      boxes().forEach(cb => cb.addEventListener('change', recompute));
+      const all = card.querySelector('.swap-pkg-all');
+      if (all) all.addEventListener('change', () => { boxes().forEach(cb => { cb.checked = all.checked; }); recompute(); });
+      const build = card.querySelector('[data-build-from-package]');
+      if (build) build.addEventListener('click', () => {
+        const members = checkedMembers();
+        if (members.length < 2) { showToast('Select at least 2 lots for a package', true); return; }
+        buildProposalFromPackage(data.bankId, Object.assign({}, pkg, { sells: members }));
+      });
+      recompute();
+    });
   }
 
   // ---- Portfolio snapshot cells ----
@@ -5373,6 +5529,7 @@
     return `<h3 class="swap-section-head">Swap blotter <span class="swap-count">${kept.length}</span></h3>
       <div class="swap-toolbar">
         <label class="sa"><input type="checkbox" id="swapSelAll" checked data-toggle-all> Select all shown</label>
+        <button type="button" class="small-btn primary" data-build-selected-proposal>Build proposal from selected</button>
         <button type="button" class="small-btn" data-export-csv>Export selected to CSV</button>
         <span class="te-note">Yield* = book YTW (taxable) / tax-equivalent YTW (exempt munis<span class="te-star">*</span>).</span>
       </div>
@@ -5394,6 +5551,8 @@
     });
     const exp = scope.querySelector('[data-export-csv]');
     if (exp) exp.addEventListener('click', exportSwapCsv);
+    const build = scope.querySelector('[data-build-selected-proposal]');
+    if (build) build.addEventListener('click', buildProposalFromSelectedSwaps);
     updateSwapPackage();
   }
 
@@ -5420,6 +5579,13 @@
       + cell('Realized Loss', compactCurrency(loss), true)
       + cell('Added Annual Income', compactCurrency(lift))
       + cell('Blended Breakeven', be == null ? '—' : be.toFixed(1) + ' yrs');
+    const buildBtn = document.querySelector('[data-build-selected-proposal]');
+    if (buildBtn) {
+      buildBtn.disabled = sel.length === 0;
+      buildBtn.textContent = sel.length > 1
+        ? `Build proposal from selected (${sel.length})`
+        : 'Build proposal from selected';
+    }
   }
 
   function exportSwapCsv() {
@@ -5543,8 +5709,116 @@
     return `${sign}$${Math.round(abs)}`;
   }
 
+  function holdingIndexByCusip(positions) {
+    const map = new Map();
+    for (const row of positions || []) {
+      if (row && row.cusip) map.set(String(row.cusip).toUpperCase(), row);
+    }
+    return map;
+  }
+
+  function candidateReinvestTarget(candidate) {
+    const suggestion = swapBuilderState.suggestion || {};
+    const knobs = suggestion.knobs || {};
+    const values = [
+      candidate && candidate.reinvestRate,
+      suggestion.reinvestTarget,
+      knobs.reinvestRatePct
+    ];
+    for (const value of values) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  }
+
+  function sellLegPayloadFromCandidate(candidate, sellRow, sourceDate) {
+    const held = candidate.held || {};
+    return {
+      side: 'sell',
+      cusip: held.cusip,
+      description: sellRow.description || held.description,
+      sector: sellRow.sector || candidate.sector,
+      coupon: sellRow.coupon,
+      maturity: sellRow.maturity || held.maturity,
+      callDate: sellRow.callDate,
+      par: sellRow.par || held.par,
+      bookPrice: sellRow.bookPrice || held.bookPrice,
+      marketPrice: sellRow.marketPrice || held.marketPrice,
+      bookYieldYtm: sellRow.bookYieldYtm ?? held.bookYield,
+      bookYieldYtw: sellRow.bookYieldYtw ?? held.bookYield,
+      marketYieldYtm: sellRow.marketYieldYtm,
+      marketYieldYtw: sellRow.marketYieldYtw,
+      modifiedDuration: sellRow.modifiedDuration ?? held.effDuration,
+      averageLife: sellRow.averageLife ?? held.wal,
+      sourceKind: 'holdings',
+      sourceRef: 'bond-accounting',
+      sourceDate: sourceDate || ''
+    };
+  }
+
+  function buyLegPayloadFromCandidate(candidate, sellRow) {
+    const offering = candidate.offering || {};
+    return {
+      side: 'buy',
+      cusip: offering.cusip,
+      description: offering.label,
+      sector: candidate.sector,
+      coupon: offering.coupon,
+      maturity: offering.maturity,
+      callDate: offering.callDate,
+      par: candidate.economics && candidate.economics.replacementPar || sellRow.par || candidate.held.par,
+      marketPrice: offering.price || 100,
+      marketYieldYtw: offering.yield,
+      sourceKind: offering.generic ? 'manual' : 'daily-package',
+      sourceRef: offering.sourceRef || (offering.generic ? 'reinvest-target' : 'daily-package'),
+      sourceDate: offering.generic ? '' : new Date().toISOString().slice(0, 10)
+    };
+  }
+
+  function packageBuyLegPayload(candidates) {
+    const sum = fn => candidates.reduce((total, candidate) => total + (Number(fn(candidate)) || 0), 0);
+    const target = candidateReinvestTarget(candidates[0]);
+    const par = sum(c => c.held && c.held.marketValue) || sum(c => c.held && c.held.par);
+    const targetText = target == null ? '' : ` at ${target.toFixed(2)}% target`;
+    return {
+      side: 'buy',
+      description: `Reinvest selected proceeds${targetText}`,
+      sector: 'Portfolio reinvestment',
+      coupon: target,
+      par,
+      marketPrice: 100,
+      marketYieldYtw: target,
+      sourceKind: 'manual',
+      sourceRef: `${candidates.length} selected Portfolio Idea Engine ideas`
+    };
+  }
+
+  async function addSwapLegToProposal(id, payload, label) {
+    const res = await fetch(`/api/swap-proposals/${id}/legs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      throw new Error(e.error || `Could not add ${label}`);
+    }
+  }
+
   async function buildProposalFromCandidate(bankId, candidate) {
-    if (!bankId || !candidate) return;
+    return buildProposalFromCandidates(bankId, [candidate]);
+  }
+
+  // Seed a proposal from an auto-suggested multi-sell package. Every member LOT
+  // becomes its own sell leg — unlike the blotter's buildProposalFromCandidates,
+  // we do NOT dedup by CUSIP, because a bank can hold several tax-lots of the
+  // same CUSIP (bought at different prices) and the package sells each one. The
+  // package's targeted best-fit buy seeds the single buy leg, sized to combined
+  // proceeds.
+  async function buildProposalFromPackage(bankId, pkg) {
+    const sells = (pkg && Array.isArray(pkg.sells) ? pkg.sells : []).filter(c => c && c.held);
+    if (!bankId || sells.length < 2) return;
     try {
       const createRes = await fetch('/api/swap-proposals', {
         method: 'POST',
@@ -5552,7 +5826,106 @@
         body: JSON.stringify({
           bankId,
           title: `Bond Swap — ${swapBuilderState.bankName || bankId}`,
-          notes: `Seeded from suggested swap (${candidate.held.cusip || ''} → ${candidate.offering.cusip || ''}).`
+          notes: `Seeded from suggested multi-bond package (${sells.length} lots → ${(pkg.offering && pkg.offering.label) || 'reinvest target'}).`
+        })
+      });
+      const created = await createRes.json();
+      if (!createRes.ok) throw new Error(created.error || 'Could not create proposal');
+      const id = created.proposal.id;
+
+      // Holdings give full sell-side metadata (coupon, call date). Group rows by
+      // CUSIP so multiple lots of one CUSIP each get paired to a distinct row.
+      const holdingsRes = await fetch('/api/swap-proposals/holdings?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' });
+      const holdings = holdingsRes.ok ? await holdingsRes.json() : { positions: [] };
+      const lotsByCusip = new Map();
+      for (const row of holdings.positions || []) {
+        const key = String(row.cusip || '').toUpperCase();
+        if (!lotsByCusip.has(key)) lotsByCusip.set(key, []);
+        lotsByCusip.get(key).push({ row, used: false });
+      }
+      const matchLot = held => {
+        const lots = lotsByCusip.get(String(held.cusip || '').toUpperCase()) || [];
+        const close = (a, b) => a != null && b != null && Math.abs(Number(a) - Number(b)) <= Math.max(1, Math.abs(Number(b)) * 0.01);
+        // Prefer the unused lot whose par + book price match this lot, else any
+        // unused lot of the CUSIP, else nothing (seed straight from held).
+        let lot = lots.find(l => !l.used && close(l.row.par, held.par) && close(l.row.bookPrice, held.bookPrice))
+          || lots.find(l => !l.used);
+        if (lot) { lot.used = true; return lot.row; }
+        return {};
+      };
+
+      for (const candidate of sells) {
+        await addSwapLegToProposal(id, sellLegPayloadFromCandidate(candidate, matchLot(candidate.held), holdings.reportDate), 'a sell leg');
+      }
+      await addSwapLegToProposal(id, packageBuyLegFromOffering(pkg.offering, sells), 'the package buy leg');
+
+      showToast(`Proposal ${id} created with ${sells.length} sell legs`);
+      await openProposalInEditor(id);
+      loadRecentSwapProposals(bankId);
+    } catch (err) {
+      showToast('Could not build package proposal: ' + (err.message || err), true);
+    }
+  }
+
+  // Buy-leg payload for a package, sized to the combined proceeds. Uses the
+  // package's concrete best-fit offering when present; otherwise falls back to
+  // the generic reinvest-at-target leg.
+  function packageBuyLegFromOffering(offering, candidates) {
+    const sumProceeds = candidates.reduce((total, c) =>
+      total + (Number(c.economics && c.economics.replacementPar)
+        || Number(c.held && c.held.marketValue) || 0), 0);
+    if (!offering || offering.generic) {
+      const generic = packageBuyLegPayload(candidates);
+      if (sumProceeds) generic.par = Math.round(sumProceeds);
+      return generic;
+    }
+    return {
+      side: 'buy',
+      cusip: offering.cusip,
+      description: offering.label,
+      sector: offering.sector,
+      coupon: offering.coupon,
+      maturity: offering.maturity,
+      callDate: offering.callDate,
+      par: Math.round(sumProceeds) || undefined,
+      marketPrice: offering.price || 100,
+      marketYieldYtw: offering.yield,
+      sourceKind: 'daily-package',
+      sourceRef: offering.sourceRef || 'daily-package',
+      sourceDate: new Date().toISOString().slice(0, 10)
+    };
+  }
+
+  async function buildProposalFromSelectedSwaps() {
+    const bankId = swapBuilderState.bankId;
+    const candidates = selectedSwapCands();
+    if (!bankId) return showToast('Pick a bank first', true);
+    if (!candidates.length) return showToast('No swap ideas selected', true);
+    return buildProposalFromCandidates(bankId, candidates);
+  }
+
+  async function buildProposalFromCandidates(bankId, candidates, packageOffering = null) {
+    const unique = [];
+    const seen = new Set();
+    for (const candidate of candidates || []) {
+      if (!candidate || !candidate.held) continue;
+      const key = String(candidate.held.cusip || unique.length).toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(candidate);
+    }
+    if (!bankId || !unique.length) return;
+    const packageMode = unique.length > 1;
+    try {
+      const createRes = await fetch('/api/swap-proposals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bankId,
+          title: `Bond Swap — ${swapBuilderState.bankName || bankId}`,
+          notes: packageMode
+            ? `Seeded from selected swap package (${unique.length} sell positions).`
+            : `Seeded from suggested swap (${unique[0].held.cusip || ''} → ${(unique[0].offering && unique[0].offering.cusip) || ''}).`
         })
       });
       const created = await createRes.json();
@@ -5563,63 +5936,27 @@
       const holdingsRes = await fetch('/api/swap-proposals/holdings?bankId=' + encodeURIComponent(bankId), { cache: 'no-store' });
       if (!holdingsRes.ok) throw new Error('Could not load holdings for the sell leg');
       const holdings = await holdingsRes.json();
-      const sellRow = (holdings.positions || []).find(p => p.cusip === candidate.held.cusip) || {};
+      const holdingsByCusip = holdingIndexByCusip(holdings.positions || []);
 
-      const sellRes = await fetch(`/api/swap-proposals/${id}/legs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          side: 'sell',
-          cusip: candidate.held.cusip,
-          description: sellRow.description || candidate.held.description,
-          sector: sellRow.sector || candidate.sector,
-          coupon: sellRow.coupon,
-          maturity: sellRow.maturity,
-          callDate: sellRow.callDate,
-          par: sellRow.par || candidate.held.par,
-          bookPrice: sellRow.bookPrice,
-          marketPrice: sellRow.marketPrice,
-          bookYieldYtm: sellRow.bookYieldYtm,
-          bookYieldYtw: sellRow.bookYieldYtw,
-          marketYieldYtm: sellRow.marketYieldYtm,
-          marketYieldYtw: sellRow.marketYieldYtw,
-          modifiedDuration: sellRow.modifiedDuration,
-          averageLife: sellRow.averageLife,
-          sourceKind: 'holdings',
-          sourceRef: 'bond-accounting',
-          sourceDate: holdings.reportDate || ''
-        })
-      });
-      if (!sellRes.ok) {
-        const e = await sellRes.json().catch(() => ({}));
-        throw new Error(e.error || 'Could not add the sell leg');
+      for (const candidate of unique) {
+        const sellRow = holdingsByCusip.get(String(candidate.held.cusip || '').toUpperCase()) || {};
+        await addSwapLegToProposal(id, sellLegPayloadFromCandidate(candidate, sellRow, holdings.reportDate), 'the sell leg');
       }
 
-      const buyRes = await fetch(`/api/swap-proposals/${id}/legs`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          side: 'buy',
-          cusip: candidate.offering.cusip,
-          description: candidate.offering.label,
-          sector: candidate.sector,
-          coupon: candidate.offering.coupon,
-          maturity: candidate.offering.maturity,
-          callDate: candidate.offering.callDate,
-          par: candidate.economics && candidate.economics.replacementPar || sellRow.par || candidate.held.par,
-          marketPrice: candidate.offering.price || 100,
-          marketYieldYtw: candidate.offering.yield,
-          sourceKind: candidate.offering.generic ? 'reinvest-target' : 'daily-package',
-          sourceRef: candidate.offering.sourceRef || 'daily-package',
-          sourceDate: candidate.offering.generic ? '' : new Date().toISOString().slice(0, 10)
-        })
-      });
-      if (!buyRes.ok) {
-        const e = await buyRes.json().catch(() => ({}));
-        throw new Error(e.error || 'Could not add the buy leg');
+      if (packageMode) {
+        const buyLeg = packageOffering
+          ? packageBuyLegFromOffering(packageOffering, unique)
+          : packageBuyLegPayload(unique);
+        await addSwapLegToProposal(id, buyLeg, 'the package buy leg');
+      } else {
+        const candidate = unique[0];
+        const sellRow = holdingsByCusip.get(String(candidate.held.cusip || '').toUpperCase()) || {};
+        await addSwapLegToProposal(id, buyLegPayloadFromCandidate(candidate, sellRow), 'the buy leg');
       }
 
-      showToast(`Proposal ${id} created with seeded legs`);
+      showToast(packageMode
+        ? `Proposal ${id} created with ${unique.length} sell legs`
+        : `Proposal ${id} created with seeded legs`);
       await openProposalInEditor(id);
       loadRecentSwapProposals(bankId);
     } catch (err) {
@@ -5656,8 +5993,7 @@
     if (!id) return;
     swapBuilderState.view = 'editor';
     swapBuilderState.proposalId = id;
-    replaceHashParams('strategies', {
-      tab: 'bond-swap',
+    replaceHashParams('bond-swap', {
       bank: swapBuilderState.bankId || '',
       proposal: id
     });
@@ -5665,13 +6001,12 @@
       const res = await fetch('/api/swap-proposals/' + encodeURIComponent(id), { cache: 'no-store' });
       const record = await res.json();
       if (!res.ok) throw new Error(record.error || 'Failed to load proposal');
-      if (hashParamsForPage('strategies').get('proposal') !== id) return;
+      if (hashParamsForPage('bond-swap').get('proposal') !== id) return;
       swapBuilderState.record = record;
       const recordBankId = record.proposal.bankId || swapBuilderState.bankId || '';
       if (recordBankId) {
         setSwapSelectedBank(recordBankId);
-        replaceHashParams('strategies', {
-          tab: 'bond-swap',
+        replaceHashParams('bond-swap', {
           bank: recordBankId,
           proposal: id
         });
@@ -5731,7 +6066,7 @@
     swapBuilderState.proposalId = null;
     swapBuilderState.record = null;
     if (window.fbbsBreadcrumb) window.fbbsBreadcrumb.clearDetail();
-    replaceHashParams('strategies', { tab: 'bond-swap', bank: swapBuilderState.bankId || '' });
+    replaceHashParams('bond-swap', { bank: swapBuilderState.bankId || '' });
     if (swapBuilderState.bankId) loadSuggestedSwapsForBank(swapBuilderState.bankId);
     else renderSwapBuilderEmpty();
     loadRecentSwapProposals(swapBuilderState.bankId);
@@ -5784,7 +6119,7 @@
         <datalist id="swapHoldingsDatalist"></datalist>
         <datalist id="swapInventoryDatalist"></datalist>
       </div>`;
-    if (window.fbbsBreadcrumb) window.fbbsBreadcrumb.setDetail('strategies', proposal.id);
+    if (window.fbbsBreadcrumb) window.fbbsBreadcrumb.setDetail('bond-swap', proposal.id);
     refreshPickerDatalists();
     bindEditorHandlers(record);
   }
@@ -6338,7 +6673,7 @@
       wrap.hidden = false;
       list.innerHTML = items.map(p => `
         <li>
-          <a href="#strategies?tab=bond-swap&bank=${encodeURIComponent(p.bankId || '')}&proposal=${encodeURIComponent(p.id)}" data-open-proposal="${escapeHtml(p.id)}">
+          <a href="#bond-swap?bank=${encodeURIComponent(p.bankId || '')}&proposal=${encodeURIComponent(p.id)}" data-open-proposal="${escapeHtml(p.id)}">
             <strong>${escapeHtml(p.id)}</strong>
             <span>${escapeHtml(p.title || 'Bond Swap')}</span>
             <em>
@@ -17265,6 +17600,34 @@
         }
       });
     });
+
+    // The "Acting as" rep picker lives in the top strip on desktop, but the
+    // top-strip links (and the picker with them) are hidden at ≤900px. Move the
+    // single #repPicker node into the drawer on mobile so reps can still switch,
+    // and back to the top strip on wider viewports. Reparenting preserves the
+    // element's event listeners; the picker was the last child of
+    // .top-strip-links, so re-appending restores its original position.
+    placeRepPicker();
+    let repPlacementMobile = window.innerWidth <= 900;
+    window.addEventListener('resize', () => {
+      const isMobile = window.innerWidth <= 900;
+      if (isMobile !== repPlacementMobile) {
+        repPlacementMobile = isMobile;
+        placeRepPicker();
+      }
+    });
+  }
+
+  function placeRepPicker() {
+    const picker = document.getElementById('repPicker');
+    if (!picker) return;
+    const onMobile = window.innerWidth <= 900;
+    const slot = document.getElementById('sidebarRepSlot');
+    const topLinks = document.querySelector('.top-strip-links');
+    const target = onMobile ? slot : topLinks;
+    if (!target || picker.parentElement === target) return;
+    closeRepPanel();
+    target.appendChild(picker);
   }
 
   // ============ US Bank Map ============

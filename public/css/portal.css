@@ -711,6 +711,28 @@ summary:focus-visible,
 
 .rep-picker-clear:hover { text-decoration: underline; }
 
+/* Mobile home for the rep picker: it's moved here from the top strip at ≤900px
+   (placeRepPicker() in portal.js). Empty on desktop, so it collapses away. */
+.sidebar-rep-slot:empty { display: none; }
+.sidebar-rep-slot {
+  padding: 12px 16px 4px;
+}
+.sidebar-rep-slot .rep-picker {
+  margin-left: 0;
+  width: 100%;
+}
+.sidebar-rep-slot .rep-picker-trigger {
+  justify-content: space-between;
+  width: 100%;
+}
+.sidebar-rep-slot .rep-picker-caret { margin-left: auto; }
+/* Open downward, full slot width, instead of the desktop's right-anchored popover. */
+.sidebar-rep-slot .rep-picker-panel {
+  left: 0;
+  right: 0;
+  min-width: 0;
+}
+
 /* MY WORK (home page personalized row) */
 .my-work {
   background: #fff;
@@ -12779,6 +12801,31 @@ body {
 .swap-hero-m .num { font-size: 24px; font-weight: 800; margin-top: 2px; line-height: 1.1; }
 .swap-hero-m .sub { font-size: 10.5px; color: #cfe0d4; margin-top: 1px; }
 
+/* Multi-sell swap packages */
+.swap-pkg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-bottom: 18px; }
+.swap-pkg-card { border: 1px solid #cdddd0; border-left: 4px solid #16523a; border-radius: 10px; padding: 16px 18px; background: #fafdfb; }
+.swap-pkg-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.swap-pkg-head strong { display: block; font-size: 14px; color: #0a3d2a; }
+.swap-pkg-sub { display: block; font-size: 11px; color: #5a6b5e; margin-top: 2px; }
+.swap-pkg-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px 14px; margin-bottom: 12px; }
+.swap-pkg-stat { display: flex; flex-direction: column; }
+.swap-pkg-stat .lab { font-size: 9.5px; letter-spacing: 0.05em; text-transform: uppercase; color: #7a8a7e; font-weight: 700; }
+.swap-pkg-stat .val { font-size: 15px; font-weight: 800; color: #16302a; margin-top: 1px; }
+.swap-pkg-stat .val.neg { color: #b3261e; }
+.swap-pkg-fit { font-size: 11px; color: #2f6b4a; background: #eef6f0; border-radius: 6px; padding: 6px 10px; margin-bottom: 12px; }
+.swap-pkg-warn { font-size: 11px; color: #8a4b00; background: #fdf3e3; border: 1px solid #f0d9ad; border-radius: 6px; padding: 7px 10px; margin-bottom: 12px; }
+.swap-pkg-sells { width: 100%; border-collapse: collapse; font-size: 11px; }
+.swap-pkg-sells th { text-align: left; font-size: 9.5px; letter-spacing: 0.04em; text-transform: uppercase; color: #7a8a7e; border-bottom: 1px solid #dde7df; padding: 4px 6px; }
+.swap-pkg-sells td { padding: 4px 6px; border-bottom: 1px solid #eef3ef; }
+.swap-pkg-sells td.cusip { font-family: "SF Mono", Menlo, monospace; font-size: 10.5px; }
+.swap-pkg-sells .num { text-align: right; }
+.swap-pkg-sells .num.neg { color: #b3261e; }
+.swap-pkg-sells th.ck, .swap-pkg-sells td.ck { width: 1%; white-space: nowrap; padding-right: 10px; }
+.swap-pkg-sells td.ck input { cursor: pointer; }
+.swap-pkg-sells .sa-mini { display: inline-flex; align-items: center; gap: 4px; font-size: 9.5px; text-transform: none; letter-spacing: 0; color: #5a6b5e; cursor: pointer; }
+.swap-pkg-sells tr.off td:not(.ck) { opacity: 0.38; }
+.swap-pkg-sells tr.off td.cusip { text-decoration: line-through; }
+
 /* Portfolio snapshot cells */
 .swap-snap {
   display: grid;
@@ -13760,3 +13807,513 @@ body {
 .billing-age-high { background: rgba(220, 38, 38, 0.12); color: var(--danger); }
 
 .reports-head-btns { display: flex; gap: 8px; align-items: center; }
+
+/* ===== Mobile app layer =====
+   Phone and tablet layout rules that sit above page-specific styling. */
+@media (max-width: 900px) {
+  :root {
+    --mobile-gutter: 16px;
+  }
+
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
+  body {
+    background: var(--bg-lighter);
+  }
+
+  .sidebar {
+    border-right-width: 3px;
+    max-width: 320px;
+    width: min(86vw, 320px);
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-brand {
+    padding: 16px 16px 14px;
+  }
+
+  .sidebar .nav-link,
+  .nav-parent {
+    min-height: 42px;
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .sidebar .nav-minor {
+    margin-left: 22px;
+  }
+
+  .sidebar-backdrop.show {
+    display: block;
+  }
+
+  .main-area {
+    margin-left: 0;
+    min-width: 0;
+  }
+
+  .top-strip {
+    align-items: center;
+    gap: 8px 10px;
+    min-height: 56px;
+    padding: 8px var(--mobile-gutter);
+  }
+
+  .sidebar-toggle {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(16, 23, 21, 0.04);
+    display: flex;
+    flex: 0 0 42px;
+    height: 42px;
+    margin-left: 0;
+    width: 42px;
+  }
+
+  .portal-jump {
+    flex: 1 1 min(300px, calc(100vw - 84px));
+    max-width: none;
+    min-width: 0;
+  }
+
+  .portal-jump input {
+    font-size: 16px;
+    height: 42px;
+  }
+
+  .jump-results {
+    left: calc(-42px - 10px);
+    right: 0;
+    top: calc(100% + 8px);
+  }
+
+  .breadcrumbs {
+    padding: 8px var(--mobile-gutter);
+  }
+
+  .page-hero {
+    padding: 24px var(--mobile-gutter);
+  }
+
+  .page-hero.home-hero {
+    padding: 38px var(--mobile-gutter) 34px;
+  }
+
+  .page-hero-inner {
+    align-items: flex-start;
+    display: grid;
+    gap: 14px;
+    max-width: none;
+  }
+
+  .page-hero h2,
+  .page-hero.home-hero h2 {
+    font-size: clamp(28px, 9vw, 40px);
+    line-height: 1.08;
+  }
+
+  .page-hero .hero-sub,
+  .page-hero.home-hero .hero-sub {
+    font-size: 14px;
+    line-height: 1.45;
+    max-width: none;
+  }
+
+  .container {
+    max-width: none;
+    padding: 22px var(--mobile-gutter);
+    width: 100%;
+  }
+
+  .toast {
+    bottom: 14px;
+    left: var(--mobile-gutter);
+    max-width: none;
+    right: var(--mobile-gutter);
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    max-width: 100%;
+  }
+
+  input[type="search"],
+  input[type="text"],
+  input[type="number"],
+  input[type="date"],
+  select,
+  textarea {
+    min-width: 0;
+  }
+
+  .publish-btn,
+  .small-btn,
+  .text-btn,
+  .home-tile-jump,
+  .snapshot-step-link,
+  .bank-workspace-tab,
+  .strategy-tab {
+    min-height: 40px;
+  }
+
+  .docs-grid,
+  .upload-grid,
+  .home-status-strip,
+  .home-launch-grid,
+  .home-bubble-grid,
+  .home-tile-grid,
+  .home-market-tiles,
+  .daily-picks-grid,
+  .market-summary-grid,
+  .market-data-list,
+  .calendar-event-list,
+  .quality-bar,
+  .explorer-stats,
+  .reports-grid,
+  .reports-import-grid,
+  .reports-peer-summary,
+  .reports-peer-flags,
+  .reports-match-row,
+  .bank-fields-grid,
+  .bank-coverage-layout,
+  .bank-coverage-grid,
+  .bank-note-composer,
+  .strategy-board,
+  .strategy-edit-grid,
+  .strategy-request-grid,
+  .peer-groups-layout,
+  .peer-groups-fieldset,
+  .swap-card-grid,
+  .swap-pkg-grid,
+  .swap-summary-grid,
+  .swap-editor-meta,
+  .maps-split,
+  .maps-drilldown,
+  .maps-full-body,
+  .custom-report-grid,
+  .portfolio-review-two-col,
+  .portfolio-decision-grid,
+  .portfolio-analytics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .home-panel-head,
+  .home-section-row,
+  .market-tool-head,
+  .cd-tool-head,
+  .bank-intel-head,
+  .bank-intel-actions,
+  .bank-upload-panel,
+  .bank-profile-head,
+  .bank-profile-tools,
+  .bank-coverage-detail-head,
+  .reports-head-btns,
+  .reports-peer-actions,
+  .swap-bank-banner,
+  .swap-editor-head,
+  .maps-panel-head,
+  .maps-full-head,
+  .coverage-book-head,
+  .coverage-book-actions {
+    align-items: stretch;
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .home-panel-head > *,
+  .home-section-row > *,
+  .bank-profile-head > *,
+  .bank-profile-tools > *,
+  .bank-coverage-detail-head > *,
+  .reports-head-btns > *,
+  .coverage-book-actions > * {
+    min-width: 0;
+  }
+
+  .bank-workspace-tabs,
+  .strategy-tabs,
+  .market-tabs,
+  .mbs-cmo-tabs,
+  .portfolio-review-tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .bank-workspace-tab,
+  .strategy-tab,
+  .market-tab,
+  .mbs-cmo-tab,
+  .portfolio-review-tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .bank-search-row,
+  .bank-account-coverage-controls,
+  .strategy-filter-row,
+  .reports-peer-search,
+  .explorer-filters,
+  .muni-filters,
+  .cd-calc-controls,
+  .cd-result-grid,
+  .cd-opportunity-search,
+  .cd-signal,
+  .cd-term-row,
+  .maps-cond,
+  .peer-groups-form label.peer-groups-row-2,
+  .peer-groups-loan-row {
+    grid-template-columns: 1fr;
+  }
+
+  .bank-recent-dropdown {
+    left: var(--mobile-gutter);
+    right: var(--mobile-gutter);
+    top: 118px;
+  }
+
+  .bank-result,
+  .bank-saved-item,
+  .bank-strategy-history-item,
+  .calendar-event-card,
+  .global-result,
+  .swap-recent a,
+  .swap-dropped-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .bank-result em,
+  .global-meta,
+  .cd-opportunity-verdict {
+    text-align: left;
+  }
+
+  .bank-profile-actions,
+  .bank-saved-meta,
+  .bank-result-meta,
+  .recap-actions,
+  .upload-section-head,
+  .swap-banner-actions,
+  .swap-card-actions,
+  .swap-editor-actions,
+  .peer-groups-builder-actions,
+  .peer-groups-form-actions,
+  .maps-head-actions,
+  .maps-area-controls {
+    justify-content: flex-start;
+  }
+
+  .swap-bank-picker {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .swap-card-legs,
+  .swap-card-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .swap-pkg-head {
+    display: grid;
+  }
+
+  .swap-knobs {
+    display: grid;
+    gap: 10px;
+  }
+
+  .swap-knobs .knob input,
+  .swap-knobs .knob select {
+    width: 100%;
+  }
+
+  .swap-barrow {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .swap-barrow .lab,
+  .swap-barrow .val {
+    text-align: left;
+    width: auto;
+  }
+
+  .maps-detail-grid,
+  .maps-full-detail .maps-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .maps-full-side {
+    border-left: 0;
+    border-top: 1px solid var(--line, #e2e2e2);
+    max-height: none;
+  }
+
+  .coverage-book-actions input[type="search"],
+  .coverage-book-actions select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .explorer-table-wrap,
+  .rv-table-wrap,
+  .mmd-table-wrap,
+  .views-detail-table-wrap,
+  .bank-trend-wrap,
+  .swap-blotter-scroll,
+  .portfolio-analytics-card,
+  .maps-table-wrap,
+  .reports-table-wrap,
+  .coverage-book-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .explorer-table,
+  .rate-comparison-table,
+  .views-detail-table,
+  .swap-runoff-tbl,
+  .swap-pkg-sells,
+  .swap-leg-table,
+  .maps-bank-table,
+  .coverage-book-table,
+  .billing-queue-table {
+    min-width: 720px;
+  }
+
+  .swap-editor-side {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .swap-editor-side > table,
+  .swap-editor-side > .swap-leg-table {
+    min-width: 900px;
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --mobile-gutter: 14px;
+  }
+
+  body {
+    font-size: 13px;
+  }
+
+  .top-strip {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .portal-jump {
+    min-width: 0;
+  }
+
+  .jump-results {
+    left: 0;
+  }
+
+  .breadcrumbs {
+    font-size: 11px;
+    gap: 4px;
+  }
+
+  .page-hero {
+    padding-top: 22px;
+    padding-bottom: 22px;
+  }
+
+  .page-hero.home-hero {
+    padding-top: 32px;
+    padding-bottom: 30px;
+  }
+
+  .page-hero h2,
+  .page-hero.home-hero h2 {
+    font-size: clamp(26px, 10vw, 34px);
+  }
+
+  .container {
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  .home-showcase {
+    padding-left: var(--mobile-gutter);
+    padding-right: var(--mobile-gutter);
+  }
+
+  .sticky-scroll,
+  .sticky-scroll > *,
+  .sticky-visual,
+  .sticky-copy,
+  .sticky-step,
+  .market-snapshot-card {
+    max-width: 100%;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .market-snapshot-card {
+    overflow: hidden;
+  }
+
+  .snapshot-card-head {
+    flex-wrap: wrap;
+  }
+
+  .my-work,
+  .swap-hero,
+  .swap-knobs,
+  .swap-pkg-card,
+  .swap-card,
+  .bank-search-panel,
+  .bank-profile,
+  .bank-saved-panel,
+  .bank-coverage-detail,
+  .reports-import-panel,
+  .peer-groups-detail,
+  .maps-panel,
+  .maps-area-card,
+  .coverage-book-detail {
+    border-radius: 8px;
+  }
+
+  .swap-hero,
+  .swap-knobs,
+  .swap-pkg-card,
+  .swap-card {
+    padding: 14px;
+  }
+
+  .swap-hero-m .num {
+    font-size: 20px;
+  }
+
+  .peer-groups-radios,
+  .bank-peer-cohort-pick,
+  .reports-head-btns {
+    align-items: flex-start;
+    display: grid;
+  }
+
+  .bank-peer-cohort-pick label,
+  .bank-peer-cohort-pick select {
+    width: 100%;
+  }
+}
