@@ -6158,9 +6158,38 @@
     return !cusip && (!Number.isFinite(par) || par === 0);
   }
 
+  function editorLegMarketValue(leg) {
+    if (!leg) return null;
+    const direct = Number(leg.marketValue);
+    if (Number.isFinite(direct)) return direct;
+    const par = Number(leg.par);
+    const price = Number(leg.marketPrice);
+    return Number.isFinite(par) && Number.isFinite(price) ? par * price / 100 : null;
+  }
+
+  function editorLegHeaderMetrics(rows) {
+    let par = 0;
+    let marketValue = 0;
+    let hasMarketValue = false;
+    (rows || []).forEach(leg => {
+      const legPar = Number(leg && leg.par);
+      if (Number.isFinite(legPar)) par += legPar;
+      const legMarketValue = editorLegMarketValue(leg);
+      if (legMarketValue != null) {
+        marketValue += legMarketValue;
+        hasMarketValue = true;
+      }
+    });
+    return {
+      par,
+      marketValue: hasMarketValue ? marketValue : null
+    };
+  }
+
   function renderLegSideTable(side, rows, isDraft) {
     const title = side === 'sell' ? 'Funding Source (Sells)' : 'Investments (Buys)';
     const tag = side === 'sell' ? 'sell' : 'buy';
+    const totals = editorLegHeaderMetrics(rows);
     const heads = LEG_INPUTS.map(c => `<th${c.secondary ? ' class="swap-leg-secondary"' : ''}>${escapeHtml(c.label)}</th>`).join('');
     const body = rows.length
       ? rows.map(leg => renderLegEditorRow(leg, isDraft)).join('')
@@ -6177,7 +6206,11 @@
       : `<button type="button" class="small-btn" data-add-leg="${tag}">Add ${tag}</button>`);
     return `
       <section class="swap-editor-side" data-side="${tag}">
-        <header><strong>${escapeHtml(title)} (${rows.length})${unfilledBadge}</strong>
+        <header>
+          <div class="swap-leg-head-main">
+            <strong>${escapeHtml(title)} (${rows.length})${unfilledBadge}</strong>
+            <span class="swap-leg-head-metrics">Par ${compactCurrency(totals.par)}${totals.marketValue == null ? '' : ` · Market ${compactCurrency(totals.marketValue)}`}</span>
+          </div>
           ${addButtons}
         </header>
         <table class="swap-leg-table">
@@ -6226,6 +6259,8 @@
     }
     const d = summary.dollars || {};
     const diff = summary.portfolioDiff || {};
+    const sellsAgg = summary.sells || {};
+    const buysAgg = summary.buys || {};
     // Which metrics legitimately require the OTHER side of the swap. Used to
     // swap "—" for a contextual hint ("Add a buy leg") so the rep knows the
     // empty cell isn't a bug. Decisions:
@@ -6253,6 +6288,34 @@
       }
       return `<div><dt>${escapeHtml(label)}</dt><dd>${body}</dd></div>`;
     };
+    const moneyValue = (value, opts = {}) => {
+      const hint = blockedHint(opts.needsSells, opts.needsBuys);
+      if (value != null) {
+        const formatted = Math.abs(value).toLocaleString('en-US', { maximumFractionDigits: 0, minimumFractionDigits: 0 });
+        return value < 0 ? `(${formatted})` : formatted;
+      }
+      return hint ? `<span class="swap-summary-hint">${escapeHtml(hint)}</span>` : '—';
+    };
+    const pctValue = (value, opts = {}) => {
+      const hint = blockedHint(opts.needsSells, opts.needsBuys);
+      if (value != null) return value.toFixed(3) + '%';
+      return hint ? `<span class="swap-summary-hint">${escapeHtml(hint)}</span>` : '—';
+    };
+    const numValue = (value, opts = {}) => {
+      const hint = blockedHint(opts.needsSells, opts.needsBuys);
+      if (value != null) return Number(value).toFixed(2);
+      return hint ? `<span class="swap-summary-hint">${escapeHtml(hint)}</span>` : '—';
+    };
+    const summaryRow = (label, sellValue, buyValue, diffValue, type = 'money') => {
+      const fmt = type === 'pct' ? pctValue : (type === 'num' ? numValue : moneyValue);
+      const diffNeedsBuys = { needsBuys: true };
+      return `<tr>
+        <th scope="row">${escapeHtml(label)}</th>
+        <td>${fmt(sellValue)}</td>
+        <td>${fmt(buyValue, { needsSells: false, needsBuys: false })}</td>
+        <td>${fmt(diffValue, diffNeedsBuys)}</td>
+      </tr>`;
+    };
     const pctChip = (label, value, opts = {}) => {
       const hint = blockedHint(opts.needsSells, opts.needsBuys);
       let body;
@@ -6269,7 +6332,24 @@
     return `
       <aside class="swap-editor-summary">
         <h4>Live summary</h4>
+        <div class="swap-summary-compare" aria-label="Portfolio comparison">
+          <table>
+            <thead>
+              <tr><th>Metric</th><th>Sells</th><th>Buys</th><th>Diff</th></tr>
+            </thead>
+            <tbody>
+              ${summaryRow('Par', sellsAgg.par, buysAgg.par, diff.par)}
+              ${summaryRow('Market value', sellsAgg.marketValue, buysAgg.marketValue, diff.marketValue)}
+              ${summaryRow('Accrued', sellsAgg.accrued, buysAgg.accrued, (buysAgg.accrued != null && sellsAgg.accrued != null) ? buysAgg.accrued - sellsAgg.accrued : null)}
+              ${summaryRow('TE market yield', sellsAgg.teMarketYield, buysAgg.teMarketYield, diff.teMarketYield, 'pct')}
+              ${summaryRow('WAL', sellsAgg.averageLife, buysAgg.averageLife, diff.averageLife, 'num')}
+            </tbody>
+          </table>
+        </div>
         <dl class="swap-summary-grid">
+          ${moneyChip('Sell par $', sellsAgg.par)}
+          ${moneyChip('Buy par $', buysAgg.par, { needsBuys: true })}
+          ${moneyChip('Par diff $', diff.par, { needsBuys: true })}
           ${moneyChip('Total income $', d.totalIncome)}
           ${moneyChip('Net interest $', d.netInterest)}
           ${moneyChip('Realized G/L $', d.realizedGainLoss)}
