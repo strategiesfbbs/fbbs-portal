@@ -17582,21 +17582,21 @@
     const sidebar = document.getElementById('sidebar');
     const backdrop = document.getElementById('sidebarBackdrop');
     if (!toggle || !sidebar || !backdrop) return;
+    const closeDrawer = () => {
+      sidebar.classList.remove('open');
+      backdrop.classList.remove('show');
+    };
 
     toggle.addEventListener('click', () => {
       sidebar.classList.toggle('open');
       backdrop.classList.toggle('show');
     });
-    backdrop.addEventListener('click', () => {
-      sidebar.classList.remove('open');
-      backdrop.classList.remove('show');
-    });
+    backdrop.addEventListener('click', closeDrawer);
     // On mobile, tapping a nav link should close the sidebar
     document.querySelectorAll('.sidebar .nav-link').forEach(link => {
       link.addEventListener('click', () => {
         if (window.innerWidth <= 900) {
-          sidebar.classList.remove('open');
-          backdrop.classList.remove('show');
+          closeDrawer();
         }
       });
     });
@@ -17611,6 +17611,7 @@
     let repPlacementMobile = window.innerWidth <= 900;
     window.addEventListener('resize', () => {
       const isMobile = window.innerWidth <= 900;
+      if (!isMobile) closeDrawer();
       if (isMobile !== repPlacementMobile) {
         repPlacementMobile = isMobile;
         placeRepPicker();
