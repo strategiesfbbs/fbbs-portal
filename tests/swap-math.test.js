@@ -592,6 +592,60 @@ test('reinvestBreakevenYears = |%loss| / annual pickup', () => {
   assert.strictEqual(m.reinvestBreakevenYears(null, 1.5), null, 'no loss → null');
 });
 
+// ---------- Multi-sell reinvestment package ----------
+
+// Two losing lots reinvested at 5%; loss is recouped right at the 24mo cap.
+const PKG_A = { proceeds: 1000000, annualIncomeGivenUp: 40000, realizedGainLoss: -20000, monthsToMaturity: 60, horizonYears: 4, par: 1000000, marketValue: 990000 };
+const PKG_B = { proceeds: 500000, annualIncomeGivenUp: 20000, realizedGainLoss: -10000, monthsToMaturity: 48, horizonYears: 3, par: 500000, marketValue: 495000 };
+
+test('summarizeReinvestPackage sums income and breakeven across members', () => {
+  const r = m.summarizeReinvestPackage([PKG_A, PKG_B], { buyYieldPct: 5.0, breakevenCapMonths: 24 });
+  assert.strictEqual(r.passes, true, 'package within all gates passes');
+  near(r.proceeds, 1500000, 1, 'combined proceeds');
+  near(r.annualBuyIncome, 75000, 1, 'income gained = proceeds x buy yield');
+  near(r.annualIncomeGivenUp, 60000, 1, 'income given up = sum of members');
+  near(r.annualIncomePickup, 15000, 1, 'net annual pickup');
+  near(r.realizedGainLoss, -30000, 1, 'combined realized loss');
+  near(r.breakevenMonths, 24.0, 0.05, 'blended breakeven = loss / (pickup/12)');
+  near(r.minMonthsToMaturity, 48, 0.1, 'earliest member maturity');
+  near(r.horizonYears, 3.67, 0.02, 'proceeds-weighted horizon');
+  assert.strictEqual(r.count, 2, 'member count');
+});
+
+test('summarizeReinvestPackage fails when breakeven exceeds the cap', () => {
+  const heavyLoss = Object.assign({}, PKG_B, { realizedGainLoss: -30000 }); // total -50k → 40mo
+  const r = m.summarizeReinvestPackage([PKG_A, heavyLoss], { buyYieldPct: 5.0, breakevenCapMonths: 24 });
+  assert.strictEqual(r.passes, false, 'over-cap breakeven fails');
+  assert.ok(r.reasons.some(x => /breakeven/.test(x)), 'reason names breakeven');
+});
+
+test('summarizeReinvestPackage fails when a sold bond matures before breakeven', () => {
+  const shortMat = Object.assign({}, PKG_B, { monthsToMaturity: 12 }); // < 24mo breakeven
+  const r = m.summarizeReinvestPackage([PKG_A, shortMat], { buyYieldPct: 5.0, breakevenCapMonths: 24 });
+  assert.strictEqual(r.passes, false, 'maturity-before-breakeven fails');
+  assert.ok(r.reasons.some(x => /matures/.test(x)), 'reason names the early maturity');
+});
+
+test('summarizeReinvestPackage fails with no net annual income pickup', () => {
+  const r = m.summarizeReinvestPackage([PKG_A, PKG_B], { buyYieldPct: 4.0, breakevenCapMonths: 24 });
+  assert.strictEqual(r.passes, false, 'reinvesting at the give-up yield earns nothing extra');
+  assert.ok(r.reasons.some(x => /pickup/.test(x)), 'reason names the missing pickup');
+});
+
+test('summarizeReinvestPackage recoups immediately when the package nets a gain', () => {
+  const gainA = Object.assign({}, PKG_A, { realizedGainLoss: 5000 });
+  const gainB = Object.assign({}, PKG_B, { realizedGainLoss: 5000 });
+  const r = m.summarizeReinvestPackage([gainA, gainB], { buyYieldPct: 5.0, breakevenCapMonths: 24 });
+  assert.strictEqual(r.passes, true, 'a net-gain package with pickup passes');
+  assert.strictEqual(r.breakevenMonths, 0, 'no loss to earn back → breakeven 0');
+});
+
+test('summarizeReinvestPackage guards empty input', () => {
+  const r = m.summarizeReinvestPackage([], { buyYieldPct: 5.0 });
+  assert.strictEqual(r.passes, false, 'no members never passes');
+  assert.strictEqual(r.count, 0, 'count 0');
+});
+
 // ---------- Done ----------
 
 console.log(`swap-math tests: ${passed} passed.`);

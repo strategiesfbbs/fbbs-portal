@@ -3256,6 +3256,7 @@ function reinvestTargetEconomics(held, effYield, marketValue, bookValue, accrued
     realizedGainLoss: roundMoney(realizedGainLoss),
     interestGivenUp: roundMoney(-annualIncomeGivenUp * horizonYears),
     buyIncome: roundMoney(annualBuyIncome * horizonYears),
+    annualIncomeGivenUp: roundMoney(annualIncomeGivenUp),
     annualIncomePickup: roundMoney(annualIncomePickup),
     netInterestToHorizon: roundMoney(netInterestToHorizon),
     netBenefitToHorizon: roundMoney(netBenefitToHorizon),
@@ -5914,6 +5915,121 @@ function buildSwapPortfolioReport(parsedHoldings, screen, knobs) {
   return { profile, runoff, hero, findings };
 }
 
+// Pick the single best reinvestment buy for a multi-sell package: the offering
+// across ALL mapped sectors that best fits the bank's ladder gaps (via the same
+// fit scorer the per-bond engine uses) while still yielding at least the
+// reinvest target, so the package is a genuine income improvement. Returns a buy
+// offering object (shaped like a candidate's `offering`) or null when nothing in
+// today's package beats the target — the caller then falls back to a generic
+// "reinvest at target" buy.
+function pickPackageBuy(inventory, fitProfile, reinvestTarget) {
+  if (!inventory || !inventory.rows) return null;
+  let best = null;
+  for (const [sector, map] of Object.entries(SWAP_SECTOR_MAP)) {
+    const rows = Array.isArray(inventory.rows[map.rowsKey]) ? inventory.rows[map.rowsKey] : [];
+    if (!rows.length) continue;
+    const pick = pickBestOffering(rows, map.yieldKey, null, {
+      fitProfile, held: null, sector, map, minYield: reinvestTarget
+    });
+    if (pick && (!best || pick.score > best.score)) best = { ...pick, sector, map };
+  }
+  if (!best) return null;
+  return {
+    label: offeringLabel(best.row, best.map.type),
+    cusip: best.row.cusip || '',
+    yield: Number(best.yld.toFixed(3)),
+    price: offeringPrice(best.row, best.map.type),
+    coupon: best.row.coupon ?? null,
+    maturity: best.row.maturity || '',
+    callDate: best.row.nextCallDate || best.row.callDate || '',
+    sector: best.map.type,
+    sourceRef: best.map.sourceRef,
+    fitYear: (best.fit && best.fit.year) || null,
+    fitSummary: (best.fit && best.fit.summary) || '',
+    structure: best.row.structure || '',
+    generic: false,
+    availableToday: true
+  };
+}
+
+// Build auto-suggested MULTI-SELL swap packages: bundle several underearning
+// held CUSIPs (across sectors) into one swap that reinvests the combined
+// proceeds into a single best-fit buy. Each package is gated on the desk's three
+// tests — net annual income pickup, breakeven, and horizon — via
+// swapMath.summarizeReinvestPackage. The buy targets the maturity/sector bucket
+// that best fills the bank's ladder (pickPackageBuy); when nothing today beats
+// the target, the package reinvests at the flat target rate.
+//
+// Greedy construction: worst earners first (lowest effective yield), add a lot
+// only while the WHOLE package still clears every gate. Forward-only, so the
+// result is deterministic and easy to explain. Returns [] when fewer than two
+// lots can be bundled (a single lot is already covered by the per-bond cards).
+function buildSwapPackages(kept, inventory, parsedHoldings, knobs, opts = {}) {
+  if (!Array.isArray(kept) || kept.length < 2) return [];
+  const capMonths = opts.packageBreakevenCapMonths ?? 24;
+  // A package is a single client-facing one-pager, so cap how many lots it
+  // bundles — a swap that dumps 50 CUSIPs at once isn't actionable. Worst
+  // earners are admitted first, so the cap keeps the highest-value sells.
+  const maxLegs = Math.max(2, opts.packageMaxLegs ?? 8);
+  const reinvestTarget = knobs.reinvestTarget;
+  if (reinvestTarget == null) return [];
+  const fitProfile = buildInvestmentFitProfile(parsedHoldings, inventory && inventory.asOfDate);
+  const buy = pickPackageBuy(inventory, fitProfile, reinvestTarget);
+  const offering = buy || {
+    label: `Reinvest at ${reinvestTarget.toFixed(2)}% target`,
+    cusip: '', yield: Number(reinvestTarget.toFixed(3)), price: 100,
+    coupon: null, maturity: '', callDate: '', sector: '',
+    sourceRef: 'reinvest-target', fitYear: null,
+    fitSummary: 'No single buy beats the target across the ladder today — reinvest the proceeds at the target rate.',
+    structure: '', generic: true, availableToday: false
+  };
+  const buyYieldPct = offering.yield;
+
+  const toMember = c => ({
+    proceeds: c.economics ? c.economics.replacementPar : null,
+    annualIncomeGivenUp: c.economics ? c.economics.annualIncomeGivenUp : null,
+    realizedGainLoss: c.economics ? c.economics.realizedGainLoss : c.held.gainLoss,
+    monthsToMaturity: c.held.monthsToMaturity,
+    horizonYears: c.economics ? c.economics.horizonYears : null,
+    par: c.held.par,
+    marketValue: c.held.marketValue
+  });
+
+  // Worst earners are the best sells. Greedily admit a lot only if the package
+  // still passes with it in.
+  const pool = kept.slice().sort((a, b) => a.held.effYield - b.held.effYield);
+  const members = [];
+  for (const cand of pool) {
+    if (members.length >= maxLegs) break;
+    if (!cand.economics || cand.economics.replacementPar == null) continue;
+    const trial = summarizeReinvestPackageMembers([...members, cand], buyYieldPct, capMonths, toMember);
+    if (trial.passes) members.push(cand);
+  }
+  if (members.length < 2) return [];
+
+  const economics = summarizeReinvestPackageMembers(members, buyYieldPct, capMonths, toMember);
+  const sectorsSold = Array.from(new Set(members.map(m => m.sector)));
+  const title = offering.generic
+    ? `Sell ${members.length} lots → reinvest at ${reinvestTarget.toFixed(2)}%`
+    : `Sell ${members.length} lots → ${offering.label}`;
+  return [{
+    id: 'PKG-1',
+    title,
+    sectorsSold,
+    sells: members,          // full candidate objects — the UI seeds legs from these
+    offering,
+    economics,
+    breakevenCapMonths: capMonths
+  }];
+}
+
+function summarizeReinvestPackageMembers(candidates, buyYieldPct, capMonths, toMember) {
+  return swapMath.summarizeReinvestPackage(candidates.map(toMember), {
+    buyYieldPct,
+    breakevenCapMonths: capMonths
+  });
+}
+
 function appendHoldingFindings(out, parsedHoldings, P, runoff, knobs) {
   const all = flattenHoldings(parsedHoldings);
   const n0 = x => { const v = numericValue(x); return v == null ? 0 : v; };
@@ -6064,6 +6180,14 @@ function handleSwapSuggested(res, bankId, query) {
   // The reinvestment target actually used (knob, else auto from inventory).
   knobs.reinvestTarget = result.reinvestTarget;
   const report = buildSwapPortfolioReport(ctx.parsedHoldings, result, knobs);
+  // Auto-suggested multi-sell packages (sell several lots → one best-fit buy),
+  // gated on net income, breakeven, and horizon. Cap is rep-overridable.
+  const packageBreakevenCapMonths = parseInt(query.get('packageBreakevenCap'), 10) || 24;
+  const packageMaxLegs = parseInt(query.get('packageMaxLegs'), 10) || 8;
+  const packages = buildSwapPackages(result.kept, ctx.inventory, ctx.parsedHoldings, knobs, {
+    packageBreakevenCapMonths,
+    packageMaxLegs
+  });
 
   return sendJSON(res, 200, {
     bankId,
@@ -6075,6 +6199,7 @@ function handleSwapSuggested(res, bankId, query) {
     holdingsTotalPositions: ctx.parsedHoldings.aggregates ? ctx.parsedHoldings.aggregates.totalPositions : 0,
     kept: result.kept,
     dropped: result.dropped,
+    packages,
     reinvestTarget: result.reinvestTarget,
     reinvestTargetSource: result.reinvestTargetSource,
     knobs: {

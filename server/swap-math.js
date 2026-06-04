@@ -917,6 +917,97 @@ function validateLegsForSend(sells, buys) {
   return issues;
 }
 
+// ---------- Multi-sell reinvestment package ----------
+//
+// Aggregate economics for a "sell several underearning lots, reinvest the
+// COMBINED proceeds into one buy" package — the multi-leg analog of
+// reinvestTargetEconomics(). Because income given up, proceeds and realized
+// G/L are all linear in par, a package's economics are the per-member sums plus
+// one income-gained term at the package buy yield. Used by the Portfolio Idea
+// Engine to auto-propose multi-CUSIP swaps, gated on the three desk tests the
+// rep cares about: net annual income pickup, breakeven, and horizon.
+//
+// members[]: { proceeds, annualIncomeGivenUp, realizedGainLoss,
+//              monthsToMaturity, horizonYears, par, marketValue }
+//   proceeds            = market value + accrued (what gets redeployed)
+//   annualIncomeGivenUp = (book value + accrued) × effective yield   [annual $]
+//   realizedGainLoss    = signed realized G/L booked on the sale     [$, loss < 0]
+// opts: { buyYieldPct, breakevenCapMonths = 24 }
+//
+// Gates (ALL must hold for `passes`):
+//   1. net annual income pickup > 0          — the package earns more than today
+//   2. breakeven ≤ breakevenCapMonths        — the blended loss is recouped in time
+//   3. every sold bond matures ≥ breakeven   — no bond disappears before payback
+//   4. net benefit to the (proceeds-weighted) horizon > 0
+function summarizeReinvestPackage(members, opts = {}) {
+  const list = Array.isArray(members) ? members.filter(Boolean) : [];
+  const breakevenCapMonths = num(opts.breakevenCapMonths) || 24;
+  const buyYieldPct = num(opts.buyYieldPct) || 0;
+  if (!list.length) {
+    return { ok: false, passes: false, reasons: ['no members'], count: 0 };
+  }
+
+  let proceeds = 0, givenUp = 0, realized = 0, par = 0, marketValue = 0;
+  let weightedHorizon = 0, horizonWeight = 0, minMonths = Infinity;
+  for (const member of list) {
+    const p = num(member.proceeds) || 0;
+    proceeds += p;
+    givenUp += num(member.annualIncomeGivenUp) || 0;
+    realized += num(member.realizedGainLoss) || 0;
+    par += num(member.par) || 0;
+    marketValue += num(member.marketValue) || 0;
+    const h = num(member.horizonYears);
+    if (h != null && h > 0 && p > 0) { weightedHorizon += h * p; horizonWeight += p; }
+    const mtm = num(member.monthsToMaturity);
+    if (mtm != null) minMonths = Math.min(minMonths, mtm);
+  }
+  if (minMonths === Infinity) minMonths = null;
+  const horizonYears = num(opts.horizonYears) != null
+    ? num(opts.horizonYears)
+    : (horizonWeight ? weightedHorizon / horizonWeight : 1);
+
+  const annualBuyIncome = proceeds * buyYieldPct / 100;
+  const annualIncomePickup = annualBuyIncome - givenUp;
+  const lossToEarnBack = realized < 0 ? -realized : 0;
+  const breakevenMonths = lossToEarnBack > 0
+    ? (annualIncomePickup > 0 ? lossToEarnBack / (annualIncomePickup / 12) : null)
+    : 0; // no realized loss → recouped immediately
+  const netBenefitToHorizon = annualIncomePickup * horizonYears + realized;
+
+  const reasons = [];
+  if (!(annualIncomePickup > 0)) reasons.push('no net annual income pickup');
+  if (breakevenMonths === null) reasons.push('realized loss is never recouped from added income');
+  if (breakevenMonths != null && breakevenMonths > breakevenCapMonths) {
+    reasons.push(`breakeven ${breakevenMonths.toFixed(1)} mo exceeds ${breakevenCapMonths} mo cap`);
+  }
+  if (breakevenMonths != null && minMonths != null && breakevenMonths > minMonths) {
+    reasons.push(`a sold bond matures in ${minMonths.toFixed(1)} mo, before the ${breakevenMonths.toFixed(1)} mo breakeven`);
+  }
+  if (!(netBenefitToHorizon > 0)) reasons.push('net benefit to horizon is not positive');
+  const passes = reasons.length === 0;
+
+  const round = v => (v == null ? null : Math.round(v));
+  return {
+    ok: true,
+    passes,
+    reasons,
+    count: list.length,
+    par: round(par),
+    marketValue: round(marketValue),
+    proceeds: round(proceeds),
+    realizedGainLoss: round(realized),
+    annualIncomeGivenUp: round(givenUp),
+    annualBuyIncome: round(annualBuyIncome),
+    annualIncomePickup: round(annualIncomePickup),
+    breakevenMonths: breakevenMonths == null ? null : Number(breakevenMonths.toFixed(1)),
+    breakevenYears: breakevenMonths == null ? null : Number((breakevenMonths / 12).toFixed(2)),
+    netBenefitToHorizon: round(netBenefitToHorizon),
+    horizonYears: Number(horizonYears.toFixed(2)),
+    minMonthsToMaturity: minMonths == null ? null : Number(minMonths.toFixed(1)),
+    buyYieldPct: Number(buyYieldPct.toFixed(3))
+  };
+}
+
 // ---------- Exports ----------
 
 module.exports = {
@@ -965,5 +1056,7 @@ module.exports = {
   solveBuyParForProceeds,
   // Input validation
   validateLegInput,
-  validateLegsForSend
+  validateLegsForSend,
+  // Multi-sell package
+  summarizeReinvestPackage
 };
