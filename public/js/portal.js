@@ -11106,7 +11106,7 @@
       ['Affiliate Rep', status.affiliateRep]
     ];
     return `
-      <section class="bank-account-coverage-summary">
+      <section class="bank-account-coverage-summary" id="bankAccountDetailsSummary">
         <div class="bank-account-coverage-title">
           <div>
             <span>Account Details</span>
@@ -11128,10 +11128,16 @@
 
   function renderTearSheetCoverageSignal() {
     const selectedStatus = document.getElementById('bankTearSheetStatus')?.value;
-    const status = { ...currentBankAccountStatus(), status: selectedStatus || currentBankAccountStatus().status || 'Open' };
+    const ownerInput = document.getElementById('bankTearSheetOwner');
+    const status = {
+      ...currentBankAccountStatus(),
+      status: selectedStatus || currentBankAccountStatus().status || 'Open',
+      owner: ownerInput ? ownerInput.value : currentBankAccountStatus().owner
+    };
     return `
       <div class="bank-coverage-signal-inner">
         <em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>
+        ${status.owner ? `<span>${escapeHtml(status.owner)}</span>` : ''}
       </div>
     `;
   }
@@ -11139,6 +11145,21 @@
   function updateTearSheetCoverageSignal() {
     const el = document.getElementById('bankProfileCoverageSignal');
     if (el) el.innerHTML = renderTearSheetCoverageSignal();
+    refreshBankAccountDetailsSummary();
+  }
+
+  function refreshBankAccountDetailsSummary() {
+    const summaryEl = document.getElementById('bankAccountDetailsSummary');
+    if (!summaryEl || !selectedBank || !selectedBank.bank) return;
+    const latest = selectedBank.bank.periods && selectedBank.bank.periods[0] ? selectedBank.bank.periods[0] : { values: {} };
+    const statusSelect = document.getElementById('bankTearSheetStatus');
+    const ownerInput = document.getElementById('bankTearSheetOwner');
+    const status = {
+      ...currentBankAccountStatus(),
+      status: statusSelect ? statusSelect.value : currentBankAccountStatus().status || 'Open',
+      owner: ownerInput ? ownerInput.value : currentBankAccountStatus().owner || ''
+    };
+    summaryEl.outerHTML = renderAccountDetailsSummary(latest.values || {}, status);
   }
 
   function coverageSelectOptions(values, selected) {
@@ -11313,7 +11334,8 @@
         <div class="bank-profile-tools">
           <div class="bank-profile-actions">
             <select id="bankTearSheetStatus" class="bank-action-select" aria-label="Bank account status">${coverageSelectOptions(BANK_COVERAGE_STATUSES, currentBankAccountStatus().status || 'Open')}</select>
-            <button type="button" class="small-btn bank-action-btn" id="bankStatusSaveBtn">Save Status</button>
+            <input type="text" id="bankTearSheetOwner" class="bank-action-input" value="${escapeHtml(currentBankAccountStatus().owner || '')}" placeholder="Account owner" aria-label="Account owner">
+            <button type="button" class="small-btn bank-action-btn" id="bankStatusSaveBtn">Save Status / Owner</button>
             <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Bank</button>
             <button type="button" class="small-btn bank-action-btn" id="bankStrategyToggleBtn">Strategy Request</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPeerReportBtn">Peer Report</button>
@@ -11355,6 +11377,7 @@
     const statusSaveBtn = document.getElementById('bankStatusSaveBtn');
     const strategyToggleBtn = document.getElementById('bankStrategyToggleBtn');
     const statusSelect = document.getElementById('bankTearSheetStatus');
+    const ownerInput = document.getElementById('bankTearSheetOwner');
     const strategySubmitBtn = document.getElementById('bankStrategySubmitBtn');
     const strategyCancelBtn = document.getElementById('bankStrategyCancelBtn');
     const peerReportBtn = document.getElementById('bankPeerReportBtn');
@@ -11369,6 +11392,7 @@
     if (peerReportBtn) peerReportBtn.addEventListener('click', () => openBankReportBuilder('bank-peer'));
     if (portfolioReportBtn) portfolioReportBtn.addEventListener('click', () => openBankReportBuilder('portfolio-peer'));
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
+    if (ownerInput) ownerInput.addEventListener('input', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
     wireBankContactsControls();
@@ -12638,8 +12662,10 @@
   function updateBankSaveButton() {
     const btn = document.getElementById('bankSaveBtn');
     const statusSelect = document.getElementById('bankTearSheetStatus');
+    const ownerInput = document.getElementById('bankTearSheetOwner');
     if (btn) btn.textContent = selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Bank';
     if (statusSelect) statusSelect.value = currentBankAccountStatus().status || 'Open';
+    if (ownerInput) ownerInput.value = currentBankAccountStatus().owner || '';
     updateTearSheetCoverageSignal();
   }
 
@@ -12748,12 +12774,13 @@
   async function saveCurrentBankAccountStatus() {
     const bankId = selectedBankId();
     const status = document.getElementById('bankTearSheetStatus')?.value || currentBankAccountStatus().status || 'Open';
+    const owner = document.getElementById('bankTearSheetOwner')?.value || '';
     if (!bankId) return showToast('No bank selected', true);
     try {
       const res = await fetch('/api/bank-account-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bankId, status })
+        body: JSON.stringify({ bankId, status, owner })
       });
       const data = await readBankJson(res);
       selectedBankAccountStatus = data.accountStatus || { status };
@@ -12764,7 +12791,7 @@
       await loadSavedBanks();
       updateBankSaveButton();
       if (selectedBankId()) loadBankActivity(selectedBankId());
-      showToast('Saved bank status');
+      showToast('Saved bank status / owner');
     } catch (e) {
       showToast(e.message, true);
     }

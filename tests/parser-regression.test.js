@@ -868,10 +868,12 @@ function assertBankAccountStatusStore() {
     const badLimitRows = listBankAccountStatuses(tmp, { limit: 'not-a-number' });
     assert.ok(badLimitRows.length >= 1);
 
-    const manual = upsertBankAccountStatus(tmp, summaries[2], { status: 'Not Real' });
+    const manual = upsertBankAccountStatus(tmp, summaries[2], { status: 'Not Real', owner: 'Manual Owner' });
     assert.strictEqual(manual.status, 'Client');
+    assert.strictEqual(manual.owner, 'Manual Owner');
     const open = upsertBankAccountStatus(tmp, summaries[2], { status: 'Open' });
     assert.strictEqual(open.status, 'Open');
+    assert.strictEqual(open.owner, 'Manual Owner');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

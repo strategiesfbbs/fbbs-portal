@@ -7152,6 +7152,16 @@ body {
   padding: 7px 10px;
 }
 
+.bank-action-input {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  min-height: 36px;
+  min-width: 180px;
+  padding: 7px 10px;
+}
+
 .bank-period-badge {
   background: var(--green);
   border-radius: 8px;

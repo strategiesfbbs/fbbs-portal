@@ -4255,29 +4255,40 @@ async function handleSaveBankAccountStatus(req, res) {
     const summary = getBankSummaryForCoverage(bankId);
     if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
 
-    const previousStatus = (getBankAccountStatuses(BANK_REPORTS_DIR, [bankId]).get(String(bankId)) || {}).status || '';
+    const previousAccountStatus = getBankAccountStatuses(BANK_REPORTS_DIR, [bankId]).get(String(bankId)) || {};
+    const previousStatus = previousAccountStatus.status || '';
+    const previousOwner = previousAccountStatus.owner || '';
+    const ownerProvided = Object.prototype.hasOwnProperty.call(body || {}, 'owner');
     const accountStatus = upsertBankAccountStatus(BANK_REPORTS_DIR, summary, {
       status: body.status,
+      ...(ownerProvided ? { owner: body.owner } : {}),
       source: 'manual'
     });
     const existingCoverage = getBankCoverage(BANK_REPORTS_DIR, bankId).saved;
     let saved = existingCoverage;
     if (existingCoverage) {
-      saved = upsertSavedBank(BANK_REPORTS_DIR, summary, { status: accountStatus.status });
+      saved = upsertSavedBank(BANK_REPORTS_DIR, summary, {
+        status: accountStatus.status,
+        ...(ownerProvided ? { owner: accountStatus.owner } : {})
+      });
     }
     appendAuditLog({
       event: 'bank-account-status-save',
       bankId,
-      status: accountStatus.status
+      status: accountStatus.status,
+      owner: accountStatus.owner
     });
-    if (previousStatus !== accountStatus.status) {
+    const statusChanged = previousStatus !== accountStatus.status;
+    const ownerChanged = ownerProvided && previousOwner !== accountStatus.owner;
+    if (statusChanged || ownerChanged) {
+      const bits = [];
+      if (statusChanged) bits.push(previousStatus ? `Status ${previousStatus} → ${accountStatus.status}` : `Status set to ${accountStatus.status}`);
+      if (ownerChanged) bits.push(`Owner ${previousOwner || '(none)'} → ${accountStatus.owner || '(none)'}`);
       logBankActivity(req, {
         bankId,
         certNumber: summary.certNumber,
         kind: 'status-change',
-        summary: previousStatus
-          ? `Status ${previousStatus} → ${accountStatus.status}`
-          : `Status set to ${accountStatus.status}`,
+        summary: bits.join(' · '),
         refType: 'coverage',
         refId: bankId
       });
