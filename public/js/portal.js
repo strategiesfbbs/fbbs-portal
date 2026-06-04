@@ -6250,7 +6250,10 @@
     const size = (isDraft && side === 'buy')
       ? `<button type="button" class="swap-leg-size" data-size-leg="${leg.id}" title="Size this buy's par so total buy proceeds match sell proceeds (cash-neutral settle)">Size</button>`
       : '';
-    return `<tr data-leg-id="${leg.id}" data-side="${escapeHtml(side)}">${cells}<td class="swap-leg-actions">${size}${del}</td></tr>`;
+    const matchMarketValue = (isDraft && side === 'buy')
+      ? `<button type="button" class="swap-leg-size" data-match-mv-leg="${leg.id}" title="Size this buy's par so total buy market value matches sell market value">Match MV</button>`
+      : '';
+    return `<tr data-leg-id="${leg.id}" data-side="${escapeHtml(side)}">${cells}<td class="swap-leg-actions">${size}${matchMarketValue}${del}</td></tr>`;
   }
 
   function renderEditorSummary(summary, proposal) {
@@ -6385,8 +6388,17 @@
     body.querySelectorAll('[data-size-leg]').forEach(btn => {
       btn.addEventListener('click', () => sizeBuyLeg(Number(btn.dataset.sizeLeg)));
     });
+    body.querySelectorAll('[data-match-mv-leg]').forEach(btn => {
+      btn.addEventListener('click', () => matchBuyLegMarketValue(Number(btn.dataset.matchMvLeg)));
+    });
     body.querySelectorAll('tr[data-leg-id]').forEach(tr => {
       tr.querySelectorAll('input[data-leg-field]').forEach(input => {
+        input.addEventListener('input', () => {
+          if (input.dataset.legField === 'marketYieldYtw') {
+            delete input.dataset.autoAtParYield;
+          }
+          previewHypotheticalAtParYield(Number(tr.dataset.legId), input);
+        });
         input.addEventListener('change', () => {
           // CUSIP changes are the "pick" event — if the value matches a known
           // holding (sells) or inventory item (buys), bulk-fill the row from
@@ -6485,6 +6497,39 @@
     debouncedPatchProposal(id, { [field]: value });
   }
 
+  function previewHypotheticalAtParYield(legId, input, patch = null) {
+    const field = input && input.dataset ? input.dataset.legField : '';
+    if (field !== 'coupon' && field !== 'marketPrice') return false;
+    const tr = input.closest('tr[data-leg-id]');
+    const cusipInput = tr && tr.querySelector('input[data-leg-field="cusip"]');
+    const couponInput = tr && tr.querySelector('input[data-leg-field="coupon"]');
+    const ytwInput = tr && tr.querySelector('input[data-leg-field="marketYieldYtw"]');
+    const mktPxInput = tr && tr.querySelector('input[data-leg-field="marketPrice"]');
+    const couponRaw = field === 'coupon' ? input.value : (couponInput ? couponInput.value : '');
+    const marketPriceRaw = field === 'marketPrice' ? input.value : (mktPxInput ? mktPxInput.value : '');
+    const couponValue = couponRaw === '' ? null : Number(couponRaw);
+    const marketPriceValue = marketPriceRaw === '' ? null : Number(marketPriceRaw);
+    const currentLeg = swapBuilderState.record && Array.isArray(swapBuilderState.record.legs)
+      ? swapBuilderState.record.legs.find(leg => Number(leg.id) === Number(legId))
+      : null;
+    const priorCoupon = currentLeg == null || currentLeg.coupon == null ? null : Number(currentLeg.coupon);
+    const priorYtw = currentLeg == null || currentLeg.marketYieldYtw == null ? null : Number(currentLeg.marketYieldYtw);
+    const ytwWasAutoSynced = Number.isFinite(priorCoupon) && Number.isFinite(priorYtw)
+      && Math.abs(priorCoupon - priorYtw) < 0.0001;
+    const ytwWasPreviewSynced = ytwInput && ytwInput.dataset.autoAtParYield === '1';
+    const isHypotheticalAtPar = tr && tr.dataset.side === 'buy'
+      && cusipInput && !cusipInput.value.trim()
+      && Number.isFinite(couponValue)
+      && marketPriceValue === 100;
+    if (!isHypotheticalAtPar || !ytwInput || (ytwInput.value !== '' && !ytwWasAutoSynced && !ytwWasPreviewSynced)) {
+      return false;
+    }
+    ytwInput.value = couponValue;
+    ytwInput.dataset.autoAtParYield = '1';
+    if (patch) patch.marketYieldYtw = couponValue;
+    return true;
+  }
+
   function queueLegUpdate(legId, input) {
     const id = swapBuilderState.proposalId;
     if (!id || !legId) return;
@@ -6507,6 +6552,7 @@
         couponInput.value = value;
       }
     }
+    if ((field === 'coupon' || field === 'marketPrice') && value != null) previewHypotheticalAtParYield(legId, input, patch);
     patchLeg(id, legId, patch);
   }
 
@@ -6590,6 +6636,59 @@
     }
   }
 
+  async function matchBuyLegMarketValue(legId) {
+    const id = swapBuilderState.proposalId;
+    const record = swapBuilderState.record;
+    if (!id || !legId || !record) return;
+    const fmt = n => (n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 }));
+    try {
+      const legs = Array.isArray(record.legs) ? record.legs : [];
+      const buys = legs.filter(l => l.side === 'buy');
+      const flex = buys.find(l => Number(l.id) === Number(legId));
+      if (!flex) throw new Error('That row is not a buy leg.');
+      const sellMarketValue = record.computedSummary && record.computedSummary.sells
+        ? Number(record.computedSummary.sells.marketValue)
+        : null;
+      if (!Number.isFinite(sellMarketValue) || sellMarketValue <= 0) {
+        throw new Error('Add sell legs with par and market price before matching market value.');
+      }
+      const lockedBuyMarketValue = buys
+        .filter(l => Number(l.id) !== Number(legId))
+        .reduce((sum, leg) => sum + (editorLegMarketValue(leg) || 0), 0);
+      const targetMarketValue = sellMarketValue - lockedBuyMarketValue;
+      if (!(targetMarketValue > 0)) {
+        throw new Error('Other buy legs already meet or exceed the sell market value.');
+      }
+      const marketPrice = Number(flex.marketPrice);
+      if (!Number.isFinite(marketPrice) || marketPrice <= 0) {
+        throw new Error('Enter a market price on this buy leg before matching market value.');
+      }
+      const suggestedPar = Math.round(targetMarketValue * 100 / marketPrice);
+      const resultingMarketValue = suggestedPar * marketPrice / 100;
+      const lines = [
+        `Size this buy leg to ${fmt(suggestedPar)} par?`,
+        '',
+        `Sell market value:        ${fmt(sellMarketValue)}`,
+        lockedBuyMarketValue ? `Other buy market value:   ${fmt(lockedBuyMarketValue)}` : null,
+        `Target for this buy:      ${fmt(targetMarketValue)}`,
+        `Market value at this par: ${fmt(resultingMarketValue)}`
+      ].filter(l => l !== null);
+      if (!confirm(lines.join('\n'))) return;
+      const patchRes = await fetch(`/api/swap-proposals/${encodeURIComponent(id)}/legs/${legId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ par: suggestedPar })
+      });
+      const patched = await patchRes.json();
+      if (!patchRes.ok) throw new Error(patched.error || 'Could not apply the matched par');
+      swapBuilderState.record = patched;
+      renderProposalEditor(patched);
+      showToast(`Matched buy market value with ${fmt(suggestedPar)} par`);
+    } catch (err) {
+      showToast('Match market value failed: ' + (err.message || err), true);
+    }
+  }
+
   function updateLiveSummary(record) {
     // Any edit invalidates a previous blocked-send list — clear it so the rep
     // isn't staring at stale gaps after fixing them.
@@ -6602,6 +6701,19 @@
     wrap.innerHTML = renderEditorSummary(record.computedSummary, record.proposal);
     const fresh = wrap.firstElementChild;
     if (fresh) summaryNode.replaceWith(fresh);
+    updateEditorLegHeaderMetrics(record);
+  }
+
+  function updateEditorLegHeaderMetrics(record) {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body || !record || !Array.isArray(record.legs)) return;
+    ['sell', 'buy'].forEach(side => {
+      const section = body.querySelector(`.swap-editor-side[data-side="${side}"]`);
+      const metricEl = section && section.querySelector('.swap-leg-head-metrics');
+      if (!metricEl) return;
+      const totals = editorLegHeaderMetrics(record.legs.filter(leg => leg.side === side));
+      metricEl.textContent = `Par ${compactCurrency(totals.par)}${totals.marketValue == null ? '' : ` · Market ${compactCurrency(totals.marketValue)}`}`;
+    });
   }
 
   async function addEmptyLeg(side, presets = null) {
