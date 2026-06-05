@@ -380,6 +380,10 @@ function teYield(yieldPct, taxRatePct) {
 
 function isTaxExemptLeg(leg) {
   if (!leg || typeof leg !== 'object') return false;
+  const sourceKind = String(leg.sourceKind || '').toLowerCase();
+  const sourceRef = String(leg.sourceRef || '').toLowerCase();
+  const cusip = String(leg.cusip || '').trim();
+  if (sourceKind === 'manual' && !cusip && (sourceRef === 'reinvest-target' || !sourceRef)) return false;
   const explicit = [leg.taxStatus, leg.taxTreatment, leg.taxableStatus]
     .map(v => String(v || '').toLowerCase())
     .find(Boolean);
