@@ -6566,7 +6566,7 @@
               ${summaryRow('Par', sellsAgg.par, buysAgg.par, diff.par)}
               ${summaryRow('Market value', sellsAgg.marketValue, buysAgg.marketValue, diff.marketValue)}
               ${summaryRow('Accrued', sellsAgg.accrued, buysAgg.accrued, (buysAgg.accrued != null && sellsAgg.accrued != null) ? buysAgg.accrued - sellsAgg.accrued : null)}
-              ${summaryRow('TE market yield', sellsAgg.teMarketYield, buysAgg.teMarketYield, diff.teMarketYield, 'pct')}
+              ${summaryRow('Market yield', sellsAgg.marketYield, buysAgg.marketYield, diff.marketYield, 'pct')}
               ${summaryRow('WAL', sellsAgg.averageLife, buysAgg.averageLife, diff.averageLife, 'num')}
             </tbody>
           </table>
@@ -6582,7 +6582,7 @@
           <div><dt>Breakeven</dt><dd>${breakevenBody}</dd></div>
           <div><dt>Horizon</dt><dd>${summary.horizonYears == null ? '—' : summary.horizonYears.toFixed(2) + ' yr'}</dd></div>
           ${pctChip('Δ TE Bk Yld', diff.teBookYield, { needsBuys: true })}
-          ${pctChip('Δ TE Mkt Yld', diff.teMarketYield, { needsBuys: true })}
+          ${pctChip('Δ Mkt Yld', diff.marketYield, { needsBuys: true })}
         </dl>
       </aside>`;
   }
