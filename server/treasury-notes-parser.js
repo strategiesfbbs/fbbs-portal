@@ -296,8 +296,13 @@ function looksLikeTreasuryWorkbook(buffer) {
   }
   const notes = parsed.notes || [];
   if (notes.length < 3) return false;
+  // Discriminate on the CUSIP prefix only. The parser synthesizes a generic
+  // "Treasury Note …" description for every row regardless of issuer, so the
+  // description is useless here — it made any bond grid (e.g. an FHLB callables
+  // export, CUSIPs 3130*) match at 100%. Real US Treasuries are 912* (912796
+  // bills / 91282* notes / 912810 bonds); agency GSEs are 313*. Require a
+  // genuine-Treasury CUSIP majority.
   const treasuryLike = notes.filter(note =>
-    /treasur/i.test(String(note.description || '')) ||
     /^912[0-9A-Za-z]/.test(String(note.cusip || ''))
   ).length;
   return treasuryLike >= Math.ceil(notes.length * 0.6);

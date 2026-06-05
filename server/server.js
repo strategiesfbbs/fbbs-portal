@@ -662,39 +662,6 @@ function classifyFolderDropFile(filename) {
 // can't tell them apart. Peek at the workbook and route Treasury-note and Baird muni
 // exports to their real slots; genuine WIRP/Fed-Funds books match neither and fall
 // through to the existing reference handling. Returns a slot name or null.
-// Positive content detector for agency offering grids. The desk's Bloomberg
-// "grid1_<hash>.xlsx" agency exports carry an issuer-ticker column ("Tkr") whose
-// values are GSE issuers (FHLB / FNMA / FHLMC / FFCB / Farmer Mac). This must run
-// BEFORE the Treasury sniff: an all-callable FHLB grid has no CUSIP column and can
-// otherwise slip through looksLikeTreasuryWorkbook. Returns 'agenciesCallables'
-// (when call columns are present) / 'agenciesBullets', or null. Munis (issuer
-// column, no Tkr) and the real Treasury sheet (Name/CUSIP, no Tkr) don't match.
-const AGENCY_ISSUER_RE = /\b(FHLB|FNMA|FHLMC|FFCB|FAMCA|FARMER\s*MAC|FED(?:ERAL)?\s*(?:HOME\s*LOAN|FARM\s*CREDIT|NAT))\b/i;
-function sniffAgencyWorkbookSlot(buffer) {
-  try {
-    const wb = XLSX.read(buffer, { type: 'buffer' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    if (!ws) return null;
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
-    const hdr = (rows[0] || []).map(h => String(h || '').toLowerCase().trim());
-    const tkrIdx = hdr.findIndex(h => h === 'tkr' || h === 'ticker');
-    if (tkrIdx < 0) return null;
-    let dataRows = 0, agencyRows = 0;
-    for (let i = 1; i < rows.length; i++) {
-      const s = String((rows[i] || [])[tkrIdx] || '').trim();
-      if (!s) continue;
-      dataRows++;
-      if (AGENCY_ISSUER_RE.test(s)) agencyRows++;
-    }
-    if (dataRows < 3 || agencyRows < Math.ceil(dataRows * 0.6)) return null;
-    const has = s => hdr.some(h => h.includes(s));
-    if (has('call typ') || has('ytnc') || has('nxt call') || has('next call')) return 'agenciesCallables';
-    return 'agenciesBullets';
-  } catch (_) {
-    return null;
-  }
-}
-
 function sniffWorkbookSlot(fullPath) {
   let buffer;
   try {
@@ -702,10 +669,8 @@ function sniffWorkbookSlot(fullPath) {
   } catch (err) {
     return null;
   }
-  const agencySlot = sniffAgencyWorkbookSlot(buffer);
-  if (agencySlot) return agencySlot;
-  if (looksLikeBairdSyndicateWorkbook(buffer)) return 'bairdSyndicate';
   if (looksLikeTreasuryWorkbook(buffer)) return 'treasuryNotes';
+  if (looksLikeBairdSyndicateWorkbook(buffer)) return 'bairdSyndicate';
   return null;
 }
 
@@ -7102,7 +7067,9 @@ function scanFolderDrop(dateValue) {
   });
   const touchesAgencies = Boolean(slots.agenciesBullets || slots.agenciesCallables);
   if (touchesAgencies && (!slots.agenciesBullets || !slots.agenciesCallables)) {
-    warnings.push('Agency publishing needs both the bullets and callables workbooks unless the other file already exists in today’s current package.');
+    const have = slots.agenciesBullets ? 'Bullets' : 'Callables';
+    const missing = slots.agenciesBullets ? 'Callables' : 'Bullets';
+    warnings.push(`Agencies: only the ${have} workbook is here. Publishing will go through one-sided (the ${missing} side will be empty in the Agency Explorer until it's added).`);
   }
   const dates = [...new Set(publishable.map(row => row.date).filter(Boolean))];
   if (dates.length > 1) warnings.push(`Files appear to reference multiple dates: ${dates.join(', ')}.`);
@@ -7403,20 +7370,11 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
 
   const touchesAgencies = incomingSlots.has('agenciesBullets') || incomingSlots.has('agenciesCallables');
   const touchesMuniOfferings = incomingSlots.has('munioffers') || incomingSlots.has('bairdSyndicate');
-  if (touchesAgencies) {
-    const missingAgencyUploads = ['agenciesBullets', 'agenciesCallables']
-      .filter(slot => !incomingSlots.has(slot));
-    const existingPackageDate = priorMeta.date || deriveCurrentPackageDateFromFiles(CURRENT_DIR, existingBeforeUpload) || (existingBeforeUpload.length > 0 ? todayStamp() : null);
-    const currentPackageWillArchive = existingBeforeUpload.length > 0 && existingPackageDate !== todayStamp();
-    const missingCanUseCurrentFiles = !currentPackageWillArchive &&
-      missingAgencyUploads.every(slot => findPackageFileForSlot(CURRENT_DIR, slot, priorMeta));
-
-    if (missingAgencyUploads.length > 0 && !missingCanUseCurrentFiles) {
-      return sendJSON(res, 400, {
-        error: 'Agency uploads require both Bullets and Callables files. Add both agency Excel files and publish again.'
-      });
-    }
-  }
+  // Agencies publish best with both Bullets and Callables (the Agency Explorer
+  // merges them), but a one-sided publish is allowed: when only one file is in
+  // the folder, the package publishes that side and the parse step records a
+  // warning rather than hard-blocking the whole upload. The only true failure is
+  // no agency file at all, handled below once the files are collected.
 
   // Archive any existing current-package files from a prior day. If same-day,
   // only replace files for the slots being re-uploaded; preserve everything
@@ -7780,11 +7738,12 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
 
   if (touchesAgencies) {
     const agencySelection = collectAgencyPackageFiles(CURRENT_DIR, { slotFilenames, priorMeta });
-    if (agencySelection.missingSlots.length > 0) {
+    if (agencySelection.files.length === 0) {
       return sendJSON(res, 400, {
-        error: 'Agency uploads require both Bullets and Callables files. Add both agency Excel files and publish again.'
+        error: 'No agency Bullets or Callables file is available to publish.'
       });
     }
+    const agencyMissingSlots = agencySelection.missingSlots;
 
     const bulletsFile = agencySelection.files.find(f => f.slot === 'agenciesBullets');
     const callablesFile = agencySelection.files.find(f => f.slot === 'agenciesCallables');
@@ -7797,8 +7756,12 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
 
     const parsed = parseAgenciesFiles(agencySelection.files);
     agencyCount = parsed.offerings.length;
-    agencyWarnings = parsed.warnings;
+    agencyWarnings = parsed.warnings.slice();
     agencySources = parsed.sources;
+    if (agencyMissingSlots.length > 0) {
+      const label = s => (s === 'agenciesBullets' ? 'Bullets' : 'Callables');
+      agencyWarnings.push(`Agencies published one-sided: only ${agencySelection.files.map(f => label(f.slot)).join(' & ')} provided. The ${agencyMissingSlots.map(label).join(' & ')} side is empty in the Agency Explorer until it's published.`);
+    }
     // Prefer bullets filename date, fall back to callables
     agencyFileDate = dateSniffs.agenciesBullets || dateSniffs.agenciesCallables || null;
     const payload = {
