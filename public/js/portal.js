@@ -139,7 +139,7 @@
   const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -165,6 +165,7 @@
     { page: 'maps', group: 'Banks', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' },
     { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
     { page: 'peer-groups', group: 'Banks', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
+    { page: 'maturity-calendar', group: 'Banks', label: 'Maturity Calendar', description: 'Covered banks with bonds maturing or first-callable in the window — reinvestment call list', aliases: 'maturity call calendar rollover runoff reinvestment maturing callable proceeds call list coverage bond accounting' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'bond-swap', group: 'Strategies', label: 'Bond Swap', description: 'Portfolio Idea Engine and multi-leg swap-proposal builder', aliases: 'bond swap proposal portfolio idea engine swap builder cusip leg reinvest blotter' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
@@ -191,7 +192,9 @@
     'structured-notes': 'offerings',
     banks: 'banks',
     maps: 'banks',
-    reports: 'banks'
+    reports: 'banks',
+    'peer-groups': 'banks',
+    'maturity-calendar': 'banks'
   };
 
   const DEFAULT_BROKERED_CD_TERMS = [
@@ -1490,6 +1493,7 @@
     }
     if (pageName === 'bond-swap') enterBondSwapPage();
     if (pageName === 'peer-groups') loadPeerGroups();
+    if (pageName === 'maturity-calendar') enterMaturityCalendarPage();
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'package-qa') renderPackageQa();
     if (pageName === 'admin') loadAuditLog();
@@ -5052,6 +5056,222 @@
     } else {
       swapBuilderState.bankName = id ? (fallbackName || swapBuilderState.bankName || id) : '';
     }
+  }
+
+  // ============ Maturity & Call Calendar ============
+  // Cross-bank roll-up of bond-accounting holdings maturing or first-callable
+  // within a window, joined to coverage owner. A proactive sales call list:
+  // reinvestment money coming free. Window (server-bucketed) drives a refetch;
+  // owner + sector are filtered client-side off the full window dataset.
+  const maturityCalState = {
+    window: 90,
+    owner: '',
+    sector: '',
+    ownerTouched: false,
+    data: null,
+    loading: false,
+    wired: false
+  };
+
+  function enterMaturityCalendarPage() {
+    if (!maturityCalState.wired) {
+      maturityCalState.wired = true;
+      const windowBar = document.getElementById('maturityCalWindow');
+      if (windowBar) {
+        windowBar.addEventListener('click', e => {
+          const btn = e.target.closest('button[data-window]');
+          if (!btn) return;
+          const win = Number(btn.dataset.window) || 90;
+          if (win === maturityCalState.window) return;
+          maturityCalState.window = win;
+          windowBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+          loadMaturityCalendar();
+        });
+      }
+      const ownerSel = document.getElementById('maturityCalOwner');
+      if (ownerSel) ownerSel.addEventListener('change', () => {
+        maturityCalState.owner = ownerSel.value;
+        maturityCalState.ownerTouched = true;
+        renderMaturityCalendar();
+      });
+      const sectorSel = document.getElementById('maturityCalSector');
+      if (sectorSel) sectorSel.addEventListener('change', () => {
+        maturityCalState.sector = sectorSel.value;
+        renderMaturityCalendar();
+      });
+      const exportBtn = document.getElementById('maturityCalExport');
+      if (exportBtn) exportBtn.addEventListener('click', exportMaturityCalendarCsv);
+    }
+    loadMaturityCalendar();
+  }
+
+  async function loadMaturityCalendar() {
+    const app = document.getElementById('maturityCalApp');
+    if (!app) return;
+    maturityCalState.loading = true;
+    app.innerHTML = '<p class="muted-note">Loading maturity calendar…</p>';
+    try {
+      const res = await fetch('/api/maturity-calendar?window=' + encodeURIComponent(maturityCalState.window), { cache: 'no-store' });
+      if (!res.ok) throw new Error('Request failed (' + res.status + ')');
+      const data = await res.json();
+      maturityCalState.data = data;
+      // Default owner to the acting-as rep the first time, if their name matches
+      // a coverage owner in the data and the user hasn't picked one yet.
+      if (!maturityCalState.ownerTouched && !maturityCalState.owner && meState.rep) {
+        const repName = String(meState.rep.displayName || meState.rep.username || '').trim().toLowerCase();
+        const match = (data.owners || []).find(o => String(o).trim().toLowerCase() === repName);
+        if (match) maturityCalState.owner = match;
+      }
+      renderMaturityCalendar();
+    } catch (err) {
+      app.innerHTML = '<p class="error-note">Could not load the maturity calendar: ' + escapeHtml(err.message) + '</p>';
+    } finally {
+      maturityCalState.loading = false;
+    }
+  }
+
+  // Apply the client-side owner + sector filters to the full window dataset and
+  // recompute per-bank and grand totals from the visible lots.
+  function maturityCalendarFilteredView() {
+    const data = maturityCalState.data;
+    if (!data || !Array.isArray(data.banks)) return { banks: [], totals: { bankCount: 0, lotCount: 0, par: 0, marketValue: 0 } };
+    const ownerFilter = maturityCalState.owner;
+    const sectorFilter = maturityCalState.sector;
+    const banks = [];
+    for (const bank of data.banks) {
+      if (ownerFilter && bank.owner !== ownerFilter) continue;
+      const lots = sectorFilter ? bank.lots.filter(l => l.sector === sectorFilter) : bank.lots;
+      if (!lots.length) continue;
+      banks.push({
+        ...bank,
+        lots,
+        lotCount: lots.length,
+        par: lots.reduce((s, l) => s + (l.par || 0), 0),
+        marketValue: lots.reduce((s, l) => s + (l.marketValue || 0), 0)
+      });
+    }
+    return {
+      banks,
+      totals: {
+        bankCount: banks.length,
+        lotCount: banks.reduce((s, b) => s + b.lotCount, 0),
+        par: banks.reduce((s, b) => s + b.par, 0),
+        marketValue: banks.reduce((s, b) => s + b.marketValue, 0)
+      }
+    };
+  }
+
+  function maturityCalendarEventChip(lot) {
+    const cls = lot.eventType === 'Call' ? 'mc-chip-call' : 'mc-chip-maturity';
+    const when = lot.daysOut <= 0 ? 'now' : ('in ' + lot.daysOut + 'd');
+    return '<span class="mc-chip ' + cls + '">' + escapeHtml(lot.eventType) + ' ' + when + '</span>';
+  }
+
+  function renderMaturityCalendar() {
+    const app = document.getElementById('maturityCalApp');
+    if (!app) return;
+    const data = maturityCalState.data;
+    const heroStat = document.getElementById('maturityCalHeroStat');
+    const meta = document.getElementById('maturityCalMeta');
+
+    if (data && data.available === false) {
+      if (heroStat) heroStat.textContent = '—';
+      if (meta) meta.textContent = '';
+      app.innerHTML = '<p class="muted-note">' + escapeHtml(data.notice || 'No bond-accounting portfolios have been imported yet.') + ' Import portfolios under Reports → Data to populate this calendar.</p>';
+      return;
+    }
+
+    // Keep the filter dropdowns in sync with the loaded dataset.
+    const ownerSel = document.getElementById('maturityCalOwner');
+    if (ownerSel && data) {
+      const owners = data.owners || [];
+      ownerSel.innerHTML = '<option value="">All owners</option>' +
+        owners.map(o => '<option value="' + escapeHtml(o) + '"' + (o === maturityCalState.owner ? ' selected' : '') + '>' + escapeHtml(o) + '</option>').join('');
+    }
+    const sectorSel = document.getElementById('maturityCalSector');
+    if (sectorSel && data) {
+      const sectors = Array.from(new Set((data.banks || []).flatMap(b => b.lots.map(l => l.sector)).filter(Boolean))).sort();
+      sectorSel.innerHTML = '<option value="">All sectors</option>' +
+        sectors.map(s => '<option value="' + escapeHtml(s) + '"' + (s === maturityCalState.sector ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('');
+    }
+
+    const view = maturityCalendarFilteredView();
+    if (heroStat) heroStat.textContent = String(view.totals.bankCount);
+    if (meta) {
+      const importedNote = data && data.importedAt ? ('Portfolios imported ' + maturityCalendarDate(data.importedAt) + '. ') : '';
+      meta.textContent = importedNote + 'Dates are only as fresh as the last bond-accounting import — confirm a current portfolio before acting.';
+    }
+
+    if (!view.banks.length) {
+      app.innerHTML = '<p class="muted-note">No lots mature or first-call within ' + maturityCalState.window + ' days for the selected filters.</p>';
+      return;
+    }
+
+    const totals = view.totals;
+    const summary = '<div class="mc-summary">' +
+      '<div class="mc-summary-stat"><span>' + totals.bankCount + '</span><small>Banks</small></div>' +
+      '<div class="mc-summary-stat"><span>' + totals.lotCount + '</span><small>Lots</small></div>' +
+      '<div class="mc-summary-stat"><span>' + formatMoney(totals.par) + '</span><small>Par maturing/calling</small></div>' +
+      '<div class="mc-summary-stat"><span>' + formatMoney(totals.marketValue) + '</span><small>Market value</small></div>' +
+      '</div>';
+
+    const cards = view.banks.map(bank => {
+      const rows = bank.lots.map(lot => '<tr>' +
+        '<td>' + maturityCalendarEventChip(lot) + '</td>' +
+        '<td>' + escapeHtml(maturityCalendarDate(lot.eventDate)) + '</td>' +
+        '<td>' + escapeHtml(lot.sector || '—') + '</td>' +
+        '<td>' + escapeHtml(lot.cusip || '—') + '</td>' +
+        '<td class="mc-desc">' + escapeHtml(lot.description || '—') + '</td>' +
+        '<td class="mc-num">' + (lot.coupon != null ? formatPercentTile(lot.coupon) : '—') + '</td>' +
+        '<td class="mc-num">' + formatMoney(lot.par) + '</td>' +
+        '<td class="mc-num">' + (lot.bookYield != null ? formatPercentTile(lot.bookYield) : '—') + '</td>' +
+        '</tr>').join('');
+      const owner = bank.owner ? escapeHtml(bank.owner) : '<em>Unassigned</em>';
+      const status = bank.status ? '<span class="mc-status">' + escapeHtml(bank.status) + '</span>' : '';
+      return '<section class="mc-bank-card">' +
+        '<header class="mc-bank-head">' +
+          '<div>' +
+            '<h3>' + escapeHtml(bank.name) + '</h3>' +
+            '<p class="mc-bank-sub">' + escapeHtml([bank.city, bank.state].filter(Boolean).join(', ')) + ' · Owner: ' + owner + ' ' + status + '</p>' +
+          '</div>' +
+          '<div class="mc-bank-stat">' +
+            '<span>' + formatMoney(bank.par) + '</span><small>' + bank.lotCount + ' lot' + (bank.lotCount === 1 ? '' : 's') + ' · as of ' + escapeHtml(maturityCalendarDate(bank.reportDate)) + '</small>' +
+          '</div>' +
+          '<a class="small-btn" href="#bond-swap?bank=' + encodeURIComponent(bank.bankId) + '">Find swap ideas</a>' +
+        '</header>' +
+        '<div class="mc-table-wrap"><table class="mc-table"><thead><tr>' +
+          '<th>Event</th><th>Date</th><th>Sector</th><th>CUSIP</th><th>Description</th><th class="mc-num">Coupon</th><th class="mc-num">Par</th><th class="mc-num">Bk Yld</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '</section>';
+    }).join('');
+
+    app.innerHTML = summary + cards;
+  }
+
+  function maturityCalendarDate(iso) {
+    if (!iso) return '—';
+    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return String(iso);
+    return m[2] + '/' + m[3] + '/' + m[1];
+  }
+
+  function exportMaturityCalendarCsv() {
+    const view = maturityCalendarFilteredView();
+    if (!view.banks.length) { showToast('Nothing to export for the current filters.', true); return; }
+    const header = ['Bank', 'City', 'State', 'Owner', 'Status', 'Report Date', 'Event', 'Event Date', 'Days Out', 'Sector', 'CUSIP', 'Description', 'Coupon', 'Par', 'Market Value', 'Book Yield'];
+    const rows = [header];
+    for (const bank of view.banks) {
+      for (const lot of bank.lots) {
+        rows.push([
+          bank.name, bank.city, bank.state, bank.owner, bank.status, maturityCalendarDate(bank.reportDate),
+          lot.eventType, maturityCalendarDate(lot.eventDate), lot.daysOut, lot.sector, lot.cusip, lot.description,
+          lot.coupon != null ? lot.coupon : '', lot.par != null ? lot.par : '', lot.marketValue != null ? lot.marketValue : '',
+          lot.bookYield != null ? lot.bookYield : ''
+        ]);
+      }
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv('fbbs_maturity_calendar_' + maturityCalState.window + 'd_' + stamp + '.csv', rows);
   }
 
   // Entry point fired by goTo() when the Bond Swap page activates. Reads the

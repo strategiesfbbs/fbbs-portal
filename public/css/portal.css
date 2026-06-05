@@ -14529,3 +14529,66 @@ body {
 .exec-seglegend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 12px; }
 .exec-seglegend li { font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 5px; }
 .exec-seglegend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* ===== Maturity & Call Calendar (#maturity-calendar) ===== */
+.maturity-cal-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  margin: 18px 0 6px;
+}
+.mc-control { display: flex; flex-direction: column; gap: 5px; }
+.mc-control > label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); font-weight: 600; }
+.mc-control select {
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface); color: var(--text); font-size: 13px; min-width: 160px;
+}
+.mc-control-actions { margin-left: auto; }
+.mc-window-toggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mc-window-toggle button {
+  border: 0; background: var(--surface); color: var(--text2);
+  padding: 7px 14px; font-size: 13px; cursor: pointer; border-left: 1px solid var(--border);
+}
+.mc-window-toggle button:first-child { border-left: 0; }
+.mc-window-toggle button.active { background: var(--success); color: #fff; font-weight: 600; }
+.maturity-cal-meta { font-size: 12px; color: var(--text2); margin: 4px 0 16px; }
+
+.mc-summary { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 18px; }
+.mc-summary-stat {
+  flex: 1 1 150px; background: var(--bg-light); border: 1px solid var(--border-light);
+  border-radius: 10px; padding: 14px 16px; display: flex; flex-direction: column; gap: 2px;
+}
+.mc-summary-stat span { font-size: 22px; font-weight: 700; color: var(--text); }
+.mc-summary-stat small { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); }
+
+.mc-bank-card {
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  box-shadow: var(--shadow-sm); margin-bottom: 16px; overflow: hidden;
+}
+.mc-bank-head {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 18px; border-bottom: 1px solid var(--border-light); background: var(--bg-lighter);
+}
+.mc-bank-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.mc-bank-sub { margin: 3px 0 0; font-size: 12px; color: var(--text2); }
+.mc-bank-stat { margin-left: auto; text-align: right; display: flex; flex-direction: column; }
+.mc-bank-stat span { font-size: 17px; font-weight: 700; color: var(--success); }
+.mc-bank-stat small { font-size: 11px; color: var(--text2); }
+.mc-status {
+  display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px;
+  background: var(--border-light); color: var(--text2); font-weight: 600;
+}
+.mc-table-wrap { overflow-x: auto; }
+.mc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mc-table th, .mc-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border-light); white-space: nowrap; }
+.mc-table th { font-size: 11px; text-transform: uppercase; letter-spacing: .03em; color: var(--text2); font-weight: 600; }
+.mc-table td.mc-num, .mc-table th.mc-num { text-align: right; }
+.mc-table td.mc-desc { white-space: normal; max-width: 280px; }
+.mc-table tbody tr:hover { background: var(--surface-hover); }
+.mc-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.mc-chip-maturity { background: #e7f1ec; color: var(--success); }
+.mc-chip-call { background: #f6e9e4; color: var(--danger); }
+
+.muted-note { color: var(--text2); font-size: 14px; padding: 16px 0; }
+.error-note { color: var(--danger); font-size: 14px; padding: 16px 0; }

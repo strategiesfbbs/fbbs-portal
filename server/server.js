@@ -4731,6 +4731,124 @@ function getSwapBankContext(bankId) {
   return { bank, summary, parsedHoldings, inventory };
 }
 
+// ---- Cross-bank maturity / call calendar (proactive sales call list) ----
+// Rolls every imported bond-accounting portfolio into a forward calendar of
+// lots maturing — or first callable — within a window, joined to coverage
+// owner/status, so a rep can see which covered banks have reinvestment money
+// coming free. Pure aggregation over already-parsed portfolios (loadParsedPortfolio
+// is cached), so no new ingestion, cache, or invalidation hook is needed.
+function maturityCalendarBucketLabel(daysOut) {
+  if (daysOut <= 30) return '0-30';
+  if (daysOut <= 60) return '31-60';
+  if (daysOut <= 90) return '61-90';
+  if (daysOut <= 180) return '91-180';
+  return '181+';
+}
+
+function buildMaturityCalendar(query) {
+  const windowDays = Math.max(1, Math.min(3650, Math.round(Number(query.get('window')) || 90)));
+  const ownerFilter = String(query.get('owner') || '').trim().toLowerCase();
+  const stateFilter = String(query.get('state') || '').trim().toUpperCase();
+  const sectorFilter = String(query.get('sector') || '').trim().toLowerCase();
+  const generatedAt = new Date().toISOString();
+
+  const manifest = loadBondAccountingManifest(BANK_REPORTS_DIR);
+  if (!manifest || !Array.isArray(manifest.matches) || !manifest.matches.length) {
+    return {
+      available: false, generatedAt, windowDays, owners: [], banks: [],
+      totals: { bankCount: 0, lotCount: 0, par: 0, marketValue: 0 },
+      notice: 'No bond-accounting portfolios have been imported yet.'
+    };
+  }
+
+  const matchIds = manifest.matches.filter(r => r && r.bankId).map(r => String(r.bankId));
+  const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, matchIds);
+
+  // Midnight-UTC today, so "days out" is stable regardless of request time of day.
+  const todayMs = Math.floor(Date.now() / 86400000) * 86400000;
+  const horizonMs = todayMs + windowDays * 86400000;
+
+  const seenBank = new Set();
+  const owners = new Set();
+  const banks = [];
+
+  for (const row of manifest.matches) {
+    if (!row || !row.bankId || !row.storedPath) continue;
+    const bankId = String(row.bankId);
+    if (seenBank.has(bankId)) continue; // keep one portfolio per bank (manifest order = latest first)
+    const filePath = resolveBondAccountingStoredFile(BANK_REPORTS_DIR, row.storedPath);
+    if (!filePath) continue;
+    let parsed;
+    try { parsed = loadParsedPortfolio(filePath); } catch (err) { log('warn', `Maturity calendar: skipping ${bankId} (${err.message})`); continue; }
+    if (!parsed) continue;
+    seenBank.add(bankId);
+
+    const summary = summaries.get(bankId) || {};
+    const owner = (summary.accountStatus && summary.accountStatus.owner) || '';
+    const status = (summary.accountStatus && summary.accountStatus.status) || '';
+    const state = String(summary.state || '').toUpperCase();
+    if (owner) owners.add(owner);
+    if (stateFilter && state !== stateFilter) continue;
+    if (ownerFilter && owner.toLowerCase() !== ownerFilter) continue;
+
+    const lots = [];
+    for (const pos of flattenPortfolioHoldings(parsed)) {
+      if (sectorFilter && String(pos.sector || '').toLowerCase() !== sectorFilter) continue;
+      // Soonest actionable event for this lot: a stated maturity or first call
+      // landing within the forward window. Both are required to be in the
+      // [today, horizon] range — a bond already past its first call date is
+      // continuously callable (not a discrete upcoming event), so it's only a
+      // "coming free" signal when a future call/maturity actually lands in-window.
+      const events = [];
+      const matMs = pos.maturity ? Date.parse(pos.maturity) : NaN;
+      if (Number.isFinite(matMs) && matMs >= todayMs && matMs <= horizonMs) {
+        events.push({ type: 'Maturity', dateMs: matMs, date: pos.maturity });
+      }
+      const callMs = pos.nextCall ? Date.parse(pos.nextCall) : NaN;
+      if (Number.isFinite(callMs) && callMs >= todayMs && callMs <= horizonMs) {
+        events.push({ type: 'Call', dateMs: callMs, date: pos.nextCall });
+      }
+      if (!events.length) continue;
+      events.sort((a, b) => a.dateMs - b.dateMs);
+      const ev = events[0];
+      const daysOut = Math.round((ev.dateMs - todayMs) / 86400000);
+      lots.push({
+        cusip: pos.cusip, description: pos.description, sector: pos.sector,
+        coupon: pos.coupon, par: pos.par || 0, marketValue: pos.marketValue || 0,
+        bookYield: pos.bookYield, eventType: ev.type, eventDate: ev.date,
+        daysOut, bucket: maturityCalendarBucketLabel(daysOut)
+      });
+    }
+    if (!lots.length) continue;
+    lots.sort((a, b) => a.daysOut - b.daysOut);
+    banks.push({
+      bankId,
+      name: summary.displayName || summary.name || 'Bank',
+      city: summary.city || '',
+      state, owner, status,
+      reportDate: parsed.asOfDate || row.reportDate || '',
+      lotCount: lots.length,
+      par: lots.reduce((s, l) => s + (l.par || 0), 0),
+      marketValue: lots.reduce((s, l) => s + (l.marketValue || 0), 0),
+      lots
+    });
+  }
+
+  banks.sort((a, b) => b.par - a.par);
+  return {
+    available: true, generatedAt, windowDays,
+    importedAt: manifest.importedAt || '',
+    owners: Array.from(owners).sort(),
+    banks,
+    totals: {
+      bankCount: banks.length,
+      lotCount: banks.reduce((s, b) => s + b.lotCount, 0),
+      par: banks.reduce((s, b) => s + b.par, 0),
+      marketValue: banks.reduce((s, b) => s + b.marketValue, 0)
+    }
+  };
+}
+
 // Strict numeric coercion for the portfolio review path.
 // Unlike numericValue() above, this returns null for null/''/undefined
 // instead of coercing them to 0. The sector parser leaves yield/duration
@@ -8323,6 +8441,10 @@ const server = http.createServer(async (req, res) => {
     // ---- Bond Swap proposals (tab under Strategies; routes namespaced
     // under /api/swap-proposals so they don't tangle with the existing
     // /api/strategies/:id catchall below.) ----
+
+    if (pathname === '/api/maturity-calendar' && req.method === 'GET') {
+      return sendJSON(res, 200, buildMaturityCalendar(query));
+    }
 
     if (pathname === '/api/swap-proposals/eligible-banks' && req.method === 'GET') {
       return sendJSON(res, 200, { banks: listSwapEligibleBanks() });

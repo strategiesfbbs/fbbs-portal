@@ -126,6 +126,9 @@
         <a class="nav-link nav-minor" data-page="peer-groups" href="#peer-groups">
           <span class="nav-label">Peer Groups</span>
         </a>
+        <a class="nav-link nav-minor" data-page="maturity-calendar" href="#maturity-calendar">
+          <span class="nav-label">Maturity Calendar</span>
+        </a>
       </div>
     </div>
 
@@ -754,6 +757,49 @@
       </section>
       <div id="reportsPanelParking" hidden></div>
     </section>
+  </div>
+</div>
+
+<!-- ========== MATURITY CALENDAR PAGE ========== -->
+<div class="page" id="p-maturity-calendar">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Maturity &amp; Call <strong>Calendar</strong></h2>
+        <p class="hero-sub">Covered banks with bonds maturing or first-callable inside the window &mdash; reinvestment money coming free, and a reason to call.</p>
+      </div>
+      <div class="hero-stat">
+        <span id="maturityCalHeroStat">&mdash;</span>
+        <small>Banks in window</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="maturity-cal-controls" id="maturityCalControls">
+      <div class="mc-control">
+        <label>Window</label>
+        <div class="mc-window-toggle" id="maturityCalWindow" role="group" aria-label="Horizon window">
+          <button type="button" data-window="30">30d</button>
+          <button type="button" data-window="60">60d</button>
+          <button type="button" class="active" data-window="90">90d</button>
+          <button type="button" data-window="180">180d</button>
+        </div>
+      </div>
+      <div class="mc-control">
+        <label for="maturityCalOwner">Owner</label>
+        <select id="maturityCalOwner"><option value="">All owners</option></select>
+      </div>
+      <div class="mc-control">
+        <label for="maturityCalSector">Sector</label>
+        <select id="maturityCalSector"><option value="">All sectors</option></select>
+      </div>
+      <div class="mc-control mc-control-actions">
+        <button type="button" class="small-btn" id="maturityCalExport">Export CSV</button>
+      </div>
+    </div>
+    <p class="maturity-cal-meta" id="maturityCalMeta"></p>
+    <section id="maturityCalApp" aria-label="Maturity and call calendar"></section>
   </div>
 </div>
 
