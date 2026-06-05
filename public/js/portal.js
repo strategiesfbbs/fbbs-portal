@@ -17443,6 +17443,77 @@
     return `<div class="exec-notice${danger ? ' danger' : ''}"><h3>${escapeHtml(title)}</h3><p>${msg}</p></div>`;
   }
 
+  // Render one leg of the capital waterfall: bars scaled to the largest magnitude
+  // in the leg; negatives (credits / reductions) get the success colour.
+  function execBridgeLeg(steps) {
+    if (!steps || !steps.length) return '';
+    const maxAbs = Math.max.apply(null, steps.map(s => Math.abs(s.value || 0)).concat([1]));
+    return steps.map(s => {
+      const w = Math.max(2, Math.round(Math.abs(s.value || 0) / maxAbs * 100));
+      const neg = (s.value || 0) < 0;
+      return `<div class="exec-wf-row ${s.kind || ''}">
+        <span class="exec-wf-lbl">${escapeHtml(s.label)}</span>
+        <span class="exec-wf-bar"><i class="${neg ? 'neg' : ''}" style="width:${w}%"></i></span>
+        <span class="exec-wf-val ${neg ? 'neg' : ''}">${execMoney(s.value)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  // Horizontal maturity ladder: net MV per bucket, bar scaled to largest |MV|.
+  function execLadder(buckets) {
+    if (!buckets || !buckets.length) return '';
+    const maxAbs = Math.max.apply(null, buckets.map(b => Math.abs(b.mktValue || 0)).concat([1]));
+    return `<div class="exec-ladder">` + buckets.map(b => {
+      const w = Math.max(1, Math.round(Math.abs(b.mktValue || 0) / maxAbs * 100));
+      const neg = (b.mktValue || 0) < 0;
+      return `<div class="exec-ladder-row">
+        <span class="exec-ladder-lbl">${escapeHtml(b.label)}</span>
+        <span class="exec-ladder-bar"><i class="${neg ? 'neg' : ''}" style="width:${w}%"></i></span>
+        <span class="exec-ladder-val ${neg ? 'neg' : ''}">${execMoney(b.mktValue)}<em>${b.positions || 0}</em></span>
+      </div>`;
+    }).join('') + `</div>`;
+  }
+
+  // One KPI sparkline (bar-per-snapshot) for the trend card. Bars scale to the
+  // largest |value| in the series; the latest is highlighted, negatives flagged.
+  function execTrendChart(label, points, fmt) {
+    const vals = points.map(p => p.v).filter(v => v != null && isFinite(v));
+    if (!vals.length) return '';
+    const max = Math.max.apply(null, vals.map(Math.abs).concat([1]));
+    const last = points[points.length - 1];
+    const first = points.find(p => p.v != null);
+    const chg = (first && last && first.v != null && last.v != null) ? last.v - first.v : null;
+    const chip = chg == null || chg === 0 ? '' : `<span class="exec-delta ${chg > 0 ? 'good' : 'bad'}">${chg > 0 ? '▲' : '▼'} ${fmt(Math.abs(chg))}</span>`;
+    const bars = points.map((p, i) => {
+      const h = p.v == null ? 0 : Math.max(3, Math.round(Math.abs(p.v) / max * 100));
+      const cls = (i === points.length - 1 ? 'last ' : '') + ((p.v || 0) < 0 ? 'neg' : '');
+      return `<span class="exec-trend-bar ${cls}" style="height:${h}%" title="${escapeHtml(p.date || '')}: ${p.v == null ? '—' : fmt(p.v)}"></span>`;
+    }).join('');
+    return `<div class="exec-trend">
+      <div class="exec-trend-head"><span>${escapeHtml(label)}</span><strong>${last && last.v != null ? fmt(last.v) : '—'}</strong></div>
+      <div class="exec-trend-bars">${bars}</div>
+      <div class="exec-trend-foot">${chip || '<span class="exec-delta flat">▬</span>'}<span>${points.length} pts</span></div>
+    </div>`;
+  }
+
+  // Segmented bar + legend for the fixed/floating/etc. coupon-type mix.
+  function execCouponMix(mix) {
+    const items = (mix || []).filter(m => m.mktValue);
+    if (!items.length) return '';
+    const total = items.reduce((a, m) => a + Math.abs(m.mktValue || 0), 0) || 1;
+    const seg = items.map((m, i) => `<span class="seg seg-${i % 5}" style="width:${Math.max(1, Math.round(Math.abs(m.mktValue) / total * 100))}%" title="${escapeHtml(m.type)} ${execMoney(m.mktValue)}"></span>`).join('');
+    const legend = items.map((m, i) => `<li><i class="seg-${i % 5}"></i>${escapeHtml(m.type)} <strong>${execPct(Math.abs(m.mktValue) / total)}</strong></li>`).join('');
+    return `<div class="exec-segbar">${seg}</div><ul class="exec-seglegend">${legend}</ul>`;
+  }
+
+  function execTone(tone) {
+    return tone === 'bad' ? 'bad' : tone === 'warn' || tone === 'watch' ? 'warn' : 'ok';
+  }
+
+  function execDv01(n) {
+    return n == null || !isFinite(n) ? '—' : `${Number(n).toFixed(1)}/bp`;
+  }
+
   function bindExecUploadForm() {
     const form = document.getElementById('execUploadForm');
     if (!form || form.dataset.bound) return;
@@ -17511,6 +17582,24 @@
     const nameWarn = (d.warnings || []).find(w => /names not yet mapped/.test(w));
     const banner = nameWarn ? `<div class="exec-banner">⚠ ${esc(nameWarn)}</div>` : '';
 
+    const brief = d.ceoBrief || {};
+    const briefHighlights = (brief.highlights || []).map(h => `
+      <div class="exec-ceo-tile ${execTone(h.tone)}">
+        <span>${esc(h.label)}</span>
+        <strong>${esc(h.value)}</strong>
+        <em>${esc(h.detail || '')}</em>
+      </div>`).join('');
+    const briefLines = (brief.decisionText || []).map(x => `<li>${esc(x)}</li>`).join('');
+    const ceoBrief = `
+      <section class="exec-card exec-ceo-brief ${execTone(brief.tone)}">
+        <div class="exec-ceo-head">
+          <div><h3>CEO Brief</h3><p>${esc(brief.headline || 'Executive summary is available for review.')}</p></div>
+          <span class="exec-brief-pill ${execTone(brief.tone)}">${execTone(brief.tone) === 'bad' ? 'Attention' : execTone(brief.tone) === 'warn' ? 'Watch' : 'Stable'}</span>
+        </div>
+        <div class="exec-ceo-grid">${briefHighlights}</div>
+        ${briefLines ? `<ul class="exec-brief-lines">${briefLines}</ul>` : ''}
+      </section>`;
+
     const watch = (d.narrative && d.narrative.watchItems) || [];
     const narrative = `
       <section class="exec-card exec-narrative">
@@ -17528,9 +17617,100 @@
         ${tile('Total Requirement', execMoney(cap.totalRequirement), execDelta(cap.deltas && cap.deltas.totalRequirement, { invertColor: true }))}
         ${tile('Inventory MV', execMoney(risk.totalMktValue), execDelta(risk.deltas && risk.deltas.totalMktValue))}
         ${tile('Unrealized P&L', execMoney(pnl.unrealizedTotal), execDelta(pnl.deltas && pnl.deltas.unrealizedTotal))}
-        ${tile('Markup Revenue', execMoney(rev.dayTotal), execDelta(rev.deltas && rev.deltas.dayTotal), `MTD ${execMoney(rev.mtd)}`)}
+        ${tile('Markup Revenue', execMoney(rev.dayTotal), execDelta(rev.deltas && rev.deltas.dayTotal), (rev.markup != null && rev.commission != null) ? `MTD ${execMoney(rev.mtd)} · ${execMoney(rev.markup)} mkup / ${execMoney(rev.commission)} comm` : `MTD ${execMoney(rev.mtd)}`)}
         ${tile('Activity', `${act.ticketCount || 0} tix`, '', `${execPct(cf.customerPct)} cust / ${execPct(cf.dealerPct)} dlr`)}
       </section>`;
+
+    const shock = d.riskShock || null;
+    const hedge = d.hedgeWatch || null;
+    let riskHedge = '';
+    if (shock || hedge) {
+      const shockRows = shock ? (shock.shocks || []).map(s => `
+        <tr><td class="num">${s.shockBp > 0 ? '+' : ''}${s.shockBp} bp</td><td class="num ${(s.estimatedPnl || 0) < 0 ? 'neg' : ''}">${execMoney(s.estimatedPnl)}</td><td class="num">${execPct(s.pctExcessAtRisk)}</td><td class="num">${execMoney(s.proFormaExcess)}</td></tr>`).join('') : '';
+      const sectorRows2 = shock ? (shock.bySector || []).slice(0, 5).map(s => `
+        <tr><td>${esc(s.sector)}</td><td class="num">${execDv01(s.dv01)}</td><td class="num ${(s.up100Pnl || 0) < 0 ? 'neg' : ''}">${execMoney(s.up100Pnl)}</td><td class="num">${execPct(s.pctOfAbsDv01)}</td></tr>`).join('') : '';
+      const hedgeRows = hedge ? (hedge.scenarios || []).map(h => `
+        <tr><td class="num">${execPct(h.targetRatio, 0)}</td><td class="num">${execDv01(h.dv01ToOffset)}</td><td class="num">${execDv01(h.residualDv01)}</td><td class="num">${execMoney(h.residualUp100Loss)}</td></tr>`).join('') : '';
+      const needs = hedge ? (hedge.dataNeeded || []).map(x => `<li>${esc(x)}</li>`).join('') : '';
+      riskHedge = `
+        <section class="exec-card"><h3>Risk Shock &amp; Hedge Watch</h3>
+          <div class="exec-two-col">
+            <div><h4>Parallel-rate shock</h4>
+              <table class="exec-table"><thead><tr><th class="num">Shock</th><th class="num">Est. P&amp;L</th><th class="num">% Excess</th><th class="num">Pro-forma excess</th></tr></thead><tbody>${shockRows || '<tr><td colspan="4" class="muted">—</td></tr>'}</tbody></table>
+              <p class="exec-foot">${esc((shock && shock.basis) || '')}</p>
+            </div>
+            <div><h4>DV01 by sector</h4>
+              <table class="exec-table"><thead><tr><th>Sector</th><th class="num">DV01</th><th class="num">+100 bp</th><th class="num">Share</th></tr></thead><tbody>${sectorRows2 || '<tr><td colspan="4" class="muted">—</td></tr>'}</tbody></table>
+            </div>
+          </div>
+          <div class="exec-two-col exec-subgrid">
+            <div><h4>Hedge equivalents</h4>
+              <div class="exec-hedge-posture ${execTone(hedge && hedge.posture === 'Review' ? 'warn' : 'ok')}">
+                <strong>${esc((hedge && hedge.posture) || '—')}</strong><span>current net ${execDv01(hedge ? hedge.netDv01 : null)} · +100 bp loss ${execMoney(hedge ? hedge.up100Loss : null)}</span>
+              </div>
+              <table class="exec-table"><thead><tr><th class="num">Target</th><th class="num">Offset</th><th class="num">Residual</th><th class="num">Residual +100</th></tr></thead><tbody>${hedgeRows || '<tr><td colspan="4" class="muted">—</td></tr>'}</tbody></table>
+            </div>
+            <div><h4>Hedge sheet data to add</h4><ul class="exec-data-needed">${needs || '<li>Upload current hedge positions to replace rough DV01-only equivalents.</li>'}</ul><p class="exec-foot">${esc((hedge && hedge.note) || '')}</p></div>
+          </div>
+        </section>`;
+    }
+
+    const rq = d.revenueQuality || {};
+    const rqRows = (rq.byType || []).map(t => `<tr><td>${esc(t.type)}</td><td class="num">${execMoney(t.principal)}</td><td class="num">${execPct(t.pctPrincipal)}</td><td class="num">${t.tickets}</td></tr>`).join('');
+    const revenueQuality = `
+      <section class="exec-card"><h3>Revenue Quality</h3>
+        <div class="exec-book-kpis">
+          <div><span>Revenue / Ticket</span><strong>${execMoney(rq.revenuePerTicket)}</strong></div>
+          <div><span>Revenue / $1MM</span><strong>${execMoney(rq.revenuePerMillionPrincipal)}</strong></div>
+          <div><span>Markup Mix</span><strong>${execPct(rq.markupPct)}</strong></div>
+          <div><span>Customer Flow</span><strong>${execPct(rq.customerPct)}</strong></div>
+        </div>
+        <table class="exec-table"><thead><tr><th>Flow type</th><th class="num">Gross principal</th><th class="num">Mix</th><th class="num">Tix</th></tr></thead><tbody>${rqRows || '<tr><td colspan="4" class="muted">—</td></tr>'}</tbody></table>
+      </section>`;
+
+    const mgmtRows = (d.managementActions || []).map(a => `<tr><td><span class="exec-flag ${execTone(a.severity)}">${esc(execTone(a.severity))}</span></td><td>${esc(a.title)}<p class="exec-foot">${esc(a.detail || '')}</p></td><td>${esc(a.owner || '')}</td></tr>`).join('');
+    const managementActions = `
+      <section class="exec-card"><h3>Management Actions</h3>
+        <table class="exec-table"><thead><tr><th>Status</th><th>Item</th><th>Owner</th></tr></thead><tbody>${mgmtRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table>
+      </section>`;
+
+    const tr = d.trend || [];
+    let trend = '';
+    if (tr.length >= 2) {
+      const metrics = [
+        { label: 'Excess (Call)', key: 'excessCall' },
+        { label: 'Total Requirement', key: 'totalRequirement' },
+        { label: 'Inventory MV', key: 'inventoryMV' },
+        { label: 'Day Revenue', key: 'revenueDay' },
+      ];
+      const charts = metrics.map(m => execTrendChart(m.label, tr.map(p => ({ date: p.asOfDate, v: p[m.key] })), execMoney)).join('');
+      trend = `<section class="exec-card"><h3>Trend <span class="exec-foot" style="font-weight:400">last ${tr.length} snapshots, oldest→newest</span></h3>
+        <div class="exec-trend-grid">${charts}</div></section>`;
+    }
+
+    const pos = d.positions;
+    let positionsCard = '';
+    if (pos && (pos.byType || []).length) {
+      const rows = pos.byType.map(t => `<tr><td>${esc(t.type)}</td><td class="num">${execMoney(t.book)}</td><td class="num">${t.positions}</td><td class="num">${t.accounts}</td></tr>`).join('');
+      positionsCard = `<section class="exec-card"><h3>Positions by Account Type</h3>
+        <table class="exec-table"><thead><tr><th>Account type</th><th class="num">Book value</th><th class="num">Positions</th><th class="num">Accts</th></tr></thead><tbody>${rows}</tbody></table>
+        <p class="exec-foot">Total book ${execMoney(pos.totalBook)} across ${pos.accountCount} account(s) · from the margin workbook FT-60 detail.</p></section>`;
+    }
+
+    const br = cap.bridge;
+    let bridge = '';
+    if (br && ((br.requirement || []).length || (br.excess || []).length)) {
+      const recon = br.reconciles === false ? ` <span class="exec-chip warn-chip">legs don’t tie</span>` : '';
+      const reqLeg = (br.requirement || []).length
+        ? `<div><h4>How the requirement is built</h4>${execBridgeLeg(br.requirement)}</div>` : '';
+      const excLeg = (br.excess || []).length
+        ? `<div><h4>Capital position</h4>${execBridgeLeg(br.excess)}
+            <p class="exec-foot">Buffer ${execPct(cap.bufferPct)} of equity${cap.pershingVariance != null ? ` · Pershing variance ${execMoney(cap.pershingVariance)}` : ''}</p></div>` : '';
+      bridge = `
+        <section class="exec-card"><h3>Capital Bridge${recon}</h3>
+          <div class="exec-two-col">${reqLeg}${excLeg}</div>
+        </section>`;
+    }
 
     const sectorRows = (risk.bySector || []).map(s => `
       <tr><td>${esc(s.sector)}</td><td class="num">${execMoney(s.mktValue)}</td><td class="num">${s.dv01 != null ? s.dv01.toFixed(1) : '—'}</td><td class="num">${execMoney(s.requirement)}</td><td class="num ${(s.pnl || 0) < 0 ? 'neg' : ''}">${execMoney(s.pnl)}</td></tr>`).join('');
@@ -17549,6 +17729,58 @@
         </div>
       </section>`;
 
+    const bpd = d.bookProfile || null;
+    let book = '';
+    if (bpd && (bpd.waYield != null || bpd.waSpread != null || bpd.waDuration != null || bpd.waCoupon != null || (bpd.maturityLadder || []).length)) {
+      const cell = (lbl, val) => `<div><span>${lbl}</span><strong>${val}</strong></div>`;
+      const cells = cell('Book Yield', bpd.waYield != null ? bpd.waYield.toFixed(2) + '%' : '—')
+        + cell('Avg Spread', bpd.waSpread != null ? bpd.waSpread.toFixed(0) + ' bp' : '—')
+        + cell('Avg Coupon', bpd.waCoupon != null ? bpd.waCoupon.toFixed(2) + '%' : '—')
+        + cell('Avg Duration', bpd.waDuration != null ? bpd.waDuration.toFixed(2) + ' yr' : '—')
+        + cell('DV01', risk.portfolioDv01 != null ? risk.portfolioDv01.toFixed(1) + '/bp' : '—');
+      const ladderBlock = (bpd.maturityLadder || []).length
+        ? `<h4>Maturity ladder &mdash; net MV by years to maturity</h4>${execLadder(bpd.maturityLadder)}`
+        : `<p class="exec-foot">Maturity ladder unavailable &mdash; the sector blotter carried no maturity dates for the priced book.</p>`;
+      const mixBlock = (bpd.couponMix || []).some(m => m.mktValue)
+        ? `<h4>Coupon type (by MV)</h4>${execCouponMix(bpd.couponMix)}`
+        : '';
+      const bodyBlock = mixBlock
+        ? `<div class="exec-two-col"><div>${ladderBlock}</div><div>${mixBlock}</div></div>`
+        : ladderBlock;
+      book = `
+        <section class="exec-card"><h3>Book Profile</h3>
+          <div class="exec-book-kpis">${cells}</div>
+          ${bodyBlock}
+          <p class="exec-foot">MV-weighted across priced inventory · yield ${esc(bpd.yieldCoverage || '—')} · duration ${esc(bpd.durationCoverage || '—')}${bpd.couponCoverage ? ` · coupon ${esc(bpd.couponCoverage)}` : ''}${bpd.asOf ? ` · as of ${esc(bpd.asOf)}` : ''}</p>
+        </section>`;
+    }
+
+    const comp = d.composition, calls = d.upcomingCalls;
+    const hasComp = comp && (comp.byIndustryGroup || []).length;
+    const hasCalls = calls && (calls.items || []).length;
+    let compCard = '';
+    if (hasComp || hasCalls) {
+      const compRows = hasComp
+        ? comp.byIndustryGroup.map(g => `<tr><td>${esc(g.group)}</td><td class="num ${(g.mktValue || 0) < 0 ? 'neg' : ''}">${execMoney(g.mktValue)}</td><td class="num">${g.positions}</td></tr>`).join('')
+        : '<tr><td colspan="3" class="muted">—</td></tr>';
+      const callRows = hasCalls
+        ? calls.items.map(c => `<tr><td>${esc(c.issuer)}</td><td>${esc(c.callDate)}</td><td class="num">${c.daysToCall}d</td><td class="num">${execMoney(c.mktValue)}</td></tr>`).join('')
+        : `<tr><td colspan="4" class="muted">No calls within ${calls ? calls.withinDays : 90}d</td></tr>`;
+      compCard = `
+        <section class="exec-card"><h3>Composition &amp; Calls</h3>
+          <div class="exec-two-col">
+            <div><h4>By industry group (MV)</h4>
+              <table class="exec-table"><thead><tr><th>Industry</th><th class="num">MV</th><th class="num">Pos</th></tr></thead><tbody>${compRows}</tbody></table>
+              ${hasComp ? `<p class="exec-foot">Industry coverage ${esc(comp.coverage || '—')}.</p>` : ''}
+            </div>
+            <div><h4>Upcoming calls${calls ? ` (next ${calls.withinDays}d)` : ''}</h4>
+              <table class="exec-table"><thead><tr><th>Issuer</th><th>Call</th><th class="num">In</th><th class="num">MV</th></tr></thead><tbody>${callRows}</tbody></table>
+              ${hasCalls ? `<p class="exec-foot">${calls.count} bond(s), ${execMoney(calls.totalMktValue)} MV callable within ${calls.withinDays}d.</p>` : ''}
+            </div>
+          </div>
+        </section>`;
+    }
+
     const repRows = (rev.bySalesperson || []).filter(r => r.revenue).map(r => `<tr><td>${esc(r.name || r.code)}</td><td class="num">${execMoney(r.revenue)}</td><td class="num">${r.tickets}</td></tr>`).join('');
     const deskRows = (rev.byDesk || []).filter(r => r.revenue).map(r => `<tr><td>${esc(r.name || r.code)}</td><td class="num">${execMoney(r.revenue)}</td><td class="num">${r.tickets}</td></tr>`).join('');
     const netRows = (act.netBuySellBySector || []).map(s => `<tr><td>${esc(s.sector)}</td><td class="num ${(s.net || 0) < 0 ? 'neg' : ''}">${execMoney(s.net)}</td><td class="num">${s.tickets}</td></tr>`).join('');
@@ -17561,6 +17793,7 @@
           <div><h4>Revenue by desk</h4><table class="exec-table"><thead><tr><th>Desk</th><th class="num">Rev.</th><th class="num">Tix</th></tr></thead><tbody>${deskRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
           <div><h4>Net buy/sell by sector</h4><table class="exec-table"><thead><tr><th>Sector</th><th class="num">Net</th><th class="num">Tix</th></tr></thead><tbody>${netRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
         </div>
+        ${(rev.markup != null && rev.commission != null && (rev.markup || rev.commission)) ? `<p class="exec-foot">Today's ${execMoney(rev.dayTotal)} revenue = ${execMoney(rev.markup)} principal markup + ${execMoney(rev.commission)} agency commission.</p>` : ''}
         <div class="exec-two-col">
           <div><h4>Customer vs dealer/street</h4>
             <div class="exec-flow-bar"><span style="width:${custW}%"></span></div>
@@ -17569,6 +17802,17 @@
           <div><h4>Top counterparties</h4><table class="exec-table"><thead><tr><th>Counterparty</th><th class="num">Principal</th><th class="num">%</th></tr></thead><tbody>${cpRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
         </div>
       </section>`;
+
+    const settle = d.settlement;
+    let settleCard = '';
+    if (settle && (settle.items || []).length) {
+      const rows = settle.items.map(s => `<tr><td>${esc(s.settleDate)}</td><td class="num ${(s.net || 0) < 0 ? 'neg' : ''}">${execMoney(s.net)}</td><td class="num">${execMoney(s.gross)}</td><td class="num">${s.tickets}</td></tr>`).join('');
+      settleCard = `
+        <section class="exec-card"><h3>Settlement Pipeline</h3>
+          <table class="exec-table"><thead><tr><th>Settle date</th><th class="num">Net</th><th class="num">Gross</th><th class="num">Tix</th></tr></thead><tbody>${rows}</tbody></table>
+          <p class="exec-foot">${settle.unsettledCount} ticket(s) settling after COB ${esc(settle.asOf || '')} · net ${execMoney(settle.totalNet)} / gross ${execMoney(settle.totalGross)}.</p>
+        </section>`;
+    }
 
     const mo = d.marketOverlay;
     let market;
@@ -17612,7 +17856,7 @@
     const sf = d.sourceFiles || {};
     const coverage = `<p class="exec-foot exec-coverage">Source: ${esc(sf.margin || '—')} · sector lookup ${esc((d.coverage && d.coverage.sectorLookup) || '—')} · haircut detail ${esc((d.coverage && d.coverage.haircutDetail) || '—')} · generated ${esc(d.generatedAt || '')}</p>`;
 
-    body.innerHTML = banner + narrative + kpis + riskCapital + activity + market + exceptions + coverage;
+    body.innerHTML = banner + ceoBrief + kpis + riskHedge + managementActions + revenueQuality + trend + narrative + bridge + positionsCard + riskCapital + book + compCard + activity + settleCard + market + exceptions + coverage;
   }
 
   async function loadAuditLog() {

@@ -8062,6 +8062,8 @@ const server = http.createServer(async (req, res) => {
           error: date ? `No executive summary for ${date}` : 'No executive summary yet — upload today\'s four files on the Exec Summary tab.'
         });
       }
+      // Attach a compact KPI trend (last ~30 snapshots) for the trend card.
+      try { summary.trend = execSummaryStore.getTrend(EXEC_SUMMARY_DIR, summary.asOfDate, 30); } catch (_) { /* trend optional */ }
       return sendJSON(res, 200, summary);
     }
 
