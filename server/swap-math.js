@@ -378,6 +378,26 @@ function teYield(yieldPct, taxRatePct) {
   return y / (1 - taxFrac);
 }
 
+function isTaxExemptLeg(leg) {
+  if (!leg || typeof leg !== 'object') return false;
+  const explicit = [leg.taxStatus, leg.taxTreatment, leg.taxableStatus]
+    .map(v => String(v || '').toLowerCase())
+    .find(Boolean);
+  if (explicit && /\btaxable\b/.test(explicit) && !/tax[-\s]?exempt/.test(explicit)) return false;
+  if (explicit && /tax[-\s]?exempt|exempt/.test(explicit)) return true;
+  const text = [leg.sector, leg.section, leg.description]
+    .map(v => String(v || '').toLowerCase())
+    .join(' ');
+  if (/\btaxable\s+muni/.test(text)) return false;
+  return /\bexempt\s+muni\b|tax[-\s]?exempt|\bmunicipals\b|\bbq\s+muni\b|\bmuni\s+bq\b/.test(text);
+}
+
+function taxEquivalentYieldForLeg(leg, yieldPct, taxRatePct) {
+  const y = num(yieldPct);
+  if (y == null) return null;
+  return isTaxExemptLeg(leg) ? teYield(y, taxRatePct) : y;
+}
+
 // FBBS verified tax-equivalent yield for (bank-qualified) municipals. Beyond the
 // plain gross-up `teYield`, this nets the TEFRA interest-expense disallowance the
 // desk uses on the Portfolio Filtering tab:
@@ -617,7 +637,9 @@ function aggregateLegs(legs, taxRate) {
   if (!Array.isArray(legs) || !legs.length) return null;
   let parSum = 0, bvSum = 0, mvSum = 0, accruedSum = 0;
   let weightedBkYld = 0, weightedMktYld = 0, weightedAvgLife = 0, weightedDuration = 0;
+  let weightedTeBkYld = 0, weightedTeMktYld = 0;
   let bkYldWeight = 0, mktYldWeight = 0, alWeight = 0, durWeight = 0;
+  let teBkYldWeight = 0, teMktYldWeight = 0;
   for (const leg of legs) {
     const par = num(leg.par) || 0;
     parSum += par;
@@ -628,8 +650,16 @@ function aggregateLegs(legs, taxRate) {
     if (leg.accrued != null) accruedSum += num(leg.accrued) || 0;
     const bky = num(leg.bookYieldYtm) ?? num(leg.bookYieldYtw);
     const mky = num(leg.marketYieldYtw) ?? num(leg.marketYieldYtm);
-    if (bky != null && bv != null) { weightedBkYld += bky * bv; bkYldWeight += bv; }
-    if (mky != null && mv != null) { weightedMktYld += mky * mv; mktYldWeight += mv; }
+    if (bky != null && bv != null) {
+      weightedBkYld += bky * bv; bkYldWeight += bv;
+      const te = taxEquivalentYieldForLeg(leg, bky, taxRate);
+      if (te != null) { weightedTeBkYld += te * bv; teBkYldWeight += bv; }
+    }
+    if (mky != null && mv != null) {
+      weightedMktYld += mky * mv; mktYldWeight += mv;
+      const te = taxEquivalentYieldForLeg(leg, mky, taxRate);
+      if (te != null) { weightedTeMktYld += te * mv; teMktYldWeight += mv; }
+    }
     const al = num(leg.averageLife);
     if (al != null && par) { weightedAvgLife += al * par; alWeight += par; }
     const dur = num(leg.modifiedDuration) || num(leg.effectiveDuration);
@@ -645,8 +675,8 @@ function aggregateLegs(legs, taxRate) {
     gainLoss: (bvSum && mvSum) ? mvSum - bvSum : null,
     bookYield: bkYld,
     marketYield: mktYld,
-    teBookYield: bkYld == null || taxRate == null ? null : teYield(bkYld, taxRate),
-    teMarketYield: mktYld == null || taxRate == null ? null : teYield(mktYld, taxRate),
+    teBookYield: teBkYldWeight ? weightedTeBkYld / teBkYldWeight : null,
+    teMarketYield: teMktYldWeight ? weightedTeMktYld / teMktYldWeight : null,
     averageLife: alWeight ? weightedAvgLife / alWeight : null,
     duration: durWeight ? weightedDuration / durWeight : null
   };
@@ -1026,6 +1056,8 @@ module.exports = {
   inferLastCouponDate,
   // Yield
   teYield,
+  isTaxExemptLeg,
+  taxEquivalentYieldForLeg,
   municipalTeYield,
   reinvestBreakevenYears,
   yieldFromPriceAndMaturity,

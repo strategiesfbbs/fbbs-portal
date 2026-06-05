@@ -388,6 +388,19 @@ test('aggregateLegs value-weights book yield', () => {
   near(agg.marketYield, 5, 0.01);
 });
 
+test('aggregateLegs only gross-ups tax-exempt TE yields', () => {
+  const taxable = m.aggregateLegs([
+    { par: 1_000_000, marketPrice: 100, marketYieldYtw: 5, sourceKind: 'manual' }
+  ], 21);
+  near(taxable.marketYield, 5, 0.001);
+  near(taxable.teMarketYield, 5, 0.001, 'manual hypothetical buy keeps typed yield');
+
+  const exempt = m.aggregateLegs([
+    { par: 1_000_000, marketPrice: 100, marketYieldYtw: 5, sector: 'Exempt Muni' }
+  ], 21);
+  near(exempt.teMarketYield, m.teYield(5, 21), 0.001, 'exempt muni gets TE gross-up');
+});
+
 test('swapSummary roundtrips a simple 1×1 swap', () => {
   const sells = [{
     par: 1_000_000, bookPrice: 100, marketPrice: 98,

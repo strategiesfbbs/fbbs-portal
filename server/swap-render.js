@@ -144,8 +144,8 @@ function deriveLegRow(leg, taxRate) {
   const proceeds = swapMath.legProceeds({ marketValue, accrued: leg.accrued });
   const bookYield = leg.bookYieldYtm != null ? leg.bookYieldYtm : leg.bookYieldYtw;
   const marketYield = leg.marketYieldYtw != null ? leg.marketYieldYtw : leg.marketYieldYtm;
-  const teBookYield = taxRate != null && bookYield != null ? swapMath.teYield(bookYield, taxRate) : bookYield;
-  const teMarketYield = taxRate != null && marketYield != null ? swapMath.teYield(marketYield, taxRate) : marketYield;
+  const teBookYield = swapMath.taxEquivalentYieldForLeg(leg, bookYield, taxRate);
+  const teMarketYield = swapMath.taxEquivalentYieldForLeg(leg, marketYield, taxRate);
   return {
     cusip: leg.cusip || '',
     sector: leg.sector || '',
@@ -185,8 +185,8 @@ function renderTotalsRow(label, agg, taxRate) {
     maturity: '',
     callDate: '',
     par: agg.par,
-    teBookYield: taxRate != null && agg.bookYield != null ? swapMath.teYield(agg.bookYield, taxRate) : agg.bookYield,
-    teMarketYield: taxRate != null && agg.marketYield != null ? swapMath.teYield(agg.marketYield, taxRate) : agg.marketYield,
+    teBookYield: agg.teBookYield,
+    teMarketYield: agg.teMarketYield,
     bookPrice: null,
     marketPrice: null,
     averageLife: agg.averageLife,
