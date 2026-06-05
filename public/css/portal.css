@@ -3529,6 +3529,29 @@ summary:focus-visible,
   font-weight: 800;
   min-width: 300px;
 }
+.muni-map-link {
+  background: transparent;
+  border: 0;
+  color: var(--text, #1f2925);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+.muni-map-link:hover,
+.muni-map-link:focus-visible {
+  color: var(--green, #003f2a);
+  outline: none;
+  text-decoration: underline;
+}
+.muni-row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.muni-map-btn {
+  white-space: nowrap;
+}
 .muni-table .qnty-cell {
   font-variant-numeric: tabular-nums;
   font-family: 'Courier New', monospace;

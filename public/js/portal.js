@@ -12618,6 +12618,20 @@
     });
   }
 
+  // Issuer link + pin button on each muni row → jump to the US Bank Map with
+  // this deal located. Passes the whole offering object (mapsOpenDeal stashes
+  // it) so a deal from an archived package — not in today's map inventory —
+  // still anchors; the #maps?deal=CUSIP hash keeps the jump bookmarkable.
+  function wireMuniMapLinks(container, rows) {
+    if (!container) return;
+    container.querySelectorAll('[data-muni-map-idx]').forEach(el => {
+      el.addEventListener('click', () => {
+        const offering = rows[Number(el.dataset.muniMapIdx)];
+        if (offering) mapsOpenDeal(offering);
+      });
+    });
+  }
+
   async function copyBankAssistantNote() {
     const note = bankAssistantLastResponse && bankAssistantLastResponse.callNote;
     const btn = document.getElementById('bankAssistantCopyBtn');
@@ -15635,7 +15649,7 @@
           <td class="rating-cell">${ratingCell}</td>
           <td style="text-align:right" class="qnty-cell">${o.quantity.toLocaleString()}</td>
           <td>${escapeHtml(o.issuerState)}</td>
-          <td class="issuer-cell">${escapeHtml(o.issuerName)}</td>
+          <td class="issuer-cell"><button type="button" class="muni-map-link" data-muni-map-idx="${idx}" title="Show this deal on the US Bank Map">${escapeHtml(o.issuerName)}</button></td>
           <td>${escapeHtml(o.issueType)}</td>
           <td style="text-align:right">${o.coupon.toFixed(3)}</td>
           <td>${formatNumericDate(o.maturity)}</td>
@@ -15647,11 +15661,12 @@
           <td style="text-align:right">${priceCell}</td>
           <td class="cusip-cell">${escapeHtml(o.cusip)}</td>
           <td>${creditCell}</td>
-          <td><button type="button" class="small-btn buyers-btn" data-buyers-product="muni" data-buyers-idx="${idx}">Find buyers</button></td>
+          <td><span class="muni-row-actions"><button type="button" class="small-btn muni-map-btn" data-muni-map-idx="${idx}" title="Show this deal on the US Bank Map"><span aria-hidden="true">&#128205;</span> Map</button><button type="button" class="small-btn buyers-btn" data-buyers-product="muni" data-buyers-idx="${idx}">Find buyers</button></span></td>
         </tr>
       `;
     }).join('');
     wireBuyersButtons(body, filtered);
+    wireMuniMapLinks(body, filtered);
   }
 
   function applyMuniFilters(offerings) {
@@ -18573,6 +18588,11 @@
     mapRevision: 0
   };
 
+  // Deal handed off from a "show on map" link in another page (e.g. the Muni
+  // Explorer). Carries the full offering so an archived deal that isn't in the
+  // map's current inventory can still be anchored; consumed by mapsApplyHashDeal.
+  let mapsPendingDeal = null;
+
   function mapsFieldFilterType(def) {
     if (!def) return 'text';
     return (def.type === 'money' || def.type === 'percent' || def.type === 'percentOf' || def.type === 'number')
@@ -19096,6 +19116,45 @@
     if (!anchor) showToast(`Found ${label}, but no mapped bank in that state to place it`, true);
   }
 
+  // Entry point for cross-page "show this deal on the map" links. Navigates to
+  // the map via a bookmarkable #maps?deal=CUSIP hash; loadMaps → mapsApplyHashDeal
+  // does the actual focus once the bank data is ready.
+  function mapsOpenDeal(muni) {
+    if (!muni) return;
+    mapsPendingDeal = muni;
+    const cusip = String(muni.cusip || '').trim();
+    const target = '#maps' + (cusip ? '?deal=' + encodeURIComponent(cusip) : '');
+    if (window.location.hash === target) {
+      // Re-clicking the same deal won't fire hashchange — route directly
+      // (updateHash:false preserves the ?deal= param so the focus still runs).
+      goTo('maps', { updateHash: false });
+    } else {
+      window.location.hash = target;
+    }
+  }
+
+  // Reads ?deal=CUSIP off the maps hash and focuses that muni deal. Prefers the
+  // object stashed by mapsOpenDeal (covers archived deals not in today's
+  // inventory); otherwise looks the CUSIP up in the loaded inventory so a
+  // pasted/bookmarked link still works for current deals.
+  function mapsApplyHashDeal() {
+    const params = hashParamsForPage('maps');
+    const cusip = String(params.get('deal') || '').trim().toUpperCase();
+    if (!cusip) return;
+    let muni = (mapsPendingDeal && String(mapsPendingDeal.cusip || '').trim().toUpperCase() === cusip)
+      ? mapsPendingDeal
+      : (mapsState.munis || []).find(m => String(m.cusip || '').trim().toUpperCase() === cusip) || null;
+    mapsPendingDeal = null;
+    if (!muni) {
+      showToast('That muni deal isn’t in the current map inventory.', true);
+      return;
+    }
+    const box = document.getElementById('mapsAreaSearchBox');
+    if (box) box.value = muni.cusip || '';
+    mapsState.muniMatches = [muni];
+    mapsSelectMuniDeal(muni);
+  }
+
   function mapsRunSearch() {
     const input = document.getElementById('mapsAreaSearchBox');
     const raw = input ? input.value.trim() : '';
@@ -19217,6 +19276,8 @@
     mapsState.muniMatches = [];
     mapsState.selectedBankId = '';
     mapsState.detailDismissed = false;
+    mapsPendingDeal = null;
+    replaceHashParams('maps', {});
     const input = document.getElementById('mapsAreaSearchBox');
     const radius = document.getElementById('mapsAreaRadius');
     if (input) input.value = '';
@@ -19335,6 +19396,7 @@
     if (mapsState.loading) return;
     if (mapsState.loaded) {
       renderMapsView();
+      mapsApplyHashDeal();
       return;
     }
     mapsState.loading = true;
@@ -19376,6 +19438,7 @@
       mapsBindHandlers();
       renderMapsOwnerOptions();
       renderMapsView();
+      mapsApplyHashDeal();
     } catch (err) {
       if (subtitle) subtitle.textContent = err.message || 'Failed to load bank data';
       const body = document.getElementById('mapsBankBody');
