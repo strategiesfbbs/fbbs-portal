@@ -9343,6 +9343,7 @@ module.exports = {
   readPackageDir,
   collectAgencyPackageFiles,
   findPackageFileForSlot,
+  sniffAgencyWorkbookSlot,
   findSwapCandidates,
   formatSwapCandidateLine,
   mapSwapHoldingPosition,

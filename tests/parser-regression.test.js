@@ -24,7 +24,8 @@ const {
   isSameOriginWrite,
   mapSwapHoldingPosition,
   readPackageDir,
-  collectAgencyPackageFiles
+  collectAgencyPackageFiles,
+  sniffAgencyWorkbookSlot
 } = require('../server/server');
 const { saveCdHistorySnapshot, summarizeWeeklyCdHistory } = require('../server/cd-history');
 const { importWeeklyCdWorksheet } = require('../server/cd-history-importer');
@@ -373,6 +374,35 @@ function assertAgenciesParser() {
   assert.strictEqual(bannerParsed.offerings[0].cusip, '3130ABCD1');
   assert(Math.abs(bannerParsed.offerings[0].ytm - 4.1) < 1e-9);
   assert(bannerParsed.warnings.some(warning => warning.includes('Bullet row 5: skipped')));
+
+  // YTM column-scale detection. The Bloomberg grid1 export delivers A YTM already
+  // in percent (3.327); the parser must NOT blindly *100 it (the old bug → 332.7%).
+  // Decided once per column from the sample median: >1 ⇒ already percent (kept).
+  const gridPercent = parseAgenciesFiles([{
+    filename: 'grid1_percent.xlsx',
+    buffer: workbookBuffer([
+      ['Tkr', 'Cpn', 'Mty', 'Nxt Call', 'Call Typ', 'A Px', 'A YTM', 'A YTNC', 'CUSIP'],
+      ['FHLB', 1, '7/27/2026', '6/27/2026', 'Monthly', 99.683, 3.327, 7.003, '3130ANDM9'],
+      ['FFCB', 4.5, '8/15/2028', '8/15/2026', 'Quarterly', 100.1, 4.45, 5.1, '3133EPXY8'],
+      ['FNMA', 3.5, '9/15/2029', '9/15/2026', 'Anytime', 99.2, 3.96, 4.8, '3135BAD01']
+    ])
+  }]);
+  assert.strictEqual(gridPercent.offerings.length, 3);
+  assert(Math.abs(gridPercent.offerings[0].ytm - 3.327) < 1e-9, `grid ytm kept as percent, got ${gridPercent.offerings[0].ytm}`);
+  assert(gridPercent.offerings.every(o => o.ytm > 0.1 && o.ytm < 25), 'grid ytm values land in the sane band');
+  assert.strictEqual(gridPercent.warnings.filter(w => /ytm/.test(w) && /outside/.test(w)).length, 0);
+
+  // Decimal column (legacy trader sheet) is still scaled up ×100 (median ≤1).
+  const gridDecimal = parseAgenciesFiles([{
+    filename: 'grid1_decimal.xlsx',
+    buffer: workbookBuffer([
+      ['Tkr', 'Cpn', 'Mty', 'Nxt Call', 'Call Typ', 'A Px', 'A YTM', 'A YTNC', 'CUSIP'],
+      ['FHLB', 1, '7/27/2026', '6/27/2026', 'Monthly', 99.683, 0.03327, 0.07003, '3130ANDM9'],
+      ['FFCB', 4.5, '8/15/2028', '8/15/2026', 'Quarterly', 100.1, 0.0445, 0.051, '3133EPXY8'],
+      ['FNMA', 3.5, '9/15/2029', '9/15/2026', 'Anytime', 99.2, 0.0396, 0.048, '3135BAD01']
+    ])
+  }]);
+  assert(Math.abs(gridDecimal.offerings[0].ytm - 3.327) < 1e-9, `decimal ytm scaled up, got ${gridDecimal.offerings[0].ytm}`);
 }
 
 function assertCorporatesParser() {
@@ -500,6 +530,32 @@ function assertWorkbookContentSniffing() {
   ]);
   assert.strictEqual(looksLikeTreasuryWorkbook(wirp), false);
   assert.strictEqual(looksLikeBairdSyndicateWorkbook(wirp), false);
+
+  // Agency callables in the Bloomberg grid layout (Tkr column of GSE issuers,
+  // call columns present). Must NOT false-match Treasury: the parser synthesizes
+  // a "Treasury Note …" description for every row, so detection has to key on the
+  // 912* CUSIP prefix — these are 3130* (FHLB). The agency sniffer routes them.
+  const agencyCallables = workbookBuffer([
+    ['SIZE IN MM', 'Tkr', 'Cpn', 'Mty', 'Nxt Call', 'Call Typ', 'A Px', 'A YTM', 'A YTNC', 'CUSIP'],
+    [1.98, 'FHLB', 1, '7/27/2026', '6/27/2026', 'Monthly', 99.683, 3.327, 7.003, '3130ANDM9'],
+    [3.61, 'FHLB', 1, '7/27/2026', '6/27/2026', 'Monthly', 99.683, 3.327, 7.003, '3130ANDN7'],
+    [2.0, 'FFCB', 4.5, '8/15/2028', '8/15/2026', 'Quarterly', 100.1, 4.45, 5.1, '3133EPXY8']
+  ]);
+  assert.strictEqual(looksLikeTreasuryWorkbook(agencyCallables), false);
+  assert.strictEqual(sniffAgencyWorkbookSlot(agencyCallables), 'agenciesCallables');
+
+  // Agency bullets grid — same issuer column, no call columns → bullets.
+  const agencyBullets = workbookBuffer([
+    ['ASz', 'Tkr', 'Cpn', 'Mty', 'A Px', 'A YTM', 'A Spd', 'CUSIP'],
+    [5, 'FHLB', 3.25, '5/15/2028', 99.5, 4.1, 12, '3130ABCD1'],
+    [2, 'FNMA', 3.0, '6/15/2027', 100.0, 4.0, 10, '3135BAD01'],
+    [1, 'FFCB', 4.0, '9/15/2029', 98.7, 4.3, 14, '3133EPXY8']
+  ]);
+  assert.strictEqual(sniffAgencyWorkbookSlot(agencyBullets), 'agenciesBullets');
+
+  // Muni (Baird) and Treasury sheets have no Tkr column → not agencies.
+  assert.strictEqual(sniffAgencyWorkbookSlot(baird), null);
+  assert.strictEqual(sniffAgencyWorkbookSlot(treasury), null);
 }
 
 function assertPackageReaderUsesSlotMetadata() {
