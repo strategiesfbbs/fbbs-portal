@@ -18561,6 +18561,11 @@
     visibleBanks: [],
     search: '',
     areaSearch: { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 },
+    munis: [],
+    muniAsOfDate: '',
+    muniMatches: [],
+    muniDeal: null,
+    muniAnchorCache: new Map(),
     locationFilter: null,
     territory: { owner: '', minAssets: '', maxAssets: '', sort: 'opportunity' },
     advanced: [],
@@ -18925,31 +18930,303 @@
     applyMapsFilters();
   }
 
-  function mapsClearAreaSearch() {
-    mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
+  function renderMapsAreaStatus() {
+    const el = document.getElementById('mapsAreaStatus');
+    if (!el) return;
+    if (mapsState.muniDeal && mapsState.muniDeal.muni) {
+      const deal = mapsState.muniDeal;
+      el.textContent = deal.anchor
+        ? `${deal.label} · within ${formatNumber(mapsState.areaSearch.radiusMiles)} miles${deal.approximate ? ' (state-level location)' : ''}`
+        : `Deal found, but no mapped bank in ${deal.label} to anchor it.`;
+      return;
+    }
+    if (!mapsState.areaSearch || !mapsState.areaSearch.query) {
+      el.textContent = 'Search a CUSIP, city, county, or state to locate a muni deal in inventory and the banks around it.';
+      return;
+    }
+    if (!mapsAreaIsActive()) {
+      el.textContent = `No muni deal or town/county matched "${mapsState.areaSearch.query}".`;
+      return;
+    }
+    el.textContent = `${mapsState.areaSearch.label || mapsState.areaSearch.query} · within ${formatNumber(mapsState.areaSearch.radiusMiles)} miles`;
+  }
+
+  // ---- Muni deal search (inventory → map) ----------------------------------
+  // The muni offerings carry issuerName + issuerState + cusip but no lat/lon, so
+  // a deal is geo-anchored by matching its town/county (+ state) against the
+  // already-loaded bank coordinates — the same source the area search uses.
+
+  // School-district / qualifier tokens to strip when isolating the locality.
+  const MAPS_MUNI_QUALIFIER_RE = /\b(CNTY|COUNTY|PARISH|BORO|BOROUGH|TWP|TOWNSHIP|VILLAGE|VLG|CITY|TOWN|SCH|SCHOOL|DIST|DISTRICT|REORG|CONS|CONSOLIDATED|UNIF|UNIFIED|IND|INDEP|INDEPENDENT|ISD|USD|CSD|JT|PUB|PUBLIC|COMM|COMMUNITY|COLL|COLLEGE)\b/g;
+
+  function mapsMuniLocality(muni) {
+    const state = String(muni && muni.issuerState || '').trim().toUpperCase();
+    let raw = String(muni && muni.issuerName || '').toUpperCase().trim();
+    // The locality precedes the state code when it appears mid-name
+    // ("BARTON CNTY MO SCH DIST" → "BARTON CNTY"), so cut there. Compare tokens
+    // directly rather than building a RegExp from the state — the syndicate
+    // workbook doesn't validate its state cell, and a stray metacharacter in a
+    // `new RegExp(state)` would throw and take down the whole search.
+    if (state) {
+      const tokens = raw.split(/\s+/);
+      const cut = tokens.indexOf(state);
+      if (cut > 0) raw = tokens.slice(0, cut).join(' ');
+    }
+    const isCounty = /\b(CNTY|COUNTY|PARISH)\b/.test(raw);
+    const base = raw
+      .replace(/#.*$/, ' ')
+      .replace(/[^A-Z0-9\- ]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const stripped = base
+      // District identifiers only — "SCH DIST NO 5" / "NO. 12", never "NORFOLK".
+      .replace(/\bNO\.?\s+\d+\b/g, ' ')
+      .replace(/\bR-?[IVX0-9]+\b/g, ' ')
+      .replace(MAPS_MUNI_QUALIFIER_RE, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    // Don't let qualifier-stripping erase a real place name to nothing
+    // ("PUBLIC SCHOOL DIST" → "") — keep the pre-strip name in that case.
+    return { state, locality: stripped || base, isCounty };
+  }
+
+  function mapsMuniDealLabel(muni) {
+    const loc = mapsMuniLocality(muni);
+    const name = loc.locality
+      ? loc.locality.replace(/\b\w/g, c => c.toUpperCase()) + (loc.isCounty ? ' County' : '')
+      : '';
+    return [name, loc.state].filter(Boolean).join(', ') || String(muni && muni.issuerName || '').trim();
+  }
+
+  function mapsMuniAnchor(muni) {
+    if (!muni) return null;
+    const cacheKey = String(muni.cusip || muni.issuerName || '');
+    if (mapsState.muniAnchorCache.has(cacheKey)) return mapsState.muniAnchorCache.get(cacheKey);
+    const loc = mapsMuniLocality(muni);
+    const state = loc.state;
+    const query = mapsNormalizeAreaText(loc.locality);
+    const inState = mapsState.banks.filter(b => mapsHasCoords(b) && String(b.state || '').trim().toUpperCase() === state);
+    const average = list => ({
+      lat: list.reduce((s, b) => s + Number(b.latitude), 0) / list.length,
+      lon: list.reduce((s, b) => s + Number(b.longitude), 0) / list.length
+    });
+    let anchor = null;
+    if (query && query.length >= 3 && inState.length) {
+      const matches = inState.filter(b => {
+        const city = mapsNormalizeAreaText(b.city);
+        const county = mapsNormalizeAreaText(String(b.county || '').replace(/,.*/, ''));
+        if (loc.isCounty) return county && (county === query || county.includes(query) || query.includes(county));
+        return (city && (city === query || city.includes(query) || query.includes(city))) ||
+          (county && (county === query || county.includes(query)));
+      });
+      if (matches.length) {
+        const c = average(matches);
+        anchor = { lat: c.lat, lon: c.lon, approximate: false, matchedBanks: matches.length, basis: loc.isCounty ? 'county' : 'city' };
+      }
+    }
+    if (!anchor && inState.length) {
+      const c = average(inState);
+      anchor = { lat: c.lat, lon: c.lon, approximate: true, matchedBanks: 0, basis: 'state' };
+    }
+    mapsState.muniAnchorCache.set(cacheKey, anchor);
+    return anchor;
+  }
+
+  function mapsSearchMunis(rawQuery) {
+    const munis = mapsState.munis || [];
+    const q = String(rawQuery || '').trim();
+    if (!munis.length || q.length < 2) return [];
+    const norm = q.toUpperCase().replace(/\s+/g, ' ').trim();
+    const cusipQ = norm.replace(/[^A-Z0-9]/g, '');
+    const areaNorm = mapsNormalizeAreaText(q);
+    const scored = [];
+    for (const m of munis) {
+      let score = 0;
+      const cusip = String(m.cusip || '').toUpperCase();
+      const issuer = String(m.issuerName || '').toUpperCase();
+      const state = String(m.issuerState || '').toUpperCase();
+      const issuerNorm = mapsNormalizeAreaText(m.issuerName);
+      if (cusip && cusipQ.length >= 4) {
+        if (cusip === cusipQ) score = Math.max(score, 100);
+        else if (cusip.startsWith(cusipQ)) score = Math.max(score, 90);
+        else if (cusip.includes(cusipQ)) score = Math.max(score, 70);
+      }
+      if (issuer.includes(norm)) score = Math.max(score, 85);
+      if (areaNorm && issuerNorm && issuerNorm.includes(areaNorm)) score = Math.max(score, 75);
+      if (areaNorm && issuerNorm && areaNorm.includes(issuerNorm) && issuerNorm.length >= 3) score = Math.max(score, 58);
+      if (norm.length === 2 && state === norm) score = Math.max(score, 50);
+      if (String(m.issueType || '').toUpperCase().includes(norm)) score = Math.max(score, 38);
+      if (score > 0) scored.push({ muni: m, score });
+    }
+    scored.sort((a, b) =>
+      b.score - a.score ||
+      String(a.muni.issuerName || '').localeCompare(String(b.muni.issuerName || '')) ||
+      String(a.muni.maturity || '').localeCompare(String(b.muni.maturity || '')));
+    return scored.slice(0, 12).map(s => s.muni);
+  }
+
+  function mapsMuniKey(muni) {
+    return [muni && muni.cusip, muni && muni.issuerName, muni && muni.maturity, muni && muni.coupon].filter(v => v != null).join('|');
+  }
+
+  function mapsSelectMuniDeal(muni) {
+    if (!muni) return;
+    const radius = document.getElementById('mapsAreaRadius');
+    const radiusMiles = Number(radius && radius.value) || 50;
+    const label = mapsMuniDealLabel(muni);
+    const anchor = mapsMuniAnchor(muni);
+    mapsState.muniDeal = { muni, anchor, label, approximate: !!(anchor && anchor.approximate) };
+    mapsState.selectedStates.clear();
     mapsState.locationFilter = null;
+    mapsState.selectedBankId = '';
+    mapsState.detailDismissed = false;
+    mapsState.areaSearch = {
+      query: muni.cusip || label,
+      radiusMiles,
+      center: anchor ? { lat: anchor.lat, lon: anchor.lon } : null,
+      label,
+      matchedCount: anchor ? anchor.matchedBanks : 0
+    };
+    mapsSetViewport(null);
+    mapsState.mapRevision += 1;
+    renderMapsStateChips();
+    renderMapsMuniResults();
+    renderMapsAreaStatus();
+    applyMapsFilters();
+    if (!anchor) showToast(`Found ${label}, but no mapped bank in that state to place it`, true);
+  }
+
+  function mapsRunSearch() {
+    const input = document.getElementById('mapsAreaSearchBox');
+    const raw = input ? input.value.trim() : '';
+    if (raw.length < 2) {
+      showToast('Enter a CUSIP, city, county, or state to search', true);
+      return;
+    }
+    const matches = mapsSearchMunis(raw);
+    mapsState.muniMatches = matches;
+    if (matches.length) {
+      // Prefer the top match we can actually place on the map.
+      const pick = matches.find(m => mapsMuniAnchor(m)) || matches[0];
+      mapsSelectMuniDeal(pick);
+      return;
+    }
+    // No inventory deal matched — fall back to the town/county area search.
+    mapsState.muniDeal = null;
+    mapsState.muniMatches = [];
+    renderMapsMuniResults();
+    mapsApplyAreaSearch();
+  }
+
+  function mapsMuniMetric(label, value) {
+    return `<div class="maps-muni-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value == null || value === '' ? '—' : String(value))}</strong></div>`;
+  }
+
+  function renderMapsMuniResults() {
+    const el = document.getElementById('mapsMuniResults');
+    if (!el) return;
+    const deal = mapsState.muniDeal;
+    const matches = mapsState.muniMatches || [];
+    if (!deal && !matches.length) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+    el.hidden = false;
+    let html = '';
+    if (deal && deal.muni) {
+      const m = deal.muni;
+      const pct = v => (v == null || v === '') ? '—' : `${Number(v).toFixed(3).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}%`;
+      const rating = [m.moodysRating, m.spRating].filter(Boolean).join(' / ') || '—';
+      const source = m.source || (m.isSyndicate ? 'Baird Syndicate' : 'FBBS');
+      const nearby = mapsState.visibleBanks.length;
+      html += `
+        <div class="maps-muni-deal">
+          <div class="maps-muni-deal-head">
+            <div>
+              <span class="maps-muni-deal-tag">Muni deal · ${escapeHtml(m.section || 'Muni')} · ${escapeHtml(source)}</span>
+              <strong>${escapeHtml(m.issuerName || '')}</strong>
+              <span class="maps-muni-deal-where">${escapeHtml(deal.label)}${deal.approximate ? ' · state-level location' : ''}</span>
+            </div>
+            <span class="maps-muni-deal-cusip">${escapeHtml(m.cusip || '')}</span>
+          </div>
+          <div class="maps-muni-deal-grid">
+            ${mapsMuniMetric('Type', m.issueType)}
+            ${mapsMuniMetric('Coupon', m.coupon != null ? `${Number(m.coupon).toFixed(3)}%` : '—')}
+            ${mapsMuniMetric('Maturity', m.maturity ? formatShortDate(m.maturity) : '—')}
+            ${mapsMuniMetric('YTW', pct(m.ytw))}
+            ${mapsMuniMetric('Price', m.price != null ? Number(m.price).toFixed(3) : '—')}
+            ${mapsMuniMetric('Rating', rating)}
+            ${mapsMuniMetric('Qnty', m.quantity != null ? Number(m.quantity).toLocaleString() : '—')}
+            ${mapsMuniMetric('Call', m.callDate ? formatShortDate(m.callDate) : '—')}
+          </div>
+          <div class="maps-muni-deal-foot">${deal.anchor
+            ? `${formatNumber(nearby)} bank(s) within ${formatNumber(mapsState.areaSearch.radiusMiles)} mi of this deal`
+            : 'No mapped bank in this deal&rsquo;s state to place it on the map.'}</div>
+        </div>`;
+    }
+    const others = matches.filter(m => !deal || !deal.muni || mapsMuniKey(m) !== mapsMuniKey(deal.muni));
+    if (others.length) {
+      html += `
+        <div class="maps-muni-picklist">
+          <strong>${formatNumber(matches.length)} matching deal(s) in inventory${mapsState.muniAsOfDate ? ` · ${escapeHtml(formatShortDate(mapsState.muniAsOfDate))}` : ''}</strong>
+          <div class="maps-muni-pick-rows">
+            ${others.map(m => `
+              <button type="button" class="maps-muni-pick" data-maps-muni-key="${escapeHtml(mapsMuniKey(m))}">
+                <span class="maps-muni-pick-name">${escapeHtml(m.issuerName || '')}</span>
+                <span class="maps-muni-pick-meta">${escapeHtml(m.issuerState || '')} · ${escapeHtml(m.issueType || '')} · ${m.coupon != null ? Number(m.coupon).toFixed(2) + '%' : ''} ${escapeHtml(m.maturity ? formatShortDate(m.maturity) : '')}</span>
+                <span class="maps-muni-pick-cusip">${escapeHtml(m.cusip || '')}</span>
+              </button>`).join('')}
+          </div>
+        </div>`;
+    }
+    el.innerHTML = html;
+  }
+
+  // Walk the whole filtered bank list (not just one marker's overlaps) so a
+  // city/county result with many banks can be stepped through one at a time.
+  function mapsScrollSelectedRowIntoView() {
+    const body = document.getElementById('mapsBankBody');
+    if (!body) return;
+    const row = body.querySelector('tr.maps-row-selected');
+    if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+  }
+
+  function mapsStepBank(direction) {
+    const list = mapsState.visibleBanks || [];
+    if (!list.length) return;
+    let idx = list.findIndex(b => String(b.id || '') === String(mapsState.selectedBankId || ''));
+    if (idx < 0) idx = direction > 0 ? -1 : 0;
+    idx = (idx + direction + list.length) % list.length;
+    const bank = list[idx];
+    if (!bank) return;
+    mapsState.detailDismissed = false;
+    mapsSelectBank(bank, mapsLocationGroups(list).find(group => group.key === mapsLocationKey(bank)));
+    applyMapsFilters();
+    mapsScrollSelectedRowIntoView();
+  }
+
+  // One Clear: reset every map selection (clicked states, area/muni search,
+  // drilldown, selected bank) so the user never has to click back on a state
+  // that's hidden under a cluster of pins.
+  function mapsClearAll() {
+    mapsState.selectedStates.clear();
+    mapsState.locationFilter = null;
+    mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
+    mapsState.muniDeal = null;
+    mapsState.muniMatches = [];
+    mapsState.selectedBankId = '';
+    mapsState.detailDismissed = false;
     const input = document.getElementById('mapsAreaSearchBox');
     const radius = document.getElementById('mapsAreaRadius');
     if (input) input.value = '';
     if (radius) radius.value = '50';
     mapsSetViewport(null);
     mapsState.mapRevision += 1;
+    renderMapsStateChips();
+    renderMapsMuniResults();
     renderMapsAreaStatus();
     applyMapsFilters();
-  }
-
-  function renderMapsAreaStatus() {
-    const el = document.getElementById('mapsAreaStatus');
-    if (!el) return;
-    if (!mapsState.areaSearch || !mapsState.areaSearch.query) {
-      el.textContent = 'Search a town or county to find nearby banks.';
-      return;
-    }
-    if (!mapsAreaIsActive()) {
-      el.textContent = `No town or county matched "${mapsState.areaSearch.query}".`;
-      return;
-    }
-    el.textContent = `${mapsState.areaSearch.label || mapsState.areaSearch.query} · within ${formatNumber(mapsState.areaSearch.radiusMiles)} miles`;
   }
 
   function mapsLocationKey(bank) {
@@ -19064,12 +19341,21 @@
     if (subtitle) subtitle.textContent = 'Loading bank tear sheet data…';
     mapsSetLoadingState(true);
     try {
-      const res = await fetch('/api/banks/map', { cache: 'no-store' });
+      const [res, muniData] = await Promise.all([
+        fetch('/api/banks/map', { cache: 'no-store' }),
+        // Muni inventory powers the deal search. It's a separate, optional slot —
+        // a missing/404 daily package just degrades the box to a town/county area
+        // search, so swallow any failure rather than blocking the map.
+        fetchOptionalJson('/api/muni-offerings')
+      ]);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || 'Bank tear sheet data not available yet.');
       }
       const data = await res.json();
+      mapsState.munis = Array.isArray(muniData && muniData.offerings) ? muniData.offerings : [];
+      mapsState.muniAsOfDate = (muniData && muniData.asOfDate) || '';
+      mapsState.muniAnchorCache = new Map();
       mapsState.banks = Array.isArray(data.banks)
         ? data.banks.map(bank => ({ ...bank, securitiesToAssets: mapsSecuritiesToAssets(bank) }))
         : [];
@@ -19143,6 +19429,7 @@
     renderMapsStateChips();
     renderMapsStatusFilters();
     renderMapsAreaStatus();
+    renderMapsMuniResults();
     renderMapsStateSummary();
     renderMapsDrilldown(mapsState.visibleBanks.length ? mapsState.visibleBanks : mapsState.banks);
     renderMapsDetailPanel();
@@ -19201,25 +19488,30 @@
         const dLon = radius / Math.max(1, 69 * Math.cos(lat * Math.PI / 180));
         ring.push({ lat: lat + Math.sin(rad) * dLat, lon: lon + Math.cos(rad) * dLon });
       }
+      const deal = mapsState.muniDeal && mapsState.muniDeal.muni ? mapsState.muniDeal : null;
+      const ringColor = deal ? '#b5862d' : '#8257d6';
+      const dealHover = deal
+        ? `<b>${escapeHtml(deal.muni.issuerName || area.label || area.query)}</b><br>${escapeHtml(deal.label)}${deal.muni.cusip ? `<br>CUSIP ${escapeHtml(deal.muni.cusip)}` : ''}<br>${formatNumber(radius)} mile search area<extra></extra>`
+        : `<b>${escapeHtml(area.label || area.query)}</b><br>${formatNumber(radius)} mile search area<extra></extra>`;
       figData.push({
         type: 'scattergeo',
         mode: 'lines',
         lat: ring.map(point => point.lat),
         lon: ring.map(point => point.lon),
         hoverinfo: 'skip',
-        line: { color: '#8257d6', width: 2, dash: 'dot' },
+        line: { color: ringColor, width: 2, dash: 'dot' },
         showlegend: false
       }, {
         type: 'scattergeo',
         mode: 'markers',
         lat: [lat],
         lon: [lon],
-        hovertemplate: `<b>${escapeHtml(area.label || area.query)}</b><br>${formatNumber(radius)} mile search area<extra></extra>`,
+        hovertemplate: dealHover,
         marker: {
-          color: '#ffffff',
-          line: { color: '#8257d6', width: 3 },
-          size: 18,
-          symbol: 'star'
+          color: deal ? '#f4c542' : '#ffffff',
+          line: { color: ringColor, width: 3 },
+          size: deal ? 20 : 18,
+          symbol: deal ? 'diamond' : 'star'
         },
         showlegend: false
       });
@@ -19292,12 +19584,15 @@
           else mapsState.selectedStates.add(st);
           mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
           mapsState.locationFilter = null;
+          mapsState.muniDeal = null;
+          mapsState.muniMatches = [];
           const areaInput = document.getElementById('mapsAreaSearchBox');
           if (areaInput) areaInput.value = '';
           mapsSetViewport(null);
           mapsState.mapRevision += 1;
           renderMapsStateChips();
           renderMapsAreaStatus();
+          renderMapsMuniResults();
           applyMapsFilters();
           return;
         }
@@ -19583,10 +19878,14 @@
     if (area) {
       const areaStatus = document.getElementById('mapsAreaStatus');
       if (areaStatus) {
-        areaStatus.textContent = `${area.label || area.query} · ${formatNumber(rows.length)} banks within ${formatNumber(area.radiusMiles)} miles`;
+        const deal = mapsState.muniDeal && mapsState.muniDeal.muni ? mapsState.muniDeal : null;
+        areaStatus.textContent = deal
+          ? `${deal.label} · ${formatNumber(rows.length)} banks within ${formatNumber(area.radiusMiles)} miles${deal.approximate ? ' (state-level location)' : ''}`
+          : `${area.label || area.query} · ${formatNumber(rows.length)} banks within ${formatNumber(area.radiusMiles)} miles`;
       }
     }
     renderMapsActiveFilters();
+    renderMapsMuniResults();
     renderMapsDetailPanel();
     renderMapsFullView();
   }
@@ -19622,8 +19921,17 @@
     mapsState.selectedLocationIndex = groupIndex;
     const accountStatus = bank.accountStatus || {};
     const locationLine = [bank.address, bank.city, bank.state, bank.zip5 || bank.zip].filter(Boolean).join(', ');
+    const listIndex = mapsState.visibleBanks.findIndex(peer => String(peer.id || '') === String(bank.id || ''));
+    const listTotal = mapsState.visibleBanks.length;
     panel.hidden = false;
     panel.innerHTML = `
+      ${listTotal > 1 ? `
+        <div class="maps-detail-stepper">
+          <button type="button" class="small-btn" id="mapsListPrev" aria-label="Previous bank in list">&#9664; Prev</button>
+          <span>Bank ${formatNumber((listIndex < 0 ? 0 : listIndex) + 1)} of ${formatNumber(listTotal)} · use &larr; &rarr;</span>
+          <button type="button" class="small-btn" id="mapsListNext" aria-label="Next bank in list">Next &#9654;</button>
+        </div>
+      ` : ''}
       <div class="maps-detail-head">
         <div>
           <span class="maps-detail-status"><span class="maps-detail-status-dot" style="background:${mapsStatusColor(status)}"></span>Status: ${escapeHtml(status)}</span>
@@ -19658,6 +19966,10 @@
       mapsState.selectedBankId = '';
       applyMapsFilters();
     });
+    const listPrev = document.getElementById('mapsListPrev');
+    if (listPrev) listPrev.addEventListener('click', () => mapsStepBank(-1));
+    const listNext = document.getElementById('mapsListNext');
+    if (listNext) listNext.addEventListener('click', () => mapsStepBank(1));
     const cycle = direction => {
       if (!group || groupBanks.length <= 1) return;
       const next = (groupIndex + direction + groupBanks.length) % groupBanks.length;
@@ -19845,17 +20157,17 @@
       areaInput.addEventListener('keydown', e => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          mapsApplyAreaSearch();
+          mapsRunSearch();
         }
       });
       areaInput.dataset.bound = '1';
     }
     if (areaBtn && !areaBtn.dataset.bound) {
-      areaBtn.addEventListener('click', mapsApplyAreaSearch);
+      areaBtn.addEventListener('click', mapsRunSearch);
       areaBtn.dataset.bound = '1';
     }
     if (areaClear && !areaClear.dataset.bound) {
-      areaClear.addEventListener('click', mapsClearAreaSearch);
+      areaClear.addEventListener('click', mapsClearAll);
       areaClear.dataset.bound = '1';
     }
     if (areaRadius && !areaRadius.dataset.bound) {
@@ -19865,10 +20177,21 @@
           mapsSetViewport(null);
           mapsState.mapRevision += 1;
           renderMapsAreaStatus();
+          renderMapsMuniResults();
           applyMapsFilters();
         }
       });
       areaRadius.dataset.bound = '1';
+    }
+    const muniResults = document.getElementById('mapsMuniResults');
+    if (muniResults && !muniResults.dataset.bound) {
+      muniResults.addEventListener('click', e => {
+        const btn = e.target.closest('[data-maps-muni-key]');
+        if (!btn) return;
+        const muni = (mapsState.muniMatches || []).find(m => mapsMuniKey(m) === btn.dataset.mapsMuniKey);
+        if (muni) mapsSelectMuniDeal(muni);
+      });
+      muniResults.dataset.bound = '1';
     }
     const fitBtn = document.getElementById('mapsFitResultsBtn');
     if (fitBtn && !fitBtn.dataset.bound) {
@@ -19888,26 +20211,22 @@
         mapsState.selectedStates.add(state);
         mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
         mapsState.locationFilter = null;
+        mapsState.muniDeal = null;
+        mapsState.muniMatches = [];
         const areaInput = document.getElementById('mapsAreaSearchBox');
         if (areaInput) areaInput.value = '';
         mapsSetViewport(null);
         mapsState.mapRevision += 1;
         renderMapsStateChips();
         renderMapsAreaStatus();
+        renderMapsMuniResults();
         applyMapsFilters();
       });
       stateSelect.dataset.bound = '1';
     }
     const clearBtn = document.getElementById('mapsClearStates');
     if (clearBtn && !clearBtn.dataset.bound) {
-      clearBtn.addEventListener('click', () => {
-        mapsState.selectedStates.clear();
-        mapsState.locationFilter = null;
-        mapsSetViewport(null);
-        mapsState.mapRevision += 1;
-        renderMapsStateChips();
-        applyMapsFilters();
-      });
+      clearBtn.addEventListener('click', mapsClearAll);
       clearBtn.dataset.bound = '1';
     }
     const statusFilters = document.getElementById('mapsLegend');
@@ -20104,6 +20423,24 @@
         mapsApplyLocationDrilldown(btn);
       });
       drilldown.dataset.bound = '1';
+    }
+    // Arrow keys step through the visible bank list — only while the map page
+    // is active and the user isn't typing into a field.
+    if (!document.body.dataset.mapsKeysBound) {
+      document.addEventListener('keydown', e => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        const mapsPage = document.getElementById('p-maps');
+        if (!mapsPage || !mapsPage.classList.contains('active')) return;
+        const fullOpen = !document.getElementById('mapsFullBackdrop')?.hidden;
+        if (fullOpen) return;
+        const t = e.target;
+        const tag = t && t.tagName ? t.tagName.toLowerCase() : '';
+        if (tag === 'input' || tag === 'select' || tag === 'textarea' || (t && t.isContentEditable)) return;
+        if (!mapsState.visibleBanks.length) return;
+        e.preventDefault();
+        mapsStepBank(e.key === 'ArrowRight' ? 1 : -1);
+      });
+      document.body.dataset.mapsKeysBound = '1';
     }
   }
 

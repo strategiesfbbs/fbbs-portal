@@ -11508,6 +11508,150 @@ body {
 #mapsAreaRadius {
   background: #fff;
 }
+.maps-muni-results {
+  display: grid;
+  gap: 10px;
+}
+.maps-muni-results[hidden] {
+  display: none;
+}
+.maps-muni-deal {
+  background: linear-gradient(180deg, #fffdf5 0%, #fff 60%);
+  border: 1px solid rgba(181, 134, 45, 0.45);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(120, 90, 20, 0.08);
+  padding: 10px 12px;
+}
+.maps-muni-deal-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+.maps-muni-deal-head strong {
+  color: var(--text, #1f2925);
+  display: block;
+  font-size: 14px;
+  line-height: 1.25;
+  margin: 3px 0 2px;
+}
+.maps-muni-deal-tag {
+  color: #8a6512;
+  display: block;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.maps-muni-deal-where {
+  color: var(--text3, #666);
+  display: block;
+  font-size: 12px;
+}
+.maps-muni-deal-cusip {
+  color: var(--text2, #444);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.maps-muni-deal-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 10px 0 8px;
+}
+.maps-muni-metric {
+  background: #fff;
+  border: 1px solid rgba(181, 134, 45, 0.22);
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+.maps-muni-metric span {
+  color: var(--text3, #666);
+  display: block;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.maps-muni-metric strong {
+  color: var(--text, #1f2925);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.maps-muni-deal-foot {
+  color: var(--text2, #444);
+  font-size: 12px;
+  font-weight: 700;
+}
+.maps-muni-picklist > strong {
+  color: var(--text, #1f2925);
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.maps-muni-pick-rows {
+  display: grid;
+  gap: 5px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.maps-muni-pick {
+  background: #fff;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 7px;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 1px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 6px 9px;
+  text-align: left;
+}
+.maps-muni-pick:hover {
+  background: #fffaf0;
+  border-color: rgba(181, 134, 45, 0.5);
+}
+.maps-muni-pick-name {
+  color: var(--text, #1f2925);
+  font-size: 12.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.maps-muni-pick-cusip {
+  color: var(--text3, #666);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+.maps-muni-pick-meta {
+  color: var(--text3, #666);
+  font-size: 11px;
+  grid-column: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.maps-detail-stepper {
+  align-items: center;
+  background: rgba(0, 63, 42, 0.06);
+  border: 1px solid rgba(0, 63, 42, 0.14);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 7px 8px;
+}
+.maps-detail-stepper span {
+  color: var(--text2, #444);
+  font-size: 12px;
+  font-weight: 800;
+}
 .maps-tip {
   color: var(--text3, #666);
   font-size: 12px;
@@ -12214,6 +12358,7 @@ body {
   .maps-head-actions { justify-content: flex-start; }
   .maps-area-card { grid-template-columns: 1fr; }
   .maps-area-controls { justify-content: flex-start; }
+  .maps-muni-deal-grid { grid-template-columns: 1fr 1fr; }
   .maps-drilldown { grid-template-columns: 1fr; }
   .maps-cond { grid-template-columns: 1fr; }
   .maps-detail-grid { grid-template-columns: 1fr 1fr; }

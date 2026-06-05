@@ -2841,20 +2841,21 @@
         <div id="mapsPlot" class="maps-plot"></div>
         <div class="maps-area-card">
           <div>
-            <strong>Muni deal area search</strong>
-            <span id="mapsAreaStatus">Search a town or county to find nearby banks.</span>
+            <strong>Muni deal &amp; area search</strong>
+            <span id="mapsAreaStatus">Search a CUSIP, city, county, or state to locate a muni deal in inventory and the banks around it.</span>
           </div>
           <div class="maps-area-controls">
-            <input type="search" id="mapsAreaSearchBox" placeholder="City or county..." autocomplete="off">
+            <input type="search" id="mapsAreaSearchBox" placeholder="CUSIP, city, county, state&hellip;" autocomplete="off">
             <select id="mapsAreaRadius">
               <option value="25">25 mi</option>
               <option value="50" selected>50 mi</option>
               <option value="75">75 mi</option>
               <option value="100">100 mi</option>
             </select>
-            <button id="mapsAreaSearchBtn" type="button" class="small-btn primary">Find Area</button>
+            <button id="mapsAreaSearchBtn" type="button" class="small-btn primary">Search</button>
             <button id="mapsAreaClearBtn" type="button" class="small-btn">Clear</button>
           </div>
+          <div id="mapsMuniResults" class="maps-muni-results" hidden></div>
         </div>
         <div class="maps-tip">Drag or scroll the map freely. Use Add State or area search to filter, then click a pin for the bank's stats.</div>
       </section>
