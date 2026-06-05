@@ -37,9 +37,11 @@ const HEDGE_TARGET_RATIOS = [0.25, 0.50, 0.75, 1.00];
 // Code -> name lookups. Codes mean nothing to a CEO; these humanize the desk
 // and rep codes that appear in the TH activity sheet.
 //
-// TODO(fbbs): confirm the real desk / rep names with the firm and fill these
-// in (spec §9). Until then the UI falls back to showing the raw code, and the
-// summary carries a `desk/rep names not yet mapped` warning so it's visible.
+// SALESPERSON_MAP is the firm's current rep roster (provided 2026-06-05). The
+// desk-level TRADER_MAP is a different code space (08-TRSY, 30-PRICD, ...) and
+// is still stubbed — confirm the real desk labels with the firm (spec §9).
+// Any code missing from a map falls back to the raw code, and the summary
+// carries a `desk/rep names not yet mapped` warning while a map is unfilled.
 // ---------------------------------------------------------------------------
 const TRADER_MAP = {
   '08-TRSY': null,   // Treasury desk (confirm label)
@@ -50,7 +52,36 @@ const TRADER_MAP = {
   '98-SECNT': null,
 };
 const SALESPERSON_MAP = {
-  F20: null, F36: null, F57: null, F61: null, K50: null, K55: null,
+  F14: 'Jim Courrier',
+  F18: 'A.W. Spellmeyer',
+  F20: 'Dan Hagemann',
+  F21: 'Mac & Gio',
+  F22: 'Gio Rozo',
+  F23: 'Bobby Scheetz',
+  F25: 'Courtney Kiefer',
+  F26: 'Glasser/Hagemann',
+  F30: 'John Waugh',
+  F33: 'Brian Roscoe',
+  F36: 'Dave Glasser',
+  F40: 'Mark Crihfield',
+  F41: 'Joe Crifasi',
+  F45: 'Ryan Kane',
+  F53: "Michael D'Addabbo",
+  F54: 'Ted Warley',
+  F57: 'Mac McGinnis',
+  F61: 'Duane Kerner',
+  F62: 'Bryce Martin',
+  F70: 'Ardi Baniahmad',
+  F71: 'Josh Benner',
+  F72: 'Meghan Greenwood',
+  F80: 'Crihfield/Crifasi',
+  K34: 'Michael Lauth',
+  K50: 'Greg Bernard',
+  K55: 'Bernard/Lewis',
+  K60: 'Jim Lewis',
+  K64: 'Lewis/Krei',
+  L33: 'L1 Hart & Co',
+  O44: 'Edward Krei',
 };
 
 function deskName(code) { return (code && TRADER_MAP[code]) || code || 'Unmapped'; }
