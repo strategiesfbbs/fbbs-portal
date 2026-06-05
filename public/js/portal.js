@@ -14278,13 +14278,18 @@
     const publishBtn = document.getElementById('folderDropPublishBtn');
     const publishable = Array.isArray(data.publishable) ? data.publishable : [];
     const references = Array.isArray(data.references) ? data.references : [];
+    const execFiles = Array.isArray(data.execFiles) ? data.execFiles : [];
     const ignored = Array.isArray(data.ignored) ? data.ignored : [];
     const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+    const execMeta = data.execSummary || null;
     if (summary) {
+      const execNote = execMeta && (execMeta.present || []).length
+        ? ` · <strong>${escapeHtml(formatNumber((execMeta.present || []).length))}</strong>/4 exec summary`
+        : '';
       summary.innerHTML = `
         <strong>${escapeHtml(formatNumber(publishable.length))}</strong> publishable ·
         <strong>${escapeHtml(formatNumber(references.length))}</strong> reference/internal ·
-        <strong>${escapeHtml(formatNumber(ignored.length))}</strong> ignored
+        <strong>${escapeHtml(formatNumber(ignored.length))}</strong> ignored${execNote}
         ${warnings.length ? `<span>${escapeHtml(warnings[0])}</span>` : '<span>Ready to publish after review.</span>'}
       `;
     }
@@ -14292,6 +14297,7 @@
     if (!grid) return;
     const rows = [
       ...publishable.map(row => ({ ...row, tone: 'ok' })),
+      ...execFiles.map(row => ({ ...row, tone: 'exec' })),
       ...references.map(row => ({ ...row, tone: 'ref' })),
       ...ignored.map(row => ({ ...row, tone: 'ignored' }))
     ];
@@ -14306,7 +14312,7 @@
           <div class="folder-drop-file ${escapeHtml(row.tone)}">
             <div>
               <strong>${escapeHtml(row.filename)}</strong>
-              <span>${escapeHtml(folderDropSlotLabel(row))}${row.date ? ` · ${escapeHtml(row.date)}` : ''}${row.companionRole && row.tone === 'ok' ? ' · companion' : ''}</span>
+              <span>${escapeHtml(folderDropSlotLabel(row))}${row.date ? ` · ${escapeHtml(row.date)}` : ''}${row.companionRole && row.tone === 'ok' ? ' · companion' : ''}${row.tone === 'exec' ? ' · exec summary' : ''}</span>
             </div>
             <em>${escapeHtml(formatFileSize(row.size || 0))}</em>
           </div>
@@ -14344,6 +14350,18 @@
       if (Array.isArray(snRows) && snRows.length) refParts.push(`${formatNumber(snRows.length)} structured notes`);
       if (Array.isArray(mcRows) && mcRows.length) refParts.push(`${formatNumber(mcRows.length)} market emails`);
       if (refParts.length) setTimeout(() => showToast(`Reference files ingested · ${refParts.join(', ')}`), 500);
+      const exec = data.referenceIngest.execSummary;
+      if (exec) {
+        if (exec.ingested) {
+          setTimeout(() => showToast(`Exec Summary updated · COB ${exec.cobDate || exec.asOfDate || 'latest'}`), 700);
+        } else if (exec.skipped && Array.isArray(exec.missing) && exec.missing.length) {
+          const labels = { inventory: 'inventory grid', activity: 'TH activity', sector: 'sector blotter', margin: 'margin workbook' };
+          const miss = exec.missing.map(k => labels[k] || k).join(', ');
+          setTimeout(() => showToast(`Exec Summary not generated · missing ${miss}`, true), 700);
+        } else if (exec.error) {
+          setTimeout(() => showToast(`Exec Summary ingest failed · ${exec.error}`, true), 700);
+        }
+      }
     }
     if (Array.isArray(data.dateWarnings) && data.dateWarnings.length) {
       setTimeout(() => showToast(data.dateWarnings[0], true), 600);

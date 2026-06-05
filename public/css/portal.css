@@ -6448,6 +6448,11 @@ body {
   background: #f7faf8;
 }
 
+.folder-drop-file.exec {
+  background: #f3f0fa;
+  box-shadow: inset 3px 0 0 #6b5bb5;
+}
+
 .folder-drop-file.ignored {
   opacity: 0.68;
 }

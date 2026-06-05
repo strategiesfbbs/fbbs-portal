@@ -6673,9 +6673,14 @@ function marketFromEconomicUpdate(econ) {
 
 // Identify which of the four daily files an upload is, by content (the grid
 // filenames are opaque hashes). Fallback for when the form field name is absent.
-function classifyExecSummaryFile(file) {
+// Content-classify one of the four Executive Summary daily inputs from a raw
+// workbook buffer. Keys on sheet/header signatures so it survives the generic
+// "grid1_<hash>.xlsx" Bloomberg filenames that carry no slot hint. Returns
+// 'inventory' | 'activity' | 'sector' | 'margin' | null. Shared by the
+// labeled-picker upload route and the folder-drop scan.
+function classifyExecSummaryBuffer(buffer) {
   try {
-    const wb = XLSX.read(file.data, { type: 'buffer' });
+    const wb = XLSX.read(buffer, { type: 'buffer' });
     const names = wb.SheetNames || [];
     if (names.includes('MAIN') && names.includes('TOTAL_HAIRCUTS')) return 'margin';
     const ws = wb.Sheets[names[0]];
@@ -6688,6 +6693,18 @@ function classifyExecSummaryFile(file) {
   } catch (_) { /* fall through to null */ }
   return null;
 }
+
+function classifyExecSummaryFile(file) {
+  return classifyExecSummaryBuffer(file && file.data);
+}
+
+// Human labels for the four exec-summary slots (folder-drop scan + UI).
+const EXEC_SUMMARY_SLOT_LABELS = {
+  inventory: 'Inventory & risk grid',
+  activity: 'TH trade activity',
+  sector: 'Sector / issuer blotter',
+  margin: 'Net-capital margin workbook'
+};
 
 // Management-only: ingest the four daily files, compute + persist one COB-dated
 // executive-summary snapshot (idempotent), and return it. Admin-gated via the
@@ -6979,36 +6996,70 @@ function scanFolderDrop(dateValue) {
       const filename = entry.name;
       const fullPath = path.join(folderPath, filename);
       const stat = fs.statSync(fullPath);
+      const isWorkbook = /\.(xlsx|xlsm|xls)$/i.test(filename);
       let slot = classifyFolderDropFile(filename);
-      if (!slot && /\.(xlsx|xlsm|xls)$/i.test(filename)) {
-        slot = sniffWorkbookSlot(fullPath);
+      let execSlot = null;
+      if (!slot && isWorkbook) {
+        // One buffer read serves both the daily-slot content sniff and the
+        // exec-summary classifier, so generic grid1_<hash> exports route right.
+        let buffer = null;
+        try { buffer = fs.readFileSync(fullPath); } catch (_) { /* unreadable — leave unslotted */ }
+        if (buffer) {
+          slot = sniffWorkbookSlot(fullPath);
+          if (!slot) execSlot = classifyExecSummaryBuffer(buffer);
+        }
       }
-      const reference = !slot && isReferenceDropFile(filename);
+      const reference = !slot && !execSlot && isReferenceDropFile(filename);
       return {
         filename,
         size: stat.size,
         modifiedAt: stat.mtime.toISOString(),
         slot,
-        label: slot ? (DOC_TYPES_LABELS[slot] || slot) : folderDropReferenceLabel(filename),
+        execSlot,
+        label: slot ? (DOC_TYPES_LABELS[slot] || slot)
+          : execSlot ? (EXEC_SUMMARY_SLOT_LABELS[execSlot] || execSlot)
+          : folderDropReferenceLabel(filename),
         companionRole: folderDropCompanionRole(filename),
         date: sniffDateFromFilename(filename),
         reference,
-        ignored: filename.startsWith('.') || filename.startsWith('_') || (!slot && !reference)
+        ignored: filename.startsWith('.') || filename.startsWith('_') || (!slot && !execSlot && !reference)
       };
     })
     .filter(row => !row.filename.startsWith('.') && row.filename !== '.DS_Store');
 
   const publishable = entries.filter(row => row.slot && !row.ignored);
   const references = entries.filter(row => row.reference && !row.ignored);
-  const ignored = entries.filter(row => row.ignored || (!row.slot && !row.reference));
+  const execFiles = entries.filter(row => row.execSlot && !row.ignored);
+  const ignored = entries.filter(row => row.ignored || (!row.slot && !row.execSlot && !row.reference));
   const slots = {};
   publishable.forEach(row => {
     if (!slots[row.slot]) slots[row.slot] = [];
     slots[row.slot].push(row);
   });
 
+  // Exec-summary readiness: first file per slot wins (dedupe), report gaps.
+  const execSlots = {};
+  execFiles.forEach(row => { if (!execSlots[row.execSlot]) execSlots[row.execSlot] = row.filename; });
+  const execPresent = Object.keys(execSlots);
+  const execMissing = ['inventory', 'activity', 'sector', 'margin'].filter(k => !execSlots[k]);
+  const execSummary = {
+    detected: execSlots,
+    present: execPresent,
+    missing: execMissing,
+    complete: execMissing.length === 0,
+    labels: EXEC_SUMMARY_SLOT_LABELS
+  };
+
   const warnings = [];
   if (!publishable.length) warnings.push('No publishable portal files were found in this folder.');
+  // Same daily slot claimed by more than one file — publishing would let the
+  // last writer win silently (e.g. an agency-callables sheet that content-sniffs
+  // as Treasury colliding with the real Treasury file). Surface it for review.
+  Object.entries(slots).forEach(([slot, rows]) => {
+    if (rows.length > 1) {
+      warnings.push(`${rows.length} files both classify as ${DOC_TYPES_LABELS[slot] || slot}: ${rows.map(r => r.filename).join(', ')}. Only one can fill that slot — remove or relabel the others before publishing.`);
+    }
+  });
   const touchesAgencies = Boolean(slots.agenciesBullets || slots.agenciesCallables);
   if (touchesAgencies && (!slots.agenciesBullets || !slots.agenciesCallables)) {
     warnings.push('Agency publishing needs both the bullets and callables workbooks unless the other file already exists in today’s current package.');
@@ -7016,6 +7067,11 @@ function scanFolderDrop(dateValue) {
   const dates = [...new Set(publishable.map(row => row.date).filter(Boolean))];
   if (dates.length > 1) warnings.push(`Files appear to reference multiple dates: ${dates.join(', ')}.`);
   if (references.length) warnings.push(`${references.length} reference/internal file${references.length === 1 ? '' : 's'} found. They will stay in the folder and will not replace package slots yet.`);
+  if (execPresent.length && !execSummary.complete) {
+    warnings.push(`Executive Summary: ${execPresent.length} of 4 files detected (${execPresent.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')}). Missing ${execMissing.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')} — exec summary will not generate on publish until all four are in the folder.`);
+  } else if (execSummary.complete) {
+    warnings.push('Executive Summary: all four files detected — the management snapshot will refresh on publish.');
+  }
 
   return {
     date,
@@ -7023,6 +7079,8 @@ function scanFolderDrop(dateValue) {
     created: true,
     publishable,
     references,
+    execFiles,
+    execSummary,
     ignored,
     slots,
     warnings
@@ -7094,6 +7152,73 @@ function ingestFolderDropReferences(scan) {
   return result;
 }
 
+// Best-effort: when the folder also holds the four Executive Summary inputs
+// (margin workbook + TH activity / inventory / sector grids), ingest them into
+// the management-only snapshot as part of the same publish — so the desk drops
+// everything in one folder and hits Publish once. Already admin-gated: the
+// folder-drop publish route sits behind the same FBBS_ADMIN_USERS check as the
+// dedicated exec-summary upload. Never throws: a failure here must not break the
+// daily package publish, so all errors are caught and reported in the result.
+function ingestFolderDropExecSummary(scan, req) {
+  const exec = scan.execSummary || {};
+  const detected = exec.detected || {};
+  const present = exec.present || [];
+  if (!present.length) return null; // no exec files in the folder — nothing to do
+  if (!exec.complete) {
+    return { ingested: false, skipped: true, reason: 'incomplete', present, missing: exec.missing || [] };
+  }
+
+  const tmpPaths = [];
+  try {
+    const folderPath = dropboxDirForDate(scan.date);
+    fs.mkdirSync(EXEC_SUMMARY_DIR, { recursive: true });
+    const writeTmp = (slot, tag) => {
+      const sourcePath = safeJoin(folderPath, detected[slot]);
+      if (!sourcePath || !fs.existsSync(sourcePath)) throw new Error(`Could not read exec ${slot} file ${detected[slot]}`);
+      const ext = path.extname(detected[slot] || '') || '.xlsx';
+      const p = path.join(EXEC_SUMMARY_DIR, `exec-folderdrop.tmp-${tag}-${process.pid}-${Date.now()}${ext}`);
+      fs.writeFileSync(p, fs.readFileSync(sourcePath));
+      tmpPaths.push(p);
+      return p;
+    };
+    const paths = {
+      inventoryPath: writeTmp('inventory', 'inv'),
+      activityPath: writeTmp('activity', 'act'),
+      sectorPath: writeTmp('sector', 'sec'),
+      marginPath: writeTmp('margin', 'mgn'),
+    };
+
+    let market = null;
+    try { market = marketFromEconomicUpdate(loadCurrentEconomicUpdate()); } catch (_) { /* overlay optional */ }
+
+    const summary = execSummaryStore.ingestExecSummary(EXEC_SUMMARY_DIR, paths, {
+      market,
+      sourceFiles: {
+        inventory: sanitizeFilename(detected.inventory),
+        activity: sanitizeFilename(detected.activity),
+        sector: sanitizeFilename(detected.sector),
+        margin: sanitizeFilename(detected.margin),
+      },
+    });
+
+    appendAuditLog({
+      event: 'exec-summary-import',
+      source: 'folder-drop',
+      asOfDate: summary.asOfDate,
+      cobDate: summary.cobDate,
+      sourceFiles: summary.sourceFiles,
+      warnings: summary.warnings,
+      ...(auditActorForRequest(req) || {}),
+    });
+    return { ingested: true, asOfDate: summary.asOfDate, cobDate: summary.cobDate, sourceFiles: summary.sourceFiles, warnings: summary.warnings };
+  } catch (err) {
+    log('warn', 'Folder-drop exec-summary ingest failed:', err.message);
+    return { ingested: false, error: err.message };
+  } finally {
+    for (const p of tmpPaths) { try { fs.rmSync(p, { force: true }); } catch (_) {} }
+  }
+}
+
 function validatePublishFileSet(files) {
   let classifiedCount = 0;
   for (const file of files || []) {
@@ -7156,7 +7281,11 @@ async function handleFolderDropPublish(req, res) {
       auditEvent: 'folder-publish',
       publishedBy: 'Folder Drop',
       sourceFolder: scan.folderPath,
-      afterPublish: () => ingestFolderDropReferences(scan)
+      afterPublish: () => {
+        const result = ingestFolderDropReferences(scan);
+        result.execSummary = ingestFolderDropExecSummary(scan, req);
+        return result;
+      }
     });
   } catch (err) {
     log('error', 'Folder drop publish failed:', err.message);
