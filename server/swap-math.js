@@ -383,6 +383,8 @@ function isTaxExemptLeg(leg) {
   const sourceKind = String(leg.sourceKind || '').toLowerCase();
   const sourceRef = String(leg.sourceRef || '').toLowerCase();
   const cusip = String(leg.cusip || '').trim();
+  if (!cusip && String(leg.side || '').toLowerCase() === 'buy') return false;
+  if (sourceKind === 'manual' && String(leg.side || '').toLowerCase() === 'buy') return false;
   if (sourceKind === 'manual' && !cusip && (sourceRef === 'reinvest-target' || !sourceRef)) return false;
   const explicit = [leg.taxStatus, leg.taxTreatment, leg.taxableStatus]
     .map(v => String(v || '').toLowerCase())

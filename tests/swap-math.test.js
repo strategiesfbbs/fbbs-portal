@@ -397,6 +397,7 @@ test('aggregateLegs only gross-ups tax-exempt TE yields', () => {
 
   const genericExemptMuniIdea = m.aggregateLegs([
     {
+      side: 'buy',
       par: 1_000_000,
       marketPrice: 100,
       marketYieldYtw: 5,
@@ -407,8 +408,34 @@ test('aggregateLegs only gross-ups tax-exempt TE yields', () => {
   ], 21);
   near(genericExemptMuniIdea.teMarketYield, 5, 0.001, 'generic reinvest target keeps typed yield');
 
+  const cusiplessDailyPackageBuy = m.aggregateLegs([
+    {
+      side: 'buy',
+      par: 1_000_000,
+      marketPrice: 100,
+      marketYieldYtw: 5,
+      sector: 'Exempt Muni',
+      sourceKind: 'daily-package',
+      sourceRef: '_muni_offerings.json'
+    }
+  ], 21);
+  near(cusiplessDailyPackageBuy.teMarketYield, 5, 0.001, 'CUSIP-less buy keeps typed yield');
+
+  const manualBuyWithCusip = m.aggregateLegs([
+    {
+      side: 'buy',
+      cusip: 'MANUAL01',
+      par: 1_000_000,
+      marketPrice: 100,
+      marketYieldYtw: 5,
+      sector: 'Exempt Muni',
+      sourceKind: 'manual'
+    }
+  ], 21);
+  near(manualBuyWithCusip.teMarketYield, 5, 0.001, 'manual buy keeps typed yield');
+
   const exempt = m.aggregateLegs([
-    { par: 1_000_000, marketPrice: 100, marketYieldYtw: 5, sector: 'Exempt Muni', sourceKind: 'holdings' }
+    { side: 'sell', par: 1_000_000, marketPrice: 100, marketYieldYtw: 5, sector: 'Exempt Muni', sourceKind: 'holdings' }
   ], 21);
   near(exempt.teMarketYield, m.teYield(5, 21), 0.001, 'exempt muni gets TE gross-up');
 });
