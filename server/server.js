@@ -601,8 +601,13 @@ function classifyFile(filename, explicitSlot) {
         lower.includes('rate sheet')) {
       return 'cd';
     }
+    // Economic Update PDF: the daily file arrives as YYYYMMDD.pdf, or carries an
+    // "econ" keyword. Do NOT blanket-default every unknown PDF to econ — that let
+    // stray reference PDFs (e.g. an offering doc) collide with the real econ file
+    // and silently overwrite it. Unknown PDFs fall through to null (reference/ignored).
     if (/^\d{8}\.pdf$/.test(lower)) return 'econ';
-    return 'econ';
+    if (lower.includes('econ') || lower.includes('economic')) return 'econ';
+    return null;
   }
   return null;
 }
@@ -657,6 +662,39 @@ function classifyFolderDropFile(filename) {
 // can't tell them apart. Peek at the workbook and route Treasury-note and Baird muni
 // exports to their real slots; genuine WIRP/Fed-Funds books match neither and fall
 // through to the existing reference handling. Returns a slot name or null.
+// Positive content detector for agency offering grids. The desk's Bloomberg
+// "grid1_<hash>.xlsx" agency exports carry an issuer-ticker column ("Tkr") whose
+// values are GSE issuers (FHLB / FNMA / FHLMC / FFCB / Farmer Mac). This must run
+// BEFORE the Treasury sniff: an all-callable FHLB grid has no CUSIP column and can
+// otherwise slip through looksLikeTreasuryWorkbook. Returns 'agenciesCallables'
+// (when call columns are present) / 'agenciesBullets', or null. Munis (issuer
+// column, no Tkr) and the real Treasury sheet (Name/CUSIP, no Tkr) don't match.
+const AGENCY_ISSUER_RE = /\b(FHLB|FNMA|FHLMC|FFCB|FAMCA|FARMER\s*MAC|FED(?:ERAL)?\s*(?:HOME\s*LOAN|FARM\s*CREDIT|NAT))\b/i;
+function sniffAgencyWorkbookSlot(buffer) {
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) return null;
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+    const hdr = (rows[0] || []).map(h => String(h || '').toLowerCase().trim());
+    const tkrIdx = hdr.findIndex(h => h === 'tkr' || h === 'ticker');
+    if (tkrIdx < 0) return null;
+    let dataRows = 0, agencyRows = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const s = String((rows[i] || [])[tkrIdx] || '').trim();
+      if (!s) continue;
+      dataRows++;
+      if (AGENCY_ISSUER_RE.test(s)) agencyRows++;
+    }
+    if (dataRows < 3 || agencyRows < Math.ceil(dataRows * 0.6)) return null;
+    const has = s => hdr.some(h => h.includes(s));
+    if (has('call typ') || has('ytnc') || has('nxt call') || has('next call')) return 'agenciesCallables';
+    return 'agenciesBullets';
+  } catch (_) {
+    return null;
+  }
+}
+
 function sniffWorkbookSlot(fullPath) {
   let buffer;
   try {
@@ -664,8 +702,10 @@ function sniffWorkbookSlot(fullPath) {
   } catch (err) {
     return null;
   }
-  if (looksLikeTreasuryWorkbook(buffer)) return 'treasuryNotes';
+  const agencySlot = sniffAgencyWorkbookSlot(buffer);
+  if (agencySlot) return agencySlot;
   if (looksLikeBairdSyndicateWorkbook(buffer)) return 'bairdSyndicate';
+  if (looksLikeTreasuryWorkbook(buffer)) return 'treasuryNotes';
   return null;
 }
 
