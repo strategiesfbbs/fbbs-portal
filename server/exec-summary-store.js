@@ -660,8 +660,14 @@ function computeExecSummary(src, ctx = {}) {
     coverage: { sectorLookup: `${secs.filter(s => byCusip[s.cusip]).length}/${secs.length}`, haircutDetail: capitalEfficiency.haircutDetailCoverage },
     warnings,
   };
-  if (!summary.deskNamesMapped || !summary.repNamesMapped) {
-    warnings.push('desk/rep names not yet mapped — showing codes (see exec-summary-store.js TRADER_MAP/SALESPERSON_MAP)');
+  // Report each code space independently so a filled side doesn't get flagged
+  // alongside an empty one (rep roster is firm-provided; desk TRADER_MAP is a
+  // separate code space still pending the firm's desk labels).
+  if (!summary.deskNamesMapped) {
+    warnings.push('desk trader codes not yet mapped — showing codes (fill TRADER_MAP in exec-summary-store.js with the firm desk labels)');
+  }
+  if (!summary.repNamesMapped) {
+    warnings.push('rep names not yet mapped — showing codes (fill the roster in rep-roster.js)');
   }
   summary.ceoBrief = buildCeoBrief(summary);
   summary.narrative = buildNarrative(summary);
