@@ -6715,9 +6715,9 @@ function marketFromEconomicUpdate(econ) {
   return (Object.keys(ust).length || market.sofr != null) ? market : null;
 }
 
-// Identify which of the four daily files an upload is, by content (the grid
+// Identify which of the Executive Summary files an upload is, by content (the grid
 // filenames are opaque hashes). Fallback for when the form field name is absent.
-// Content-classify one of the four Executive Summary daily inputs from a raw
+// Content-classify one of the Executive Summary daily inputs from a raw
 // workbook buffer. Keys on sheet/header signatures so it survives the generic
 // "grid1_<hash>.xlsx" Bloomberg filenames that carry no slot hint. Returns
 // 'inventory' | 'activity' | 'sector' | 'margin' | null. Shared by the
@@ -6742,15 +6742,19 @@ function classifyExecSummaryFile(file) {
   return classifyExecSummaryBuffer(file && file.data);
 }
 
-// Human labels for the four exec-summary slots (folder-drop scan + UI).
+// Human labels for exec-summary slots (folder-drop scan + UI). The three
+// required sources are inventory, TBLT trades, and margin; TH activity remains
+// accepted as optional legacy revenue detail when it is dropped in too.
 const EXEC_SUMMARY_SLOT_LABELS = {
   inventory: 'Inventory & risk grid',
-  activity: 'TH trade activity',
-  sector: 'Sector / issuer blotter',
+  activity: 'TH trade activity (optional)',
+  sector: 'TBLT trades',
   margin: 'Net-capital margin workbook'
 };
 
-// Management-only: ingest the four daily files, compute + persist one COB-dated
+const EXEC_SUMMARY_REQUIRED_SLOTS = ['inventory', 'sector', 'margin'];
+
+// Management-only: ingest the daily files, compute + persist one COB-dated
 // executive-summary snapshot (idempotent), and return it. Admin-gated via the
 // FBBS_ADMIN_USERS allowlist (see isAdminOnlyApiWrite).
 async function handleExecSummaryUpload(req, res) {
@@ -6762,7 +6766,7 @@ async function handleExecSummaryUpload(req, res) {
   try {
     const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
     const excel = files.filter(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename || ''));
-    if (!excel.length) return sendJSON(res, 400, { error: 'Upload the four daily files (.xlsx / .xlsm).' });
+    if (!excel.length) return sendJSON(res, 400, { error: 'Upload the three Executive Summary files (.xlsx / .xlsm).' });
     for (const f of excel) {
       if (!looksLikeExcel(f.data)) return sendJSON(res, 400, { error: `${f.filename} does not look like an Excel workbook.` });
     }
@@ -6773,9 +6777,9 @@ async function handleExecSummaryUpload(req, res) {
       const slot = byField || classifyExecSummaryFile(f);
       if (slot && !slots[slot]) slots[slot] = f;
     }
-    const missing = Object.keys(slots).filter(k => !slots[k]);
+    const missing = EXEC_SUMMARY_REQUIRED_SLOTS.filter(k => !slots[k]);
     if (missing.length) {
-      return sendJSON(res, 400, { error: `Could not identify the daily file(s) for: ${missing.join(', ')}. Use the labeled pickers, or confirm the Bloomberg / margin-calc exports.` });
+      return sendJSON(res, 400, { error: `Could not identify the Executive Summary file(s) for: ${missing.map(k => EXEC_SUMMARY_SLOT_LABELS[k] || k).join(', ')}. Use the labeled pickers, or confirm the Bloomberg / margin-calc exports.` });
     }
 
     fs.mkdirSync(EXEC_SUMMARY_DIR, { recursive: true });
@@ -6788,10 +6792,10 @@ async function handleExecSummaryUpload(req, res) {
     };
     const paths = {
       inventoryPath: writeTmp(slots.inventory, 'inv'),
-      activityPath: writeTmp(slots.activity, 'act'),
       sectorPath: writeTmp(slots.sector, 'sec'),
       marginPath: writeTmp(slots.margin, 'mgn'),
     };
+    if (slots.activity) paths.activityPath = writeTmp(slots.activity, 'act');
 
     let market = null;
     try { market = marketFromEconomicUpdate(await loadCurrentEconomicUpdate()); } catch (_) { /* overlay optional */ }
@@ -6800,7 +6804,8 @@ async function handleExecSummaryUpload(req, res) {
       market,
       sourceFiles: {
         inventory: sanitizeFilename(slots.inventory.filename),
-        activity: sanitizeFilename(slots.activity.filename),
+        activity: slots.activity ? sanitizeFilename(slots.activity.filename) : null,
+        trades: sanitizeFilename(slots.sector.filename),
         sector: sanitizeFilename(slots.sector.filename),
         margin: sanitizeFilename(slots.margin.filename),
       },
@@ -7085,7 +7090,8 @@ function scanFolderDrop(dateValue) {
   const execSlots = {};
   execFiles.forEach(row => { if (!execSlots[row.execSlot]) execSlots[row.execSlot] = row.filename; });
   const execPresent = Object.keys(execSlots);
-  const execMissing = ['inventory', 'activity', 'sector', 'margin'].filter(k => !execSlots[k]);
+  const execRequiredPresent = EXEC_SUMMARY_REQUIRED_SLOTS.filter(k => execSlots[k]);
+  const execMissing = EXEC_SUMMARY_REQUIRED_SLOTS.filter(k => !execSlots[k]);
   const execSummary = {
     detected: execSlots,
     present: execPresent,
@@ -7114,9 +7120,9 @@ function scanFolderDrop(dateValue) {
   if (dates.length > 1) warnings.push(`Files appear to reference multiple dates: ${dates.join(', ')}.`);
   if (references.length) warnings.push(`${references.length} reference/internal file${references.length === 1 ? '' : 's'} found. They will stay in the folder and will not replace package slots yet.`);
   if (execPresent.length && !execSummary.complete) {
-    warnings.push(`Executive Summary: ${execPresent.length} of 4 files detected (${execPresent.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')}). Missing ${execMissing.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')} — exec summary will not generate on publish until all four are in the folder.`);
+    warnings.push(`Executive Summary: ${execRequiredPresent.length} of 3 required files detected (${execPresent.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')}). Missing ${execMissing.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')} — exec summary will not generate on publish until holdings, TBLT trades, and margin are in the folder.`);
   } else if (execSummary.complete) {
-    warnings.push('Executive Summary: all four files detected — the management snapshot will refresh on publish.');
+    warnings.push('Executive Summary: holdings, TBLT trades, and margin detected — the management snapshot will refresh on publish.');
   }
 
   return {
@@ -7198,8 +7204,8 @@ function ingestFolderDropReferences(scan) {
   return result;
 }
 
-// Best-effort: when the folder also holds the four Executive Summary inputs
-// (margin workbook + TH activity / inventory / sector grids), ingest them into
+// Best-effort: when the folder also holds the Executive Summary inputs
+// (holdings, TBLT trades, and margin workbook), ingest them into
 // the management-only snapshot as part of the same publish — so the desk drops
 // everything in one folder and hits Publish once. Already admin-gated: the
 // folder-drop publish route sits behind the same FBBS_ADMIN_USERS check as the
@@ -7229,10 +7235,10 @@ function ingestFolderDropExecSummary(scan, req) {
     };
     const paths = {
       inventoryPath: writeTmp('inventory', 'inv'),
-      activityPath: writeTmp('activity', 'act'),
       sectorPath: writeTmp('sector', 'sec'),
       marginPath: writeTmp('margin', 'mgn'),
     };
+    if (detected.activity) paths.activityPath = writeTmp('activity', 'act');
 
     let market = null;
     try { market = marketFromEconomicUpdate(loadCurrentEconomicUpdate()); } catch (_) { /* overlay optional */ }
@@ -7241,7 +7247,8 @@ function ingestFolderDropExecSummary(scan, req) {
       market,
       sourceFiles: {
         inventory: sanitizeFilename(detected.inventory),
-        activity: sanitizeFilename(detected.activity),
+        activity: detected.activity ? sanitizeFilename(detected.activity) : null,
+        trades: sanitizeFilename(detected.sector),
         sector: sanitizeFilename(detected.sector),
         margin: sanitizeFilename(detected.margin),
       },
@@ -8348,7 +8355,7 @@ const server = http.createServer(async (req, res) => {
         : execSummaryStore.getLatestSnapshot(EXEC_SUMMARY_DIR);
       if (!summary) {
         return sendJSON(res, 404, {
-          error: date ? `No executive summary for ${date}` : 'No executive summary yet — upload today\'s four files on the Exec Summary tab.'
+          error: date ? `No executive summary for ${date}` : 'No executive summary yet — upload holdings, TBLT trades, and margin on the Exec Summary tab.'
         });
       }
       // Attach a compact KPI trend (last ~30 snapshots) for the trend card.

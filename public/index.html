@@ -2974,7 +2974,7 @@
     <div class="page-hero-inner">
       <div>
         <h2>Executive <strong>Summary</strong></h2>
-        <p class="hero-sub" id="execSummarySub">Management-only &mdash; capital, risk, P&amp;L, and desk activity</p>
+        <p class="hero-sub" id="execSummarySub">Management-only &mdash; holdings, trades, and margin</p>
       </div>
       <div class="hero-stat">
         <div class="num" id="execSummaryExcess">&mdash;</div>
@@ -2986,12 +2986,11 @@
   <div class="container">
     <details class="exec-upload" id="execUploadPanel">
       <summary>Upload today&apos;s files &amp; generate snapshot</summary>
-      <p class="kicker">Drop the four daily exports &mdash; inventory &amp; risk grid, TH trade activity, sector / issuer blotter, and the margin-calc workbook (.xlsm). Re-running a date overwrites that snapshot.</p>
+      <p class="kicker">Drop the three daily exports &mdash; inventory &amp; risk grid, TBLT trades, and the margin-calc workbook (.xlsm). Re-running a date overwrites that snapshot.</p>
       <form id="execUploadForm" enctype="multipart/form-data">
         <div class="exec-upload-grid">
           <label>Inventory &amp; risk grid<input type="file" name="inventory" accept=".xlsx,.xls"></label>
-          <label>TH trade activity<input type="file" name="activity" accept=".xlsx,.xls"></label>
-          <label>Sector / issuer blotter<input type="file" name="sector" accept=".xlsx,.xls"></label>
+          <label>TBLT trades<input type="file" name="sector" accept=".xlsx,.xls"></label>
           <label>Margin-calc workbook<input type="file" name="margin" accept=".xlsm,.xlsx"></label>
         </div>
         <div class="exec-upload-actions">

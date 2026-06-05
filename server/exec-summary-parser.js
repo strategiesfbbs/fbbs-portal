@@ -3,7 +3,7 @@
 /**
  * FBBS Executive Summary — source parsers.
  *
- * Pure xlsx -> normalized-JSON parsers for the four daily inputs behind the
+ * Pure xlsx -> normalized-JSON parsers for the daily inputs behind the
  * (management-only) Executive Summary tab. No I/O beyond reading the workbook
  * path it is handed; no SQLite, no network. Follows the portal parser
  * convention: every parser returns `{ asOfDate, warnings, ... }`; the caller
@@ -11,8 +11,8 @@
  *
  * Inputs (Bloomberg + margin-calc exports — cached values, no live BDP at read):
  *   - Inventory & risk grid   (grid1_ab5*.xlsx)      -> parseInventoryGrid
- *   - TH trade activity       (grid1_v0d*.xlsx)      -> parseTradeActivity  (the spine)
- *   - Sector / issuer blotter (grid1_zmp*.xlsx)      -> parseSectorLookup   (CUSIP->sector/issuer)
+ *   - TBLT trade blotter      (grid1_*.xlsx)         -> parseSectorLookup   (trades + CUSIP lookup)
+ *   - TH trade activity       (grid1_v0d*.xlsx)      -> parseTradeActivity  (legacy optional detail)
  *   - Net-capital workbook    (...MARGIN CALC.xlsm)  -> parseMarginWorkbook
  */
 
@@ -194,21 +194,58 @@ function parseTradeActivity(filePath) {
   return { asOfDate: maxDate, warnings, trades };
 }
 
-// ------------------------------------------------- CUSIP -> sector/issuer ----
-// The blotter double-counts each economic trade across leg types (MT/SB/TT...),
-// so we use it strictly as a CUSIP-keyed reference map, deduped by CUSIP.
+// -------------------------------------- TBLT trades + CUSIP -> sector/issuer -
+// The TBLT blotter can carry duplicate CUSIPs because each sheet tells the
+// day's trade story. We keep every row as activity, while also building a
+// deduped CUSIP reference map for issuer/sector/duration/maturity joins.
 function parseSectorLookup(filePath) {
   const warnings = [];
   const records = firstSheetObjects(filePath);
   const byCusip = {};
+  const trades = [];
   let maxDate = null;
 
-  for (const row of records) {
+  records.forEach((row, idx) => {
     const cusip = txt(row['Cusip Number']).toUpperCase();
-    if (!isCusip(cusip)) continue;
+    if (!isCusip(cusip)) return;
 
     const td = excelToISO(row['Trade Date']);
     if (td && (!maxDate || td > maxDate)) maxDate = td;
+    const amount = numify(row['Amount']);
+    const price = numify(row['Price']);
+    const principal = numify(row['Principal']);
+    const derivedPrincipal = (amount != null && price != null) ? amount * 1000 * price / 100 : null;
+    const security = txt(row['Security']) || txt(row['Security Description']);
+    const trade = {
+      trader: txt(row['Trader']),
+      type: txt(row['Type']),
+      ticket: txt(row['Ticket']) || `TBLT-${idx + 1}`,
+      security,
+      cusip,
+      buySell: txt(row['B/S']).toUpperCase(),
+      amount,
+      price,
+      counterparty: txt(row['Counterparty']),
+      firmAccount: txt(row['Firm Account Long Name']),
+      masterAccount: txt(row['Master Account Long Name']),
+      tradeDate: td,
+      settleDate: excelToISO(row['Settle Date']),
+      salesperson: txt(row['Salesperson']),
+      txnCost1: numify(row['Transaction Cost 1 Amount']),
+      txnCost2: numify(row['Transaction Cost 2 Amount']),
+      revenue: numify(row['Revenue']),
+      principal: principal != null ? principal : derivedPrincipal,
+      accruedInterest: numify(row['Accrued Interest']),
+      customerType: txt(row['Firm Account Customer Type']).toUpperCase() || 'UNSPECIFIED',
+      issuer: txt(row['Issuer']) || null,
+      industrySector: txt(row['Industry Sector']) || null,
+      industryGroup: txt(row['Industry Group']) || null,
+      marketSector: txt(row['Market Sector Description']) || null,
+    };
+    if (trade.revenue == null && (trade.txnCost1 != null || trade.txnCost2 != null)) {
+      trade.revenue = (trade.txnCost1 || 0) + (trade.txnCost2 || 0);
+    }
+    trades.push(trade);
 
     if (!byCusip[cusip]) {
       byCusip[cusip] = {
@@ -231,11 +268,12 @@ function parseSectorLookup(filePath) {
       if (!e.industrySector) e.industrySector = txt(row['Industry Sector']) || null;
       if (e.duration == null) e.duration = numify(row['Duration']);
     }
-  }
+  });
 
   const cusipCount = Object.keys(byCusip).length;
-  if (!cusipCount) warnings.push('no CUSIPs parsed from sector lookup');
-  return { asOfDate: maxDate, warnings, byCusip, cusipCount };
+  if (!cusipCount) warnings.push('no CUSIPs parsed from TBLT blotter');
+  if (!trades.length) warnings.push('no trade rows parsed from TBLT blotter');
+  return { asOfDate: maxDate, warnings, byCusip, cusipCount, trades, tradeCount: trades.length };
 }
 
 // ------------------------------------------------------ net-capital workbook -

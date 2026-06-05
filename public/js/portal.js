@@ -14355,7 +14355,7 @@
         if (exec.ingested) {
           setTimeout(() => showToast(`Exec Summary updated · COB ${exec.cobDate || exec.asOfDate || 'latest'}`), 700);
         } else if (exec.skipped && Array.isArray(exec.missing) && exec.missing.length) {
-          const labels = { inventory: 'inventory grid', activity: 'TH activity', sector: 'sector blotter', margin: 'margin workbook' };
+          const labels = { inventory: 'inventory grid', activity: 'TH activity', sector: 'TBLT trades', margin: 'margin workbook' };
           const miss = exec.missing.map(k => labels[k] || k).join(', ');
           setTimeout(() => showToast(`Exec Summary not generated · missing ${miss}`, true), 700);
         } else if (exec.error) {
@@ -17761,8 +17761,8 @@
       const status = document.getElementById('execUploadStatus');
       const btn = document.getElementById('execUploadBtn');
       const fd = new FormData(form);
-      const hasAny = ['inventory', 'activity', 'sector', 'margin'].some(k => { const f = fd.get(k); return f && f.name; });
-      if (!hasAny) { if (status) status.textContent = 'Choose the four files first.'; return; }
+      const hasAny = ['inventory', 'sector', 'margin'].some(k => { const f = fd.get(k); return f && f.name; });
+      if (!hasAny) { if (status) status.textContent = 'Choose the three files first.'; return; }
       if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
       if (status) status.textContent = 'Uploading and computing…';
       try {
@@ -17978,7 +17978,7 @@
         + cell('DV01', risk.portfolioDv01 != null ? risk.portfolioDv01.toFixed(1) + '/bp' : '—');
       const ladderBlock = (bpd.maturityLadder || []).length
         ? `<h4>Maturity ladder &mdash; net MV by years to maturity</h4>${execLadder(bpd.maturityLadder)}`
-        : `<p class="exec-foot">Maturity ladder unavailable &mdash; the sector blotter carried no maturity dates for the priced book.</p>`;
+        : `<p class="exec-foot">Maturity ladder unavailable &mdash; the TBLT blotter carried no maturity dates for the priced book.</p>`;
       const mixBlock = (bpd.couponMix || []).some(m => m.mktValue)
         ? `<h4>Coupon type (by MV)</h4>${execCouponMix(bpd.couponMix)}`
         : '';
@@ -18092,7 +18092,7 @@
       </section>`;
 
     const sf = d.sourceFiles || {};
-    const coverage = `<p class="exec-foot exec-coverage">Source: ${esc(sf.margin || '—')} · sector lookup ${esc((d.coverage && d.coverage.sectorLookup) || '—')} · haircut detail ${esc((d.coverage && d.coverage.haircutDetail) || '—')} · generated ${esc(d.generatedAt || '')}</p>`;
+    const coverage = `<p class="exec-foot exec-coverage">Source: ${esc(sf.margin || '—')} · TBLT lookup ${esc((d.coverage && d.coverage.sectorLookup) || '—')} · haircut detail ${esc((d.coverage && d.coverage.haircutDetail) || '—')} · generated ${esc(d.generatedAt || '')}</p>`;
 
     body.innerHTML = banner + ceoBrief + kpis + riskHedge + managementActions + revenueQuality + trend + narrative + bridge + positionsCard + riskCapital + book + compCard + activity + settleCard + market + exceptions + coverage;
   }

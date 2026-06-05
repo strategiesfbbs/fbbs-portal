@@ -179,6 +179,22 @@ test('null/empty market -> overlay null; empty trades does not throw', () => {
   assert.strictEqual(s.activity.ticketCount, 0);
 });
 
+test('three-source TBLT mode uses blotter rows for activity without revenue detail', () => {
+  const src = sources();
+  delete src.activity;
+  src.sector.trades = [
+    { ticket: 'TBLT-1', cusip: '11111AAA1', buySell: 'B', principal: 1000000, customerType: 'UNSPECIFIED', settleDate: '2026-06-05' },
+    { ticket: 'TBLT-2', cusip: '22222BBB2', buySell: 'S', principal: 495000, customerType: 'UNSPECIFIED', settleDate: '2026-06-05' },
+  ];
+  const s = store.computeExecSummary(src);
+  assert.strictEqual(s.revenue.dayTotal, null);
+  assert.strictEqual(s.activity.ticketCount, 2);
+  assert.strictEqual(s.activity.netBuySellBySector[0].sector, 'Corp');
+  assert.strictEqual(s.activity.netBuySellBySector[0].net, 505000);
+  assert.strictEqual(s.activity.customerFlow.customerPct, null);
+  assert.ok(/TBLT shows 2 trade row/.test(s.narrative.text));
+});
+
 test('market overlay derives 2s10s when curve present', () => {
   const src = sources();
   src.market = { ust: { ust_2y: 4.0, ust_10y: 4.5 }, sofr: 5.3, ig_oas: 90, hy_oas: 320 };

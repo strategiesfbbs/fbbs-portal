@@ -3,7 +3,7 @@
 /**
  * FBBS Executive Summary — calc engine + store.
  *
- * Turns the four parsed daily inputs (see exec-summary-parser.js) into the
+ * Turns the three daily sources (holdings, TBLT trades, margin) into the
  * computed `summary_daily` object the management-only Executive Summary tab
  * renders, and persists one idempotent snapshot per business morning.
  *
@@ -121,7 +121,7 @@ function buildCapitalBridge(c) {
 
 // Inventory "book profile": MV-weighted average yield / spread / duration plus a
 // years-to-maturity ladder. Yield & spread come off the inventory grid; duration
-// & maturity off the sector blotter (joined by CUSIP). Each metric weights by
+// & maturity off the TBLT blotter (joined by CUSIP). Each metric weights by
 // |market value| over only the positions that carry it, so missing Bloomberg
 // columns don't dilute the average — they just shrink coverage. Net (signed) MV
 // fills each ladder bucket, matching how the sector table reports MV.
@@ -329,7 +329,8 @@ function computeHedgeWatch(risk, capital) {
 function computeRevenueQuality(revenue, activitySummary) {
   const cf = (activitySummary && activitySummary.customerFlow) || {};
   const grossPrincipal = (cf.customerPrincipal || 0) + (cf.dealerPrincipal || 0);
-  const dayTotal = revenue && revenue.dayTotal != null ? Number(revenue.dayTotal) : 0;
+  const revenueKnown = Boolean(revenue && revenue.dayTotal != null);
+  const dayTotal = revenueKnown ? Number(revenue.dayTotal) : null;
   const byType = (cf.byType || []).map(t => ({
     type: t.type,
     principal: t.principal,
@@ -338,10 +339,10 @@ function computeRevenueQuality(revenue, activitySummary) {
   }));
   return {
     grossPrincipal: round(grossPrincipal, 0),
-    revenuePerTicket: activitySummary && activitySummary.ticketCount ? round(dayTotal / activitySummary.ticketCount, 0) : null,
-    revenuePerMillionPrincipal: grossPrincipal ? round(dayTotal / grossPrincipal * 1000000, 0) : null,
-    markupPct: dayTotal ? round((revenue.markup || 0) / dayTotal, 4) : null,
-    commissionPct: dayTotal ? round((revenue.commission || 0) / dayTotal, 4) : null,
+    revenuePerTicket: revenueKnown && activitySummary && activitySummary.ticketCount ? round(dayTotal / activitySummary.ticketCount, 0) : null,
+    revenuePerMillionPrincipal: revenueKnown && grossPrincipal ? round(dayTotal / grossPrincipal * 1000000, 0) : null,
+    markupPct: revenueKnown && dayTotal ? round((revenue.markup || 0) / dayTotal, 4) : null,
+    commissionPct: revenueKnown && dayTotal ? round((revenue.commission || 0) / dayTotal, 4) : null,
     customerPct: cf.customerPct ?? null,
     dealerPct: cf.dealerPct ?? null,
     byType,
@@ -431,7 +432,11 @@ function issuerMatch(a, b) {
  * @param {{prior,priorMonthRevenue}} ctx
  */
 function computeExecSummary(src, ctx = {}) {
-  const { inventory, activity, sector, margin, market } = src;
+  const inventory = src.inventory || { warnings: [], securities: [] };
+  const sector = src.sector || { warnings: [], byCusip: {}, trades: [] };
+  const activity = src.activity || { warnings: [], asOfDate: sector.asOfDate || null, trades: sector.trades || [] };
+  const margin = src.margin || { warnings: [], haircuts: [], approvedIssuers: [], capital: {} };
+  const market = src.market || null;
   const prior = ctx.prior || null;
   const warnings = [
     ...(inventory.warnings || []),
@@ -515,10 +520,11 @@ function computeExecSummary(src, ctx = {}) {
   const positions = computePositionsByAccount(margin.positionsByAccount, margin.accountTypes);
 
   // ===================== REVENUE & ACTIVITY (TH spine) =====================
-  const trades = activity.trades;
-  const revenueDay = sumBy(trades, t => t.revenue);
-  const markupDay = sumBy(trades, t => t.txnCost1);     // principal markup (Txn Cost 1)
-  const commissionDay = sumBy(trades, t => t.txnCost2); // agency commission (Txn Cost 2)
+  const trades = activity.trades || [];
+  const hasRevenueDetail = !trades.length || trades.some(t => t.revenue != null || t.txnCost1 != null || t.txnCost2 != null);
+  const revenueDay = hasRevenueDetail ? sumBy(trades, t => t.revenue) : null;
+  const markupDay = hasRevenueDetail ? sumBy(trades, t => t.txnCost1) : null;     // principal markup (Txn Cost 1)
+  const commissionDay = hasRevenueDetail ? sumBy(trades, t => t.txnCost2) : null; // agency commission (Txn Cost 2)
   const priorMonthRevenue = Number(ctx.priorMonthRevenue) || 0;
 
   const bySalesperson = groupSum(trades, t => t.salesperson || 'UNSPECIFIED', { revenue: t => t.revenue, principal: t => Math.abs(t.principal || 0) })
@@ -539,20 +545,23 @@ function computeExecSummary(src, ctx = {}) {
   const flowGroups = groupSum(trades, t => t.customerType || 'UNSPECIFIED', { principal: t => Math.abs(t.principal || 0) });
   const totalFlow = sumBy(flowGroups, g => g.principal);
   const custFlow = sumBy(flowGroups.filter(g => g.key === 'CUST' || g.key === 'RETAIL'), g => g.principal);
+  const hasCustomerTypeDetail = trades.some(t => t.customerType && t.customerType !== 'UNSPECIFIED');
+  const hasCounterpartyDetail = trades.some(t => t.counterparty);
 
-  const topCounterparties = groupSum(trades, t => t.counterparty || 'Unknown', { principal: t => Math.abs(t.principal || 0) })
+  const topCounterparties = hasCounterpartyDetail ? groupSum(trades, t => t.counterparty || 'Unknown', { principal: t => Math.abs(t.principal || 0) })
     .map(g => ({ counterparty: g.key, principal: round(g.principal, 0), tickets: g.count, pct: round(safeDiv(g.principal, totalFlow), 4) }))
-    .sort((a, b) => b.principal - a.principal).slice(0, 5);
+    .sort((a, b) => b.principal - a.principal).slice(0, 5) : [];
 
-  const tickets = new Set(trades.map(t => t.ticket).filter(Boolean)).size;
+  const distinctTickets = new Set(trades.map(t => t.ticket).filter(Boolean)).size;
+  const tickets = distinctTickets || trades.length;
 
   const revenue = {
-    dayTotal: round(revenueDay, 0),
-    mtd: round(priorMonthRevenue + revenueDay, 0),
-    markup: round(markupDay, 0),
-    commission: round(commissionDay, 0),
+    dayTotal: hasRevenueDetail ? round(revenueDay, 0) : null,
+    mtd: hasRevenueDetail ? round(priorMonthRevenue + revenueDay, 0) : null,
+    markup: hasRevenueDetail ? round(markupDay, 0) : null,
+    commission: hasRevenueDetail ? round(commissionDay, 0) : null,
     bySalesperson, byDesk,
-    deltas: { dayTotal: delta(round(revenueDay, 0), prior && prior.revenue && prior.revenue.dayTotal) },
+    deltas: { dayTotal: hasRevenueDetail ? delta(round(revenueDay, 0), prior && prior.revenue && prior.revenue.dayTotal) : null },
   };
   const activitySummary = {
     ticketCount: tickets,
@@ -563,10 +572,10 @@ function computeExecSummary(src, ctx = {}) {
       // CUST + RETAIL = customer; everything else (DEALER + unclassified street
       // blocks) = dealer/street, so the two shares are complementary.
       byType: flowGroups.map(g => ({ type: g.key, principal: round(g.principal, 0), tickets: g.count })),
-      customerPct: round(safeDiv(custFlow, totalFlow), 4),
-      dealerPct: totalFlow ? round((totalFlow - custFlow) / totalFlow, 4) : null,
-      customerPrincipal: round(custFlow, 0),
-      dealerPrincipal: round(totalFlow - custFlow, 0),
+      customerPct: hasCustomerTypeDetail ? round(safeDiv(custFlow, totalFlow), 4) : null,
+      dealerPct: hasCustomerTypeDetail && totalFlow ? round((totalFlow - custFlow) / totalFlow, 4) : null,
+      customerPrincipal: hasCustomerTypeDetail ? round(custFlow, 0) : null,
+      dealerPrincipal: hasCustomerTypeDetail ? round(totalFlow - custFlow, 0) : null,
     },
     topCounterparties,
   };
@@ -588,7 +597,7 @@ function computeExecSummary(src, ctx = {}) {
   const capitalEfficiency = {
     approvedIssuerSavings: capital.approvedIssuerAdj != null ? Math.abs(capital.approvedIssuerAdj) : null,
     pnlPerRequirement: round(safeDiv(unrealizedTotal, capital.totalRequirement), 4),
-    revenuePerRequirement: round(safeDiv(revenueDay, capital.totalRequirement), 6),
+    revenuePerRequirement: hasRevenueDetail ? round(safeDiv(revenueDay, capital.totalRequirement), 6) : null,
     bySector: sectorGroups.map(g => ({ sector: g.sector, requirement: g.requirement, pnl: g.pnl, pnlPerRequirement: g.pnlPerRequirement })),
     topIssuersByRequirement: issuerReq.slice(0, 8),
     haircutDetailCoverage: `${secs.filter(s => haircutByCusip[s.cusip]).length}/${secs.length}`,
@@ -712,11 +721,16 @@ function buildNarrative(s) {
 
   // 3) Revenue & flow
   const topRep = rev.bySalesperson && rev.bySalesperson[0];
-  let s3 = `The desk earned ${money(rev.dayTotal)}`;
-  s3 += (rev.markup != null && rev.commission != null && rev.commission > 0)
-    ? ` (${money(rev.markup)} principal markup, ${money(rev.commission)} agency commission)`
-    : ` of markup/commission`;
-  s3 += ` today across ${a.ticketCount} tickets, ${pct(a.customerFlow.customerPct)} customer vs ${pct(a.customerFlow.dealerPct)} dealer/street`;
+  let s3 = rev.dayTotal != null ? `The desk earned ${money(rev.dayTotal)}` : `TBLT shows ${a.ticketCount} trade row(s)`;
+  if (rev.dayTotal != null) {
+    s3 += (rev.markup != null && rev.commission != null && rev.commission > 0)
+      ? ` (${money(rev.markup)} principal markup, ${money(rev.commission)} agency commission)`
+      : ` of markup/commission`;
+    s3 += ` today across ${a.ticketCount} tickets`;
+  }
+  if (a.customerFlow.customerPct != null || a.customerFlow.dealerPct != null) {
+    s3 += `, ${pct(a.customerFlow.customerPct)} customer vs ${pct(a.customerFlow.dealerPct)} dealer/street`;
+  }
   s3 += topRep && topRep.revenue > 0 ? `; ${topRep.name} led production at ${money(topRep.revenue)}.` : `.`;
   sentences.push(s3);
 
@@ -779,7 +793,7 @@ function saveSnapshot(execDir, summary, meta = {}) {
     cob_date: summary.cobDate || null,
     generated_at: generatedAt,
     source_files: summary.sourceFiles ? JSON.stringify(summary.sourceFiles) : null,
-    day_revenue: (summary.revenue && summary.revenue.dayTotal) || 0,
+    day_revenue: summary.revenue ? summary.revenue.dayTotal ?? null : null,
     summary_json: JSON.stringify(summary),
   };
 
@@ -910,14 +924,16 @@ function getPriorMonthRevenue(execDir, asOfDate) {
 
 // ------------------------------------------------------------- orchestration -
 /**
- * Parse the four uploaded files, compute the snapshot against history, persist
+ * Parse the uploaded files, compute the snapshot against history, persist
  * idempotently, and return the summary. `market` (optional) is the portal's
  * already-ingested Economic Update data, passed through to the overlay.
  */
 function ingestExecSummary(execDir, paths, opts = {}) {
   const inventory = parser.parseInventoryGrid(paths.inventoryPath);
-  const activity = parser.parseTradeActivity(paths.activityPath);
-  const sector = parser.parseSectorLookup(paths.sectorPath);
+  const sector = parser.parseSectorLookup(paths.sectorPath || paths.tradesPath);
+  const activity = paths.activityPath
+    ? parser.parseTradeActivity(paths.activityPath)
+    : { asOfDate: sector.asOfDate, warnings: [], trades: sector.trades || [] };
   const margin = parser.parseMarginWorkbook(paths.marginPath);
 
   const asOfDate = margin.cobDate || margin.preparedDate || activity.asOfDate || opts.asOfDate || null;
