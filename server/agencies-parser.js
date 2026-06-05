@@ -135,6 +135,23 @@ function toYieldPct(val, treatment) {
   return n;
 }
 
+// Decide whether a whole yield column arrives as a decimal fraction (0.0369) or
+// already as a percent (3.69). Trader workbooks historically send YTM as a
+// decimal; the Bloomberg "grid1_<hash>.xlsx" exports send it already in percent
+// (A YTM = 3.327). Deciding once per column from the sample median scales the
+// sheet consistently — far safer than a per-row ≤1 guess, which would misread a
+// genuine sub-1% percent yield. Returns the multiplier to apply (100 or 1).
+function yieldColumnMultiplier(dataRows, colIndex) {
+  if (colIndex < 0) return 100; // column absent — legacy decimal default (harmless: no values)
+  const nums = dataRows
+    .map(r => toNumber(r ? r[colIndex] : null))
+    .filter(n => n != null && n > 0)
+    .sort((a, b) => a - b);
+  if (!nums.length) return 100;
+  const median = nums[Math.floor(nums.length / 2)];
+  return median <= 1 ? 100 : 1; // ≤1 ⇒ decimal fraction (scale up); >1 ⇒ already percent
+}
+
 // Sanity band for published yields. A computed yield outside ~0.1–25% almost
 // always means a misread column or a decimal/percent scaling slip — the most
 // dangerous parser failure (a fully-populated sheet of wrong numbers that looks
@@ -165,6 +182,13 @@ function parseSheet(worksheet, structure, warnings) {
   const headers = (rows[headerIndex] || []).map(value => value == null ? '' : String(value).trim());
   const map = buildHeaderMap(headers);
 
+  // Decide the YTM column's scale once, from the data below the header, so a
+  // decimal sheet (0.0369) and a percent sheet (3.327 grid1 export) both land
+  // on a percent basis. YTNC keeps its per-value heuristic (its values legitimately
+  // span both forms — an imminent call spikes YTNC well above 1).
+  const ytmColIndex = map['ytm'] ? headers.indexOf(map['ytm']) : -1;
+  const ytmMultiplier = yieldColumnMultiplier(rows.slice(headerIndex + 1), ytmColIndex);
+
   const out = [];
   for (let i = headerIndex + 1; i < rows.length; i++) {
     const row = rows[i];
@@ -183,7 +207,7 @@ function parseSheet(worksheet, structure, warnings) {
       maturity:       toIsoDate(get('maturity')),
       availableSize:  toNumber(get('availableSize')),
       askPrice:       toNumber(get('askPrice')),
-      ytm:            toYieldPct(get('ytm'), 'ytm'),
+      ytm:            (() => { const n = toNumber(get('ytm')); return n == null ? null : n * ytmMultiplier; })(),
       ytnc:           toYieldPct(get('ytnc'), 'ytnc'),
 
       // Bullet-only

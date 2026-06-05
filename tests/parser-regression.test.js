@@ -129,7 +129,11 @@ function assertClassification() {
   assert.strictEqual(classifyFile('20260512_MASTER.xls'), null);
   assert.strictEqual(classifyFile('dealer commission spreadsheet.xlsx'), null);
   assert.strictEqual(classifyFile('20260424_FBBS_Offerings.pdf'), 'munioffers');
-  assert.strictEqual(classifyFile('grid1_twjtolp5.xlsx'), 'agenciesBullets');
+  // Generic grid1_<hash> names carry no slot hint → unclassified at the filename
+  // layer (content sniffing routes them). They must NOT blanket-default to
+  // agenciesBullets: findPackageFileForSlot scans the package via classifyFile,
+  // and that default made any stray workbook get grabbed as the agency bullets file.
+  assert.strictEqual(classifyFile('grid1_twjtolp5.xlsx'), null);
   assert.strictEqual(classifyFile('Baird Syndicate Munis.xlsx'), 'bairdSyndicate');
   assert.strictEqual(classifyFile('bullets 04.24.26.xlsx'), 'agenciesBullets');
   assert.strictEqual(classifyFile('callables 04.24.26.xlsx'), 'agenciesCallables');

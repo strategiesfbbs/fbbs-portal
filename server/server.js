@@ -569,7 +569,12 @@ function classifyFile(filename, explicitSlot) {
     if (lower.includes('corporate') || lower.includes('corp_')) return 'corporates';
     if (lower.includes('callable') || lower.includes('call')) return 'agenciesCallables';
     if (lower.includes('bullet')) return 'agenciesBullets';
-    return 'agenciesBullets';  // ambiguous → default; user can drop into the right slot
+    // Unrecognized workbook → unclassified. Do NOT blanket-default to
+    // agenciesBullets: findPackageFileForSlot() scans the current package by
+    // classifyFile(), and that default made any stray xlsx (a Baird muni grid,
+    // a Treasury grid) get grabbed as the agency bullets file. Real bullets are
+    // caught by the 'bullet' keyword or the content sniffer (sniffAgencyWorkbookSlot).
+    return null;
   }
 
   if (lower.endsWith('.pdf')) {
@@ -656,12 +661,44 @@ function classifyFolderDropFile(filename) {
   return classifyFile(filename);
 }
 
+// Positive content detector for agency offering grids. The desk's Bloomberg
+// "grid1_<hash>.xlsx" agency exports carry an issuer-ticker column ("Tkr") whose
+// values are GSE issuers (FHLB / FNMA / FHLMC / FFCB / Farmer Mac). The agencies
+// parser reads this grid format (abbreviated headers + per-column yield scaling),
+// so these route to the agency slots. Munis (issuer column, no Tkr) and the real
+// Treasury sheet (Name/CUSIP, no Tkr) don't match.
+const AGENCY_ISSUER_RE = /\b(FHLB|FNMA|FHLMC|FFCB|FAMCA|FARMER\s*MAC|FED(?:ERAL)?\s*(?:HOME\s*LOAN|FARM\s*CREDIT|NAT))\b/i;
+function sniffAgencyWorkbookSlot(buffer) {
+  try {
+    const wb = XLSX.read(buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) return null;
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+    const hdr = (rows[0] || []).map(h => String(h || '').toLowerCase().trim());
+    const tkrIdx = hdr.findIndex(h => h === 'tkr' || h === 'ticker');
+    if (tkrIdx < 0) return null;
+    let dataRows = 0, agencyRows = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const s = String((rows[i] || [])[tkrIdx] || '').trim();
+      if (!s) continue;
+      dataRows++;
+      if (AGENCY_ISSUER_RE.test(s)) agencyRows++;
+    }
+    if (dataRows < 3 || agencyRows < Math.ceil(dataRows * 0.6)) return null;
+    const has = s => hdr.some(h => h.includes(s));
+    if (has('call typ') || has('ytnc') || has('nxt call') || has('next call')) return 'agenciesCallables';
+    return 'agenciesBullets';
+  } catch (_) {
+    return null;
+  }
+}
+
 // Content fallback for folder-drop xlsx that the filename classifier left unslotted.
 // Desk exports increasingly arrive with generic names ("grid1_<hash>.xlsx") that the
-// same tool reuses for WIRP, Treasury, and Baird Syndicate reports — the filename alone
-// can't tell them apart. Peek at the workbook and route Treasury-note and Baird muni
-// exports to their real slots; genuine WIRP/Fed-Funds books match neither and fall
-// through to the existing reference handling. Returns a slot name or null.
+// same tool reuses for agency, Treasury, Baird Syndicate, and WIRP reports — the
+// filename alone can't tell them apart. Peek at the workbook and route agency,
+// Treasury-note, and Baird muni exports to their real slots; genuine WIRP/Fed-Funds
+// books match none and fall through to reference handling. Returns a slot name or null.
 function sniffWorkbookSlot(fullPath) {
   let buffer;
   try {
@@ -669,6 +706,8 @@ function sniffWorkbookSlot(fullPath) {
   } catch (err) {
     return null;
   }
+  const agencySlot = sniffAgencyWorkbookSlot(buffer);
+  if (agencySlot) return agencySlot;
   if (looksLikeTreasuryWorkbook(buffer)) return 'treasuryNotes';
   if (looksLikeBairdSyndicateWorkbook(buffer)) return 'bairdSyndicate';
   return null;
