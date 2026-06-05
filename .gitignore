@@ -8,6 +8,7 @@ data/dropbox/*
 data/cd-internal/*
 data/structured-notes/*
 data/market-color/*
+data/exec-summary/*
 data/audit.log
 !data/current/.gitkeep
 !data/archive/.gitkeep
@@ -18,6 +19,7 @@ data/audit.log
 !data/cd-internal/.gitkeep
 !data/structured-notes/.gitkeep
 !data/market-color/.gitkeep
+!data/exec-summary/.gitkeep
 
 # Node / IIS logs
 node_modules/

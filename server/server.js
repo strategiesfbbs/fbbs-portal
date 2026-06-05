@@ -35,6 +35,8 @@ const { parseBrokeredCdRateSheetText } = require('./brokered-cd-parser');
 const { parseMuniOffersText } = require('./muni-offers-parser');
 const { parseBairdSyndicateWorkbook, looksLikeBairdSyndicateWorkbook } = require('./baird-syndicate-parser');
 const { parseEconomicUpdateText } = require('./economic-update-parser');
+const XLSX = require('./xlsx');
+const execSummaryStore = require('./exec-summary-store');
 const { parseMmdCurveText } = require('./mmd-parser');
 const { parseTreasuryNotesWorkbook, looksLikeTreasuryWorkbook } = require('./treasury-notes-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
@@ -181,6 +183,7 @@ const MBS_CMO_DIR = path.join(DATA_DIR, 'mbs-cmo');
 const STRUCTURED_NOTES_DIR = path.join(DATA_DIR, 'structured-notes');
 const MARKET_COLOR_DIR = path.join(DATA_DIR, 'market-color');
 const CD_INTERNAL_DIR = path.join(DATA_DIR, 'cd-internal');
+const EXEC_SUMMARY_DIR = path.join(DATA_DIR, 'exec-summary');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 const AUDIT_LOG_MAX_BYTES = (parseInt(process.env.AUDIT_LOG_MAX_MB, 10) || 10) * 1024 * 1024;
 const AUDIT_LOG_KEEP = Math.max(1, parseInt(process.env.AUDIT_LOG_KEEP, 10) || 5);
@@ -214,7 +217,7 @@ function log(level, ...args) {
 
 // ---------- Setup ----------
 
-[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, DROPBOX_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR, STRUCTURED_NOTES_DIR, MARKET_COLOR_DIR, CD_INTERNAL_DIR].forEach(dir => {
+[DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, DROPBOX_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR, STRUCTURED_NOTES_DIR, MARKET_COLOR_DIR, CD_INTERNAL_DIR, EXEC_SUMMARY_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     log('info', 'Created data directory:', dir);
@@ -520,7 +523,8 @@ function isAdminOnlyApiWrite(pathname, method) {
     pathname === '/api/bank-account-statuses/upload' ||
     pathname === '/api/banks/averaged-series/upload' ||
     pathname === '/api/banks/bond-accounting/upload' ||
-    pathname === '/api/brokered-cd/wirp/upload'
+    pathname === '/api/brokered-cd/wirp/upload' ||
+    pathname === '/api/exec-summary/upload'
   );
 }
 
@@ -6522,6 +6526,124 @@ async function handleAveragedSeriesUpload(req, res) {
   }
 }
 
+// Map the portal's already-ingested Economic Update into the small market shape
+// the exec-summary overlay expects (reuse — no new external feed). Best-effort:
+// returns null when nothing usable is present.
+function marketFromEconomicUpdate(econ) {
+  if (!econ || typeof econ !== 'object') return null;
+  const ust = {};
+  const tmap = { 2: 'ust_2y', 5: 'ust_5y', 10: 'ust_10y', 30: 'ust_30y' };
+  if (Array.isArray(econ.treasuries)) {
+    for (const t of econ.treasuries) {
+      const m = String(t.tenor || '').match(/(\d+)\s*(?:yr|y|year)/i);
+      const key = m && tmap[Number(m[1])];
+      if (key && t.yield != null) ust[key] = Number(t.yield);
+    }
+  }
+  const rates = Array.isArray(econ.marketRates) ? econ.marketRates : [];
+  const findRate = re => { const r = rates.find(x => re.test(String(x.label || ''))); return r && r.value != null ? Number(r.value) : null; };
+  const market = {
+    ust,
+    sofr: findRate(/sofr/i),
+    fedFunds: findRate(/fed.?funds|fed funds target|fff/i),
+    igOas: findRate(/\big\b|investment grade|cdx ig/i),
+    hyOas: findRate(/\bhy\b|high yield/i),
+    note: econ.asOfDate ? `Reusing portal Economic Update (as of ${econ.asOfDate})` : 'Reusing portal Economic Update',
+  };
+  return (Object.keys(ust).length || market.sofr != null) ? market : null;
+}
+
+// Identify which of the four daily files an upload is, by content (the grid
+// filenames are opaque hashes). Fallback for when the form field name is absent.
+function classifyExecSummaryFile(file) {
+  try {
+    const wb = XLSX.read(file.data, { type: 'buffer' });
+    const names = wb.SheetNames || [];
+    if (names.includes('MAIN') && names.includes('TOTAL_HAIRCUTS')) return 'margin';
+    const ws = wb.Sheets[names[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+    const hdr = (rows[0] || []).map(h => String(h || '').toLowerCase());
+    const has = s => hdr.some(h => h.includes(s));
+    if (has('industry sector') && has('market sector')) return 'sector';
+    if (has('salesperson') && has('customer type')) return 'activity';
+    if (has('cusip(s)') && (has('p & l') || has('bidprice'))) return 'inventory';
+  } catch (_) { /* fall through to null */ }
+  return null;
+}
+
+// Management-only: ingest the four daily files, compute + persist one COB-dated
+// executive-summary snapshot (idempotent), and return it. Admin-gated via the
+// FBBS_ADMIN_USERS allowlist (see isAdminOnlyApiWrite).
+async function handleExecSummaryUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  const tmpPaths = [];
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const excel = files.filter(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename || ''));
+    if (!excel.length) return sendJSON(res, 400, { error: 'Upload the four daily files (.xlsx / .xlsm).' });
+    for (const f of excel) {
+      if (!looksLikeExcel(f.data)) return sendJSON(res, 400, { error: `${f.filename} does not look like an Excel workbook.` });
+    }
+
+    const slots = { inventory: null, activity: null, sector: null, margin: null };
+    for (const f of excel) {
+      const byField = ['inventory', 'activity', 'sector', 'margin'].includes(f.fieldName) ? f.fieldName : null;
+      const slot = byField || classifyExecSummaryFile(f);
+      if (slot && !slots[slot]) slots[slot] = f;
+    }
+    const missing = Object.keys(slots).filter(k => !slots[k]);
+    if (missing.length) {
+      return sendJSON(res, 400, { error: `Could not identify the daily file(s) for: ${missing.join(', ')}. Use the labeled pickers, or confirm the Bloomberg / margin-calc exports.` });
+    }
+
+    fs.mkdirSync(EXEC_SUMMARY_DIR, { recursive: true });
+    const writeTmp = (f, tag) => {
+      const ext = path.extname(f.filename || '') || '.xlsx';
+      const p = path.join(EXEC_SUMMARY_DIR, `exec-upload.tmp-${tag}-${process.pid}-${Date.now()}${ext}`);
+      fs.writeFileSync(p, f.data);
+      tmpPaths.push(p);
+      return p;
+    };
+    const paths = {
+      inventoryPath: writeTmp(slots.inventory, 'inv'),
+      activityPath: writeTmp(slots.activity, 'act'),
+      sectorPath: writeTmp(slots.sector, 'sec'),
+      marginPath: writeTmp(slots.margin, 'mgn'),
+    };
+
+    let market = null;
+    try { market = marketFromEconomicUpdate(await loadCurrentEconomicUpdate()); } catch (_) { /* overlay optional */ }
+
+    const summary = execSummaryStore.ingestExecSummary(EXEC_SUMMARY_DIR, paths, {
+      market,
+      sourceFiles: {
+        inventory: sanitizeFilename(slots.inventory.filename),
+        activity: sanitizeFilename(slots.activity.filename),
+        sector: sanitizeFilename(slots.sector.filename),
+        margin: sanitizeFilename(slots.margin.filename),
+      },
+    });
+
+    appendAuditLog({
+      event: 'exec-summary-import',
+      asOfDate: summary.asOfDate,
+      cobDate: summary.cobDate,
+      sourceFiles: summary.sourceFiles,
+      warnings: summary.warnings,
+      ...(auditActorForRequest(req) || {}),
+    });
+    return sendJSON(res, 200, { success: true, asOfDate: summary.asOfDate, summary });
+  } catch (err) {
+    log('error', 'Exec summary upload failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Executive summary import failed' });
+  } finally {
+    for (const p of tmpPaths) { try { fs.rmSync(p, { force: true }); } catch (_) {} }
+  }
+}
+
 async function handleBondAccountingUpload(req, res) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
@@ -7920,6 +8042,29 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, buildGoLiveStatus(req));
     }
 
+    // Management-only Executive Summary (Tier-B internal). Admin-gated, same as the
+    // Upload/Admin pages: in production (or whenever an admin allowlist is set) only
+    // FBBS_ADMIN_USERS may read it; on a local laptop with no allowlist it is open.
+    if ((pathname === '/api/exec-summary' || pathname === '/api/exec-summary/history') && req.method === 'GET') {
+      const { auth } = authInfoForRequest(req);
+      if ((IS_IIS_AUTH_MODE || ADMIN_USERS.size > 0) && !auth.isAdmin) {
+        return sendJSON(res, 403, { error: 'Management/admin permission is required for the Executive Summary.' });
+      }
+      if (pathname === '/api/exec-summary/history') {
+        return sendJSON(res, 200, { snapshots: execSummaryStore.listSnapshots(EXEC_SUMMARY_DIR) });
+      }
+      const date = query.get('date');
+      const summary = date
+        ? execSummaryStore.getSnapshot(EXEC_SUMMARY_DIR, date)
+        : execSummaryStore.getLatestSnapshot(EXEC_SUMMARY_DIR);
+      if (!summary) {
+        return sendJSON(res, 404, {
+          error: date ? `No executive summary for ${date}` : 'No executive summary yet — upload today\'s four files on the Exec Summary tab.'
+        });
+      }
+      return sendJSON(res, 200, summary);
+    }
+
     if (pathname === '/api/bank-views' && req.method === 'GET') {
       const repParam = String(query.get('rep') || '').toLowerCase();
       const rep = repParam === 'all' ? null : resolveRequestRep(req);
@@ -8637,6 +8782,10 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/banks/averaged-series/upload' && req.method === 'POST') {
       return await handleAveragedSeriesUpload(req, res);
+    }
+
+    if (pathname === '/api/exec-summary/upload' && req.method === 'POST') {
+      return await handleExecSummaryUpload(req, res);
     }
 
     if (pathname === '/api/banks/averaged-series' && req.method === 'GET') {

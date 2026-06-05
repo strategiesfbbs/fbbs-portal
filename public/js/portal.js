@@ -136,13 +136,14 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
+    { page: 'exec-summary', group: 'Operations', label: 'Exec Summary', description: 'Management-only daily capital, risk, P&L, and desk-activity dashboard', aliases: 'executive summary ceo capital net cap excess requirement buffer risk dv01 pnl revenue desk rep counterparty haircut management board' },
     { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
@@ -1390,12 +1391,12 @@
 
   function applyAuthUi() {
     const allowAdmin = isAdminUiAllowed();
-    document.querySelectorAll('[data-page="upload"], [data-goto="upload"], [data-page="admin"], [data-goto="admin"]').forEach(el => {
+    document.querySelectorAll('[data-page="upload"], [data-goto="upload"], [data-page="admin"], [data-goto="admin"], [data-page="exec-summary"], [data-goto="exec-summary"]').forEach(el => {
       el.hidden = !allowAdmin;
       el.setAttribute('aria-hidden', allowAdmin ? 'false' : 'true');
     });
     const active = parseHashTarget(window.location.hash || '#home').page;
-    if (!allowAdmin && (active === 'upload' || active === 'admin')) {
+    if (!allowAdmin && (active === 'upload' || active === 'admin' || active === 'exec-summary')) {
       showToast('Admin permission is required for that page.', true);
       goTo('package-qa');
     }
@@ -1404,7 +1405,7 @@
   function goTo(pageName, { updateHash = true } = {}) {
     pageName = parseHashTarget(pageName).page;
     if (!VALID_PAGES.includes(pageName)) pageName = 'home';
-    if (!isAdminUiAllowed() && (pageName === 'upload' || pageName === 'admin')) {
+    if (!isAdminUiAllowed() && (pageName === 'upload' || pageName === 'admin' || pageName === 'exec-summary')) {
       showToast('Admin permission is required for that page.', true);
       pageName = 'package-qa';
     }
@@ -1492,6 +1493,7 @@
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'package-qa') renderPackageQa();
     if (pageName === 'admin') loadAuditLog();
+    if (pageName === 'exec-summary') loadExecSummary();
   }
 
   // Expose for inline handlers that still use it (belt + braces)
@@ -17413,6 +17415,204 @@
       </table>
       <div class="legend-box"><strong>Note:</strong> Read-only review derived from the published package metadata (<code>/api/current</code>). Counts come from each slot's parsed JSON; optional slots (dashboard, Baird Syndicate) don't count against completeness.</div>
     `;
+  }
+
+  // ===== Executive Summary (management-only) =====
+  let execSummaryData = null;
+
+  function execMoney(n) {
+    if (n == null || !isFinite(n)) return '—';
+    const a = Math.abs(n), s = n < 0 ? '-' : '';
+    if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(1)}M`;
+    if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(1)}K`;
+    return `${s}$${a.toFixed(0)}`;
+  }
+  function execPct(n, dp) {
+    return (n == null || !isFinite(n)) ? '—' : `${(n * 100).toFixed(dp == null ? 1 : dp)}%`;
+  }
+  // Day-over-day delta chip. By default a rise is good (green); pass invertColor
+  // for metrics where a rise is bad (e.g. the capital requirement).
+  function execDelta(n, opts) {
+    opts = opts || {};
+    if (n == null || !isFinite(n) || n === 0) return '<span class="exec-delta flat">▬</span>';
+    const up = n > 0;
+    const good = opts.invertColor ? !up : up;
+    return `<span class="exec-delta ${good ? 'good' : 'bad'}">${up ? '▲' : '▼'} ${execMoney(Math.abs(n))}</span>`;
+  }
+  function execNotice(title, msg, danger) {
+    return `<div class="exec-notice${danger ? ' danger' : ''}"><h3>${escapeHtml(title)}</h3><p>${msg}</p></div>`;
+  }
+
+  function bindExecUploadForm() {
+    const form = document.getElementById('execUploadForm');
+    if (!form || form.dataset.bound) return;
+    form.dataset.bound = '1';
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const status = document.getElementById('execUploadStatus');
+      const btn = document.getElementById('execUploadBtn');
+      const fd = new FormData(form);
+      const hasAny = ['inventory', 'activity', 'sector', 'margin'].some(k => { const f = fd.get(k); return f && f.name; });
+      if (!hasAny) { if (status) status.textContent = 'Choose the four files first.'; return; }
+      if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+      if (status) status.textContent = 'Uploading and computing…';
+      try {
+        const res = await fetch('/api/exec-summary/upload', { method: 'POST', body: fd });
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(out.error || ('HTTP ' + res.status));
+        if (status) status.textContent = `Snapshot generated for ${out.asOfDate || 'today'}.`;
+        form.reset();
+        await loadExecSummary();
+      } catch (err) {
+        if (status) status.textContent = 'Failed: ' + err.message;
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Generate Snapshot'; }
+      }
+    });
+  }
+
+  async function loadExecSummary() {
+    bindExecUploadForm();
+    const body = document.getElementById('execSummaryBody');
+    const excessStat = document.getElementById('execSummaryExcess');
+    const sub = document.getElementById('execSummarySub');
+    if (!body) return;
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text3)">Loading executive summary…</div>';
+    try {
+      const res = await fetch('/api/exec-summary', { cache: 'no-store' });
+      if (res.status === 403) { body.innerHTML = execNotice('Management access required', 'The Executive Summary is restricted to management / admin users.'); return; }
+      if (res.status === 404) {
+        execSummaryData = null;
+        if (excessStat) excessStat.textContent = '—';
+        body.innerHTML = execNotice('No snapshot yet', 'Open “Upload today’s files” above and generate the first executive summary.');
+        return;
+      }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      execSummaryData = await res.json();
+    } catch (e) {
+      console.error('Failed to load exec summary:', e);
+      body.innerHTML = execNotice('Failed to load', escapeHtml(e.message), true);
+      return;
+    }
+    const d = execSummaryData;
+    if (excessStat) excessStat.textContent = execMoney(d.capital && d.capital.excessCall);
+    if (sub) sub.textContent = `COB ${d.cobDate || d.asOfDate || '—'}${d.preparedDate ? ` · prepared ${d.preparedDate}` : ''}`;
+    renderExecSummary(d);
+  }
+
+  function renderExecSummary(d) {
+    const body = document.getElementById('execSummaryBody');
+    if (!body || !d) return;
+    const esc = escapeHtml;
+    const cap = d.capital || {}, risk = d.risk || {}, pnl = d.pnl || {}, rev = d.revenue || {};
+    const act = d.activity || {}, eff = d.capitalEfficiency || {}, exc = d.exceptions || {};
+    const cf = act.customerFlow || {};
+
+    const nameWarn = (d.warnings || []).find(w => /names not yet mapped/.test(w));
+    const banner = nameWarn ? `<div class="exec-banner">⚠ ${esc(nameWarn)}</div>` : '';
+
+    const watch = (d.narrative && d.narrative.watchItems) || [];
+    const narrative = `
+      <section class="exec-card exec-narrative">
+        <p class="exec-narrative-text">${esc((d.narrative && d.narrative.text) || '')}</p>
+        <div class="exec-watch"><h4>Watch</h4><ul>${watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>
+      </section>`;
+
+    const tile = (label, value, delta, extra) => `
+      <div class="exec-kpi"><div class="exec-kpi-label">${esc(label)}</div>
+      <div class="exec-kpi-value">${value}</div>
+      <div class="exec-kpi-sub">${delta || ''}${extra ? ` <span>${extra}</span>` : ''}</div></div>`;
+    const kpis = `
+      <section class="exec-kpi-grid">
+        ${tile('Excess (Call)', execMoney(cap.excessCall), execDelta(cap.deltas && cap.deltas.excessCall), `buffer ${execPct(cap.bufferPct)}`)}
+        ${tile('Total Requirement', execMoney(cap.totalRequirement), execDelta(cap.deltas && cap.deltas.totalRequirement, { invertColor: true }))}
+        ${tile('Inventory MV', execMoney(risk.totalMktValue), execDelta(risk.deltas && risk.deltas.totalMktValue))}
+        ${tile('Unrealized P&L', execMoney(pnl.unrealizedTotal), execDelta(pnl.deltas && pnl.deltas.unrealizedTotal))}
+        ${tile('Markup Revenue', execMoney(rev.dayTotal), execDelta(rev.deltas && rev.deltas.dayTotal), `MTD ${execMoney(rev.mtd)}`)}
+        ${tile('Activity', `${act.ticketCount || 0} tix`, '', `${execPct(cf.customerPct)} cust / ${execPct(cf.dealerPct)} dlr`)}
+      </section>`;
+
+    const sectorRows = (risk.bySector || []).map(s => `
+      <tr><td>${esc(s.sector)}</td><td class="num">${execMoney(s.mktValue)}</td><td class="num">${s.dv01 != null ? s.dv01.toFixed(1) : '—'}</td><td class="num">${execMoney(s.requirement)}</td><td class="num ${(s.pnl || 0) < 0 ? 'neg' : ''}">${execMoney(s.pnl)}</td></tr>`).join('');
+    const issuerRows = (eff.topIssuersByRequirement || []).map(i => `
+      <tr><td>${esc(i.issuer)}${i.approvedIssuer ? ' <span class="exec-chip approved">20% appr</span>' : ''}</td><td class="num">${execMoney(i.requirement)}</td><td class="num">${execMoney(i.mktValue)}</td><td class="num ${(i.pnl || 0) < 0 ? 'neg' : ''}">${execMoney(i.pnl)}</td></tr>`).join('');
+    const riskCapital = `
+      <section class="exec-card"><h3>Risk &amp; Capital</h3>
+        <div class="exec-two-col">
+          <div><h4>Inventory by sector</h4>
+            <table class="exec-table"><thead><tr><th>Sector</th><th class="num">MV</th><th class="num">DV01</th><th class="num">Req.</th><th class="num">P&amp;L</th></tr></thead><tbody>${sectorRows}</tbody></table>
+            <p class="exec-foot">Portfolio DV01 ${risk.portfolioDv01 != null ? risk.portfolioDv01.toFixed(1) : '—'}/bp · P&amp;L per $ req ${eff.pnlPerRequirement != null ? eff.pnlPerRequirement.toFixed(4) : '—'} · approved-issuer benefit ${execMoney(eff.approvedIssuerSavings)}</p>
+          </div>
+          <div><h4>Top issuers by capital consumed</h4>
+            <table class="exec-table"><thead><tr><th>Issuer</th><th class="num">Req.</th><th class="num">MV</th><th class="num">P&amp;L</th></tr></thead><tbody>${issuerRows || '<tr><td colspan="4" class="muted">—</td></tr>'}</tbody></table>
+          </div>
+        </div>
+      </section>`;
+
+    const repRows = (rev.bySalesperson || []).filter(r => r.revenue).map(r => `<tr><td>${esc(r.name || r.code)}</td><td class="num">${execMoney(r.revenue)}</td><td class="num">${r.tickets}</td></tr>`).join('');
+    const deskRows = (rev.byDesk || []).filter(r => r.revenue).map(r => `<tr><td>${esc(r.name || r.code)}</td><td class="num">${execMoney(r.revenue)}</td><td class="num">${r.tickets}</td></tr>`).join('');
+    const netRows = (act.netBuySellBySector || []).map(s => `<tr><td>${esc(s.sector)}</td><td class="num ${(s.net || 0) < 0 ? 'neg' : ''}">${execMoney(s.net)}</td><td class="num">${s.tickets}</td></tr>`).join('');
+    const cpRows = (act.topCounterparties || []).map(c => `<tr><td>${esc(c.counterparty)}</td><td class="num">${execMoney(c.principal)}</td><td class="num">${execPct(c.pct)}</td></tr>`).join('');
+    const custW = Math.max(0, Math.min(100, Math.round((cf.customerPct || 0) * 100)));
+    const activity = `
+      <section class="exec-card"><h3>Activity &amp; Desk</h3>
+        <div class="exec-three-col">
+          <div><h4>Revenue by salesperson</h4><table class="exec-table"><thead><tr><th>Rep</th><th class="num">Rev.</th><th class="num">Tix</th></tr></thead><tbody>${repRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
+          <div><h4>Revenue by desk</h4><table class="exec-table"><thead><tr><th>Desk</th><th class="num">Rev.</th><th class="num">Tix</th></tr></thead><tbody>${deskRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
+          <div><h4>Net buy/sell by sector</h4><table class="exec-table"><thead><tr><th>Sector</th><th class="num">Net</th><th class="num">Tix</th></tr></thead><tbody>${netRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
+        </div>
+        <div class="exec-two-col">
+          <div><h4>Customer vs dealer/street</h4>
+            <div class="exec-flow-bar"><span style="width:${custW}%"></span></div>
+            <p class="exec-foot">${execPct(cf.customerPct)} customer (${execMoney(cf.customerPrincipal)}) · ${execPct(cf.dealerPct)} dealer/street (${execMoney(cf.dealerPrincipal)})</p>
+          </div>
+          <div><h4>Top counterparties</h4><table class="exec-table"><thead><tr><th>Counterparty</th><th class="num">Principal</th><th class="num">%</th></tr></thead><tbody>${cpRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
+        </div>
+      </section>`;
+
+    const mo = d.marketOverlay;
+    let market;
+    if (mo) {
+      const ust = mo.curve || mo.ust || {};
+      const c = k => (ust && ust[k] != null) ? `${Number(ust[k]).toFixed(2)}%` : '—';
+      const cell = (lbl, val) => `<div><span>${lbl}</span><strong>${val}</strong></div>`;
+      market = `
+        <section class="exec-card"><h3>Market Overlay</h3>
+          <div class="exec-market">
+            ${cell('2Y', c('ust_2y'))}${cell('5Y', c('ust_5y'))}${cell('10Y', c('ust_10y'))}${cell('30Y', c('ust_30y'))}
+            ${cell('2s10s', mo.curve2s10s != null ? mo.curve2s10s + 'bp' : '—')}${cell('SOFR', mo.sofr != null ? mo.sofr + '%' : '—')}${cell('IG OAS', mo.igOas != null ? mo.igOas : '—')}${cell('HY OAS', mo.hyOas != null ? mo.hyOas : '—')}
+          </div>
+          <p class="exec-foot">${esc(mo.note || '')} — desk net flow vs the move is shown under Activity.</p>
+        </section>`;
+    } else {
+      market = `<section class="exec-card"><h3>Market Overlay</h3><p class="muted">Market overlay unavailable — publish today’s Economic Update in the portal, then re-generate this snapshot to reuse its curve and spreads.</p></section>`;
+    }
+
+    const np = exc.netCapProximity || {}, pv = exc.pershingVariance || {}, agd = exc.aged || {}, unp = exc.unpriced || {}, conc = exc.concentration || {};
+    const agedRows = (agd.items || []).map(a => `<tr><td>${esc(a.cusip)}</td><td>${esc(a.issuer || a.sector || '')}</td><td class="num">${a.ageDays}d</td><td class="num">${execMoney(a.haircut)}</td></tr>`).join('');
+    const concBreached = new Set((conc.breaches || []).map(b => b.issuer));
+    const concRows = (conc.topIssuers || []).slice(0, 6).map(i => `<tr><td>${esc(i.issuer)}</td><td class="num">${execMoney(i.mktValue)}</td><td class="num ${concBreached.has(i.issuer) ? 'neg' : ''}">${execPct(i.pct)}</td></tr>`).join('');
+    const discRows = (exc.recentDiscrepancies || []).slice(0, 6).map(x => `<tr><td>${esc(x.date)}</td><td>${esc(x.note)}</td></tr>`).join('');
+    const flags = `
+      <div class="exec-flags">
+        <span class="exec-flag ${np.breach ? 'bad' : 'ok'}">Net-cap buffer ${execPct(np.bufferPct)} ${np.breach ? '⚠ below floor' : 'ok'}</span>
+        <span class="exec-flag ${pv.breach ? 'bad' : 'ok'}">Pershing variance ${execMoney(pv.value)} ${pv.breach ? '⚠' : '✓'}</span>
+        <span class="exec-flag ${agd.count ? 'warn' : 'ok'}">${agd.count || 0} aged &gt; ${agd.thresholdDays || 30}d</span>
+        <span class="exec-flag ${unp.count ? 'warn' : 'ok'}">${unp.count || 0} unpriced</span>
+      </div>`;
+    const exceptions = `
+      <section class="exec-card"><h3>Exceptions</h3>${flags}
+        <div class="exec-three-col">
+          <div><h4>Aged inventory</h4><table class="exec-table"><thead><tr><th>CUSIP</th><th>Issuer/Sector</th><th class="num">Age</th><th class="num">Haircut</th></tr></thead><tbody>${agedRows || '<tr><td colspan="4" class="muted">None</td></tr>'}</tbody></table></div>
+          <div><h4>Issuer concentration</h4><table class="exec-table"><thead><tr><th>Issuer</th><th class="num">MV</th><th class="num">%</th></tr></thead><tbody>${concRows || '<tr><td colspan="3" class="muted">—</td></tr>'}</tbody></table></div>
+          <div><h4>Recent margin discrepancies</h4><table class="exec-table"><thead><tr><th>Date</th><th>Note</th></tr></thead><tbody>${discRows || '<tr><td colspan="2" class="muted">None</td></tr>'}</tbody></table></div>
+        </div>
+      </section>`;
+
+    const sf = d.sourceFiles || {};
+    const coverage = `<p class="exec-foot exec-coverage">Source: ${esc(sf.margin || '—')} · sector lookup ${esc((d.coverage && d.coverage.sectorLookup) || '—')} · haircut detail ${esc((d.coverage && d.coverage.haircutDetail) || '—')} · generated ${esc(d.generatedAt || '')}</p>`;
+
+    body.innerHTML = banner + narrative + kpis + riskCapital + activity + market + exceptions + coverage;
   }
 
   async function loadAuditLog() {

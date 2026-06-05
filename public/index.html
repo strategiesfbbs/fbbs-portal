@@ -138,6 +138,10 @@
 
     <div class="nav-section">
       <div class="nav-section-title">Operations</div>
+      <a class="nav-link" data-page="exec-summary" href="#exec-summary">
+        <span class="nav-icon">&#9733;</span>
+        <span class="nav-label">Exec Summary</span>
+      </a>
       <a class="nav-link" data-page="archive" href="#archive">
         <span class="nav-icon">&#9776;</span>
         <span class="nav-label">Archive</span>
@@ -2918,6 +2922,45 @@
 </div>
 
 <!-- ========== ADMIN PAGE ========== -->
+<!-- ========== EXEC SUMMARY PAGE (management-only) ========== -->
+<div class="page" id="p-exec-summary">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Executive <strong>Summary</strong></h2>
+        <p class="hero-sub" id="execSummarySub">Management-only &mdash; capital, risk, P&amp;L, and desk activity</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="execSummaryExcess">&mdash;</div>
+        <div class="lbl">Excess (Call)</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <details class="exec-upload" id="execUploadPanel">
+      <summary>Upload today&apos;s files &amp; generate snapshot</summary>
+      <p class="kicker">Drop the four daily exports &mdash; inventory &amp; risk grid, TH trade activity, sector / issuer blotter, and the margin-calc workbook (.xlsm). Re-running a date overwrites that snapshot.</p>
+      <form id="execUploadForm" enctype="multipart/form-data">
+        <div class="exec-upload-grid">
+          <label>Inventory &amp; risk grid<input type="file" name="inventory" accept=".xlsx,.xls"></label>
+          <label>TH trade activity<input type="file" name="activity" accept=".xlsx,.xls"></label>
+          <label>Sector / issuer blotter<input type="file" name="sector" accept=".xlsx,.xls"></label>
+          <label>Margin-calc workbook<input type="file" name="margin" accept=".xlsm,.xlsx"></label>
+        </div>
+        <div class="exec-upload-actions">
+          <button type="submit" class="publish-btn" id="execUploadBtn">Generate Snapshot</button>
+          <span id="execUploadStatus" class="kicker"></span>
+        </div>
+      </form>
+    </details>
+
+    <div id="execSummaryBody">
+      <div style="text-align:center;padding:40px;color:var(--text3)">Loading executive summary&hellip;</div>
+    </div>
+  </div>
+</div>
+
 <div class="page" id="p-admin">
   <section class="page-hero">
     <div class="page-hero-inner">

@@ -172,7 +172,8 @@ test('iis admin ingest routes reject non-admins before parsing', async () => {
       '/api/bank-account-statuses/upload',
       '/api/banks/averaged-series/upload',
       '/api/banks/bond-accounting/upload',
-      '/api/brokered-cd/wirp/upload'
+      '/api/brokered-cd/wirp/upload',
+      '/api/exec-summary/upload'
     ];
     for (const route of ingestRoutes) {
       const res = await request(port, {
@@ -180,6 +181,19 @@ test('iis admin ingest routes reject non-admins before parsing', async () => {
         path: route,
         headers: { 'x-iisnode-logon_user': 'FBBS\\ordinaryrep' },
         body: ''
+      });
+      assert.strictEqual(res.status, 403, `${route}: ${res.status} ${res.text}`);
+    }
+  });
+});
+
+test('iis exec summary reads reject non-admins', async () => {
+  await withServer({ FBBS_AUTH_MODE: 'iis', FBBS_ADMIN_USERS: 'adminuser' }, async ({ port }) => {
+    for (const route of ['/api/exec-summary', '/api/exec-summary/history']) {
+      const res = await request(port, {
+        method: 'GET',
+        path: route,
+        headers: { 'x-iisnode-logon_user': 'FBBS\\ordinaryrep' }
       });
       assert.strictEqual(res.status, 403, `${route}: ${res.status} ${res.text}`);
     }
