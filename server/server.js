@@ -283,25 +283,48 @@ function getContentType(filePath) {
   return MIME_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
 }
 
-function sendJSON(res, status, data) {
-  const body = JSON.stringify(data);
+// Only compress JSON past this size — below it, gzip's framing overhead and the
+// CPU cost aren't worth it.
+const JSON_GZIP_MIN_BYTES = 1400;
+
+// Core JSON writer. When `req` is supplied AND the client accepts gzip AND the
+// body clears the threshold, the response is gzipped; otherwise identity. Most
+// call sites omit `req` (default null) and so are byte-for-byte unchanged — gzip
+// is strictly opt-in per route. `gzCache` lets a hot route (the bank map) hand
+// in a pre-gzipped buffer; the chosen gzip buffer is returned so it can cache it.
+function writeJsonBody(res, status, body, req = null, gzCache = null) {
+  const wantsGzip = !!req &&
+    /\bgzip\b/.test(String(req.headers['accept-encoding'] || '')) &&
+    Buffer.byteLength(body) >= JSON_GZIP_MIN_BYTES;
+  if (wantsGzip) {
+    const gz = gzCache || zlib.gzipSync(body);
+    res.writeHead(status, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Encoding': 'gzip',
+      'Vary': 'Accept-Encoding',
+      'Content-Length': gz.length,
+      'Cache-Control': 'no-store'
+    });
+    res.end(gz);
+    return gz;
+  }
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
     'Cache-Control': 'no-store'
   });
   res.end(body);
+  return null;
+}
+
+function sendJSON(res, status, data, req = null) {
+  writeJsonBody(res, status, JSON.stringify(data), req);
 }
 
 // Send an already-serialized JSON string — lets a large, cacheable payload
 // (e.g. the bank map dataset) skip re-stringifying on every request.
-function sendJSONRaw(res, status, body) {
-  res.writeHead(status, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Content-Length': Buffer.byteLength(body),
-    'Cache-Control': 'no-store'
-  });
-  res.end(body);
+function sendJSONRaw(res, status, body, req = null) {
+  writeJsonBody(res, status, body, req);
 }
 
 function sendText(res, status, text) {
@@ -3966,6 +3989,7 @@ async function handleBuyerCandidates(req, res) {
 
 let mapBankCache = null;
 let mapBankCacheBody = null; // pre-serialized JSON for /api/banks/map (large payload)
+let mapBankCacheBodyGz = null; // gzipped copy of mapBankCacheBody (see /api/banks/map)
 
 const BANK_FIELD_LABELS = new Map((BANK_FIELDS || []).map(f => [f.key, f.label]));
 
@@ -4032,6 +4056,7 @@ function getMapBankData() {
 function invalidateMapBankCache() {
   mapBankCache = null;
   mapBankCacheBody = null;
+  mapBankCacheBodyGz = null;
 }
 
 // Tear-sheet peer comparison: maps BANK_FIELDS keys to FedFis "Averaged Series"
@@ -9157,7 +9182,10 @@ const server = http.createServer(async (req, res) => {
       const data = getMapBankData();
       if (!data) return sendJSON(res, 404, { error: 'No bank data has been imported yet' });
       if (!mapBankCacheBody) mapBankCacheBody = JSON.stringify(data);
-      return sendJSONRaw(res, 200, mapBankCacheBody);
+      // Multi-MB payload: gzip it (and cache the gzipped buffer) so the common
+      // map load ships ~10x smaller without re-compressing every request.
+      mapBankCacheBodyGz = writeJsonBody(res, 200, mapBankCacheBody, req, mapBankCacheBodyGz) || mapBankCacheBodyGz;
+      return;
     }
 
     if (pathname === '/api/banks/averaged-series/upload' && req.method === 'POST') {
