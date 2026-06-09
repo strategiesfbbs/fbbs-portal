@@ -7957,7 +7957,7 @@
     const types = Object.values(REPORT_TYPE_META);
     return `
       <div class="reports-modal-backdrop" role="presentation">
-        <section class="reports-modal" role="dialog" aria-modal="true" aria-labelledby="reportsTypePickerTitle">
+        <section class="reports-modal" role="dialog" aria-modal="true" aria-labelledby="reportsTypePickerTitle" tabindex="-1">
           <header>
             <h3 id="reportsTypePickerTitle">Create Report</h3>
             <a href="#reports" aria-label="Close">×</a>
@@ -9226,9 +9226,14 @@
     saveReportsSessionReports();
   }
 
+  let reportsModalFocusRelease = null;
+
   function renderReportsWorkspace() {
     const app = document.getElementById('reportsApp');
     if (!app) return;
+    // Every route change re-renders app, destroying the Create-Report modal — so
+    // release any focus trap from a prior render before we replace the DOM.
+    if (reportsModalFocusRelease) { reportsModalFocusRelease(); reportsModalFocusRelease = null; }
     const route = reportsRoute();
     app.hidden = false;
     parkReportPanels();
@@ -9236,6 +9241,7 @@
     const path = route.subpath || '';
     if (path === 'new') {
       app.innerHTML = reportsHomeHtml() + reportTypePickerHtml();
+      reportsModalFocusRelease = trapModalFocus(app.querySelector('.reports-modal'));
     } else if (path.startsWith('build/')) {
       const type = path.split('/')[1] || 'bank-peer';
       const bankId = route.params.get('bankId') || '';
