@@ -2323,13 +2323,15 @@
       return;
     }
 
+    // A 0-count market has nothing to open — show a muted "None today" instead of
+    // an Open button that dead-ends on an empty explorer.
     list.innerHTML = items.map(item => `
-      <li>
+      <li class="${item.count ? '' : 'home-tile-breakdown-row-empty'}">
         <span class="home-tile-breakdown-num">${formatNumber(item.count)}</span>
         <span class="home-tile-breakdown-label">${escapeHtml(item.label)}</span>
-        <button type="button" class="home-tile-breakdown-btn" data-goto="${escapeHtml(item.page)}" aria-label="Open ${escapeHtml(item.label)} explorer">
-          Open <span aria-hidden="true">&rarr;</span>
-        </button>
+        ${item.count
+          ? `<button type="button" class="home-tile-breakdown-btn" data-goto="${escapeHtml(item.page)}" aria-label="Open ${escapeHtml(item.label)} explorer">Open <span aria-hidden="true">&rarr;</span></button>`
+          : `<span class="home-tile-breakdown-btn is-empty">None today</span>`}
       </li>
     `).join('');
   }
@@ -2363,6 +2365,17 @@
       : '';
   }
 
+  // Whole-calendar-day age of a YYYY-MM-DD package date vs today (UTC-normalized
+  // so time-of-day never shifts the count). Null if unparseable.
+  function packageAgeDays(dateStr) {
+    const m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return null;
+    const pkgUTC = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const now = new Date();
+    const todayUTC = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    return Math.round((todayUTC - pkgUTC) / 86400000);
+  }
+
   function renderHomeStatusPill(pkg, filled) {
     const pill = document.getElementById('homeStatusPill');
     if (!pill) return;
@@ -2379,6 +2392,15 @@
       text = dateLabel
         ? `In progress · ${dateLabel} · ${filled} of ${TOTAL_SLOTS}`
         : `In progress · ${filled} of ${TOTAL_SLOTS}`;
+    }
+    // Surface package age so a stale "Published"/"In progress" package never reads
+    // as today's. Always label the age; flag it as stale (warning style) at 2+ days.
+    const ageDays = filled > 0 ? packageAgeDays(pkg && pkg.date) : null;
+    if (ageDays != null && ageDays >= 1) {
+      text += ` · ${ageDays} day${ageDays === 1 ? '' : 's'} old`;
+      pill.dataset.stale = ageDays >= 2 ? '1' : '';
+    } else {
+      pill.dataset.stale = '';
     }
     pill.dataset.state = state;
     textEl.textContent = text;

@@ -1021,6 +1021,14 @@ summary:focus-visible,
 .hero-status[data-state="empty"] {
   color: var(--text2);
 }
+/* A package 2+ calendar days old reads as needs-attention even when complete,
+   so a stale "Published" package never looks like today's. */
+.hero-status[data-stale="1"] {
+  background: rgba(192, 57, 43, 0.10);
+  border-color: rgba(192, 57, 43, 0.22);
+  color: var(--danger);
+}
+.hero-status[data-stale="1"] .hero-status-dot { background: var(--danger); }
 
 /* Inline "specs" line on a home tile (Apple product-card pattern) */
 .home-bubble-card .tile-spec {
@@ -5134,6 +5142,17 @@ body {
   color: var(--text3);
   font-size: 12px;
   font-weight: 500;
+}
+
+/* A market with nothing in today's package: dim the row and show a static,
+   non-interactive "None today" pill instead of an Open button. */
+.home-tile-breakdown li.home-tile-breakdown-row-empty { opacity: 0.55; }
+.home-tile-breakdown li .home-tile-breakdown-btn.is-empty {
+  background: transparent;
+  border-color: var(--border-light);
+  color: var(--text3);
+  cursor: default;
+  transform: none;
 }
 
 /* Daily Sheets tile — package date + status chip (no hero fraction) */
