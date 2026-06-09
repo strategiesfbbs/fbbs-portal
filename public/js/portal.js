@@ -17010,6 +17010,12 @@
       const keep = select.value;
       select.innerHTML = '<option value="">All structures</option>' + structures.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
       select.value = keep;
+      // If the selected structure no longer exists after a re-ingest, the browser
+      // resets select.value to ''. Reconcile the filter so the list isn't silently
+      // filtered by an invisible structure while the dropdown reads "All structures".
+      if (structuredNotesFilters.structure && select.value !== structuredNotesFilters.structure) {
+        structuredNotesFilters.structure = select.value;
+      }
     }
 
     const filtered = applyStructuredNotesFilters(notes);
