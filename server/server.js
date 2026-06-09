@@ -7559,7 +7559,10 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
     }
   } catch (err) {
     log('error', 'Archive-rollover failed:', err.message);
-    return sendJSON(res, 500, { error: 'Failed to rotate existing package' });
+    // Post-mutation: the rollover may have partially archived/unlinked the prior
+    // package. Throw so publishPackageFiles() restores the snapshot rather than
+    // leaving the current package half-rotated.
+    throw Object.assign(new Error('Failed to rotate existing package'), { statusCode: 500 });
   }
 
   // Save uploaded files and sniff dates. Most slots are single-file (later wins);
@@ -7578,7 +7581,9 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
     }
     const signatureError = validateUploadSignature(file, slot);
     if (signatureError) {
-      return sendJSON(res, 400, { error: signatureError });
+      // Post-mutation (the rollover above already moved/removed prior slots).
+      // Throw so the snapshot is restored instead of leaving a missing slot.
+      throw Object.assign(new Error(signatureError), { statusCode: 400 });
     }
     const safeName = sanitizeFilename(file.filename);
     const target = safeJoin(CURRENT_DIR, safeName);
@@ -7611,7 +7616,9 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
   }
 
   if (saved.length === 0) {
-    return sendJSON(res, 400, { error: 'No uploaded files could be classified' });
+    // Post-mutation: throw so the snapshot is restored rather than leaving the
+    // package stripped of the slots the rollover already cleared.
+    throw Object.assign(new Error('No uploaded files could be classified'), { statusCode: 400 });
   }
 
   // Extract the Economic Update PDF into structured market data if present.
@@ -7856,9 +7863,9 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
   if (touchesAgencies) {
     const agencySelection = collectAgencyPackageFiles(CURRENT_DIR, { slotFilenames, priorMeta });
     if (agencySelection.files.length === 0) {
-      return sendJSON(res, 400, {
-        error: 'No agency Bullets or Callables file is available to publish.'
-      });
+      // Post-mutation: an agencies-only republish whose new file fails to collect
+      // has already unlinked the prior _agencies.json. Throw so it's restored.
+      throw Object.assign(new Error('No agency Bullets or Callables file is available to publish.'), { statusCode: 400 });
     }
     const agencyMissingSlots = agencySelection.missingSlots;
 
