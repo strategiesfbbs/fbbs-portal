@@ -14734,6 +14734,11 @@ body {
 }
 .mc-summary-stat span { font-size: 22px; font-weight: 700; color: var(--text); }
 .mc-summary-stat small { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); }
+.mc-summary-maturity { border-left: 4px solid var(--success); }
+.mc-summary-maturity span { color: var(--success); }
+.mc-summary-call { border-left: 4px solid var(--danger); }
+.mc-summary-call span { color: var(--danger); }
+.mc-summary-note { padding: 0 0 14px; margin: -6px 0 0; font-size: 12px; }
 
 .mc-bank-card {
   border: 1px solid var(--border); border-radius: 12px; background: var(--surface);

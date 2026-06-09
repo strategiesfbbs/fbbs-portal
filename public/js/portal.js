@@ -5132,9 +5132,34 @@
 
   // Apply the client-side owner + sector filters to the full window dataset and
   // recompute per-bank and grand totals from the visible lots.
+  // Split a lot list into certain maturities vs potential (issuer-optional) calls.
+  // Mirrors the server's maturityCalendarSplitTotals so the two never diverge —
+  // par that frees up for sure (maturities) is kept apart from par that only
+  // frees up IF the bond is called.
+  function maturityCalendarSplitTotals(lots) {
+    const t = {
+      lotCount: 0, par: 0, marketValue: 0,
+      maturityLots: 0, maturityPar: 0, maturityMarketValue: 0,
+      callLots: 0, callPar: 0, callMarketValue: 0
+    };
+    for (const l of lots) {
+      const par = l.par || 0;
+      const mv = l.marketValue || 0;
+      t.lotCount += 1; t.par += par; t.marketValue += mv;
+      if (l.eventType === 'Call') { t.callLots += 1; t.callPar += par; t.callMarketValue += mv; }
+      else { t.maturityLots += 1; t.maturityPar += par; t.maturityMarketValue += mv; }
+    }
+    return t;
+  }
+
   function maturityCalendarFilteredView() {
     const data = maturityCalState.data;
-    if (!data || !Array.isArray(data.banks)) return { banks: [], totals: { bankCount: 0, lotCount: 0, par: 0, marketValue: 0 } };
+    const emptyTotals = {
+      bankCount: 0, lotCount: 0, par: 0, marketValue: 0,
+      maturityLots: 0, maturityPar: 0, maturityMarketValue: 0,
+      callLots: 0, callPar: 0, callMarketValue: 0
+    };
+    if (!data || !Array.isArray(data.banks)) return { banks: [], totals: emptyTotals };
     const ownerFilter = maturityCalState.owner;
     const sectorFilter = maturityCalState.sector;
     const banks = [];
@@ -5142,23 +5167,15 @@
       if (ownerFilter && bank.owner !== ownerFilter) continue;
       const lots = sectorFilter ? bank.lots.filter(l => l.sector === sectorFilter) : bank.lots;
       if (!lots.length) continue;
-      banks.push({
-        ...bank,
-        lots,
-        lotCount: lots.length,
-        par: lots.reduce((s, l) => s + (l.par || 0), 0),
-        marketValue: lots.reduce((s, l) => s + (l.marketValue || 0), 0)
-      });
+      banks.push({ ...bank, lots, ...maturityCalendarSplitTotals(lots) });
     }
-    return {
-      banks,
-      totals: {
-        bankCount: banks.length,
-        lotCount: banks.reduce((s, b) => s + b.lotCount, 0),
-        par: banks.reduce((s, b) => s + b.par, 0),
-        marketValue: banks.reduce((s, b) => s + b.marketValue, 0)
-      }
-    };
+    const totals = banks.reduce((acc, b) => {
+      acc.par += b.par; acc.marketValue += b.marketValue; acc.lotCount += b.lotCount;
+      acc.maturityLots += b.maturityLots; acc.maturityPar += b.maturityPar; acc.maturityMarketValue += b.maturityMarketValue;
+      acc.callLots += b.callLots; acc.callPar += b.callPar; acc.callMarketValue += b.callMarketValue;
+      return acc;
+    }, { ...emptyTotals, bankCount: banks.length });
+    return { banks, totals };
   }
 
   function maturityCalendarEventChip(lot) {
@@ -5210,10 +5227,11 @@
     const totals = view.totals;
     const summary = '<div class="mc-summary">' +
       '<div class="mc-summary-stat"><span>' + totals.bankCount + '</span><small>Banks</small></div>' +
-      '<div class="mc-summary-stat"><span>' + totals.lotCount + '</span><small>Lots</small></div>' +
-      '<div class="mc-summary-stat"><span>' + formatMoney(totals.par) + '</span><small>Par maturing/calling</small></div>' +
-      '<div class="mc-summary-stat"><span>' + formatMoney(totals.marketValue) + '</span><small>Market value</small></div>' +
-      '</div>';
+      '<div class="mc-summary-stat mc-summary-maturity"><span>' + formatMoney(totals.maturityPar) + '</span><small>Par maturing &mdash; certain (' + totals.maturityLots + ' lot' + (totals.maturityLots === 1 ? '' : 's') + ')</small></div>' +
+      '<div class="mc-summary-stat mc-summary-call"><span>' + formatMoney(totals.callPar) + '</span><small>Par callable &mdash; potential (' + totals.callLots + ' lot' + (totals.callLots === 1 ? '' : 's') + ')</small></div>' +
+      '<div class="mc-summary-stat"><span>' + formatMoney(totals.maturityMarketValue) + '</span><small>Market value (maturing)</small></div>' +
+      '</div>' +
+      '<p class="mc-summary-note muted-note">Maturities are par that frees up for sure on the date. Calls are <em>potential</em> &mdash; they only free up if the issuer exercises the call, so the two are summed separately and never combined.</p>';
 
     const cards = view.banks.map(bank => {
       const rows = bank.lots.map(lot => '<tr>' +
@@ -5235,7 +5253,9 @@
             '<p class="mc-bank-sub">' + escapeHtml([bank.city, bank.state].filter(Boolean).join(', ')) + ' · Owner: ' + owner + ' ' + status + '</p>' +
           '</div>' +
           '<div class="mc-bank-stat">' +
-            '<span>' + formatMoney(bank.par) + '</span><small>' + bank.lotCount + ' lot' + (bank.lotCount === 1 ? '' : 's') + ' · as of ' + escapeHtml(maturityCalendarDate(bank.reportDate)) + '</small>' +
+            '<span>' + formatMoney(bank.maturityPar) + '</span>' +
+            '<small>maturing' + (bank.callPar ? ' · ' + formatMoney(bank.callPar) + ' callable' : '') + ' · ' +
+              bank.lotCount + ' lot' + (bank.lotCount === 1 ? '' : 's') + ' · as of ' + escapeHtml(maturityCalendarDate(bank.reportDate)) + '</small>' +
           '</div>' +
           '<a class="small-btn" href="#bond-swap?bank=' + encodeURIComponent(bank.bankId) + '">Find swap ideas</a>' +
         '</header>' +

@@ -4789,6 +4789,34 @@ function maturityCalendarBucketLabel(daysOut) {
   return '181+';
 }
 
+// Split a lot list into certain maturities vs potential (issuer-optional) calls,
+// so par coming free isn't conflated. Maturities are money that WILL free up on
+// the date; calls only free up IF the issuer exercises — never sum them together.
+function maturityCalendarSplitTotals(lots) {
+  const t = {
+    lotCount: 0, par: 0, marketValue: 0,
+    maturityLots: 0, maturityPar: 0, maturityMarketValue: 0,
+    callLots: 0, callPar: 0, callMarketValue: 0
+  };
+  for (const l of lots) {
+    const par = l.par || 0;
+    const mv = l.marketValue || 0;
+    t.lotCount += 1;
+    t.par += par;
+    t.marketValue += mv;
+    if (l.eventType === 'Call') {
+      t.callLots += 1;
+      t.callPar += par;
+      t.callMarketValue += mv;
+    } else {
+      t.maturityLots += 1;
+      t.maturityPar += par;
+      t.maturityMarketValue += mv;
+    }
+  }
+  return t;
+}
+
 function buildMaturityCalendar(query) {
   const windowDays = Math.max(1, Math.min(3650, Math.round(Number(query.get('window')) || 90)));
   const ownerFilter = String(query.get('owner') || '').trim().toLowerCase();
@@ -4800,7 +4828,11 @@ function buildMaturityCalendar(query) {
   if (!manifest || !Array.isArray(manifest.matches) || !manifest.matches.length) {
     return {
       available: false, generatedAt, windowDays, owners: [], banks: [],
-      totals: { bankCount: 0, lotCount: 0, par: 0, marketValue: 0 },
+      totals: {
+        bankCount: 0, lotCount: 0, par: 0, marketValue: 0,
+        maturityLots: 0, maturityPar: 0, maturityMarketValue: 0,
+        callLots: 0, callPar: 0, callMarketValue: 0
+      },
       notice: 'No bond-accounting portfolios have been imported yet.'
     };
   }
@@ -4865,31 +4897,45 @@ function buildMaturityCalendar(query) {
     }
     if (!lots.length) continue;
     lots.sort((a, b) => a.daysOut - b.daysOut);
+    const split = maturityCalendarSplitTotals(lots);
     banks.push({
       bankId,
       name: summary.displayName || summary.name || 'Bank',
       city: summary.city || '',
       state, owner, status,
       reportDate: parsed.asOfDate || row.reportDate || '',
-      lotCount: lots.length,
-      par: lots.reduce((s, l) => s + (l.par || 0), 0),
-      marketValue: lots.reduce((s, l) => s + (l.marketValue || 0), 0),
+      lotCount: split.lotCount,
+      par: split.par,
+      marketValue: split.marketValue,
+      maturityLots: split.maturityLots,
+      maturityPar: split.maturityPar,
+      maturityMarketValue: split.maturityMarketValue,
+      callLots: split.callLots,
+      callPar: split.callPar,
+      callMarketValue: split.callMarketValue,
       lots
     });
   }
 
-  banks.sort((a, b) => b.par - a.par);
+  // Rank by certain maturities first, then potential calls — the actionable
+  // (money-for-sure) banks float to the top.
+  banks.sort((a, b) => (b.maturityPar - a.maturityPar) || (b.callPar - a.callPar));
+  const grand = banks.reduce((acc, b) => {
+    acc.par += b.par; acc.marketValue += b.marketValue; acc.lotCount += b.lotCount;
+    acc.maturityLots += b.maturityLots; acc.maturityPar += b.maturityPar; acc.maturityMarketValue += b.maturityMarketValue;
+    acc.callLots += b.callLots; acc.callPar += b.callPar; acc.callMarketValue += b.callMarketValue;
+    return acc;
+  }, {
+    bankCount: banks.length, lotCount: 0, par: 0, marketValue: 0,
+    maturityLots: 0, maturityPar: 0, maturityMarketValue: 0,
+    callLots: 0, callPar: 0, callMarketValue: 0
+  });
   return {
     available: true, generatedAt, windowDays,
     importedAt: manifest.importedAt || '',
     owners: Array.from(owners).sort(),
     banks,
-    totals: {
-      bankCount: banks.length,
-      lotCount: banks.reduce((s, b) => s + b.lotCount, 0),
-      par: banks.reduce((s, b) => s + b.par, 0),
-      marketValue: banks.reduce((s, b) => s + b.marketValue, 0)
-    }
+    totals: grand
   };
 }
 
