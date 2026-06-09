@@ -1072,127 +1072,6 @@
     return `${packageUploadedCount(pkg)} / ${TOTAL_SLOTS}`;
   }
 
-  function homeMissingDocs() {
-    const pkg = currentPackage || {};
-    return SLOTS
-      .filter(slot => !pkg[slot])
-      .map(slot => DOC_TYPES[slot].label);
-  }
-
-  function homeWorkItemHtml(item) {
-    return `
-      <button type="button" class="home-work-item ${item.tone || ''}" data-goto="${escapeHtml(item.page)}">
-        <span>${escapeHtml(item.kicker)}</span>
-        <strong>${escapeHtml(item.title)}</strong>
-        <em>${escapeHtml(item.detail)}</em>
-      </button>
-    `;
-  }
-
-  function renderHomeWorkList(filled) {
-    const target = document.getElementById('homeWorkList');
-    if (!target) return;
-    const pkg = currentPackage || {};
-    const missing = homeMissingDocs();
-    const items = [];
-    const strategyCounts = strategyNotifications.counts || {};
-    const needsBilled = Number(strategyCounts['Needs Billed'] || 0);
-    const inProgress = Number(strategyCounts['In Progress'] || 0);
-    const openStrategies = Number(strategyCounts.Open || 0);
-
-    if (filled < TOTAL_SLOTS) {
-      items.push({
-        page: 'upload',
-        tone: 'attention',
-        kicker: 'Publish',
-        title: `${TOTAL_SLOTS - filled} file${TOTAL_SLOTS - filled === 1 ? '' : 's'} missing`,
-        detail: missing.slice(0, 2).join(', ') + (missing.length > 2 ? ` + ${missing.length - 2} more` : '')
-      });
-    } else {
-      items.push({
-        page: 'archive',
-        tone: 'ok',
-        kicker: 'Published',
-        title: `Package ready for ${formatShortDate(pkg.date)}`,
-        detail: `Last published ${formatTime(pkg.publishedAt)}`
-      });
-    }
-
-    if (qualitySummary.datesMatch === false || qualitySummary.warnings > 0) {
-      items.push({
-        page: 'upload',
-        tone: 'attention',
-        kicker: 'Review',
-        title: qualitySummary.datesMatch === false ? 'Date mismatch detected' : 'Parser warnings detected',
-        detail: qualitySummary.countsText || 'Review upload quality before sharing'
-      });
-    }
-
-    if (needsBilled > 0) {
-      items.push({
-        page: 'strategies',
-        tone: 'attention',
-        kicker: 'Billing',
-        title: `${formatNumber(needsBilled)} strateg${needsBilled === 1 ? 'y' : 'ies'} need${needsBilled === 1 ? 's' : ''} billed`,
-        detail: 'Review invoice contact and archive after billing'
-      });
-    }
-
-    if (openStrategies > 0 || inProgress > 0) {
-      items.push({
-        page: 'strategies',
-        kicker: 'Strategies',
-        title: `${formatNumber(openStrategies)} open · ${formatNumber(inProgress)} in progress`,
-        detail: 'Bond swaps, BCIS, CECL, and miscellaneous requests'
-      });
-    }
-
-    items.push({
-      page: 'banks',
-      kicker: 'Coverage',
-      title: 'Open bank tear sheets',
-      detail: 'Search banks, saved coverage, and notes'
-    });
-
-    items.push({
-      page: 'cd-recap',
-      kicker: 'CDs',
-      title: 'Review weekly CD recap',
-      detail: 'Deduped CUSIPs, term counts, and rate changes'
-    });
-
-    target.innerHTML = items.map(homeWorkItemHtml).join('');
-  }
-
-  function renderHomeLaunchGrid() {
-    const target = document.getElementById('homeLaunchGrid');
-    if (!target) return;
-    const cds = marketData.cds || [];
-    const munis = marketData.munis || [];
-    const agencies = marketData.agencies || [];
-    const corporates = marketData.corporates || [];
-    const strategyCounts = strategyNotifications.counts || {};
-    const cards = [
-      { page: 'strategies', label: 'Strategies', title: 'Strategies Queue', detail: 'Track Bond Swap, Muni BCIS, THO, CECL, miscellaneous, and billing requests.', metric: `${formatNumber(strategyCounts.Open || 0)} open` },
-      { page: 'bond-swap', label: 'Bond Swap', title: 'Bond Swap', detail: 'Portfolio Idea Engine and multi-leg swap-proposal builder for bond-accounting banks.', metric: 'Swap builder' },
-      { page: 'banks', label: 'Banks', title: 'Bank Tear Sheets', detail: 'Call report tear sheets, saved banks, notes, and coverage status.', metric: 'Coverage workspace' },
-      { page: 'treasury-explorer', label: 'Treasuries', title: 'Treasury Explorer', detail: 'Review uploaded Treasury Notes by CUSIP, coupon, maturity, yield, price, and spread.', metric: `${formatNumber(treasuries.length)} notes` },
-      { page: 'explorer', label: 'CDs', title: 'CD Explorer', detail: 'Search daily CD offerings by issuer, CUSIP, term, rate, and restrictions.', metric: `${formatNumber(cds.length)} CDs` },
-      { page: 'muni-explorer', label: 'Munis', title: 'Muni Explorer', detail: 'Browse municipal offerings by issuer, state, rating, yield, and call status.', metric: `${formatNumber(munis.length)} munis` },
-      { page: 'agencies', label: 'Agencies', title: 'Agency Explorer', detail: 'Review bullet and callable agencies with commission-adjusted context.', metric: `${formatNumber(agencies.length)} offerings` },
-      { page: 'corporates', label: 'Corporates', title: 'Corporate Explorer', detail: 'Filter corporate inventory by issuer, ticker, sector, yield, and rating.', metric: `${formatNumber(corporates.length)} bonds` }
-    ];
-
-    target.innerHTML = cards.map(card => `
-      <button type="button" class="home-launch-card" data-goto="${escapeHtml(card.page)}">
-        <span>${escapeHtml(card.label)}</span>
-        <strong>${escapeHtml(card.title)}</strong>
-        <em>${escapeHtml(card.detail)}</em>
-        <b>${escapeHtml(card.metric)}</b>
-      </button>
-    `).join('');
-  }
-
   async function fetchOptionalJson(path) {
     try {
       const res = await fetch(path, { cache: 'no-store' });
@@ -1805,8 +1684,6 @@
     const pkg = currentPackage || {};
     const filled = packageUploadedCount(pkg);
     const subtitle = document.getElementById('homeSubtitle');
-    const packageStat = document.getElementById('homePackageStat');
-    if (packageStat) packageStat.textContent = `${filled}/${TOTAL_SLOTS}`;
 
     if (filled === 0) {
       if (subtitle) subtitle.textContent = 'No package has been published yet.';
@@ -2540,172 +2417,6 @@
         loadBank(id, { collapseResults: true });
       });
     });
-  }
-
-  function normalizeSearchText(parts) {
-    const values = [];
-    const add = value => {
-      if (value == null || value === '') return;
-      if (Array.isArray(value)) {
-        value.forEach(add);
-        return;
-      }
-      if (typeof value === 'object') {
-        Object.values(value).forEach(add);
-        return;
-      }
-      const raw = String(value).trim().toLowerCase();
-      if (!raw) return;
-      const spaced = raw.replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
-      values.push(raw);
-      if (spaced && spaced !== raw) values.push(spaced);
-      if (spaced && spaced.includes(' ')) values.push(spaced.replace(/\s+/g, ''));
-    };
-    parts.forEach(add);
-    return values.join(' ');
-  }
-
-  const STATE_SEARCH_ALIASES = {
-    AL: 'alabama', AK: 'alaska', AZ: 'arizona', AR: 'arkansas', CA: 'california',
-    CO: 'colorado', CT: 'connecticut', DE: 'delaware', DC: 'district of columbia washington dc',
-    FL: 'florida', GA: 'georgia', HI: 'hawaii', ID: 'idaho', IL: 'illinois',
-    IN: 'indiana', IA: 'iowa', KS: 'kansas', KY: 'kentucky', LA: 'louisiana',
-    ME: 'maine', MD: 'maryland', MA: 'massachusetts', MI: 'michigan', MN: 'minnesota',
-    MS: 'mississippi', MO: 'missouri', MT: 'montana', NE: 'nebraska', NV: 'nevada',
-    NH: 'new hampshire', NJ: 'new jersey', NM: 'new mexico', NY: 'new york',
-    NC: 'north carolina', ND: 'north dakota', OH: 'ohio', OK: 'oklahoma',
-    OR: 'oregon', PA: 'pennsylvania', RI: 'rhode island', SC: 'south carolina',
-    SD: 'south dakota', TN: 'tennessee', TX: 'texas', UT: 'utah', VT: 'vermont',
-    VA: 'virginia', WA: 'washington', WV: 'west virginia', WI: 'wisconsin',
-    WY: 'wyoming', PR: 'puerto rico', GU: 'guam', VI: 'virgin islands'
-  };
-
-  function stateSearchAliases(value) {
-    const code = String(value || '').trim().toUpperCase();
-    if (!code) return [];
-    const name = STATE_SEARCH_ALIASES[code];
-    return name ? [code, name] : [code];
-  }
-
-  function creditSearchAliases(value) {
-    const tier = String(value || '').trim();
-    if (!tier) return [];
-    return [tier, `${tier} rated`, `${tier}-rated`, `${tier} rating`];
-  }
-
-  function searchTermsFromQuery(value) {
-    return String(value || '')
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, ' ')
-      .split(/\s+/)
-      .filter(Boolean);
-  }
-
-  function buildSearchRows() {
-    const rows = [];
-    (marketData.cds || []).forEach(o => rows.push({
-      type: 'CD',
-      title: o.name,
-      subtitle: `${formatPercentTile(o.rate, 2)} · ${o.term} · ${formatShortDate(o.maturity)}`,
-      meta: o.cusip,
-      page: 'explorer',
-      searchText: normalizeSearchText([
-        o,
-        stateSearchAliases(o.issuerState),
-        'cd certificate deposit brokered cd security'
-      ])
-    }));
-    (marketData.munis || []).forEach(o => rows.push({
-      type: 'Muni',
-      title: o.issuerName,
-      subtitle: `${o.section || 'Muni'} · ${o.issuerState || ''} · ${formatPercentTile(o.ytw, 3)}`,
-      meta: o.cusip,
-      page: 'muni-explorer',
-      searchText: normalizeSearchText([
-        o,
-        stateSearchAliases(o.issuerState),
-        'muni municipal bond security tax exempt taxable bq'
-      ])
-    }));
-    (marketData.agencies || []).forEach(o => rows.push({
-      type: 'Agency',
-      title: `${o.ticker || 'Agency'} ${o.cusip || ''}`,
-      subtitle: `${o.structure || ''} · ${formatPercentTile(o.ytm, 3)} · ${formatShortDate(o.maturity)}`,
-      meta: o.callType || o.benchmark || '',
-      page: 'agencies',
-      searchText: normalizeSearchText([
-        o,
-        'agency agencies government sponsored gse bond security bullet callable'
-      ])
-    }));
-    (marketData.corporates || []).forEach(o => rows.push({
-      type: 'Corporate',
-      title: o.issuerName,
-      subtitle: `${o.ticker || ''} · ${o.creditTier || ''} · ${formatPercentTile(o.ytm, 3)}`,
-      meta: o.cusip,
-      page: 'corporates',
-      searchText: normalizeSearchText([
-        o,
-        creditSearchAliases(o.creditTier),
-        o.investmentGrade ? 'investment grade ig' : 'high yield hy',
-        'corporate corp bond security'
-      ])
-    }));
-    return rows;
-  }
-
-  function interleaveSearchMatches(matches, limit = 24) {
-    const typeOrder = ['CD', 'Muni', 'Agency', 'Corporate'];
-    const groups = new Map(typeOrder.map(type => [type, []]));
-    matches.forEach(row => {
-      if (!groups.has(row.type)) groups.set(row.type, []);
-      groups.get(row.type).push(row);
-    });
-
-    const ordered = [];
-    while (ordered.length < limit) {
-      let added = false;
-      for (const type of typeOrder) {
-        const next = groups.get(type).shift();
-        if (!next) continue;
-        ordered.push(next);
-        added = true;
-        if (ordered.length >= limit) break;
-      }
-      if (!added) break;
-    }
-    return ordered;
-  }
-
-  function renderGlobalSearch() {
-    const input = document.getElementById('globalSearchInput');
-    const results = document.getElementById('globalSearchResults');
-    if (!input || !results) return;
-
-    const terms = searchTermsFromQuery(input.value);
-    if (!terms.length) {
-      results.innerHTML = '<div class="global-empty">Start typing to search CDs, munis, agencies, and corporates.</div>';
-      return;
-    }
-
-    const matches = interleaveSearchMatches(
-      buildSearchRows().filter(row => terms.every(term => row.searchText.includes(term)))
-    );
-
-    if (!matches.length) {
-      results.innerHTML = '<div class="global-empty">No matching offerings found.</div>';
-      return;
-    }
-
-    results.innerHTML = matches.map(row => `
-      <button class="global-result" type="button" data-goto="${row.page}">
-        <span class="global-type">${escapeHtml(row.type)}</span>
-        <span class="global-title">${escapeHtml(row.title || '—')}</span>
-        <span class="global-subtitle">${escapeHtml(row.subtitle || '')}</span>
-        <span class="global-meta">${escapeHtml(row.meta || '')}</span>
-      </button>
-    `).join('');
   }
 
   function escapeHtml(str) {
@@ -4094,12 +3805,6 @@
     if (folderScanBtn) folderScanBtn.addEventListener('click', () => scanFolderDrop());
     if (folderPublishBtn) folderPublishBtn.addEventListener('click', publishFolderDrop);
     scanFolderDrop({ silent: true });
-  }
-
-  function setupGlobalSearch() {
-    const input = document.getElementById('globalSearchInput');
-    if (!input) return;
-    input.addEventListener('input', renderGlobalSearch);
   }
 
   // ============ Bank Tear Sheets ============
@@ -10436,9 +10141,6 @@
     } catch (e) {
       strategyNotifications = { requests: [], counts: {} };
     }
-    const filled = packageUploadedCount(currentPackage);
-    renderHomeWorkList(filled);
-    renderHomeLaunchGrid();
     if (typeof renderHomeTileStrategies === 'function') renderHomeTileStrategies();
   }
 
@@ -18564,7 +18266,6 @@
     setupHome();
     setupHomePolish();
     setupUpload();
-    setupGlobalSearch();
     setupCdCostCalculator();
     setupCdOpportunityTool();
     setupEconomicMarketTool();
