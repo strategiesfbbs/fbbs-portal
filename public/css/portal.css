@@ -14767,6 +14767,10 @@ body {
 .mc-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
 .mc-chip-maturity { background: #e7f1ec; color: var(--success); }
 .mc-chip-call { background: #f6e9e4; color: var(--danger); }
+.mc-chip-callable {
+  display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 9px;
+  background: var(--bg-light); color: var(--text2); border: 1px dashed var(--border);
+}
 
 .muted-note { color: var(--text2); font-size: 14px; padding: 16px 0; }
 .error-note { color: var(--danger); font-size: 14px; padding: 16px 0; }

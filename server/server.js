@@ -4870,29 +4870,40 @@ function buildMaturityCalendar(query) {
     const lots = [];
     for (const pos of flattenPortfolioHoldings(parsed)) {
       if (sectorFilter && String(pos.sector || '').toLowerCase() !== sectorFilter) continue;
-      // Soonest actionable event for this lot: a stated maturity or first call
-      // landing within the forward window. Both are required to be in the
-      // [today, horizon] range — a bond already past its first call date is
+      // A maturity or first call landing within the forward window. Both must be
+      // in [today, horizon] — a bond already past its first call date is
       // continuously callable (not a discrete upcoming event), so it's only a
       // "coming free" signal when a future call/maturity actually lands in-window.
-      const events = [];
+      //
+      // Bucket rule (drives the certain/potential split): if the MATURITY is
+      // in-window, the par is CERTAIN to free up in-window — anchor on the
+      // maturity even when an earlier in-window call exists (the call only means
+      // it MIGHT come back sooner; surface that as a hint, never reclassify the
+      // par as potential). Only when the maturity is out-of-window (or absent) and
+      // just the call lands in-window is the lot potential (issuer-optional).
       const matMs = pos.maturity ? Date.parse(pos.maturity) : NaN;
-      if (Number.isFinite(matMs) && matMs >= todayMs && matMs <= horizonMs) {
-        events.push({ type: 'Maturity', dateMs: matMs, date: pos.maturity });
-      }
       const callMs = pos.nextCall ? Date.parse(pos.nextCall) : NaN;
-      if (Number.isFinite(callMs) && callMs >= todayMs && callMs <= horizonMs) {
-        events.push({ type: 'Call', dateMs: callMs, date: pos.nextCall });
+      const matInWindow = Number.isFinite(matMs) && matMs >= todayMs && matMs <= horizonMs;
+      const callInWindow = Number.isFinite(callMs) && callMs >= todayMs && callMs <= horizonMs;
+      if (!matInWindow && !callInWindow) continue;
+
+      let eventType, eventMs, eventDate, callableDate = null, callableDaysOut = null;
+      if (matInWindow) {
+        eventType = 'Maturity'; eventMs = matMs; eventDate = pos.maturity;
+        if (callInWindow && callMs < matMs) {
+          callableDate = pos.nextCall;
+          callableDaysOut = Math.round((callMs - todayMs) / 86400000);
+        }
+      } else {
+        eventType = 'Call'; eventMs = callMs; eventDate = pos.nextCall;
       }
-      if (!events.length) continue;
-      events.sort((a, b) => a.dateMs - b.dateMs);
-      const ev = events[0];
-      const daysOut = Math.round((ev.dateMs - todayMs) / 86400000);
+      const daysOut = Math.round((eventMs - todayMs) / 86400000);
       lots.push({
         cusip: pos.cusip, description: pos.description, sector: pos.sector,
         coupon: pos.coupon, par: pos.par || 0, marketValue: pos.marketValue || 0,
-        bookYield: pos.bookYield, eventType: ev.type, eventDate: ev.date,
-        daysOut, bucket: maturityCalendarBucketLabel(daysOut)
+        bookYield: pos.bookYield, eventType, eventDate,
+        daysOut, bucket: maturityCalendarBucketLabel(daysOut),
+        callableDate, callableDaysOut
       });
     }
     if (!lots.length) continue;

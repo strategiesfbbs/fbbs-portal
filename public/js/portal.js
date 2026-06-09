@@ -5169,6 +5169,9 @@
       if (!lots.length) continue;
       banks.push({ ...bank, lots, ...maturityCalendarSplitTotals(lots) });
     }
+    // Re-rank for the filtered set — a sector filter changes each bank's certain
+    // maturing par, so the server's full-dataset order can be stale here.
+    banks.sort((a, b) => (b.maturityPar - a.maturityPar) || (b.callPar - a.callPar));
     const totals = banks.reduce((acc, b) => {
       acc.par += b.par; acc.marketValue += b.marketValue; acc.lotCount += b.lotCount;
       acc.maturityLots += b.maturityLots; acc.maturityPar += b.maturityPar; acc.maturityMarketValue += b.maturityMarketValue;
@@ -5181,7 +5184,14 @@
   function maturityCalendarEventChip(lot) {
     const cls = lot.eventType === 'Call' ? 'mc-chip-call' : 'mc-chip-maturity';
     const when = lot.daysOut <= 0 ? 'now' : ('in ' + lot.daysOut + 'd');
-    return '<span class="mc-chip ' + cls + '">' + escapeHtml(lot.eventType) + ' ' + when + '</span>';
+    let chip = '<span class="mc-chip ' + cls + '">' + escapeHtml(lot.eventType) + ' ' + when + '</span>';
+    // Certain maturity that could come back sooner if the issuer calls — flag it
+    // so the rep sees the earlier date without the par leaving the certain bucket.
+    if (lot.callableDate) {
+      const callWhen = lot.callableDaysOut <= 0 ? 'now' : ('in ' + lot.callableDaysOut + 'd');
+      chip += ' <span class="mc-chip-callable" title="Callable before maturity">callable ' + callWhen + '</span>';
+    }
+    return chip;
   }
 
   function renderMaturityCalendar() {
@@ -5278,13 +5288,16 @@
   function exportMaturityCalendarCsv() {
     const view = maturityCalendarFilteredView();
     if (!view.banks.length) { showToast('Nothing to export for the current filters.', true); return; }
-    const header = ['Bank', 'City', 'State', 'Owner', 'Status', 'Report Date', 'Event', 'Event Date', 'Days Out', 'Sector', 'CUSIP', 'Description', 'Coupon', 'Par', 'Market Value', 'Book Yield'];
+    const header = ['Bank', 'City', 'State', 'Owner', 'Status', 'Report Date', 'Event', 'Certainty', 'Event Date', 'Days Out', 'Callable Date', 'Sector', 'CUSIP', 'Description', 'Coupon', 'Par', 'Market Value', 'Book Yield'];
     const rows = [header];
     for (const bank of view.banks) {
       for (const lot of bank.lots) {
         rows.push([
           bank.name, bank.city, bank.state, bank.owner, bank.status, maturityCalendarDate(bank.reportDate),
-          lot.eventType, maturityCalendarDate(lot.eventDate), lot.daysOut, lot.sector, lot.cusip, lot.description,
+          lot.eventType, lot.eventType === 'Call' ? 'Potential' : 'Certain',
+          maturityCalendarDate(lot.eventDate), lot.daysOut,
+          lot.callableDate ? maturityCalendarDate(lot.callableDate) : '',
+          lot.sector, lot.cusip, lot.description,
           lot.coupon != null ? lot.coupon : '', lot.par != null ? lot.par : '', lot.marketValue != null ? lot.marketValue : '',
           lot.bookYield != null ? lot.bookYield : ''
         ]);
