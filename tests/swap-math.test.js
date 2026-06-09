@@ -460,6 +460,21 @@ test('swapSummary roundtrips a simple 1×1 swap', () => {
   assert.ok(Math.abs(s.settleAdjust) < 100, `settleAdjust ${s.settleAdjust} should be near 0`);
 });
 
+test('swapSummary breakeven is horizon-independent (annual basis, not horizon-scaled)', () => {
+  // Regression: swapSummary fed swapBreakevenMonths the horizon-scaled net income
+  // (interest * h) where an ANNUAL pickup is expected, understating breakeven by
+  // the horizon factor on the printed/frozen client one-pager.
+  const sells = [{ par: 1_000_000, bookPrice: 100, marketPrice: 98, bookYieldYtm: 2.0, marketYieldYtw: 5.0, averageLife: 3 }];
+  const buys = [{ par: 1_000_000, bookPrice: 98, marketPrice: 98, bookYieldYtm: 5.0, marketYieldYtw: 5.0, averageLife: 3 }];
+  const s1 = m.swapSummary({ sells, buys, horizonYears: 1 });
+  const s3 = m.swapSummary({ sells, buys, horizonYears: 3 });
+  assert.strictEqual(s1.breakevenMonths, s3.breakevenMonths,
+    `breakeven must not change with horizon, got ${s1.breakevenMonths} (1yr) vs ${s3.breakevenMonths} (3yr)`);
+  // realized loss 20,000 recovered from annual pickup 29,000: 20000 / (29000/12) = 8.276 mo
+  assert.strictEqual(s3.breakevenMonths, 8.3,
+    `breakeven ${s3.breakevenMonths} should be the annual-basis 8.3 months, not the ~2.8 horizon-scaled value`);
+});
+
 // ---------- Input validation: validateLegInput ----------
 
 test('validateLegInput passes an empty stub leg (add-then-fill workflow)', () => {

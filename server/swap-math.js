@@ -737,7 +737,13 @@ function swapSummary({ sells, buys, horizonYears, settleAdjust = null, taxRate =
 
   const netIncome = (sellInterest || 0) + (buyInterest || 0);
   const netBenefit = netIncome + (realizedGainLoss || 0);
-  const breakevenMonths = swapBreakevenMonths(realizedGainLoss, netIncome);
+  // netIncome is the net interest over the WHOLE horizon (sell/buy interest are
+  // *h above), but swapBreakevenMonths expects an ANNUAL pickup (it divides by 12
+  // to get months). Pass the de-annualized figure so the whole-proposal breakeven
+  // matches the per-leg path (which passes the un-scaled annualIncomePickup) and
+  // isn't understated by the horizon factor on the printed proposal.
+  const annualNetIncome = h ? netIncome / h : netIncome;
+  const breakevenMonths = swapBreakevenMonths(realizedGainLoss, annualNetIncome);
   const breakevenYears = breakevenMonths == null ? null : breakevenMonths / 12;
   const diff = portfolioDiff(sellsAgg, buysAgg);
 
