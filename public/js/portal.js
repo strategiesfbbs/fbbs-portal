@@ -12273,7 +12273,7 @@
     backdrop.className = 'maps-modal-backdrop buyers-drawer-backdrop';
     backdrop.hidden = true;
     backdrop.innerHTML = `
-      <div class="maps-modal buyers-drawer" role="dialog" aria-modal="true" aria-labelledby="buyersDrawerTitle">
+      <div class="maps-modal buyers-drawer" role="dialog" aria-modal="true" aria-labelledby="buyersDrawerTitle" tabindex="-1">
         <header>
           <div>
             <div class="title" id="buyersDrawerTitle">Who should I call?</div>
@@ -12294,7 +12294,10 @@
         </footer>
       </div>`;
     document.body.appendChild(backdrop);
-    const close = () => { backdrop.hidden = true; };
+    const close = () => {
+      backdrop.hidden = true;
+      if (buyersFocusRelease) { buyersFocusRelease(); buyersFocusRelease = null; }
+    };
     backdrop.querySelector('#buyersDrawerClose').addEventListener('click', close);
     backdrop.querySelector('#buyersDrawerCloseFooter').addEventListener('click', close);
     backdrop.addEventListener('click', evt => { if (evt.target === backdrop) close(); });
@@ -12315,6 +12318,32 @@
   }
 
   let buyersDrawerCtx = { productType: null, offering: null, scope: 'all' };
+  let buyersFocusRelease = null;
+
+  // Shared modal focus management: remember the opener, move focus into the
+  // dialog, trap Tab inside it, and restore focus to the opener on close.
+  // Returns a release() to call when the modal closes. Keyboard/screen-reader
+  // users otherwise land behind the overlay with focus still on the page.
+  function trapModalFocus(dialogEl) {
+    if (!dialogEl) return () => {};
+    const opener = document.activeElement;
+    const SELECTOR = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+    const focusables = () => Array.from(dialogEl.querySelectorAll(SELECTOR)).filter(el => el.offsetParent !== null);
+    (focusables()[0] || dialogEl).focus();
+    const onKey = (evt) => {
+      if (evt.key !== 'Tab') return;
+      const f = focusables();
+      if (!f.length) { evt.preventDefault(); dialogEl.focus(); return; }
+      const first = f[0], last = f[f.length - 1];
+      if (evt.shiftKey && document.activeElement === first) { evt.preventDefault(); last.focus(); }
+      else if (!evt.shiftKey && document.activeElement === last) { evt.preventDefault(); first.focus(); }
+    };
+    dialogEl.addEventListener('keydown', onKey);
+    return function release() {
+      dialogEl.removeEventListener('keydown', onKey);
+      if (opener && typeof opener.focus === 'function') opener.focus();
+    };
+  }
 
   function renderBuyersList(data) {
     const body = document.getElementById('buyersDrawerBody');
@@ -12363,6 +12392,11 @@
   function openBuyersDrawer(productType, offering) {
     const backdrop = ensureBuyersDrawer();
     backdrop.hidden = false;
+    // Release any prior trap first (a bank-id click can hide the drawer without
+    // going through close()), then trap focus in the dialog — prevents the
+    // keydown listener accumulating on the reused dialog element across opens.
+    if (buyersFocusRelease) { buyersFocusRelease(); buyersFocusRelease = null; }
+    buyersFocusRelease = trapModalFocus(backdrop.querySelector('.buyers-drawer'));
     // Default to the rep's own banks when an acting-as rep is known; otherwise
     // fall back to firm-wide coverage and hide the toggle.
     const hasRep = !!repCoverageOwner();
