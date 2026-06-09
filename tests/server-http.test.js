@@ -212,6 +212,30 @@ test('iis upload fails closed when admin allowlist is empty', async () => {
   });
 });
 
+test('cross-site mutating writes are blocked; same-origin and header-absent pass', async () => {
+  await withServer({}, async ({ port }) => {
+    const blocked = /Cross-site write request blocked/;
+    const post = (headers) => request(port, {
+      method: 'POST', path: '/api/me/override',
+      headers: { 'Content-Type': 'application/json', ...headers }, body: '{}'
+    });
+    // sec-fetch-site: cross-site -> blocked
+    const crossFetch = await post({ 'sec-fetch-site': 'cross-site' });
+    assert.strictEqual(crossFetch.status, 403, crossFetch.text);
+    assert.ok(blocked.test(crossFetch.text), crossFetch.text);
+    // mismatched Origin host -> blocked
+    const crossOrigin = await post({ Origin: 'http://evil.example.com' });
+    assert.strictEqual(crossOrigin.status, 403, crossOrigin.text);
+    assert.ok(blocked.test(crossOrigin.text), crossOrigin.text);
+    // same-origin Origin -> passes the guard (route handles it, not a cross-site 403)
+    const sameOrigin = await post({ Origin: `http://127.0.0.1:${port}` });
+    assert.ok(!blocked.test(sameOrigin.text), `same-origin should pass: ${sameOrigin.status} ${sameOrigin.text}`);
+    // no origin signals at all -> default-allow (trusted-LAN posture)
+    const bare = await post({});
+    assert.ok(!blocked.test(bare.text), `header-absent should pass: ${bare.status} ${bare.text}`);
+  });
+});
+
 async function main() {
   for (const t of tests) {
     try {
