@@ -1514,7 +1514,15 @@
     const dest = target.dataset.page || target.dataset.goto;
     if (dest && VALID_PAGES.includes(dest)) {
       e.preventDefault();
-      goTo(dest);
+      // A data-cusip hint (e.g. a Daily Intelligence pick) deep-links straight to
+      // the named bond by seeding the destination explorer's search filter,
+      // rather than dropping the rep on the bare explorer to hunt for it.
+      const cusip = target.dataset.cusip;
+      if (cusip) {
+        window.location.hash = '#' + dest + '?q=' + encodeURIComponent(cusip);
+      } else {
+        goTo(dest);
+      }
     }
   });
 
@@ -3071,7 +3079,7 @@
         ${metrics}
         <div class="daily-pick-foot">
           ${pick.cusip ? `<code>${escapeHtml(pick.cusip)}</code>` : '<span></span>'}
-          <button type="button" class="small-btn" data-goto="${escapeHtml(pick.page || 'home')}">Open</button>
+          <button type="button" class="small-btn" data-goto="${escapeHtml(pick.page || 'home')}"${pick.cusip ? ` data-cusip="${escapeHtml(pick.cusip)}"` : ''}>Open</button>
         </div>
         <div class="daily-pick-reason">${escapeHtml(pick.reason || '')}</div>
       </article>
@@ -5217,7 +5225,12 @@
     }
     const sectorSel = document.getElementById('maturityCalSector');
     if (sectorSel && data) {
-      const sectors = Array.from(new Set((data.banks || []).flatMap(b => b.lots.map(l => l.sector)).filter(Boolean))).sort();
+      // Narrow the sector list to the selected owner's banks so picking a sector
+      // can't land on a dead-end empty state (a sector only other owners hold).
+      const sectorBanks = maturityCalState.owner
+        ? (data.banks || []).filter(b => b.owner === maturityCalState.owner)
+        : (data.banks || []);
+      const sectors = Array.from(new Set(sectorBanks.flatMap(b => b.lots.map(l => l.sector)).filter(Boolean))).sort();
       sectorSel.innerHTML = '<option value="">All sectors</option>' +
         sectors.map(s => '<option value="' + escapeHtml(s) + '"' + (s === maturityCalState.sector ? ' selected' : '') + '>' + escapeHtml(s) + '</option>').join('');
     }
@@ -12651,7 +12664,7 @@
     // Default to the rep's own banks when an acting-as rep is known; otherwise
     // fall back to firm-wide coverage and hide the toggle.
     const hasRep = !!repCoverageOwner();
-    buyersDrawerCtx = { productType, offering, scope: hasRep ? 'my' : 'all' };
+    buyersDrawerCtx = { productType, offering, scope: hasRep ? 'my' : 'all', triedFallback: false };
     const toggle = document.getElementById('buyersScopeToggle');
     if (toggle) toggle.hidden = !hasRep;
     fetchBuyers();
@@ -12674,6 +12687,16 @@
         body: JSON.stringify({ productType, offering, limit: 10, owner })
       });
       const data = await readBankJson(res);
+      // If "My banks" matched no coverage owner at all (rep name doesn't line up
+      // with any stored owner string), silently fall back to all coverage once so
+      // the drawer never opens into a dead empty state. A rep who *does* cover
+      // banks but none fit this bond keeps the real "none of yours fit" result.
+      if (scope === 'my' && data.scopedOwner && data.scopedCount === 0
+          && data.coverageCount > 0 && !buyersDrawerCtx.triedFallback) {
+        buyersDrawerCtx.triedFallback = true;
+        buyersDrawerCtx.scope = 'all';
+        return fetchBuyers();
+      }
       if (subtitle) subtitle.textContent = data.offeringHeadline || '';
       renderBuyersList(data);
     } catch (e) {
