@@ -6692,6 +6692,27 @@ body {
   flex: 1;
 }
 
+.buyers-scope-toggle {
+  display: inline-flex;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.buyers-scope-toggle button {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border: 0;
+  background: var(--surface);
+  color: var(--text2);
+  cursor: pointer;
+}
+.buyers-scope-toggle button + button { border-left: 1px solid var(--border); }
+.buyers-scope-toggle button.active { background: var(--accent, var(--success)); color: #fff; }
+
+.buyers-empty-action { margin-top: 12px; }
+
 .buyers-summary {
   color: var(--text3);
   font-size: 11.5px;

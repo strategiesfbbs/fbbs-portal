@@ -12561,8 +12561,12 @@
       <div class="maps-modal buyers-drawer" role="dialog" aria-modal="true" aria-labelledby="buyersDrawerTitle">
         <header>
           <div>
-            <div class="title" id="buyersDrawerTitle">Who buys this?</div>
+            <div class="title" id="buyersDrawerTitle">Who should I call?</div>
             <div class="buyers-drawer-subtitle" id="buyersDrawerSubtitle"></div>
+            <div class="buyers-scope-toggle" id="buyersScopeToggle" role="tablist" hidden>
+              <button type="button" data-scope="my" role="tab">My banks</button>
+              <button type="button" data-scope="all" role="tab">All coverage</button>
+            </div>
           </div>
           <button type="button" class="text-btn" id="buyersDrawerClose" aria-label="Close">✕</button>
         </header>
@@ -12580,18 +12584,41 @@
     backdrop.querySelector('#buyersDrawerCloseFooter').addEventListener('click', close);
     backdrop.addEventListener('click', evt => { if (evt.target === backdrop) close(); });
     document.addEventListener('keydown', evt => { if (evt.key === 'Escape' && !backdrop.hidden) close(); });
+    backdrop.querySelector('#buyersScopeToggle').addEventListener('click', evt => {
+      const btn = evt.target.closest('button[data-scope]');
+      if (!btn || btn.dataset.scope === buyersDrawerCtx.scope) return;
+      buyersDrawerCtx.scope = btn.dataset.scope;
+      fetchBuyers();
+    });
     return backdrop;
   }
+
+  // Acting-as rep resolved to the coverage-owner string used on bank records
+  // (owners are stored as rep names), so "My banks" can scope the buyer list.
+  function repCoverageOwner() {
+    return meState.rep ? String(meState.rep.displayName || meState.rep.username || '').trim() : '';
+  }
+
+  let buyersDrawerCtx = { productType: null, offering: null, scope: 'all' };
 
   function renderBuyersList(data) {
     const body = document.getElementById('buyersDrawerBody');
     if (!body) return;
     if (!data || !Array.isArray(data.buyers) || !data.buyers.length) {
-      body.innerHTML = `<div class="bank-search-empty">${escapeHtml(data && data.notice ? data.notice : 'No coverage banks matched this offering.')}</div>`;
+      const msg = data && data.notice ? data.notice : 'No coverage banks matched this offering.';
+      // When the rep's own list is empty, offer a one-click jump to firm-wide coverage.
+      const allBtn = data && data.scopedOwner
+        ? '<button type="button" class="small-btn" id="buyersShowAll">Show all coverage</button>' : '';
+      body.innerHTML = `<div class="bank-search-empty">${escapeHtml(msg)}${allBtn ? `<div class="buyers-empty-action">${allBtn}</div>` : ''}</div>`;
+      const showAll = document.getElementById('buyersShowAll');
+      if (showAll) showAll.addEventListener('click', () => { buyersDrawerCtx.scope = 'all'; fetchBuyers(); });
       return;
     }
+    const poolLabel = data.scopedOwner
+      ? `${escapeHtml(data.scopedCount)} bank${data.scopedCount === 1 ? '' : 's'} you cover`
+      : `${escapeHtml(data.coverageCount)} covered banks`;
     body.innerHTML = `
-      <div class="buyers-summary">${escapeHtml(data.buyers.length)} of ${escapeHtml(data.coverageCount)} covered banks ranked.</div>
+      <div class="buyers-summary">${escapeHtml(data.buyers.length)} of ${poolLabel} ranked${data.scopedOwner ? ` · ${escapeHtml(data.scopedOwner)}` : ''}.</div>
       <ol class="buyers-list">
         ${data.buyers.map((b, i) => `
           <li class="buyer-row">
@@ -12618,18 +12645,33 @@
     });
   }
 
-  async function openBuyersDrawer(productType, offering) {
+  function openBuyersDrawer(productType, offering) {
     const backdrop = ensureBuyersDrawer();
     backdrop.hidden = false;
+    // Default to the rep's own banks when an acting-as rep is known; otherwise
+    // fall back to firm-wide coverage and hide the toggle.
+    const hasRep = !!repCoverageOwner();
+    buyersDrawerCtx = { productType, offering, scope: hasRep ? 'my' : 'all' };
+    const toggle = document.getElementById('buyersScopeToggle');
+    if (toggle) toggle.hidden = !hasRep;
+    fetchBuyers();
+  }
+
+  async function fetchBuyers() {
+    const { productType, offering, scope } = buyersDrawerCtx;
+    if (!productType) return;
     const subtitle = document.getElementById('buyersDrawerSubtitle');
     const body = document.getElementById('buyersDrawerBody');
+    const owner = scope === 'my' ? repCoverageOwner() : '';
+    const toggle = document.getElementById('buyersScopeToggle');
+    if (toggle) toggle.querySelectorAll('button[data-scope]').forEach(b => b.classList.toggle('active', b.dataset.scope === scope));
     if (subtitle) subtitle.textContent = '';
-    if (body) body.innerHTML = '<div class="bank-search-empty">Scoring covered banks…</div>';
+    if (body) body.innerHTML = `<div class="bank-search-empty">Scoring ${owner ? 'your covered banks' : 'covered banks'}…</div>`;
     try {
       const res = await fetch('/api/assistant/buyers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ productType, offering, limit: 10 })
+        body: JSON.stringify({ productType, offering, limit: 10, owner })
       });
       const data = await readBankJson(res);
       if (subtitle) subtitle.textContent = data.offeringHeadline || '';

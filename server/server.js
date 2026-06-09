@@ -3893,7 +3893,7 @@ function scoreCoverageBankForOffering(bank, productType, offering, holdingsForBa
   return { score, rationale: why };
 }
 
-function findBuyerCandidates({ productType, offering, limit = 10 }) {
+function findBuyerCandidates({ productType, offering, limit = 10, owner = '' }) {
   if (!BUYER_PRODUCT_TYPES.has(productType)) {
     const err = new Error('Unsupported product type');
     err.statusCode = 400;
@@ -3901,11 +3901,19 @@ function findBuyerCandidates({ productType, offering, limit = 10 }) {
   }
   const mapData = getMapBankData();
   if (!mapData || !Array.isArray(mapData.banks)) {
-    return { offeringHeadline: buyerOfferingHeadline(productType, offering), buyers: [], coverageCount: 0, notice: 'Bank dataset not loaded.' };
+    return { offeringHeadline: buyerOfferingHeadline(productType, offering), buyers: [], coverageCount: 0, scopedOwner: null, scopedCount: null, notice: 'Bank dataset not loaded.' };
   }
   const coverage = mapData.banks.filter(b => b.accountStatusLabel && b.accountStatusLabel !== 'Open');
+  // Optional rep scope: limit the pool to the banks a given coverage owner is
+  // assigned, so a rep gets their own "who should I call?" list rather than the
+  // whole firm's coverage. Matched the same way the maturity calendar matches an
+  // acting-as rep to a coverage owner (exact, case-insensitive).
+  const ownerKey = String(owner || '').trim().toLowerCase();
+  const pool = ownerKey
+    ? coverage.filter(b => String((b.accountStatus && b.accountStatus.owner) || '').trim().toLowerCase() === ownerKey)
+    : coverage;
   const holdingsIndex = getCoverageHoldingsIndex();
-  const scored = coverage
+  const scored = pool
     .map(b => {
       const holdingsForBank = holdingsIndex ? holdingsIndex.get(String(b.id)) : null;
       const result = scoreCoverageBankForOffering(b, productType, offering, holdingsForBank);
@@ -3927,11 +3935,16 @@ function findBuyerCandidates({ productType, offering, limit = 10 }) {
     .filter(Boolean)
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.max(1, Math.min(limit, 25)));
+  let notice = '';
+  if (coverage.length === 0) notice = 'No banks have an active coverage status — every bank is set to Open.';
+  else if (ownerKey && pool.length === 0) notice = `No covered banks are assigned to ${owner}.`;
   return {
     offeringHeadline: buyerOfferingHeadline(productType, offering),
     coverageCount: coverage.length,
+    scopedOwner: ownerKey ? owner : null,
+    scopedCount: ownerKey ? pool.length : null,
     buyers: scored,
-    notice: coverage.length === 0 ? 'No banks have an active coverage status — every bank is set to Open.' : ''
+    notice
   };
 }
 
@@ -3942,7 +3955,8 @@ async function handleBuyerCandidates(req, res) {
     if (!BUYER_PRODUCT_TYPES.has(productType)) return sendJSON(res, 400, { error: 'Unsupported product type' });
     const offering = (body.offering && typeof body.offering === 'object') ? body.offering : {};
     const limit = Number(body.limit) || 10;
-    const result = findBuyerCandidates({ productType, offering, limit });
+    const owner = typeof body.owner === 'string' ? body.owner : '';
+    const result = findBuyerCandidates({ productType, offering, limit, owner });
     return sendJSON(res, 200, result);
   } catch (err) {
     log('warn', 'Buyer candidates failed:', err.message);
