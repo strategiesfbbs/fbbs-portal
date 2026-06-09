@@ -55,15 +55,7 @@ const SELL_BUY_COLUMNS = [
 
 // ---------- Formatting ----------
 
-function escapeHtml(value) {
-  return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[c]));
-}
-
-function isBlank(value) {
-  return value == null || value === '' || (typeof value === 'string' && !value.trim());
-}
+const { escapeHtml, isBlank } = require('./html-escape');
 
 function money0(value) {
   if (isBlank(value)) return '—';
