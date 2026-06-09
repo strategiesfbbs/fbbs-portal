@@ -985,7 +985,10 @@ function parseMultipart(req, boundary, limit) {
           const headerStr = part.slice(0, headerEnd).toString('utf-8');
           const body = part.slice(headerEnd + 4);
 
-          const nameMatch = headerStr.match(/name="([^"]+)"/i);
+          // Anchor the field-name capture on a boundary so it can't match the
+          // `name="…"` substring inside `filename="…"` (e.g. a part that carries
+          // only filename= and no real name=).
+          const nameMatch = headerStr.match(/(?:^|[;\s])name="([^"]+)"/i);
           const filenameMatch = headerStr.match(/filename="([^"]*)"/i);
           if (!nameMatch) continue;
 
@@ -9333,6 +9336,10 @@ const server = http.createServer(async (req, res) => {
 
     fs.stat(staticPath, (err, stat) => {
       if (err || !stat.isFile()) {
+        // Don't serve the SPA shell for an unknown API path — a typo'd or removed
+        // /api/* GET should 404 as JSON, not return HTML with a 200 that callers
+        // then fail to JSON.parse.
+        if (pathname.startsWith('/api/')) return sendJSON(res, 404, { error: 'Not found' });
         return sendFile(res, path.join(PUBLIC_DIR, 'index.html'), { req });
       }
       sendFile(res, staticPath, { req });

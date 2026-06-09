@@ -222,7 +222,9 @@ function parseLinkedDataTotals(sheet) {
   if (totals.parTotalThousands != null) totals.par = Math.round(totals.parTotalThousands * 1000);
   if (totals.marketValueTotalThousands != null) totals.marketValue = Math.round(totals.marketValueTotalThousands * 1000);
   if (totals.bookValueTotalThousands != null) totals.bookValue = Math.round(totals.bookValueTotalThousands * 1000);
-  if (totals.par != null && totals.marketValue != null) totals.unrealizedGainLoss = totals.marketValue - totals.bookValue;
+  // Guard the operands actually used (marketValue - bookValue); a missing
+  // bookValue would otherwise compute marketValue - undefined = NaN into holdings.
+  if (totals.marketValue != null && totals.bookValue != null) totals.unrealizedGainLoss = totals.marketValue - totals.bookValue;
   return totals;
 }
 

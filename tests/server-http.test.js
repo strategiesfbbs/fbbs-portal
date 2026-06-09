@@ -236,6 +236,19 @@ test('cross-site mutating writes are blocked; same-origin and header-absent pass
   });
 });
 
+test('unknown /api GET returns 404 JSON, not the SPA shell; unknown non-api path serves the SPA', async () => {
+  await withServer({}, async ({ port }) => {
+    const api = await request(port, { path: '/api/does-not-exist' });
+    assert.strictEqual(api.status, 404, api.text);
+    assert.ok(api.json && /not found/i.test(api.json.error || ''), api.text);
+    assert.ok(!/<!doctype html>/i.test(api.text), 'API 404 must not be the HTML shell');
+    // A non-api unknown path still falls back to the SPA shell (client routing).
+    const spa = await request(port, { path: '/some/client/route' });
+    assert.strictEqual(spa.status, 200, spa.text);
+    assert.ok(/<!doctype html>/i.test(spa.text), 'non-api path should serve index.html');
+  });
+});
+
 async function main() {
   for (const t of tests) {
     try {
