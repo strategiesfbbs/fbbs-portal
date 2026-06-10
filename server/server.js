@@ -92,6 +92,7 @@ const {
 const {
   MANUAL_ACTIVITY_KINDS,
   PRODUCT_FIT_PRODUCTS,
+  activityCountsByBank,
   activityCountsByRep,
   addBankNote,
   countBillingByState,
@@ -5580,6 +5581,110 @@ function handleListReports(req, res, query) {
   }
 }
 
+function parseCsvParam(value) {
+  return String(value || '').split(',').map(s => s.trim()).filter(Boolean);
+}
+
+// Activity Summary by Rep — counts of manual CRM activities per rep (or per
+// bank) over a date range. Defaults to the current month.
+function handleActivitySummaryReport(req, res, query) {
+  try {
+    const now = new Date();
+    const monthStart = `${now.toISOString().slice(0, 7)}-01`;
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(query.get('from') || '') ? query.get('from') : monthStart;
+    const to = /^\d{4}-\d{2}-\d{2}$/.test(query.get('to') || '') ? query.get('to') : now.toISOString().slice(0, 10);
+    const kinds = parseCsvParam(query.get('kinds'));
+    const view = query.get('view') === 'bank' ? 'bank' : 'rep';
+    const repFilter = new Set(parseCsvParam(query.get('reps')).map(s => s.toLowerCase()));
+
+    const empty = () => ({ call: 0, email: 0, meeting: 0, task: 0, note: 0, total: 0, lastDate: '' });
+    const rows = new Map();
+    if (view === 'rep') {
+      activityCountsByRep(BANK_REPORTS_DIR, { from, to, kinds }).forEach(entry => {
+        const key = (entry.actorUsername || '(unknown)').toLowerCase();
+        if (repFilter.size && !repFilter.has(key)) return;
+        const row = rows.get(key) || { rep: entry.actorUsername || '(unknown)', repDisplay: entry.actorDisplay || entry.actorUsername || '(unknown)', ...empty() };
+        if (entry.actorDisplay) row.repDisplay = entry.actorDisplay;
+        if (row[entry.kind] !== undefined) row[entry.kind] += entry.count;
+        row.total += entry.count;
+        if (entry.lastDate > row.lastDate) row.lastDate = entry.lastDate;
+        rows.set(key, row);
+      });
+    } else {
+      // Bank view: name/state come from the coverage rows the activities hang on.
+      const banks = new Map((listSavedBanks(BANK_REPORTS_DIR) || []).map(b => [b.bankId, b]));
+      activityCountsByBank(BANK_REPORTS_DIR, { from, to, kinds }).forEach(entry => {
+        const bank = banks.get(entry.bankId) || {};
+        const row = rows.get(entry.bankId) || {
+          bankId: entry.bankId,
+          displayName: bank.displayName || entry.bankId,
+          city: bank.city || '',
+          state: bank.state || '',
+          owner: bank.owner || '',
+          ...empty()
+        };
+        if (row[entry.kind] !== undefined) row[entry.kind] += entry.count;
+        row.total += entry.count;
+        if (entry.lastDate > row.lastDate) row.lastDate = entry.lastDate;
+        rows.set(entry.bankId, row);
+      });
+    }
+    const list = [...rows.values()].sort((a, b) => b.total - a.total);
+    return sendJSON(res, 200, { view, from, to, rows: list });
+  } catch (err) {
+    log('error', 'Activity summary report failed:', err.message);
+    return sendJSON(res, 500, { error: err.message || 'Could not build activity summary' });
+  }
+}
+
+// Account Touch Report — covered banks with no manual activity in N days
+// (or ever), most neglected first.
+function handleAccountTouchReport(req, res, query) {
+  try {
+    const thresholdDays = Math.max(0, Math.min(3650, parseInt(query.get('days'), 10) || 30));
+    const statuses = new Set(parseCsvParam(query.get('statuses')));
+    const states = new Set(parseCsvParam(query.get('states')).map(s => s.toUpperCase()));
+    const owner = String(query.get('owner') || '').trim().toLowerCase();
+    const today = new Date().toISOString().slice(0, 10);
+    const lastTouch = lastActivityByBank(BANK_REPORTS_DIR);
+    const dayMs = 86400000;
+    const rows = (listSavedBanks(BANK_REPORTS_DIR) || [])
+      .filter(row => {
+        if (statuses.size && !statuses.has(row.status || 'Open')) return false;
+        if (states.size && !states.has(String(row.state || '').toUpperCase())) return false;
+        if (owner && !String(row.owner || '').toLowerCase().includes(owner)) return false;
+        return true;
+      })
+      .map(row => {
+        const last = lastTouch[row.bankId] || '';
+        const daysSince = last
+          ? Math.floor((new Date(`${today}T00:00:00`) - new Date(`${last}T00:00:00`)) / dayMs)
+          : null; // null = never touched
+        return {
+          bankId: row.bankId,
+          displayName: row.displayName,
+          city: row.city || '',
+          state: row.state || '',
+          status: row.status || 'Open',
+          owner: row.owner || '',
+          lastActivityDate: last,
+          daysSinceContact: daysSince,
+          nextActionDate: row.nextActionDate || ''
+        };
+      })
+      .filter(row => row.daysSinceContact === null || row.daysSinceContact >= thresholdDays)
+      .sort((a, b) => {
+        // Never-touched first, then oldest touch first.
+        if ((a.daysSinceContact === null) !== (b.daysSinceContact === null)) return a.daysSinceContact === null ? -1 : 1;
+        return (b.daysSinceContact || 0) - (a.daysSinceContact || 0);
+      });
+    return sendJSON(res, 200, { thresholdDays, rows });
+  } catch (err) {
+    log('error', 'Account touch report failed:', err.message);
+    return sendJSON(res, 500, { error: err.message || 'Could not build account touch report' });
+  }
+}
+
 async function handleCreateReport(req, res) {
   try {
     const body = await readJsonBody(req, 256 * 1024);
@@ -8776,6 +8881,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === '/api/reports/hidden' && req.method === 'POST') {
       return await handleSetReportHidden(req, res);
+    }
+    // Aggregation reports (Phase 4) — named routes BEFORE the :id regex.
+    if (pathname === '/api/reports/activity-summary' && req.method === 'GET') {
+      return handleActivitySummaryReport(req, res, query);
+    }
+    if (pathname === '/api/reports/account-touch' && req.method === 'GET') {
+      return handleAccountTouchReport(req, res, query);
     }
     const reportIdMatch = pathname.match(/^\/api\/reports\/([^/]+)$/);
     if (reportIdMatch && req.method === 'PATCH') {

@@ -269,6 +269,50 @@ test('my-work surfaces cold accounts; views join lastActivityDate', async () => 
   });
 });
 
+test('activity-summary and account-touch report routes aggregate manual activities', async () => {
+  const coverageStore = require('../server/bank-coverage-store');
+  await withServer({}, async ({ port, dataDir }) => {
+    const reportsDir = path.join(dataDir, 'bank-reports');
+    const a = { id: 'AR-1', displayName: 'Alpha Bank', city: 'Alton', state: 'IL', certNumber: '11' };
+    const b = { id: 'AR-2', displayName: 'Beta Bank', city: 'Pana', state: 'MO', certNumber: '22' };
+    coverageStore.upsertSavedBank(reportsDir, a, { status: 'Client', owner: 'Jim Lewis' });
+    coverageStore.upsertSavedBank(reportsDir, b, { status: 'Prospect', owner: 'Dan Hagemann' });
+    const today = new Date().toISOString().slice(0, 10);
+    coverageStore.recordManualActivity(reportsDir, { bankId: 'AR-1', kind: 'call', subject: 'c1', activityDate: today, actorUsername: 'jim', actorDisplay: 'Jim Lewis' });
+    coverageStore.recordManualActivity(reportsDir, { bankId: 'AR-1', kind: 'email', subject: 'e1', activityDate: today, actorUsername: 'jim', actorDisplay: 'Jim Lewis' });
+    coverageStore.recordManualActivity(reportsDir, { bankId: 'AR-2', kind: 'call', subject: 'c2', activityDate: '2020-06-01', actorUsername: 'dan', actorDisplay: 'Dan Hagemann' });
+
+    // By-rep view, current month: jim has 1 call + 1 email; dan's 2020 call is outside the window.
+    const byRep = await request(port, { path: '/api/reports/activity-summary' });
+    assert.strictEqual(byRep.status, 200, byRep.text);
+    const jim = byRep.json.rows.find(r => r.rep === 'jim');
+    assert.ok(jim, 'jim aggregated');
+    assert.strictEqual(jim.call, 1);
+    assert.strictEqual(jim.email, 1);
+    assert.strictEqual(jim.total, 2);
+    assert.ok(!byRep.json.rows.some(r => r.rep === 'dan'), 'out-of-window rep excluded');
+
+    // By-bank view over an explicit window that includes both.
+    const byBank = await request(port, { path: '/api/reports/activity-summary?view=bank&from=2020-01-01' });
+    assert.strictEqual(byBank.status, 200, byBank.text);
+    const alpha = byBank.json.rows.find(r => r.bankId === 'AR-1');
+    assert.ok(alpha && alpha.displayName === 'Alpha Bank' && alpha.total === 2, byBank.text);
+
+    // Account touch at 30 days: beta's last touch was 2020 → neglected; alpha touched today → excluded.
+    const touch = await request(port, { path: '/api/reports/account-touch?days=30' });
+    assert.strictEqual(touch.status, 200, touch.text);
+    const ids = touch.json.rows.map(r => r.bankId);
+    assert.ok(ids.includes('AR-2'), 'stale bank included');
+    assert.ok(!ids.includes('AR-1'), 'freshly-touched bank excluded');
+    const beta = touch.json.rows.find(r => r.bankId === 'AR-2');
+    assert.ok(beta.daysSinceContact > 1000, 'days since contact computed');
+
+    // Status filter narrows the touch report.
+    const clientsOnly = await request(port, { path: '/api/reports/account-touch?days=30&statuses=Client' });
+    assert.strictEqual(clientsOnly.json.rows.length, 0, 'beta is a Prospect, filtered out');
+  });
+});
+
 test('unknown /api GET returns 404 JSON, not the SPA shell; unknown non-api path serves the SPA', async () => {
   await withServer({}, async ({ port }) => {
     const api = await request(port, { path: '/api/does-not-exist' });

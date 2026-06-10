@@ -337,6 +337,22 @@
       folder: 'Coverage',
       description: 'Summarize saved banks, statuses, notes, strategy requests, latest call-report period, and report availability.'
     },
+    'activity-by-rep': {
+      slug: 'activity-by-rep',
+      name: 'Activity Summary by Rep',
+      shortName: 'Activity',
+      category: 'Sales',
+      folder: 'Sales Strategy',
+      description: 'Call, email, meeting, and task volume logged by each rep over a date range — or flipped to per-bank attention.'
+    },
+    'account-touch': {
+      slug: 'account-touch',
+      name: 'Account Touch Report',
+      shortName: 'Touch',
+      category: 'Sales',
+      folder: 'Sales Strategy',
+      description: 'Covered banks with no logged activity in the last N days — most neglected first.'
+    },
     'billing-queue': {
       slug: 'billing-queue',
       name: 'Billing Queue',
@@ -979,6 +995,8 @@
     if (type === 'opportunity') return exportOpportunityReportCsv();
     if (type === 'portfolio-peer') return exportPortfolioReviewCsv();
     if (type === 'billing-queue') return exportBillingQueueCsv();
+    if (type === 'activity-by-rep') return exportActivityReportCsv();
+    if (type === 'account-touch') return exportAccountTouchCsv();
     return showToast('CSV export is not available for this report type yet', true);
   }
 
@@ -8673,6 +8691,8 @@
     if (type === 'opportunity') return '<div id="reportsOpportunityMount"></div>';
     if (type === 'coverage') return '<div id="reportsCoverageBookMount"></div>';
     if (type === 'billing-queue') return '<div id="reportsBillingQueueMount"></div>';
+    if (type === 'activity-by-rep') return '<div id="reportsActivityMount"></div>';
+    if (type === 'account-touch') return '<div id="reportsAccountTouchMount"></div>';
     return '<p class="reports-muted">Select a report type to begin.</p>';
   }
 
@@ -8715,7 +8735,7 @@
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
             <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Available in Phase 1"'}>Save View</button>
-            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
+            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'account-touch'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
             <button type="button" class="small-btn secondary" disabled title="Available in Phase 3">Save &amp; Schedule</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
@@ -9664,6 +9684,8 @@
       if (type === 'opportunity') mountReportPanel('opportunityReportPanel', 'reportsOpportunityMount');
       if (type === 'coverage') renderCoverageBookMount();
       if (type === 'billing-queue') renderBillingQueueMount();
+      if (type === 'activity-by-rep') renderActivityReportMount();
+      if (type === 'account-touch') renderAccountTouchMount();
       if (autorun && !handledAutorun) setTimeout(() => runReportBuilder(type), 0);
     } else if (path === 'data/files') {
       app.innerHTML = reportsDataHtml(true);
@@ -10062,6 +10084,230 @@
     addSessionReport('billing-queue');
   }
 
+  // ===== Activity Summary by Rep + Account Touch reports (Phase 4) =====
+  // Server does the aggregation (GET /api/reports/activity-summary and
+  // /api/reports/account-touch over bank_activities); these mounts are the
+  // input panels + tables.
+
+  const ACTIVITY_REPORT_KINDS = ['call', 'email', 'meeting', 'task', 'note'];
+
+  function currentMonthStart() {
+    return `${new Date().toISOString().slice(0, 7)}-01`;
+  }
+
+  let activityReportState = {
+    loading: false,
+    loaded: false,
+    view: 'rep',
+    from: currentMonthStart(),
+    to: new Date().toISOString().slice(0, 10),
+    kinds: ACTIVITY_REPORT_KINDS.slice(),
+    rows: []
+  };
+
+  let accountTouchState = {
+    loading: false,
+    loaded: false,
+    days: 30,
+    statuses: '',
+    states: '',
+    rows: []
+  };
+
+  function renderActivityReportMount() {
+    const mount = document.getElementById('reportsActivityMount');
+    if (!mount) return;
+    const s = activityReportState;
+    const kindChecks = ACTIVITY_REPORT_KINDS.map(kind => `
+      <label><input type="checkbox" data-activity-report-kind="${escapeHtml(kind)}" ${s.kinds.includes(kind) ? 'checked' : ''}> ${escapeHtml(bankActivityKindLabel(kind))}s</label>
+    `).join('');
+    const repCols = ['Rep', '# Calls', '# Emails', '# Meetings', '# Tasks', '# Notes', 'Total', 'Last Activity'];
+    const bankCols = ['Bank', 'Owner', '# Calls', '# Emails', '# Meetings', '# Tasks', '# Notes', 'Total', 'Last Activity'];
+    const cols = s.view === 'bank' ? bankCols : repCols;
+    const body = s.loading
+      ? '<div class="bank-search-empty">Counting activities...</div>'
+      : !s.loaded
+        ? '<div class="bank-search-empty">Pick a date range and run the report.</div>'
+        : !s.rows.length
+          ? '<div class="bank-search-empty">No logged activities in that window.</div>'
+          : `
+            <div class="reports-list-wrap">
+              <table class="reports-list">
+                <thead><tr>${cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+                <tbody>
+                  ${s.rows.map(row => s.view === 'bank' ? `
+                    <tr>
+                      <td><strong>${escapeHtml(row.displayName || row.bankId)}</strong><span class="reports-desc">${escapeHtml([row.city, row.state].filter(Boolean).join(', '))}</span></td>
+                      <td>${escapeHtml(row.owner || '—')}</td>
+                      <td>${escapeHtml(formatNumber(row.call))}</td>
+                      <td>${escapeHtml(formatNumber(row.email))}</td>
+                      <td>${escapeHtml(formatNumber(row.meeting))}</td>
+                      <td>${escapeHtml(formatNumber(row.task))}</td>
+                      <td>${escapeHtml(formatNumber(row.note))}</td>
+                      <td><strong>${escapeHtml(formatNumber(row.total))}</strong></td>
+                      <td>${escapeHtml(row.lastDate || '—')}</td>
+                    </tr>
+                  ` : `
+                    <tr>
+                      <td><strong>${escapeHtml(row.repDisplay || row.rep)}</strong></td>
+                      <td>${escapeHtml(formatNumber(row.call))}</td>
+                      <td>${escapeHtml(formatNumber(row.email))}</td>
+                      <td>${escapeHtml(formatNumber(row.meeting))}</td>
+                      <td>${escapeHtml(formatNumber(row.task))}</td>
+                      <td>${escapeHtml(formatNumber(row.note))}</td>
+                      <td><strong>${escapeHtml(formatNumber(row.total))}</strong></td>
+                      <td>${escapeHtml(row.lastDate || '—')}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `;
+    mount.innerHTML = `
+      <div class="activity-report-builder">
+        <div class="custom-report-grid">
+          <label>From
+            <input type="date" id="activityReportFrom" value="${escapeHtml(s.from)}">
+          </label>
+          <label>To
+            <input type="date" id="activityReportTo" value="${escapeHtml(s.to)}">
+          </label>
+          <label>View
+            <select id="activityReportView">
+              <option value="rep" ${s.view === 'rep' ? 'selected' : ''}>By rep</option>
+              <option value="bank" ${s.view === 'bank' ? 'selected' : ''}>By bank</option>
+            </select>
+          </label>
+          <div class="custom-report-toggles">${kindChecks}</div>
+        </div>
+        <div id="activityReportOutput">${body}</div>
+      </div>
+    `;
+  }
+
+  async function runActivityReport() {
+    const s = activityReportState;
+    s.loading = true;
+    renderActivityReportMount();
+    try {
+      const params = new URLSearchParams();
+      if (s.from) params.set('from', s.from);
+      if (s.to) params.set('to', s.to);
+      params.set('view', s.view);
+      if (s.kinds.length && s.kinds.length < ACTIVITY_REPORT_KINDS.length) params.set('kinds', s.kinds.join(','));
+      const data = await fetch(`/api/reports/activity-summary?${params}`, { cache: 'no-store' }).then(readBankJson);
+      s.rows = Array.isArray(data.rows) ? data.rows : [];
+      s.loaded = true;
+      addSessionReport('activity-by-rep');
+      showToast('Activity summary ready');
+    } catch (e) {
+      showToast(e.message || 'Could not build activity summary', true);
+    } finally {
+      s.loading = false;
+      renderActivityReportMount();
+    }
+  }
+
+  function exportActivityReportCsv() {
+    const s = activityReportState;
+    if (!s.rows.length) return showToast('Run the activity summary first', true);
+    const header = s.view === 'bank'
+      ? ['Bank', 'City', 'State', 'Owner', 'Calls', 'Emails', 'Meetings', 'Tasks', 'Notes', 'Total', 'Last Activity']
+      : ['Rep', 'Calls', 'Emails', 'Meetings', 'Tasks', 'Notes', 'Total', 'Last Activity'];
+    const body = s.rows.map(row => s.view === 'bank'
+      ? [row.displayName, row.city, row.state, row.owner, row.call, row.email, row.meeting, row.task, row.note, row.total, row.lastDate]
+      : [row.repDisplay || row.rep, row.call, row.email, row.meeting, row.task, row.note, row.total, row.lastDate]);
+    downloadCsv(`activity_summary_${s.from}_${s.to}.csv`, [header, ...body]);
+    showToast(`Exported ${formatNumber(s.rows.length)} rows`);
+  }
+
+  function renderAccountTouchMount() {
+    const mount = document.getElementById('reportsAccountTouchMount');
+    if (!mount) return;
+    const s = accountTouchState;
+    const statusOptions = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
+    const selectedStatuses = new Set(String(s.statuses || '').split(',').filter(Boolean));
+    const body = s.loading
+      ? '<div class="bank-search-empty">Checking account touches...</div>'
+      : !s.loaded
+        ? '<div class="bank-search-empty">Set the threshold and run the report.</div>'
+        : !s.rows.length
+          ? '<div class="bank-search-empty">Every covered account in scope has a recent touch. Nice.</div>'
+          : `
+            <div class="reports-list-wrap">
+              <table class="reports-list">
+                <thead><tr><th>Bank</th><th>Status</th><th>Owner</th><th>Last Activity</th><th>Days Since</th><th>Next Action</th><th></th></tr></thead>
+                <tbody>
+                  ${s.rows.map(row => {
+                    const days = row.daysSinceContact;
+                    const cls = days == null || days > 60 ? 'is-cold' : days > 30 ? 'is-aging' : 'is-fresh';
+                    return `
+                      <tr>
+                        <td><strong>${escapeHtml(row.displayName || 'Bank')}</strong><span class="reports-desc">${escapeHtml([row.city, row.state].filter(Boolean).join(', '))}</span></td>
+                        <td>${escapeHtml(row.status)}</td>
+                        <td>${escapeHtml(row.owner || '—')}</td>
+                        <td>${escapeHtml(row.lastActivityDate || 'Never')}</td>
+                        <td><span class="views-last-activity ${cls}">${days == null ? 'Never' : escapeHtml(`${formatNumber(days)}d`)}</span></td>
+                        <td>${escapeHtml(row.nextActionDate || '—')}</td>
+                        <td><button type="button" class="text-btn" data-custom-bank-open="${escapeHtml(row.bankId)}">Open</button></td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `;
+    mount.innerHTML = `
+      <div class="activity-report-builder">
+        <div class="custom-report-grid">
+          <label>No activity in (days)
+            <input type="number" id="accountTouchDays" min="0" step="1" value="${escapeHtml(String(s.days))}">
+          </label>
+          <label>States
+            <input type="text" id="accountTouchStates" placeholder="MO, IL, AR..." value="${escapeHtml(s.states)}">
+          </label>
+          <label>Status
+            <select id="accountTouchStatusFilter" multiple size="5">
+              ${statusOptions.map(opt => `<option value="${escapeHtml(opt)}" ${selectedStatuses.has(opt) ? 'selected' : ''}>${escapeHtml(opt)}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div id="accountTouchOutput">${body}</div>
+      </div>
+    `;
+  }
+
+  async function runAccountTouchReport() {
+    const s = accountTouchState;
+    s.loading = true;
+    renderAccountTouchMount();
+    try {
+      const params = new URLSearchParams();
+      params.set('days', String(s.days || 0));
+      if (s.statuses) params.set('statuses', s.statuses);
+      if (s.states) params.set('states', String(s.states).toUpperCase().split(/[\s,]+/).filter(Boolean).join(','));
+      const data = await fetch(`/api/reports/account-touch?${params}`, { cache: 'no-store' }).then(readBankJson);
+      s.rows = Array.isArray(data.rows) ? data.rows : [];
+      s.loaded = true;
+      addSessionReport('account-touch');
+      showToast('Account touch report ready');
+    } catch (e) {
+      showToast(e.message || 'Could not build account touch report', true);
+    } finally {
+      s.loading = false;
+      renderAccountTouchMount();
+    }
+  }
+
+  function exportAccountTouchCsv() {
+    const s = accountTouchState;
+    if (!s.rows.length) return showToast('Run the account touch report first', true);
+    const header = ['Bank', 'City', 'State', 'Status', 'Owner', 'Last Activity', 'Days Since Contact', 'Next Action'];
+    const body = s.rows.map(row => [row.displayName, row.city, row.state, row.status, row.owner, row.lastActivityDate || 'Never', row.daysSinceContact == null ? 'Never' : row.daysSinceContact, row.nextActionDate]);
+    downloadCsv(`account_touch_${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body]);
+    showToast(`Exported ${formatNumber(s.rows.length)} rows`);
+  }
+
   function exportBillingQueueCsv() {
     const rows = billingQueueRows();
     if (!rows.length) return showToast('No billing rows to export', true);
@@ -10270,6 +10516,27 @@
         else delete gb.aggs[col];
         customBankReportState.filters.groupBy = gb;
         renderCustomBankReportMount();
+      }
+      // Activity Summary / Account Touch inputs: stash state; output updates on Run.
+      if (target.id === 'activityReportFrom') activityReportState.from = target.value || '';
+      if (target.id === 'activityReportTo') activityReportState.to = target.value || '';
+      if (target.id === 'activityReportView') {
+        activityReportState.view = target.value === 'bank' ? 'bank' : 'rep';
+        activityReportState.loaded = false;
+        activityReportState.rows = [];
+        renderActivityReportMount();
+      }
+      if (target.matches && target.matches('[data-activity-report-kind]')) {
+        const kind = target.getAttribute('data-activity-report-kind');
+        const kinds = new Set(activityReportState.kinds);
+        if (target.checked) kinds.add(kind);
+        else kinds.delete(kind);
+        activityReportState.kinds = ACTIVITY_REPORT_KINDS.filter(k => kinds.has(k));
+      }
+      if (target.id === 'accountTouchDays') accountTouchState.days = Math.max(0, parseInt(target.value, 10) || 0);
+      if (target.id === 'accountTouchStates') accountTouchState.states = target.value || '';
+      if (target.id === 'accountTouchStatusFilter') {
+        accountTouchState.statuses = Array.from(target.selectedOptions || []).map(opt => opt.value).join(',');
       }
     });
     document.addEventListener('click', event => {
@@ -10579,6 +10846,12 @@
     }
     if (type === 'billing-queue') {
       runBillingQueue();
+    }
+    if (type === 'activity-by-rep') {
+      runActivityReport();
+    }
+    if (type === 'account-touch') {
+      runAccountTouchReport();
     }
   }
   // ----------------------------------------------------------------------

@@ -865,6 +865,35 @@ function activityCountsByRep(outputDir, options = {}) {
   }));
 }
 
+// Per-bank manual-activity counts by kind within an optional date window —
+// the "which accounts get the attention" flip side of activityCountsByRep.
+function activityCountsByBank(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const kinds = sanitizeManualKinds(options.kinds);
+  const inList = kinds.map(() => '?').join(', ');
+  const params = kinds.slice();
+  const where = [`kind IN (${inList})`];
+  const from = cleanDate(options.from);
+  const to = cleanDate(options.to);
+  if (from) { where.push(`COALESCE(activity_date, substr(at, 1, 10)) >= ?`); params.push(from); }
+  if (to) { where.push(`COALESCE(activity_date, substr(at, 1, 10)) <= ?`); params.push(to); }
+  const rows = querySqliteJson(dbPath, `
+    SELECT bank_id AS bankId,
+           kind AS kind,
+           COUNT(*) AS count,
+           MAX(COALESCE(activity_date, substr(at, 1, 10))) AS lastDate
+    FROM bank_activities
+    WHERE ${where.join(' AND ')}
+    GROUP BY bank_id, kind;
+  `, params);
+  return rows.map(row => ({
+    bankId: row.bankId || '',
+    kind: row.kind || '',
+    count: Number(row.count) || 0,
+    lastDate: row.lastDate || ''
+  }));
+}
+
 // ---------- Product fit ----------
 
 function productFitSelectSql(where = '1 = 1') {
@@ -1160,6 +1189,7 @@ module.exports = {
   COVERAGE_DATABASE_FILENAME,
   MANUAL_ACTIVITY_KINDS,
   PRODUCT_FIT_PRODUCTS,
+  activityCountsByBank,
   activityCountsByRep,
   addBankNote,
   countBillingByState,

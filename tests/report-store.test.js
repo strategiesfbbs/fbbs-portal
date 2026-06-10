@@ -67,6 +67,16 @@ test('unknown type falls back to custom-bank; null rep leaves createdBy empty', 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('activity report types are accepted (Phase 4)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'report-activity-'));
+  const a = store.createReportDefinition(dir, { name: 'A', type: 'activity-by-rep' }, REP);
+  const b = store.createReportDefinition(dir, { name: 'B', type: 'account-touch' }, REP);
+  assert.strictEqual(a.type, 'activity-by-rep');
+  assert.strictEqual(b.type, 'account-touch');
+  assert.ok(store.REPORT_TYPES.has('activity-by-rep') && store.REPORT_TYPES.has('account-touch'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('create honoring a supplied id upserts (migration path) — no duplicate', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'report-upsert-'));
   store.createReportDefinition(dir, { id: 'saved-123', name: 'First', type: 'custom-bank' }, REP);
