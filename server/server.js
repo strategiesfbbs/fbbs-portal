@@ -8203,6 +8203,10 @@ function summarizeRepStrategy(row) {
   };
 }
 
+// An owned account is "going cold" when its newest manual CRM activity is older
+// than this many days (or it has never been touched).
+const COLD_ACCOUNT_DAYS = 30;
+
 function buildMyWorkResponse(rep) {
   // Build a "no rep set" envelope so the client can render a prompt without crashing.
   if (!rep) {
@@ -8212,6 +8216,7 @@ function buildMyWorkResponse(rep) {
       myProspects: { count: 0, recent: [] },
       myOpenStrategies: { count: 0, recent: [], byStatus: { Open: 0, 'In Progress': 0, 'Needs Billed': 0 } },
       myOverdueFollowups: { count: 0, items: [] },
+      myColdAccounts: { count: 0, items: [], thresholdDays: COLD_ACCOUNT_DAYS },
       recentlyTouched: []
     };
   }
@@ -8248,6 +8253,20 @@ function buildMyWorkResponse(rep) {
     if (!row.nextActionDate) return false;
     return String(row.nextActionDate).slice(0, 10) < today;
   });
+
+  // "Going cold": owned saved banks whose latest manual CRM touch (call/email/
+  // meeting/task/note) is older than COLD_ACCOUNT_DAYS or missing entirely.
+  // Oldest-touch-first so the most neglected account tops the list.
+  let lastTouchMap = {};
+  try { lastTouchMap = lastActivityByBank(BANK_REPORTS_DIR) || {}; } catch (_) { /* views survive a coverage-db hiccup */ }
+  const coldCutoff = new Date(Date.now() - COLD_ACCOUNT_DAYS * 86400000).toISOString().slice(0, 10);
+  const myCold = savedBanks
+    .filter(row => {
+      if (!ownerStringContainsRep(row.owner, rep)) return false;
+      const last = lastTouchMap[row.bankId] || '';
+      return !last || last < coldCutoff;
+    })
+    .sort((a, b) => String(lastTouchMap[a.bankId] || '').localeCompare(String(lastTouchMap[b.bankId] || '')));
 
   // Recently touched: union of my accounts + my strategies, sorted by updatedAt desc.
   const touchedEntries = [];
@@ -8302,6 +8321,19 @@ function buildMyWorkResponse(rep) {
         nextActionDate: row.nextActionDate,
         priority: row.priority,
         status: row.status
+      }))
+    },
+    myColdAccounts: {
+      count: myCold.length,
+      thresholdDays: COLD_ACCOUNT_DAYS,
+      items: myCold.slice(0, 8).map(row => ({
+        bankId: row.bankId,
+        displayName: row.displayName,
+        city: row.city || '',
+        state: row.state || '',
+        status: row.status,
+        priority: row.priority,
+        lastActivityDate: lastTouchMap[row.bankId] || ''
       }))
     },
     recentlyTouched

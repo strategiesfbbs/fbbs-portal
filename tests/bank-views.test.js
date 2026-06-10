@@ -73,4 +73,32 @@ test('viewToCsvRows handles null result and the requires-rep gate', () => {
   );
 });
 
+test('viewToCsvRows labels lastActivityDate as Last Activity', () => {
+  const csv = v.viewToCsvRows({ columns: ['displayName', 'lastActivityDate'], rows: [{ displayName: 'X', lastActivityDate: '2026-06-01' }] });
+  assert.deepStrictEqual(csv[0], ['Bank', 'Last Activity']);
+  assert.deepStrictEqual(csv[1], ['X', '2026-06-01']);
+});
+
+// Integration: the follow-ups view joins each row to its latest manual CRM
+// touch (lastActivityByBank) — the Phase 2 "going cold" column.
+test('runBankView joins lastActivityDate onto follow-up rows', () => {
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const coverageStore = require('../server/bank-coverage-store');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-views-'));
+  try {
+    const bank = { id: 'V-1', displayName: 'View Test Bank', city: 'Alton', state: 'IL', certNumber: '999' };
+    coverageStore.upsertSavedBank(tmpDir, bank, { status: 'Client', owner: 'Jim Lewis', nextActionDate: '2020-01-01' });
+    coverageStore.recordManualActivity(tmpDir, { bankId: 'V-1', kind: 'call', subject: 'Touch', activityDate: '2026-06-01' });
+    const result = v.runBankView({ outputDir: tmpDir, viewId: 'stale-follow-ups', rep: null });
+    assert.ok(result.columns.includes('lastActivityDate'), 'follow-ups view exposes lastActivityDate');
+    const row = result.rows.find(r => r.bankId === 'V-1');
+    assert.ok(row, 'stale follow-up row present');
+    assert.strictEqual(row.lastActivityDate, '2026-06-01');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 console.log(`bank-views tests: ${passed} passed.`);

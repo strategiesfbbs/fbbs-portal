@@ -10834,6 +10834,27 @@ body {
   top: 0;
 }
 .views-detail-table tbody tr:hover { background: #f6faf7; }
+
+/* Clickable column-sort headers (asc → desc → cleared) */
+.views-sort-btn {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  padding: 0;
+  text-transform: inherit;
+  white-space: nowrap;
+}
+.views-sort-btn:hover { color: #163d28; text-decoration: underline; }
+
+/* Last Activity freshness: green ≤30d, amber 30–60d, red >60d or never */
+.views-last-activity { font-weight: 600; white-space: nowrap; }
+.views-last-activity.is-fresh { color: #1f6b43; }
+.views-last-activity.is-aging { color: #8a6414; }
+.views-last-activity.is-cold { color: #9c2f2f; }
+
 .views-detail-empty {
   color: #5a615e;
   font-size: 12px;

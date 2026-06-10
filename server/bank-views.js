@@ -16,6 +16,7 @@ const {
   listBankAccountStatuses
 } = require('./bank-account-status-store');
 const {
+  lastActivityByBank,
   listBillingQueue,
   listSavedBanks
 } = require('./bank-coverage-store');
@@ -163,6 +164,16 @@ function summarizeFollowUp(row) {
 // group fits in one shell-out and the JS-side rep filter has the full set to work with.
 const ACCOUNT_VIEW_FETCH_LIMIT = 8000;
 
+// One GROUP BY over bank_activities (manual CRM kinds only) → { bankId: 'YYYY-MM-DD' }.
+// Swallows store errors so a coverage-db hiccup can't take the views page down.
+function safeLastActivityMap(outputDir) {
+  try {
+    return lastActivityByBank(outputDir) || {};
+  } catch (_) {
+    return {};
+  }
+}
+
 function runAccountStatusView(view, { outputDir, rep, limit = ACCOUNT_VIEW_FETCH_LIMIT }) {
   const rows = listBankAccountStatuses(outputDir, {
     status: view.statusFilter,
@@ -173,9 +184,13 @@ function runAccountStatusView(view, { outputDir, rep, limit = ACCOUNT_VIEW_FETCH
   const filtered = (view.requiresRep || (view.supportsRep && rep))
     ? rows.filter(r => ownerStringContainsRep(r.owner, rep))
     : rows;
+  const lastActivity = safeLastActivityMap(outputDir);
   return {
-    rows: filtered.map(summarizeBank),
-    columns: ['displayName', 'city', 'state', 'certNumber', 'status', 'owner', 'affiliate'],
+    rows: filtered.map(row => ({
+      ...summarizeBank(row),
+      lastActivityDate: lastActivity[row.bankId] || ''
+    })),
+    columns: ['displayName', 'city', 'state', 'certNumber', 'status', 'owner', 'affiliate', 'lastActivityDate'],
     rowKind: 'bank'
   };
 }
@@ -204,9 +219,13 @@ function runFollowUpsView(view, { outputDir, rep }) {
     if (view.supportsRep && rep) return ownerStringContainsRep(row.owner, rep);
     return true;
   });
+  const lastActivity = safeLastActivityMap(outputDir);
   return {
-    rows: matches.map(summarizeFollowUp),
-    columns: ['displayName', 'city', 'state', 'status', 'priority', 'owner', 'nextActionDate'],
+    rows: matches.map(row => ({
+      ...summarizeFollowUp(row),
+      lastActivityDate: lastActivity[row.bankId] || ''
+    })),
+    columns: ['displayName', 'city', 'state', 'status', 'priority', 'owner', 'nextActionDate', 'lastActivityDate'],
     rowKind: 'follow-up'
   };
 }
@@ -306,6 +325,7 @@ const CSV_COLUMN_LABELS = {
   createdAt: 'Created At',
   updatedAt: 'Updated At',
   nextActionDate: 'Next Action Date',
+  lastActivityDate: 'Last Activity',
   summary: 'Summary',
   refType: 'Source',
   amount: 'Amount',

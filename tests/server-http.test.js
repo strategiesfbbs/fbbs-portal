@@ -236,6 +236,39 @@ test('cross-site mutating writes are blocked; same-origin and header-absent pass
   });
 });
 
+test('my-work surfaces cold accounts; views join lastActivityDate', async () => {
+  // Seed the coverage store directly (the activity/coverage POST routes need the
+  // full bank-data workbook, which this harness doesn't carry), then exercise
+  // the read-only routes the Phase 2 UI consumes.
+  const coverageStore = require('../server/bank-coverage-store');
+  await withServer({ FBBS_DEFAULT_REP: 'Test Rep' }, async ({ port, dataDir }) => {
+    const reportsDir = path.join(dataDir, 'bank-reports');
+    const touched = { id: 'HT-1', displayName: 'Touched Bank', city: 'Alton', state: 'IL', certNumber: '111' };
+    const cold = { id: 'HT-2', displayName: 'Cold Bank', city: 'Pana', state: 'IL', certNumber: '222' };
+    coverageStore.upsertSavedBank(reportsDir, touched, { status: 'Client', owner: 'Test Rep', nextActionDate: '2020-01-01' });
+    coverageStore.upsertSavedBank(reportsDir, cold, { status: 'Prospect', owner: 'Test Rep' });
+    // Fresh manual touch on HT-1 (yesterday) keeps it out of the cold list.
+    const fresh = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    coverageStore.recordManualActivity(reportsDir, { bankId: 'HT-1', kind: 'call', subject: 'Check-in', activityDate: fresh });
+
+    const work = await request(port, { path: '/api/me/work' });
+    assert.strictEqual(work.status, 200, work.text);
+    const coldList = work.json.myColdAccounts;
+    assert.ok(coldList && typeof coldList.thresholdDays === 'number', 'myColdAccounts envelope present');
+    const coldIds = coldList.items.map(i => i.bankId);
+    assert.ok(coldIds.includes('HT-2'), 'never-touched bank is cold');
+    assert.ok(!coldIds.includes('HT-1'), 'freshly-touched bank is not cold');
+    assert.strictEqual(coldList.items.find(i => i.bankId === 'HT-2').lastActivityDate, '');
+
+    const view = await request(port, { path: '/api/bank-views/stale-follow-ups?rep=all' });
+    assert.strictEqual(view.status, 200, view.text);
+    assert.ok(view.json.columns.includes('lastActivityDate'), 'follow-ups view exposes lastActivityDate');
+    const row = view.json.rows.find(r => r.bankId === 'HT-1');
+    assert.ok(row, 'stale follow-up present');
+    assert.strictEqual(row.lastActivityDate, fresh);
+  });
+});
+
 test('unknown /api GET returns 404 JSON, not the SPA shell; unknown non-api path serves the SPA', async () => {
   await withServer({}, async ({ port }) => {
     const api = await request(port, { path: '/api/does-not-exist' });

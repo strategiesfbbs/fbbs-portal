@@ -1995,6 +1995,19 @@
       </li>
     `);
 
+    const cold = (work && work.myColdAccounts) || { count: 0, items: [], thresholdDays: 30 };
+    setMyWorkNum('cold', cold.count);
+    const coldDetail = document.querySelector('[data-mywork-detail="cold"]');
+    if (coldDetail) coldDetail.textContent = `No logged touch in ${cold.thresholdDays || 30}+ days`;
+    setMyWorkList('cold', cold.items, row => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(row.displayName || 'Bank')}</span>
+          <span class="my-work-list-meta">${escapeHtml(row.lastActivityDate ? `Last touch ${row.lastActivityDate}` : 'Never logged')}</span>
+        </button>
+      </li>
+    `);
+
     const recentItems = (work && work.recentlyTouched) || [];
     if (recents) {
       if (!recentItems.length) {
@@ -2086,6 +2099,7 @@
     requestedBy: 'Requested by',
     invoiceContact: 'Invoice',
     nextActionDate: 'Next Action',
+    lastActivityDate: 'Last Activity',
     summary: 'Summary',
     updatedAt: 'Updated',
     refType: 'Source',
@@ -2204,8 +2218,15 @@
       return;
     }
     const cols = result.columns || [];
+    const sort = savedViewSort(id);
     if (thead) {
-      thead.innerHTML = `<tr>${cols.map(c => `<th>${escapeHtml(SAVED_VIEW_COLUMN_LABELS[c] || c)}</th>`).join('')}</tr>`;
+      thead.innerHTML = `<tr>${cols.map(c => {
+        const arrow = sort && sort.col === c ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : '';
+        return `<th><button type="button" class="views-sort-btn" data-views-sort="${escapeHtml(c)}">${escapeHtml(SAVED_VIEW_COLUMN_LABELS[c] || c)}${arrow}</button></th>`;
+      }).join('')}</tr>`;
+      thead.querySelectorAll('[data-views-sort]').forEach(btn => {
+        btn.addEventListener('click', () => cycleSavedViewSort(id, btn.getAttribute('data-views-sort')));
+      });
     }
     if (!result.rows || !result.rows.length) {
       if (tbody) tbody.innerHTML = '';
@@ -2214,10 +2235,14 @@
     }
     if (empty) empty.hidden = true;
     if (tbody) {
-      tbody.innerHTML = result.rows.slice(0, 500).map(row => {
+      const rows = sortedSavedViewRows(result.rows, sort);
+      tbody.innerHTML = rows.slice(0, 500).map(row => {
         const bankId = row.bankId || '';
         const rowOpen = bankId ? ` data-views-row-bank="${escapeHtml(bankId)}"` : '';
-        return `<tr${rowOpen}>${cols.map(c => `<td>${escapeHtml(String(row[c] == null ? '' : row[c]))}</td>`).join('')}</tr>`;
+        return `<tr${rowOpen}>${cols.map(c => {
+          if (c === 'lastActivityDate') return lastActivityCellHtml(row[c]);
+          return `<td>${escapeHtml(String(row[c] == null ? '' : row[c]))}</td>`;
+        }).join('')}</tr>`;
       }).join('');
       tbody.querySelectorAll('[data-views-row-bank]').forEach(tr => {
         tr.style.cursor = 'pointer';
@@ -2229,6 +2254,56 @@
         });
       });
     }
+  }
+
+  // ---- Saved-view column sort (persisted per view in localStorage) ----
+
+  const SAVED_VIEW_SORT_KEY = 'fbbs.views.sort';
+
+  function savedViewSort(viewId) {
+    try {
+      const all = JSON.parse(localStorage.getItem(SAVED_VIEW_SORT_KEY) || '{}');
+      const s = all[viewId];
+      return s && s.col ? s : null;
+    } catch (_) { return null; }
+  }
+
+  // asc → desc → cleared, like the Salesforce tables reps are used to.
+  function cycleSavedViewSort(viewId, col) {
+    let all = {};
+    try { all = JSON.parse(localStorage.getItem(SAVED_VIEW_SORT_KEY) || '{}'); } catch (_) { /* reset */ }
+    const cur = all[viewId];
+    if (!cur || cur.col !== col) all[viewId] = { col, dir: 'asc' };
+    else if (cur.dir === 'asc') all[viewId] = { col, dir: 'desc' };
+    else delete all[viewId];
+    try { localStorage.setItem(SAVED_VIEW_SORT_KEY, JSON.stringify(all)); } catch (_) { /* private mode */ }
+    renderSavedViewDetail();
+  }
+
+  function sortedSavedViewRows(rows, sort) {
+    if (!sort || !sort.col) return rows;
+    const dir = sort.dir === 'desc' ? -1 : 1;
+    const col = sort.col;
+    return rows.slice().sort((a, b) => {
+      const av = a[col] == null ? '' : a[col];
+      const bv = b[col] == null ? '' : b[col];
+      const an = Number(av);
+      const bn = Number(bv);
+      if (av !== '' && bv !== '' && Number.isFinite(an) && Number.isFinite(bn)) return (an - bn) * dir;
+      // Blanks sink to the bottom in either direction so "no data" never leads.
+      if (av === '' && bv !== '') return 1;
+      if (bv === '' && av !== '') return -1;
+      return String(av).localeCompare(String(bv)) * dir;
+    });
+  }
+
+  // Color-coded freshness: green ≤30d, amber 30–60d, red >60d or never touched.
+  function lastActivityCellHtml(value) {
+    const date = String(value || '').slice(0, 10);
+    if (!date) return '<td class="views-last-activity is-cold">Never</td>';
+    const days = Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000);
+    const cls = days <= 30 ? 'is-fresh' : days <= 60 ? 'is-aging' : 'is-cold';
+    return `<td class="views-last-activity ${cls}" title="${escapeHtml(`${days} days ago`)}">${escapeHtml(date)}</td>`;
   }
 
   function setupSavedViews() {
