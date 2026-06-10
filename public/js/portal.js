@@ -110,7 +110,10 @@
     lastRunAt: null,
     definitionId: '',
     name: '',
-    filters: { search: '', states: '', statuses: '', minAssets: '', maxAssets: '', peerWatchOnly: false, savedOnly: false, portfolioOnly: false },
+    // `conditions` (the dynamic field/operator/value builder) and `groupBy`
+    // ride inside filters so saved definitions persist them without a
+    // report-store schema change.
+    filters: { search: '', states: '', statuses: '', minAssets: '', maxAssets: '', peerWatchOnly: false, savedOnly: false, portfolioOnly: false, conditions: [], groupBy: { field: '', thenBy: '', aggs: {} } },
     selectedColumns: ['displayName', 'city', 'state', 'certNumber', 'accountStatusLabel', 'totalAssets', 'totalDeposits', 'securitiesToAssets', 'loansToDeposits', 'yieldOnSecurities', 'netInterestMargin'],
     sort: { key: 'totalAssets', dir: 'desc' }
   };
@@ -381,18 +384,74 @@
     { key: 'peerDelta_liquidAssetsToAssets', label: 'Liquid Assets Gap', type: 'percent', section: 'Peer Gaps' },
     { key: 'peerDelta_longTermAssetsToAssets', label: 'Long-Term Assets Gap', type: 'percent', section: 'Peer Gaps' }
   ];
+  // Three-section rail (Salesforce-style cleanup): Templates you run or clone,
+  // what you recently ran, and your saved custom reports. Folders stay as a
+  // secondary data-driven section ("Move to folder…" still creates them).
   const REPORT_RAIL_ITEMS = [
-    { id: 'recent', section: 'REPORTS', label: 'Recent' },
-    { id: 'created', section: 'REPORTS', label: 'Created by Me' },
-    { id: 'saved-views', section: 'REPORTS', label: 'Saved Views' },
-    { id: 'pinned', section: 'REPORTS', label: 'Pinned' },
-    { id: 'all', section: 'REPORTS', label: 'All Reports' },
+    { id: 'templates', section: 'REPORTS', label: 'Templates' },
+    { id: 'recent', section: 'REPORTS', label: 'Recently Ran' },
+    { id: 'saved-views', section: 'REPORTS', label: 'My Custom Reports' },
     { id: 'folders-all', section: 'FOLDERS', label: 'All Folders' },
     { id: 'folder-coverage', section: 'FOLDERS', label: 'Coverage', folder: 'Coverage' },
     { id: 'folder-sales', section: 'FOLDERS', label: 'Sales Strategy', folder: 'Sales Strategy' },
     { id: 'folder-portfolio', section: 'FOLDERS', label: 'Portfolio Reviews', folder: 'Portfolio Reviews' },
     { id: 'folder-billing', section: 'FOLDERS', label: 'Billing', folder: 'Billing' },
     { id: 'folder-personal', section: 'FOLDERS', label: 'Personal', folder: 'Personal' }
+  ];
+
+  // Seeded starter templates for the dynamic custom-bank builder. Money values
+  // are call-report $000s (so 10,000 = $10MM). Reps run them as-is or tweak
+  // the conditions and save their own copy.
+  const STARTER_TEMPLATES = [
+    {
+      id: 'tpl-tx-clients-securities',
+      name: 'Clients in TX with securities > $10MM',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Texas client banks holding more than $10MM of AFS securities.',
+      template: true,
+      filters: {
+        conditions: [
+          { field: 'state', op: 'is', value: 'TX' },
+          { field: 'accountStatusLabel', op: 'is', value: 'Client' },
+          { field: 'afsTotal', op: 'gt', value: '10000' }
+        ],
+        groupBy: { field: '', thenBy: '', aggs: {} }
+      },
+      columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'afsTotal', 'htmTotal', 'securitiesToAssets', 'yieldOnSecurities']
+    },
+    {
+      id: 'tpl-loan-buyers',
+      name: 'Likely loan buyers (low loans/deposits, high liquidity)',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Banks with loans/deposits under 60% and liquid assets over 20% of assets — candidates for purchasing loans or extending into bonds.',
+      template: true,
+      filters: {
+        conditions: [
+          { field: 'loansToDeposits', op: 'lt', value: '60' },
+          { field: 'liquidAssetsToAssets', op: 'gt', value: '20' }
+        ],
+        groupBy: { field: 'state', thenBy: '', aggs: { totalAssets: 'sum' } }
+      },
+      columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'totalAssets', 'loansToDeposits', 'liquidAssetsToAssets', 'securitiesToAssets', 'netInterestMargin']
+    },
+    {
+      id: 'tpl-bond-swap-prospects',
+      name: 'Bond swap prospects (big book, lagging yield)',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Banks with securities over 25% of assets whose securities yield trails their peer group — bond swap conversation starters.',
+      template: true,
+      filters: {
+        conditions: [
+          { field: 'securitiesToAssets', op: 'gt', value: '25' },
+          { field: 'peerDelta_yieldOnSecurities', op: 'lt', value: '-0.15' }
+        ],
+        groupBy: { field: '', thenBy: '', aggs: {} }
+      },
+      columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'securitiesToAssets', 'yieldOnSecurities', 'peerDelta_yieldOnSecurities']
+    }
   ];
   const COMMISSION_PRODUCT_LABELS = {
     agencies: 'Agencies',
@@ -7875,17 +7934,42 @@
     }
   }
 
+  // The Templates rail lists every report type plus the seeded starter
+  // presets — run-or-clone rows, never user data, so hide/delete don't apply.
+  function templateReportsRows() {
+    const typeRows = Object.values(REPORT_TYPE_META).map(meta => ({
+      id: `tpl-type-${meta.slug}`,
+      name: meta.name,
+      type: meta.slug,
+      folder: 'Templates',
+      description: meta.description,
+      template: true
+    }));
+    return [...STARTER_TEMPLATES, ...typeRows];
+  }
+
+  function starterTemplateById(id) {
+    return STARTER_TEMPLATES.find(t => t.id === id) || null;
+  }
+
   function filterReportsRows() {
     const active = reportRailItem(reportsActiveRail);
     const search = reportsSearchQuery.trim().toLowerCase();
-    let rows = allReportsRows();
-    if (active.id === 'saved-views') rows = rows.filter(row => row.savedDefinition);
-    if (active.id === 'pinned') rows = rows.filter(row => row.pinned);
-    if (active.folder) rows = rows.filter(row => row.folder === active.folder);
+    let rows;
+    if (active.id === 'templates') {
+      rows = templateReportsRows();
+    } else {
+      rows = allReportsRows();
+      if (active.id === 'recent') rows = rows.filter(row => !row.savedDefinition || row.lastRunAt);
+      if (active.id === 'saved-views') rows = rows.filter(row => row.savedDefinition);
+      if (active.folder) rows = rows.filter(row => row.folder === active.folder);
+    }
     if (search) {
       rows = rows.filter(row => [row.name, row.description, row.folder, reportTypeMeta(row.type).name].filter(Boolean).join(' ').toLowerCase().includes(search));
     }
     rows = rows.slice().sort((a, b) => {
+      // Pinned custom reports float regardless of column sort.
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
       const av = a[reportsSort.key] || '';
       const bv = b[reportsSort.key] || '';
       const cmp = String(av).localeCompare(String(bv));
@@ -8017,8 +8101,8 @@
                       <button type="button" data-report-action="run" data-report-type="${escapeHtml(row.type)}">Run</button>
                       ${row.savedDefinition ? `<button type="button" data-report-action="pin" data-report-id="${escapeHtml(row.id)}">${row.pinned ? 'Unpin' : 'Pin'}</button>` : ''}
                       ${row.savedDefinition ? `<button type="button" data-report-action="move" data-report-id="${escapeHtml(row.id)}">Move to folder…</button>` : ''}
-                      <button type="button" data-report-action="duplicate" data-report-id="${escapeHtml(row.id)}">Duplicate</button>
-                      <button type="button" class="reports-danger-action" data-report-action="delete" data-report-id="${escapeHtml(row.id)}">Delete</button>
+                      ${row.template ? '' : `<button type="button" data-report-action="duplicate" data-report-id="${escapeHtml(row.id)}">Duplicate</button>
+                      <button type="button" class="reports-danger-action" data-report-action="delete" data-report-id="${escapeHtml(row.id)}">Delete</button>`}
                     </details>
                   </td>
                 </tr>
@@ -8149,6 +8233,36 @@
       });
   }
 
+  // ---- Dynamic condition builder + Group By ----
+  // The pure engine lives in modules/report-logic.js (UMD, unit-tested in
+  // node); these are thin adapters binding it to the custom-bank dataset.
+
+  const reportLogic = window.FbbsReportLogic;
+  const AGG_FUNCTIONS = reportLogic.AGG_FUNCTIONS;
+
+  function conditionFieldKind(type) {
+    return reportLogic.conditionFieldKind(type);
+  }
+
+  function conditionOpsForField(key) {
+    return reportLogic.operatorsFor(customBankColumnDef(key).type);
+  }
+
+  function evaluateCondition(row, cond) {
+    if (!cond || !cond.field) return true;
+    const def = customBankColumnDef(cond.field);
+    return reportLogic.evaluateCondition(customBankReportValue(row, cond.field), cond, def.type);
+  }
+
+  function groupResults(rows, field, thenBy, aggs) {
+    return reportLogic.groupRows(rows, { field, thenBy, aggs, getValue: customBankReportValue });
+  }
+
+  function customBankGroupBy() {
+    const gb = customBankReportState.filters.groupBy;
+    return gb && typeof gb === 'object' ? gb : { field: '', thenBy: '', aggs: {} };
+  }
+
   function filteredCustomBankRows() {
     const filters = customBankReportState.filters;
     const search = String(filters.search || '').trim().toLowerCase();
@@ -8169,6 +8283,11 @@
       if (filters.savedOnly && !(row.accountStatus && row.accountStatus.isCoverageSaved)) return false;
       if (filters.portfolioOnly && !row.portfolioAvailable) return false;
       if (filters.peerWatchOnly && !customBankReportHasPeerWatch(row)) return false;
+      // Dynamic conditions: AND across every row the rep has added.
+      const conditions = Array.isArray(filters.conditions) ? filters.conditions : [];
+      for (const cond of conditions) {
+        if (!evaluateCondition(row, cond)) return false;
+      }
       return true;
     });
     const sort = customBankReportState.sort || {};
@@ -8238,6 +8357,100 @@
     `).join('');
   }
 
+  // Field <select> options grouped by section, shared by the condition rows
+  // and the Group By controls.
+  function customBankFieldOptionsHtml(selectedKey, { numericOnly = false } = {}) {
+    const groups = {};
+    customBankColumnDefs().forEach(col => {
+      if (numericOnly && conditionFieldKind(col.type) !== 'numeric') return;
+      const section = col.section || 'Other';
+      (groups[section] = groups[section] || []).push(col);
+    });
+    return Object.entries(groups).map(([section, cols]) => `
+      <optgroup label="${escapeHtml(section)}">
+        ${cols.map(col => `<option value="${escapeHtml(col.key)}" ${col.key === selectedKey ? 'selected' : ''}>${escapeHtml(col.label)}</option>`).join('')}
+      </optgroup>
+    `).join('');
+  }
+
+  function customBankConditionRowHtml(cond, idx) {
+    const def = customBankColumnDef(cond.field || 'displayName');
+    const kind = conditionFieldKind(def.type);
+    const ops = conditionOpsForField(def.key);
+    const op = ops.some(o => o.op === cond.op) ? cond.op : ops[0].op;
+    const isBetween = op === 'between';
+    const noValue = op === 'blank' || kind === 'boolean';
+    const unitsHint = def.type === 'money' ? ' ($000)' : def.type === 'percent' ? ' (%)' : '';
+    const valueInput = noValue ? '' : `
+      <input type="text" class="custom-cond-value" data-cond-value="${idx}"
+        placeholder="${escapeHtml(kind === 'numeric' ? `Value${unitsHint}` : op === 'oneOf' ? 'TX, OK, MO...' : 'Value')}"
+        value="${escapeHtml(cond.value || '')}">
+      ${isBetween ? `<span class="custom-cond-and">and</span>
+      <input type="text" class="custom-cond-value" data-cond-value2="${idx}" placeholder="Upper${escapeHtml(unitsHint)}" value="${escapeHtml(cond.value2 || '')}">` : ''}
+    `;
+    return `
+      <div class="custom-cond-row" data-cond-row="${idx}">
+        <select data-cond-field="${idx}" aria-label="Field">${customBankFieldOptionsHtml(def.key)}</select>
+        <select data-cond-op="${idx}" aria-label="Operator">
+          ${ops.map(o => `<option value="${escapeHtml(o.op)}" ${o.op === op ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+        </select>
+        ${valueInput}
+        <button type="button" class="text-btn danger" data-cond-remove="${idx}" aria-label="Remove condition">✕</button>
+      </div>
+    `;
+  }
+
+  function customBankConditionsHtml() {
+    const conditions = Array.isArray(customBankReportState.filters.conditions) ? customBankReportState.filters.conditions : [];
+    return `
+      <div class="custom-report-conditions">
+        <div class="custom-report-conditions-head">
+          <strong>Conditions</strong>
+          <span>${conditions.length ? 'All must match (AND)' : 'Filter on any call-report field, status, owner, or peer gap'}</span>
+          <button type="button" class="small-btn secondary" data-cond-add>+ Add condition</button>
+        </div>
+        ${conditions.map((cond, idx) => customBankConditionRowHtml(cond, idx)).join('')}
+      </div>
+    `;
+  }
+
+  function customBankGroupByHtml() {
+    const gb = customBankGroupBy();
+    const selectedColumns = customBankReportState.selectedColumns || [];
+    const numericSelected = selectedColumns
+      .map(customBankColumnDef)
+      .filter(col => conditionFieldKind(col.type) === 'numeric');
+    const aggRows = gb.field ? numericSelected.map(col => {
+      const fn = gb.aggs && gb.aggs[col.key] ? gb.aggs[col.key] : '';
+      return `
+        <label class="custom-group-agg">
+          <span>${escapeHtml(col.label)}</span>
+          <select data-group-agg="${escapeHtml(col.key)}">
+            <option value="">—</option>
+            ${AGG_FUNCTIONS.map(f => `<option value="${escapeHtml(f)}" ${f === fn ? 'selected' : ''}>${escapeHtml(f.toUpperCase())}</option>`).join('')}
+          </select>
+        </label>
+      `;
+    }).join('') : '';
+    return `
+      <div class="custom-report-groupby">
+        <label>Group rows by
+          <select id="customBankGroupField">
+            <option value="">No grouping</option>
+            ${customBankFieldOptionsHtml(gb.field)}
+          </select>
+        </label>
+        <label ${gb.field ? '' : 'hidden'}>Then by
+          <select id="customBankGroupThenBy">
+            <option value="">—</option>
+            ${customBankFieldOptionsHtml(gb.thenBy)}
+          </select>
+        </label>
+        ${gb.field ? `<div class="custom-group-aggs"><span class="custom-group-aggs-label">Aggregates (count always shown)</span>${aggRows || '<em>Select a numeric column to aggregate it</em>'}</div>` : ''}
+      </div>
+    `;
+  }
+
   function customBankReportBuilderHtml() {
     const filters = customBankReportState.filters;
     const rows = filteredCustomBankRows();
@@ -8262,6 +8475,8 @@
           ${customBankReportFieldControl('status')}
           ${customBankReportFieldControl('toggles')}
         </div>
+        ${customBankConditionsHtml()}
+        ${customBankGroupByHtml()}
         <details class="custom-report-columns">
           <summary>Columns (${escapeHtml(formatNumber(selectedColumns.length))})</summary>
           <div>${customBankReportColumnPickerHtml()}</div>
@@ -8286,6 +8501,8 @@
     if (!rows.length) {
       return '<div class="bank-search-empty">No banks match the current report setup.</div>';
     }
+    const gb = customBankGroupBy();
+    if (gb.field) return customBankGroupedOutputHtml(rows, gb);
     const columns = (customBankReportState.selectedColumns || []).map(customBankColumnDef);
     const top = rows.slice(0, 250);
     const header = col => `<button type="button" data-custom-bank-sort="${escapeHtml(col.key)}">${escapeHtml(col.label)}${customBankReportState.sort.key === col.key ? (customBankReportState.sort.dir === 'asc' ? ' ↑' : ' ↓') : ''}</button>`;
@@ -8307,11 +8524,78 @@
     `;
   }
 
+  // Format a computed aggregate with its column's display type (avg of money
+  // values is still money, etc).
+  function formatAggregateValue(value, colKey) {
+    if (value == null) return '—';
+    const def = customBankColumnDef(colKey);
+    if (def.type === 'money') return formatCallReportValue(value, 'money');
+    if (def.type === 'percent') return `${Number(value).toFixed(2)}%`;
+    return formatNumber(Math.round(Number(value) * 100) / 100);
+  }
+
+  function customBankGroupSummaryHtml(group, gb, depth) {
+    const aggParts = Object.entries(group.aggregates || {})
+      .filter(([, v]) => v != null)
+      .map(([col, v]) => `<span class="custom-group-stat">${escapeHtml((gb.aggs[col] || '').toUpperCase())} ${escapeHtml(customBankColumnDef(col).label)}: <strong>${escapeHtml(formatAggregateValue(v, col))}</strong></span>`)
+      .join('');
+    return `
+      <summary>
+        <span class="custom-group-key">${escapeHtml(group.key)}</span>
+        <span class="custom-group-count">${escapeHtml(formatNumber(group.count))} bank${group.count === 1 ? '' : 's'}</span>
+        ${aggParts}
+      </summary>
+    `;
+  }
+
+  function customBankGroupedOutputHtml(rows, gb) {
+    const groups = groupResults(rows, gb.field, gb.thenBy, gb.aggs || {});
+    const columns = (customBankReportState.selectedColumns || []).map(customBankColumnDef);
+    const memberTable = members => `
+      <table class="reports-list custom-report-table">
+        <thead><tr>${columns.map(col => `<th>${escapeHtml(col.label)}</th>`).join('')}<th></th></tr></thead>
+        <tbody>
+          ${members.slice(0, 100).map(row => `
+            <tr>
+              ${columns.map(col => `<td>${escapeHtml(formatCustomBankReportValue(row, col.key))}</td>`).join('')}
+              <td><button type="button" class="text-btn" data-custom-bank-open="${escapeHtml(row.id)}">Open</button></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      ${members.length > 100 ? `<div class="opp-more">First 100 of ${escapeHtml(formatNumber(members.length))} in this group — export CSV for all.</div>` : ''}
+    `;
+    const groupHtml = (group, depth) => `
+      <details class="custom-group" ${depth === 0 && groups.length <= 6 ? 'open' : ''}>
+        ${customBankGroupSummaryHtml(group, gb, depth)}
+        <div class="custom-group-body">
+          ${group.subgroups ? group.subgroups.map(sub => groupHtml(sub, depth + 1)).join('') : memberTable(group.rows)}
+        </div>
+      </details>
+    `;
+    return `
+      <div class="custom-group-toolbar">
+        <span>${escapeHtml(formatNumber(groups.length))} group${groups.length === 1 ? '' : 's'} by <strong>${escapeHtml(customBankColumnDef(gb.field).label)}</strong>${gb.thenBy ? `, then ${escapeHtml(customBankColumnDef(gb.thenBy).label)}` : ''}</span>
+        <button type="button" class="text-btn" data-custom-group-toggle="open">Expand all</button>
+        <button type="button" class="text-btn" data-custom-group-toggle="close">Collapse all</button>
+      </div>
+      <div class="custom-group-list">${groups.map(g => groupHtml(g, 0)).join('')}</div>
+    `;
+  }
+
   function resetCustomBankReportFromDefinition(def) {
     if (!def) return;
     customBankReportState.definitionId = def.id || '';
     customBankReportState.name = def.name || '';
-    customBankReportState.filters = { ...customBankReportState.filters, ...(def.filters || {}) };
+    const defFilters = def.filters || {};
+    customBankReportState.filters = {
+      ...customBankReportState.filters,
+      ...defFilters,
+      // Definitions saved before the dynamic builder carry no conditions or
+      // groupBy — reset both so leftovers from the last session never leak in.
+      conditions: Array.isArray(defFilters.conditions) ? defFilters.conditions.map(c => ({ ...c })) : [],
+      groupBy: defFilters.groupBy ? { field: '', thenBy: '', aggs: {}, ...defFilters.groupBy } : { field: '', thenBy: '', aggs: {} }
+    };
     customBankReportState.selectedColumns = Array.isArray(def.columns) && def.columns.length ? def.columns.slice() : customBankReportState.selectedColumns;
     customBankReportState.sort = def.sort || customBankReportState.sort;
   }
@@ -9328,7 +9612,13 @@
       app.innerHTML = reportsBuilderHtml(type);
       if (type === 'custom-bank') {
         const reportId = route.params.get('id') || '';
-        if (reportId) resetCustomBankReportFromDefinition(savedReportDefinitionById(reportId));
+        if (reportId) {
+          const def = savedReportDefinitionById(reportId) || starterTemplateById(reportId);
+          // A starter template seeds conditions/columns but must save as a NEW
+          // definition, never overwrite the template id.
+          if (def && def.template) resetCustomBankReportFromDefinition({ ...def, id: '' });
+          else resetCustomBankReportFromDefinition(def);
+        }
         renderCustomBankReportMount();
       }
       if (type === 'bank-peer') {
@@ -9877,6 +10167,21 @@
           nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
         }
       }
+      const condValueAttr = target.hasAttribute && target.hasAttribute('data-cond-value') ? 'data-cond-value'
+        : target.hasAttribute && target.hasAttribute('data-cond-value2') ? 'data-cond-value2' : '';
+      if (condValueAttr) {
+        const idx = Number(target.getAttribute(condValueAttr));
+        const cond = (customBankReportState.filters.conditions || [])[idx];
+        if (cond) {
+          cond[condValueAttr === 'data-cond-value' ? 'value' : 'value2'] = target.value || '';
+          renderCustomBankReportMount();
+          const next = document.querySelector(`[${condValueAttr}="${idx}"]`);
+          if (next) {
+            next.focus();
+            next.setSelectionRange(next.value.length, next.value.length);
+          }
+        }
+      }
     });
     document.addEventListener('keydown', event => {
       const target = event.target;
@@ -9925,6 +10230,45 @@
         else selected.delete(key);
         customBankReportState.selectedColumns = [...selected];
         if (!customBankReportState.selectedColumns.length) customBankReportState.selectedColumns = ['displayName'];
+        renderCustomBankReportMount();
+      }
+      if (target.matches && target.matches('[data-cond-field]')) {
+        const cond = (customBankReportState.filters.conditions || [])[Number(target.getAttribute('data-cond-field'))];
+        if (cond) {
+          cond.field = target.value;
+          // Operator vocab changes with the field type — snap to the first valid op.
+          const ops = conditionOpsForField(cond.field);
+          if (!ops.some(o => o.op === cond.op)) cond.op = ops[0].op;
+          renderCustomBankReportMount();
+        }
+      }
+      if (target.matches && target.matches('[data-cond-op]')) {
+        const cond = (customBankReportState.filters.conditions || [])[Number(target.getAttribute('data-cond-op'))];
+        if (cond) {
+          cond.op = target.value;
+          renderCustomBankReportMount();
+        }
+      }
+      if (target.id === 'customBankGroupField') {
+        const gb = customBankGroupBy();
+        gb.field = target.value || '';
+        if (!gb.field) { gb.thenBy = ''; }
+        customBankReportState.filters.groupBy = gb;
+        renderCustomBankReportMount();
+      }
+      if (target.id === 'customBankGroupThenBy') {
+        const gb = customBankGroupBy();
+        gb.thenBy = target.value || '';
+        customBankReportState.filters.groupBy = gb;
+        renderCustomBankReportMount();
+      }
+      if (target.matches && target.matches('[data-group-agg]')) {
+        const gb = customBankGroupBy();
+        gb.aggs = gb.aggs || {};
+        const col = target.getAttribute('data-group-agg');
+        if (target.value) gb.aggs[col] = target.value;
+        else delete gb.aggs[col];
+        customBankReportState.filters.groupBy = gb;
         renderCustomBankReportMount();
       }
     });
@@ -10005,6 +10349,28 @@
           customBankReportState.sort = { key, dir: 'asc' };
         }
         renderCustomBankReportMount();
+        return;
+      }
+      const condAdd = clickTarget.closest('[data-cond-add]');
+      if (condAdd) {
+        const conditions = customBankReportState.filters.conditions = customBankReportState.filters.conditions || [];
+        conditions.push({ field: 'totalAssets', op: 'gt', value: '' });
+        renderCustomBankReportMount();
+        const sel = document.querySelector(`[data-cond-field="${conditions.length - 1}"]`);
+        if (sel) sel.focus();
+        return;
+      }
+      const condRemove = clickTarget.closest('[data-cond-remove]');
+      if (condRemove) {
+        const idx = Number(condRemove.dataset.condRemove);
+        (customBankReportState.filters.conditions || []).splice(idx, 1);
+        renderCustomBankReportMount();
+        return;
+      }
+      const groupToggle = clickTarget.closest('[data-custom-group-toggle]');
+      if (groupToggle) {
+        const open = groupToggle.dataset.customGroupToggle === 'open';
+        document.querySelectorAll('#customBankReportOutput details.custom-group').forEach(d => { d.open = open; });
         return;
       }
       const customOpen = clickTarget.closest('[data-custom-bank-open]');
