@@ -174,7 +174,7 @@ Gap analysis verdict: activity logging, coverage statuses, saved views, activity
 
 ## E. Hygiene
 
-- Move `docs/go-live/` (18 stale launch-era files incl. a 66 KB final review) to
+- Moved `docs/go-live/` (18 stale launch-era files incl. a 66 KB final review) to
   `docs/archive/go-live/`; keep `company-portal-context.md`, `data-pipeline.md` live.
 - `git gc` (one garbage blob in `.git/objects`).
 - Add a retention policy for `data/dropbox/` staging folders (85 MB, 13 dated folders).
