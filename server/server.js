@@ -170,6 +170,7 @@ const { renderPortfolioReviewHtml } = require('./portfolio-review-render');
 const { rotateFileIfNeeded } = require('./log-rotation');
 const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
+const marketRates = require('./market-rates');
 
 // ---------- Config ----------
 
@@ -190,6 +191,7 @@ const STRUCTURED_NOTES_DIR = path.join(DATA_DIR, 'structured-notes');
 const MARKET_COLOR_DIR = path.join(DATA_DIR, 'market-color');
 const CD_INTERNAL_DIR = path.join(DATA_DIR, 'cd-internal');
 const EXEC_SUMMARY_DIR = path.join(DATA_DIR, 'exec-summary');
+const MARKET_DIR = path.join(DATA_DIR, 'market');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 const AUDIT_LOG_MAX_BYTES = (parseInt(process.env.AUDIT_LOG_MAX_MB, 10) || 10) * 1024 * 1024;
 const AUDIT_LOG_KEEP = Math.max(1, parseInt(process.env.AUDIT_LOG_KEEP, 10) || 5);
@@ -6964,6 +6966,40 @@ function marketFromEconomicUpdate(econ) {
   return (Object.keys(ust).length || market.sofr != null) ? market : null;
 }
 
+// Market overlay from the official Treasury par curve (market-rates.js) —
+// fallback when the daily package has no parsed Economic Update. Same shape
+// as marketFromEconomicUpdate so downstream consumers don't care which fed it.
+function marketFromOfficialCurve(curve) {
+  if (!curve || !curve.tenors) return null;
+  const ust = {};
+  const tmap = { '2Y': 'ust_2y', '5Y': 'ust_5y', '10Y': 'ust_10y', '30Y': 'ust_30y' };
+  for (const [tenor, key] of Object.entries(tmap)) {
+    if (curve.tenors[tenor] != null) ust[key] = Number(curve.tenors[tenor]);
+  }
+  if (!Object.keys(ust).length) return null;
+  return {
+    ust,
+    sofr: null,
+    fedFunds: null,
+    igOas: null,
+    hyOas: null,
+    note: `Official Treasury par yield curve (as of ${curve.asOfDate})`,
+  };
+}
+
+// Economic Update overlay if today's package has one, official Treasury
+// curve otherwise. Never throws — overlay is always optional.
+async function loadMarketOverlay() {
+  let market = null;
+  try { market = marketFromEconomicUpdate(await loadCurrentEconomicUpdate()); } catch (_) { /* overlay optional */ }
+  if (!market) {
+    try {
+      market = marketFromOfficialCurve(await marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }));
+    } catch (_) { /* overlay optional */ }
+  }
+  return market;
+}
+
 // Identify which of the Executive Summary files an upload is, by content (the grid
 // filenames are opaque hashes). Fallback for when the form field name is absent.
 // Content-classify one of the Executive Summary daily inputs from a raw
@@ -7046,8 +7082,7 @@ async function handleExecSummaryUpload(req, res) {
     };
     if (slots.activity) paths.activityPath = writeTmp(slots.activity, 'act');
 
-    let market = null;
-    try { market = marketFromEconomicUpdate(await loadCurrentEconomicUpdate()); } catch (_) { /* overlay optional */ }
+    const market = await loadMarketOverlay();
 
     const summary = execSummaryStore.ingestExecSummary(EXEC_SUMMARY_DIR, paths, {
       market,
@@ -7460,7 +7495,7 @@ function ingestFolderDropReferences(scan) {
 // folder-drop publish route sits behind the same FBBS_ADMIN_USERS check as the
 // dedicated exec-summary upload. Never throws: a failure here must not break the
 // daily package publish, so all errors are caught and reported in the result.
-function ingestFolderDropExecSummary(scan, req) {
+async function ingestFolderDropExecSummary(scan, req) {
   const exec = scan.execSummary || {};
   const detected = exec.detected || {};
   const present = exec.present || [];
@@ -7489,8 +7524,9 @@ function ingestFolderDropExecSummary(scan, req) {
     };
     if (detected.activity) paths.activityPath = writeTmp('activity', 'act');
 
-    let market = null;
-    try { market = marketFromEconomicUpdate(loadCurrentEconomicUpdate()); } catch (_) { /* overlay optional */ }
+    // (was a missing-await bug: loadCurrentEconomicUpdate() is async, so the
+    // overlay silently never attached on the folder-drop path)
+    const market = await loadMarketOverlay();
 
     const summary = execSummaryStore.ingestExecSummary(EXEC_SUMMARY_DIR, paths, {
       market,
@@ -7583,9 +7619,9 @@ async function handleFolderDropPublish(req, res) {
       auditEvent: 'folder-publish',
       publishedBy: 'Folder Drop',
       sourceFolder: scan.folderPath,
-      afterPublish: () => {
+      afterPublish: async () => {
         const result = ingestFolderDropReferences(scan);
-        result.execSummary = ingestFolderDropExecSummary(scan, req);
+        result.execSummary = await ingestFolderDropExecSummary(scan, req);
         return result;
       }
     });
@@ -8233,7 +8269,7 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
   let referenceIngest = null;
   if (typeof options.afterPublish === 'function') {
     try {
-      referenceIngest = options.afterPublish();
+      referenceIngest = await options.afterPublish();
     } catch (err) {
       log('warn', 'Reference ingest failed:', err.message);
       referenceIngest = { error: err.message };
@@ -8710,6 +8746,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/me/work' && req.method === 'GET') {
       const rep = resolveRequestRep(req);
       return sendJSON(res, 200, buildMyWorkResponse(rep));
+    }
+
+    if (pathname === '/api/market/yield-curve' && req.method === 'GET') {
+      const curve = await marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log });
+      return sendJSON(res, 200, { curve });
     }
 
     if (pathname === '/api/crm/dashboard' && req.method === 'GET') {

@@ -15190,3 +15190,18 @@ body {
 
 .muted-note { color: var(--text2); font-size: 14px; padding: 16px 0; }
 .error-note { color: var(--danger); font-size: 14px; padding: 16px 0; }
+
+/* ============ Official Treasury par curve banner (market-rates) ============ */
+.official-curve-bar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+  margin: 0 0 18px; padding: 10px 16px; border-radius: 10px;
+  background: var(--racing-green, #003F2A); color: #fff; font-size: 13px;
+}
+.official-curve-bar .curve-label { font-weight: 700; white-space: nowrap; }
+.official-curve-bar .curve-asof { font-weight: 400; opacity: .75; font-size: 12px; margin-left: 6px; }
+.official-curve-bar .curve-cells { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.official-curve-bar .curve-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.official-curve-bar .curve-tenor { opacity: .65; font-size: 11px; font-weight: 600; margin-right: 2px; }
+.official-curve-bar .curve-chg { font-size: 11px; font-weight: 600; }
+.official-curve-bar .curve-chg.up { color: #ffb3a7; }
+.official-curve-bar .curve-chg.down { color: #9fe3c0; }

@@ -15750,7 +15750,38 @@
     });
   }
 
+  // Official Treasury par curve banner (from /api/market/yield-curve — the
+  // no-key home.treasury.gov feed cached server-side). Independent of the
+  // daily package, so the explorer always has a baseline even when the
+  // desk upload is missing or late. Non-blocking: failures just hide the bar.
+  let officialCurveLoaded = false;
+  async function loadOfficialCurveBanner() {
+    const bar = document.getElementById('treasuryOfficialCurve');
+    if (!bar || officialCurveLoaded) return;
+    try {
+      const res = await fetch('/api/market/yield-curve', { cache: 'no-store' });
+      if (!res.ok) return;
+      const { curve } = await res.json();
+      if (!curve || !curve.tenors) return;
+      officialCurveLoaded = true;
+      const cells = (curve.tenorOrder || Object.keys(curve.tenors)).map(tenor => {
+        const chg = curve.changes && curve.changes[tenor];
+        const chgHtml = Number.isFinite(chg) && chg !== 0
+          ? ` <span class="curve-chg ${chg > 0 ? 'up' : 'down'}">${chg > 0 ? '+' : ''}${(chg * 100).toFixed(0)}</span>`
+          : '';
+        return `<span class="curve-cell"><span class="curve-tenor">${escapeHtml(tenor)}</span> ${curve.tenors[tenor].toFixed(2)}${chgHtml}</span>`;
+      }).join('');
+      bar.innerHTML = `
+        <span class="curve-label">Official Treasury par curve
+          <span class="curve-asof">as of ${escapeHtml(formatNumericDate(curve.asOfDate))}${curve.stale ? ' · cached' : ''}</span>
+        </span>
+        <span class="curve-cells">${cells}</span>`;
+      bar.hidden = false;
+    } catch (_) { /* banner optional */ }
+  }
+
   async function loadTreasuryNotes() {
+    loadOfficialCurveBanner();
     const body = document.getElementById('treasuryExplorerBody');
     const sub = document.getElementById('treasuryExplorerSub');
     try {
