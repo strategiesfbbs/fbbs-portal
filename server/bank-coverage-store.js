@@ -158,7 +158,13 @@ function migrateBankActivityColumns(dbPath) {
     ['subject', 'TEXT'],
     ['body', 'TEXT'],
     ['activity_date', 'TEXT'],
-    ['contact_id', 'TEXT']
+    ['contact_id', 'TEXT'],
+    // Soft-delete (compliance): activities at a regulated BD are never hard-
+    // deleted. Deleted rows keep their content but carry who/when/why and are
+    // filtered out of every read path via activitySelectSql.
+    ['deleted_at', 'TEXT'],
+    ['deleted_by', 'TEXT'],
+    ['delete_reason', 'TEXT']
   ];
   for (const [name, type] of additions) {
     if (!have.has(name)) {
@@ -666,7 +672,7 @@ function activitySelectSql(where = '1 = 1') {
       ref_type AS refType,
       ref_id AS refId
     FROM bank_activities
-    WHERE ${where}
+    WHERE deleted_at IS NULL AND (${where})
   `;
 }
 
@@ -731,7 +737,10 @@ function listActivitiesForBank(outputDir, bankId, options = {}) {
   return rows.map(mapActivityRow);
 }
 
-function deleteBankActivity(outputDir, bankId, activityId) {
+// Soft delete: the row stays in bank_activities (content intact) but is
+// stamped with who removed it, when, and why, and disappears from every read
+// path. A regulated BD can't have reps hard-deleting their own call records.
+function deleteBankActivity(outputDir, bankId, activityId, options = {}) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const id = String(activityId || '');
   const bank = String(bankId || '');
@@ -743,10 +752,18 @@ function deleteBankActivity(outputDir, bankId, activityId) {
   const activity = mapActivityRow(rows[0]);
   if (!activity) return null;
   runSqlite(dbPath, `
-    DELETE FROM bank_activities
+    UPDATE bank_activities
+    SET deleted_at = ?, deleted_by = ?, delete_reason = ?
     WHERE id = ?
-      AND bank_id = ?;
-  `, [id, bank]);
+      AND bank_id = ?
+      AND deleted_at IS NULL;
+  `, [
+    new Date().toISOString(),
+    textOrNull(cleanText(options.deletedBy, 200)),
+    textOrNull(cleanText(options.reason, 500)),
+    id,
+    bank
+  ]);
   return activity;
 }
 
@@ -840,7 +857,7 @@ function lastActivityByBank(outputDir, options = {}) {
     SELECT bank_id AS bankId,
            MAX(COALESCE(activity_date, substr(at, 1, 10))) AS lastDate
     FROM bank_activities
-    WHERE kind IN (${inList})
+    WHERE deleted_at IS NULL AND kind IN (${inList})
     GROUP BY bank_id;
   `, kinds);
   const map = {};
@@ -856,7 +873,7 @@ function activityCountsByRep(outputDir, options = {}) {
   const kinds = sanitizeManualKinds(options.kinds);
   const inList = kinds.map(() => '?').join(', ');
   const params = kinds.slice();
-  const where = [`kind IN (${inList})`];
+  const where = ['deleted_at IS NULL', `kind IN (${inList})`];
   const from = cleanDate(options.from);
   const to = cleanDate(options.to);
   if (from) { where.push(`COALESCE(activity_date, substr(at, 1, 10)) >= ?`); params.push(from); }
@@ -887,7 +904,7 @@ function activityCountsByBank(outputDir, options = {}) {
   const kinds = sanitizeManualKinds(options.kinds);
   const inList = kinds.map(() => '?').join(', ');
   const params = kinds.slice();
-  const where = [`kind IN (${inList})`];
+  const where = ['deleted_at IS NULL', `kind IN (${inList})`];
   const from = cleanDate(options.from);
   const to = cleanDate(options.to);
   if (from) { where.push(`COALESCE(activity_date, substr(at, 1, 10)) >= ?`); params.push(from); }

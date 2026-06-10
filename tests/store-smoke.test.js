@@ -16,6 +16,7 @@ const os = require('os');
 const path = require('path');
 
 const coverageStore = require('../server/bank-coverage-store');
+const { querySqliteJson } = require('../server/sqlite-db');
 const accountStatusStore = require('../server/bank-account-status-store');
 const bankImporter = require('../server/bank-data-importer');
 const peerAverages = require('../server/peer-averages');
@@ -87,8 +88,15 @@ try {
   ok('activity-list', acts.length === 1 && acts[0].summary === TRICKY);
   const byActor = coverageStore.listRecentActivitiesByActor(tmpDir, 'rep1');
   ok('activity-byActor lowercased', byActor.length === 1);
-  coverageStore.deleteBankActivity(tmpDir, 'B-1', act.id);
-  ok('activity-delete', coverageStore.listActivitiesForBank(tmpDir, 'B-1').length === 0);
+  coverageStore.deleteBankActivity(tmpDir, 'B-1', act.id, { deletedBy: 'Rep One', reason: 'logged on wrong bank' });
+  ok('activity-delete hides from reads', coverageStore.listActivitiesForBank(tmpDir, 'B-1').length === 0);
+  // Soft delete: the row physically remains, stamped with who/why, and a
+  // second delete finds nothing (read paths all filter deleted rows).
+  const coverageDb = path.join(tmpDir, 'bank-coverage.sqlite');
+  const deletedRows = querySqliteJson(coverageDb, 'SELECT deleted_at, deleted_by, delete_reason FROM bank_activities WHERE id = ?;', [act.id]);
+  ok('activity-delete is soft (row retained)', deletedRows.length === 1 && Boolean(deletedRows[0].deleted_at));
+  ok('activity-delete stamps actor+reason', deletedRows[0].deleted_by === 'Rep One' && deletedRows[0].delete_reason === 'logged on wrong bank');
+  ok('activity-delete second call finds nothing', coverageStore.deleteBankActivity(tmpDir, 'B-1', act.id) === null);
 
   // Manual typed activities (Call/Email/Meeting/Task/Note) — Phase 1 keystone.
   const call = coverageStore.recordManualActivity(tmpDir, {

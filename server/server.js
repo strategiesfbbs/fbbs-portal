@@ -9424,13 +9424,22 @@ const server = http.createServer(async (req, res) => {
       const bankId = safeDecodeURIComponent(bankActivityItemMatch[1]);
       const activityId = safeDecodeURIComponent(bankActivityItemMatch[2]);
       if (!bankId || !activityId) return sendJSON(res, 400, { error: 'Invalid activity ID' });
-      const removed = deleteBankActivity(BANK_REPORTS_DIR, bankId, activityId);
+      // Soft delete with a required reason — the row is retained for audit.
+      const reason = String(query.get('reason') || '').trim();
+      if (!reason) return sendJSON(res, 400, { error: 'A removal reason is required' });
+      const rep = resolveRequestRep(req);
+      const removed = deleteBankActivity(BANK_REPORTS_DIR, bankId, activityId, {
+        deletedBy: rep ? (rep.displayName || rep.username) : '',
+        reason
+      });
       if (!removed) return sendJSON(res, 404, { error: 'Activity not found' });
       appendAuditLog({
         event: 'bank-activity-delete',
         bankId,
         activityId,
-        kind: removed.kind
+        kind: removed.kind,
+        deletedBy: rep ? rep.username : '',
+        reason
       });
       return sendJSON(res, 200, { success: true, activity: removed });
     }

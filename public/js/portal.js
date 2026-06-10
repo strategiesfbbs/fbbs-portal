@@ -14455,14 +14455,18 @@
   async function deleteBankActivityById(activityId) {
     const bankId = bankActivityBankId || selectedBankId();
     if (!bankId || !activityId) return;
-    if (!window.confirm('Delete this timeline activity? This only removes the timeline entry.')) return;
+    // Soft delete: the entry is hidden from the timeline but retained for
+    // audit/compliance, stamped with who removed it and why.
+    const reason = window.prompt('Remove this entry from the timeline?\nThe record is retained for audit. Enter a reason (required):');
+    if (reason == null) return;
+    if (!reason.trim()) { showToast('A removal reason is required', true); return; }
     try {
-      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity/${encodeURIComponent(activityId)}`, { method: 'DELETE' });
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity/${encodeURIComponent(activityId)}?reason=${encodeURIComponent(reason.trim())}`, { method: 'DELETE' });
       const data = await readBankJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       selectedBankActivities = (selectedBankActivities || []).filter(item => item.id !== activityId);
       refreshBankActivityPanel();
-      showToast('Deleted timeline activity');
+      showToast('Removed timeline entry (retained for audit)');
     } catch (e) {
       showToast(e.message || 'Could not delete timeline activity', true);
     }
