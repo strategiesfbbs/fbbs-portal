@@ -1623,8 +1623,42 @@
     if (!input || !results) return;
 
     let activeIndex = -1;
+    let cusipDebounce = null;
+    let cusipToken = 0;
 
     const optionEls = () => Array.from(results.querySelectorAll('[data-goto]'));
+
+    // CUSIP-first search: when the query could be (part of) a CUSIP — 4+
+    // alphanumeric chars including a digit — ask the server which of today's
+    // inventories carries it and append direct security hits below the page
+    // matches. Clicking a hit deep-links to that explorer with the search
+    // filter pre-seeded (same data-cusip plumbing the Daily Intelligence
+    // picks use).
+    const maybeAppendCusipResults = (rawQuery) => {
+      if (cusipDebounce) clearTimeout(cusipDebounce);
+      const compact = rawQuery.replace(/[^0-9a-z]/gi, '');
+      if (compact.length < 4 || !/\d/.test(compact)) return;
+      const token = ++cusipToken;
+      cusipDebounce = setTimeout(async () => {
+        try {
+          const res = await fetch('/api/search/cusip?q=' + encodeURIComponent(compact), { cache: 'no-store' });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (token !== cusipToken || !results.classList.contains('show')) return;
+          if (!data.results || !data.results.length) return;
+          const emptyEl = results.querySelector('.jump-empty');
+          if (emptyEl) emptyEl.remove();
+          results.insertAdjacentHTML('beforeend', data.results.map(hit => `
+            <button type="button" class="jump-result jump-result-cusip" data-goto="${escapeHtml(hit.page)}" data-cusip="${escapeHtml(hit.cusip)}">
+              <span>${escapeHtml(hit.typeLabel)}</span>
+              <strong>${escapeHtml(hit.cusip)}</strong>
+              <em>${escapeHtml(hit.description)}</em>
+            </button>
+          `).join(''));
+          if (activeIndex === -1) setActive(0);
+        } catch (_) { /* security hits are best-effort */ }
+      }, 180);
+    };
 
     const setActive = (index) => {
       const opts = optionEls();
@@ -1659,6 +1693,7 @@
       // Highlight the first match so Enter has an obvious target.
       activeIndex = -1;
       if (matches.length) setActive(0);
+      maybeAppendCusipResults(input.value.trim());
     };
 
     input.addEventListener('input', render);
@@ -1678,7 +1713,11 @@
         const target = opts[activeIndex] || opts[0];
         if (target) {
           e.preventDefault();
-          goTo(target.dataset.goto);
+          if (target.dataset.cusip) {
+            window.location.hash = '#' + target.dataset.goto + '?q=' + encodeURIComponent(target.dataset.cusip);
+          } else {
+            goTo(target.dataset.goto);
+          }
         }
       }
     });

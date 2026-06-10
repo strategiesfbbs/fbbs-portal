@@ -15205,3 +15205,7 @@ body {
 .official-curve-bar .curve-chg { font-size: 11px; font-weight: 600; }
 .official-curve-bar .curve-chg.up { color: #ffb3a7; }
 .official-curve-bar .curve-chg.down { color: #9fe3c0; }
+
+/* CUSIP hits in the nav jump search */
+.jump-result-cusip span { color: var(--racing-green, #003F2A); font-weight: 700; }
+.jump-result-cusip strong { font-variant-numeric: tabular-nums; letter-spacing: .04em; }

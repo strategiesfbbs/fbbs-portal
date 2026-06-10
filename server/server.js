@@ -7000,6 +7000,89 @@ async function loadMarketOverlay() {
   return market;
 }
 
+// ---------- CUSIP-first global search ----------
+
+// One place that knows where every security in today's inventory lives.
+// Each source: the rows to scan, the SPA page that renders them, and a
+// one-line description for the search dropdown. All sources are served
+// from the already-memoized slot caches / small JSON files — cheap enough
+// to scan per keystroke on a LAN.
+function cusipSearchSources() {
+  const slot = (filename, label) => readCurrentSlotJson(filename, label) || {};
+  const fmtPct = v => (v != null && Number.isFinite(Number(v)) ? `${Number(v).toFixed(2)}%` : null);
+  const join = parts => parts.filter(Boolean).join(' · ');
+  return [
+    {
+      type: 'cd', typeLabel: 'CD Offering', page: 'explorer',
+      rows: slot(OFFERINGS_FILENAME, 'offerings').offerings || [],
+      describe: r => join([r.name, r.term, fmtPct(r.rate), r.maturity]),
+    },
+    {
+      type: 'treasury', typeLabel: 'Treasury', page: 'treasury-explorer',
+      rows: slot(TREASURY_NOTES_FILENAME, 'treasury notes').notes || [],
+      describe: r => join([r.description, fmtPct(r.yield) && `${fmtPct(r.yield)} YTM`, r.maturity]),
+    },
+    {
+      type: 'muni', typeLabel: 'Muni', page: 'muni-explorer',
+      rows: slot(MUNI_OFFERINGS_FILENAME, 'muni offerings').offerings || [],
+      describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity, fmtPct(r.ytw) && `${fmtPct(r.ytw)} YTW`]),
+    },
+    {
+      type: 'agency', typeLabel: 'Agency', page: 'agencies',
+      rows: slot(AGENCIES_FILENAME, 'agencies').offerings || [],
+      describe: r => join([r.ticker, r.structure, fmtPct(r.coupon), r.maturity]),
+    },
+    {
+      type: 'corporate', typeLabel: 'Corporate', page: 'corporates',
+      rows: slot(CORPORATES_FILENAME, 'corporates').offerings || [],
+      describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity]),
+    },
+    {
+      type: 'mbs', typeLabel: 'MBS/CMO', page: 'mbs-cmo',
+      rows: (loadMbsCmoInventory(MBS_CMO_DIR) || {}).offers || [],
+      describe: r => join([r.description, fmtPct(r.coupon), r.productType]),
+    },
+    {
+      type: 'structured-note', typeLabel: 'Structured Note', page: 'structured-notes',
+      rows: (loadStructuredNotesInventory(STRUCTURED_NOTES_DIR) || {}).notes || [],
+      describe: r => join([r.issuer, r.structure, fmtPct(r.coupon), r.maturityDate]),
+    },
+  ];
+}
+
+// Find a CUSIP anywhere in today's inventory. Prefix match first (a rep
+// typing the first characters), falling back to substring. Returns at most
+// `limit` hits across all sources so the dropdown stays scannable.
+function searchCusipEverywhere(rawQuery, limit = 20) {
+  const needle = String(rawQuery || '').replace(/[^0-9a-z]/gi, '').toUpperCase();
+  if (needle.length < 4) return { query: needle, results: [] };
+  const perSource = 6;
+  const collect = matchFn => {
+    const out = [];
+    for (const source of cusipSearchSources()) {
+      let count = 0;
+      for (const row of source.rows) {
+        const cusip = String(row.cusip || '').replace(/[^0-9a-z]/gi, '').toUpperCase();
+        if (!cusip || !matchFn(cusip)) continue;
+        out.push({
+          cusip,
+          type: source.type,
+          typeLabel: source.typeLabel,
+          page: source.page,
+          description: source.describe(row) || '',
+        });
+        count += 1;
+        if (count >= perSource || out.length >= limit) break;
+      }
+      if (out.length >= limit) break;
+    }
+    return out;
+  };
+  let results = collect(c => c.startsWith(needle));
+  if (!results.length) results = collect(c => c.includes(needle));
+  return { query: needle, results };
+}
+
 // Identify which of the Executive Summary files an upload is, by content (the grid
 // filenames are opaque hashes). Fallback for when the form field name is absent.
 // Content-classify one of the Executive Summary daily inputs from a raw
@@ -8751,6 +8834,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/market/yield-curve' && req.method === 'GET') {
       const curve = await marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log });
       return sendJSON(res, 200, { curve });
+    }
+
+    if (pathname === '/api/search/cusip' && req.method === 'GET') {
+      return sendJSON(res, 200, searchCusipEverywhere(query.get('q')));
     }
 
     if (pathname === '/api/crm/dashboard' && req.method === 'GET') {
