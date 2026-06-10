@@ -45,6 +45,18 @@ Filename auto-classification lives in `classifyFile()` in `server/server.js`. Sa
 - `server/swap-store.js` — SQLite store for the bond-swap proposal builder (`data/bank-reports/swap-proposals.sqlite`): proposals + legs + frozen snapshots. Sequence IDs `SP-YYYY-NNNN`. Once `send`ed, legs become read-only and the canonical record is the snapshot JSON (so re-renders of a sent proposal never silently shift as market data moves). Goes through `sqlite-db.js` like `strategy-store.js`.
 - `server/swap-render.js` — server-side renderer for printable swap proposals (`/api/swap-proposals/:id/render`). Standalone HTML, inline styles, `@media print` for Save-as-PDF. Layout mirrors the FBBS Master Swap Template v4.6 print area.
 - `scripts/import-weekly-cd-worksheet.js`, `scripts/import-bank-workbook.js`, `scripts/import-bond-accounting-folder.js` — one-off CLI importers.
+- `public/js/modules/report-logic.js` — UMD module (node-testable): the pure engine behind the dynamic report builder — condition evaluation (type-aware operators), `aggregateValues`, `groupRows` (nested Then-by + per-group aggregates). Tests: `tests/report-logic.test.js`.
+
+## CRM layer (2026-06-10, Phases 1–5)
+
+Built on `bank_activities` in `bank-coverage.sqlite` (one table, two row species: system-audit rows and **manual rep-logged activities** — kinds `call/email/meeting/task/note` with `subject/body/activity_date/contact_id` columns, added by an idempotent PRAGMA-guarded migration).
+
+- **Logging:** `POST /api/banks/:bankId/activity` + Log Activity form on the bank tear sheet (type pills, contact picker, filter chips; the "All" chip hides audit rows). Store fns: `recordManualActivity`, `lastActivityByBank`, `activityCountsByRep`, `activityCountsByBank`, `listRecentManualActivities`.
+- **Surfacing:** saved views (`bank-views.js`) join a color-coded `lastActivityDate` column (green ≤30d / amber ≤60d / red); view tables have persisted per-view column sort; `/api/me/work` adds `myColdAccounts` (owned banks, no manual touch in 30d) and Home MY WORK shows the matching tile.
+- **Reports v2:** custom-bank builder has stackable AND conditions over every dataset field + Group By/Then-by with Count/Sum/Avg/Min/Max (persisted inside the saved definition's filters blob — no schema change); rail is Templates / Recently Ran / My Custom Reports + folders; three seeded starter templates. New Sales report types: `activity-by-rep` (`GET /api/reports/activity-summary`, by-rep or by-bank) and `account-touch` (`GET /api/reports/account-touch`, "no touch in N days").
+- **CRM Pulse:** `#pulse` (NOT the `#dashboard` daily-package slot) renders `GET /api/crm/dashboard` — KPIs, clients/prospects by state, strategies by type, recent activity, 14-day follow-ups; rep-scoped via the acting-rep cookie, `?rep=all` for firm-wide; CSS bars, no chart lib.
+- **Deliberately dropped:** scheduled/emailed report delivery (no email/cron infra; two-npm-dep rule). The Save & Schedule button stays disabled.
+- `tests/frontend-parse.test.js` compiles `portal.js` + every `public/js/modules/*.js` in `npm test` — a syntax error in the no-build SPA now fails CI instead of shipping a blank page.
 
 ## Data layout
 
