@@ -142,13 +142,14 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
+    { page: 'pulse', group: 'FBBS', label: 'CRM Pulse', description: 'Live CRM dashboard — clients, prospects, follow-ups, logged activity', aliases: 'crm pulse dashboard kpi clients prospects by state strategies activity follow-ups' },
     { page: 'exec-summary', group: 'Operations', label: 'Exec Summary', description: 'Management-only daily capital, risk, P&L, and desk-activity dashboard', aliases: 'executive summary ceo capital net cap excess requirement buffer risk dv01 pnl revenue desk rep counterparty haircut management board' },
     { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
     { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
@@ -1397,6 +1398,7 @@
 
     if (pageName === 'home') renderHomeRecents();
     if (pageName === 'views') loadSavedViewSummaries();
+    if (pageName === 'pulse') loadCrmPulse();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
     if (pageName === 'relativeValue') {
       loadRelativeValueSnapshot();
@@ -1856,11 +1858,16 @@
     closeRepPanel();
     renderRepPicker();
     await loadMyWork();
-    if (parseHashTarget(window.location.hash || '#home').page === 'views') {
+    const activePage = parseHashTarget(window.location.hash || '#home').page;
+    if (activePage === 'views') {
       savedViewsState.selectedResult = null;
       await loadSavedViewSummaries();
       if (savedViewsState.selectedId) openSavedView(savedViewsState.selectedId);
     }
+    // CRM Pulse widgets are rep-scoped server-side — drop the cache either way
+    // so the next visit refetches under the new identity.
+    crmPulseState.data = null;
+    if (activePage === 'pulse') loadCrmPulse(true);
   }
 
   function renderRepPicker() {
@@ -2381,6 +2388,147 @@
     const days = Math.floor((Date.now() - new Date(`${date}T00:00:00`).getTime()) / 86400000);
     const cls = days <= 30 ? 'is-fresh' : days <= 60 ? 'is-aging' : 'is-cold';
     return `<td class="views-last-activity ${cls}" title="${escapeHtml(`${days} days ago`)}">${escapeHtml(date)}</td>`;
+  }
+
+  // ===== CRM Pulse (#pulse) — live CRM dashboard =====
+  // Single payload from /api/crm/dashboard; CSS bars (the swap-sector pattern),
+  // no chart library. Respects the acting rep server-side.
+
+  let crmPulseState = { loading: false, data: null };
+
+  async function loadCrmPulse(force) {
+    if (crmPulseState.loading) return;
+    if (crmPulseState.data && !force) { renderCrmPulse(); return; }
+    crmPulseState.loading = true;
+    renderCrmPulse();
+    try {
+      crmPulseState.data = await fetch('/api/crm/dashboard', { cache: 'no-store' }).then(readBankJson);
+    } catch (e) {
+      crmPulseState.data = null;
+      showToast(e.message || 'Could not load CRM pulse', true);
+    } finally {
+      crmPulseState.loading = false;
+      renderCrmPulse();
+    }
+  }
+
+  function pulseTwoSeriesBarsHtml(rows) {
+    if (!rows.length) return '<div class="bank-search-empty">No client or prospect accounts yet.</div>';
+    const max = Math.max(...rows.map(r => Math.max(r.clients, r.prospects)), 1);
+    return `
+      <div class="pulse-bars">
+        ${rows.map(r => `
+          <div class="pulse-bar-row">
+            <span class="pulse-bar-label">${escapeHtml(r.state)}</span>
+            <span class="pulse-bar-tracks">
+              <span class="pulse-bar-track"><span class="pulse-bar-fill is-clients" style="width:${(r.clients / max * 100).toFixed(1)}%"></span><em>${escapeHtml(formatNumber(r.clients))}</em></span>
+              <span class="pulse-bar-track"><span class="pulse-bar-fill is-prospects" style="width:${(r.prospects / max * 100).toFixed(1)}%"></span><em>${escapeHtml(formatNumber(r.prospects))}</em></span>
+            </span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function pulseSingleBarsHtml(rows) {
+    if (!rows.length) return '<div class="bank-search-empty">No open strategy requests.</div>';
+    const max = Math.max(...rows.map(r => r.count), 1);
+    return `
+      <div class="pulse-bars">
+        ${rows.map(r => `
+          <div class="pulse-bar-row">
+            <span class="pulse-bar-label">${escapeHtml(r.type)}</span>
+            <span class="pulse-bar-tracks">
+              <span class="pulse-bar-track"><span class="pulse-bar-fill is-clients" style="width:${(r.count / max * 100).toFixed(1)}%"></span><em>${escapeHtml(formatNumber(r.count))}</em></span>
+            </span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function renderCrmPulse() {
+    const mount = document.getElementById('pulseMount');
+    if (!mount) return;
+    if (crmPulseState.loading && !crmPulseState.data) {
+      mount.innerHTML = '<div class="bank-search-empty">Loading CRM pulse...</div>';
+      return;
+    }
+    const data = crmPulseState.data;
+    const sub = document.getElementById('pulseSub');
+    if (!data) {
+      mount.innerHTML = '<div class="bank-search-empty">Could not load CRM data. Refresh to retry.</div>';
+      return;
+    }
+    if (sub) {
+      sub.textContent = data.rep
+        ? `Acting as ${data.rep.displayName || data.rep.username} — widgets scoped to your book. Clear "Acting as" for the firm-wide view.`
+        : 'Firm-wide view. Pick a rep in the top bar to scope every widget to one book.';
+    }
+    const k = data.kpis || {};
+    mount.innerHTML = `
+      <div class="reports-readiness pulse-kpis">
+        <div><strong>${escapeHtml(formatNumber(k.totalClients || 0))}</strong><span>Clients</span></div>
+        <div><strong>${escapeHtml(formatNumber(k.totalProspects || 0))}</strong><span>Prospects</span></div>
+        <div><strong>${escapeHtml(formatNumber(k.newThisQuarter || 0))}</strong><span>New this quarter</span></div>
+        <div><strong>${escapeHtml(formatNumber(k.openStrategies || 0))}</strong><span>Open strategies</span></div>
+        <div><strong>${escapeHtml(formatNumber(k.overdueFollowups || 0))}</strong><span>Overdue follow-ups</span></div>
+      </div>
+      <div class="pulse-grid">
+        <article class="pulse-card">
+          <h3>Clients &amp; Prospects by State</h3>
+          <p class="pulse-legend"><span class="pulse-dot is-clients"></span>Clients <span class="pulse-dot is-prospects"></span>Prospects</p>
+          ${pulseTwoSeriesBarsHtml(data.byState || [])}
+        </article>
+        <article class="pulse-card">
+          <h3>Open Strategies by Type</h3>
+          ${pulseSingleBarsHtml(data.strategiesByType || [])}
+        </article>
+        <article class="pulse-card">
+          <h3>Recent Activity</h3>
+          ${(data.recentActivities || []).length ? `
+            <table class="reports-list pulse-table">
+              <thead><tr><th>Date</th><th>Rep</th><th>Bank</th><th>Type</th><th>Subject</th></tr></thead>
+              <tbody>
+                ${data.recentActivities.map(item => `
+                  <tr>
+                    <td>${escapeHtml(item.activityDate || '')}</td>
+                    <td>${escapeHtml(item.rep || '—')}</td>
+                    <td><button type="button" class="text-btn" data-pulse-bank="${escapeHtml(item.bankId)}">${escapeHtml(item.bankName)}</button></td>
+                    <td>${escapeHtml(bankActivityKindLabel(item.kind))}</td>
+                    <td>${escapeHtml(item.subject || '')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="bank-search-empty">No activities logged yet. Log calls and emails from any bank tear sheet.</div>'}
+        </article>
+        <article class="pulse-card">
+          <h3>Upcoming Follow-ups (14 days)</h3>
+          ${(data.upcomingFollowups || []).length ? `
+            <table class="reports-list pulse-table">
+              <thead><tr><th>Bank</th><th>Owner</th><th>Date</th><th>Priority</th></tr></thead>
+              <tbody>
+                ${data.upcomingFollowups.map(item => `
+                  <tr>
+                    <td><button type="button" class="text-btn" data-pulse-bank="${escapeHtml(item.bankId)}">${escapeHtml(item.displayName)}</button></td>
+                    <td>${escapeHtml(item.owner || '—')}</td>
+                    <td>${escapeHtml(item.nextActionDate)}</td>
+                    <td>${escapeHtml(item.priority)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          ` : '<div class="bank-search-empty">Nothing due in the next two weeks.</div>'}
+        </article>
+      </div>
+    `;
+    mount.querySelectorAll('[data-pulse-bank]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        goTo('banks');
+        if (typeof loadBank === 'function') loadBank(btn.getAttribute('data-pulse-bank'), { collapseResults: true });
+      });
+    });
   }
 
   function setupSavedViews() {
@@ -10547,6 +10695,10 @@
         reportsActiveRail = rail.dataset.reportsRail || 'recent';
         localStorage.setItem('fbbs.reports.lastRail', reportsActiveRail);
         renderReportsWorkspace();
+        return;
+      }
+      if (clickTarget.closest('#pulseRefreshBtn')) {
+        loadCrmPulse(true);
         return;
       }
       const sorter = clickTarget.closest('[data-reports-sort]');

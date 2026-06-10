@@ -313,6 +313,33 @@ test('activity-summary and account-touch report routes aggregate manual activiti
   });
 });
 
+test('crm dashboard aggregates KPIs, by-state, activity, and follow-ups', async () => {
+  const coverageStore = require('../server/bank-coverage-store');
+  const statusStore = require('../server/bank-account-status-store');
+  await withServer({}, async ({ port, dataDir }) => {
+    const reportsDir = path.join(dataDir, 'bank-reports');
+    statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-1', displayName: 'TX Client', city: 'Austin', state: 'TX', certNumber: '1' }, { status: 'Client', owner: 'Jim Lewis' });
+    statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-2', displayName: 'TX Prospect', city: 'Waco', state: 'TX', certNumber: '2' }, { status: 'Prospect', owner: 'Jim Lewis' });
+    statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-3', displayName: 'MO Client', city: 'Alton', state: 'MO', certNumber: '3' }, { status: 'Client', owner: 'Dan Hagemann' });
+    const soon = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    coverageStore.upsertSavedBank(reportsDir, { id: 'CD-1', displayName: 'TX Client', city: 'Austin', state: 'TX', certNumber: '1' }, { status: 'Client', owner: 'Jim Lewis', nextActionDate: soon });
+    coverageStore.recordManualActivity(reportsDir, { bankId: 'CD-1', kind: 'call', subject: 'Quarterly check-in', actorUsername: 'jim', actorDisplay: 'Jim Lewis' });
+
+    const res = await request(port, { path: '/api/crm/dashboard' });
+    assert.strictEqual(res.status, 200, res.text);
+    const d = res.json;
+    assert.strictEqual(d.kpis.totalClients, 2);
+    assert.strictEqual(d.kpis.totalProspects, 1);
+    const tx = d.byState.find(r => r.state === 'TX');
+    assert.ok(tx && tx.clients === 1 && tx.prospects === 1, JSON.stringify(d.byState));
+    assert.strictEqual(d.recentActivities.length, 1);
+    assert.strictEqual(d.recentActivities[0].bankName, 'TX Client');
+    assert.strictEqual(d.recentActivities[0].kind, 'call');
+    assert.ok(d.upcomingFollowups.some(f => f.bankId === 'CD-1' && f.nextActionDate === soon), 'upcoming follow-up listed');
+    assert.strictEqual(d.rep, null, 'no acting rep → firm-wide');
+  });
+});
+
 test('unknown /api GET returns 404 JSON, not the SPA shell; unknown non-api path serves the SPA', async () => {
   await withServer({}, async ({ port }) => {
     const api = await request(port, { path: '/api/does-not-exist' });

@@ -112,6 +112,7 @@ const {
   listBillingQueue,
   listContactsForBank,
   listProductFitForBank,
+  listRecentManualActivities,
   listSavedBanks,
   recordBankActivity,
   recordManualActivity,
@@ -8455,6 +8456,100 @@ function listKnownReps() {
   }
 }
 
+// ---- Live CRM dashboard (#pulse) ----
+// One payload for the whole page: KPI tiles, by-state and by-type breakdowns,
+// recent manual activity, and upcoming follow-ups. Rep-scoped when an acting
+// rep is resolved (?rep=all overrides, same convention as /api/bank-views).
+
+function buildCrmDashboard(rep) {
+  const today = new Date().toISOString().slice(0, 10);
+  const repScope = rows => (rep ? rows.filter(r => ownerStringContainsRep(r.owner, rep)) : rows);
+
+  // Clients / prospects come from the account-status universe (same source as
+  // the Views tiles), not just saved coverage rows.
+  const clients = repScope(listBankAccountStatuses(BANK_REPORTS_DIR, { status: 'Client', limit: 8000, maxLimit: 8000, sort: 'bank' }));
+  const prospects = repScope(listBankAccountStatuses(BANK_REPORTS_DIR, { status: 'Prospect', limit: 8000, maxLimit: 8000, sort: 'bank' }));
+
+  // By-state, two series — the SF "Clients & Prospects by State" bar chart.
+  const stateMap = new Map();
+  const bump = (rows, key) => rows.forEach(row => {
+    const state = String(row.state || '').toUpperCase() || '—';
+    const entry = stateMap.get(state) || { state, clients: 0, prospects: 0 };
+    entry[key] += 1;
+    stateMap.set(state, entry);
+  });
+  bump(clients, 'clients');
+  bump(prospects, 'prospects');
+  const byState = [...stateMap.values()].sort((a, b) => (b.clients + b.prospects) - (a.clients + a.prospects)).slice(0, 20);
+
+  const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
+  const myBanks = repScope(savedBanks);
+  const quarter = Math.floor(new Date().getMonth() / 3);
+  const quarterStart = `${new Date().getFullYear()}-${String(quarter * 3 + 1).padStart(2, '0')}-01`;
+  const newThisQuarter = myBanks.filter(row => String(row.createdAt || '').slice(0, 10) >= quarterStart).length;
+  const overdue = myBanks.filter(row => row.nextActionDate && String(row.nextActionDate).slice(0, 10) < today);
+  const horizon = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+  const upcoming = myBanks
+    .filter(row => row.nextActionDate && String(row.nextActionDate).slice(0, 10) >= today && String(row.nextActionDate).slice(0, 10) <= horizon)
+    .sort((a, b) => String(a.nextActionDate).localeCompare(String(b.nextActionDate)))
+    .slice(0, 12)
+    .map(row => ({
+      bankId: row.bankId,
+      displayName: row.displayName,
+      owner: row.owner || '',
+      nextActionDate: row.nextActionDate,
+      priority: row.priority || 'Medium'
+    }));
+
+  const strategyResult = listStrategyRequests(BANK_REPORTS_DIR, { archived: '' }) || { requests: [] };
+  const openStatuses = new Set(['Open', 'In Progress']);
+  const openStrategies = (strategyResult.requests || []).filter(req => {
+    if (!openStatuses.has(req.status)) return false;
+    if (!rep) return true;
+    return ownerStringContainsRep(req.assignedTo, rep) || ownerStringContainsRep(req.requestedBy, rep);
+  });
+  const typeMap = new Map();
+  openStrategies.forEach(req => {
+    const type = req.requestType || 'Miscellaneous';
+    typeMap.set(type, (typeMap.get(type) || 0) + 1);
+  });
+  const strategiesByType = [...typeMap.entries()].map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count);
+
+  const bankNames = new Map(savedBanks.map(b => [b.bankId, b.displayName]));
+  let recentActivities = [];
+  try {
+    recentActivities = listRecentManualActivities(BANK_REPORTS_DIR, { limit: 20 })
+      .filter(item => !rep || String(item.actorUsername || '').toLowerCase() === String(rep.username || '').toLowerCase())
+      .map(item => ({
+        at: item.at,
+        activityDate: item.activityDate || String(item.at || '').slice(0, 10),
+        rep: item.actorDisplay || item.actorUsername || '',
+        bankId: item.bankId,
+        bankName: bankNames.get(item.bankId) || item.bankId,
+        kind: item.kind,
+        subject: item.subject || item.summary || ''
+      }));
+  } catch (err) {
+    log('warn', 'CRM dashboard activities failed:', err.message);
+  }
+
+  return {
+    rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
+    asOf: new Date().toISOString(),
+    kpis: {
+      totalClients: clients.length,
+      totalProspects: prospects.length,
+      newThisQuarter,
+      openStrategies: openStrategies.length,
+      overdueFollowups: overdue.length
+    },
+    byState,
+    strategiesByType,
+    recentActivities,
+    upcomingFollowups: upcoming
+  };
+}
+
 // Bank activity timeline writer. Pulls the actor from the request via the rep
 // identity layer so every per-bank action carries who did it. Failure here must
 // never fail the wrapping request — activity is observability, not the source
@@ -8615,6 +8710,12 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/me/work' && req.method === 'GET') {
       const rep = resolveRequestRep(req);
       return sendJSON(res, 200, buildMyWorkResponse(rep));
+    }
+
+    if (pathname === '/api/crm/dashboard' && req.method === 'GET') {
+      const repParam = String(query.get('rep') || '').toLowerCase();
+      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      return sendJSON(res, 200, buildCrmDashboard(rep));
     }
 
     if (pathname === '/api/admin/go-live-status' && req.method === 'GET') {

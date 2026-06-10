@@ -10837,6 +10837,107 @@ body {
   .activity-log-row { grid-template-columns: 1fr; }
 }
 
+/* CRM Pulse (live CRM dashboard) */
+.pulse-kpis { margin-bottom: 16px; }
+
+.pulse-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pulse-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.pulse-card h3 {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+}
+
+.pulse-legend {
+  align-items: center;
+  color: var(--text3);
+  display: flex;
+  font-size: 11px;
+  gap: 6px;
+  margin: -4px 0 10px;
+}
+
+.pulse-dot {
+  border-radius: 50%;
+  display: inline-block;
+  height: 9px;
+  width: 9px;
+}
+.pulse-dot.is-clients { background: #16523a; }
+.pulse-dot.is-prospects { background: #357ca0; }
+
+.pulse-bars {
+  display: grid;
+  gap: 7px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.pulse-bar-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 110px minmax(0, 1fr);
+}
+
+.pulse-bar-label {
+  color: var(--text2);
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pulse-bar-tracks { display: grid; gap: 3px; }
+
+.pulse-bar-track {
+  align-items: center;
+  background: #f0f4f1;
+  border-radius: 4px;
+  display: flex;
+  gap: 6px;
+  height: 12px;
+  position: relative;
+}
+
+.pulse-bar-fill {
+  border-radius: 4px;
+  display: block;
+  height: 100%;
+  min-width: 2px;
+}
+.pulse-bar-fill.is-clients { background: linear-gradient(90deg, #16523a, #0a3d2a); }
+.pulse-bar-fill.is-prospects { background: linear-gradient(90deg, #357ca0, #1f4c66); }
+
+.pulse-bar-track em {
+  color: var(--text2);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.pulse-table { font-size: 12px; width: 100%; }
+.pulse-table th { font-size: 10px; }
+
+@media (max-width: 900px) {
+  .pulse-grid { grid-template-columns: 1fr; }
+}
+
 /* Saved Views page */
 .views-scope-toggle {
   background: rgba(255, 255, 255, 0.12);

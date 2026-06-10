@@ -763,6 +763,21 @@ function listRecentActivitiesByActor(outputDir, actorUsername, options = {}) {
   return rows.map(mapActivityRow);
 }
 
+// Most recent manual CRM activities across all banks — feeds the CRM
+// dashboard's "recent activity" widget.
+function listRecentManualActivities(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const kinds = sanitizeManualKinds(options.kinds);
+  const inList = kinds.map(() => '?').join(', ');
+  const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 20), 100));
+  const rows = querySqliteJson(dbPath, `
+    ${activitySelectSql(`kind IN (${inList})`)}
+    ORDER BY at DESC
+    LIMIT ?;
+  `, [...kinds, limit]);
+  return rows.map(mapActivityRow);
+}
+
 // Restrict a caller-supplied kind list to the manual whitelist so it is always
 // safe to inline into an IN (...) clause. Falls back to all manual kinds.
 function sanitizeManualKinds(kinds) {
@@ -1214,6 +1229,7 @@ module.exports = {
   listProductFitForBank,
   listProductFitForBanks,
   listRecentActivitiesByActor,
+  listRecentManualActivities,
   listSavedBanks,
   recordBankActivity,
   recordManualActivity,
