@@ -10521,8 +10521,8 @@ body {
   border-left-width: 3px;
   border-radius: 8px;
   display: grid;
-  gap: 12px;
-  grid-template-columns: 90px minmax(0, 1fr) auto;
+  gap: 10px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   padding: 9px 12px;
 }
 
@@ -10530,6 +10530,24 @@ body {
 .bank-activity-item.is-note { border-left-color: #b58c3f; }
 .bank-activity-item.is-contact { border-left-color: #357ca0; }
 .bank-activity-item.is-strategy { border-left-color: #7a4ab0; }
+.bank-activity-item.is-call { border-left-color: #2e7d57; }
+.bank-activity-item.is-email { border-left-color: #357ca0; }
+.bank-activity-item.is-meeting { border-left-color: #b5683f; }
+.bank-activity-item.is-task { border-left-color: #7a4ab0; }
+
+.bank-activity-icon {
+  align-self: center;
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+}
+
+.bank-activity-text {
+  color: #3a423e;
+  font-size: 12px;
+  margin: 3px 0 0;
+  white-space: normal;
+}
 
 .bank-activity-kind {
   align-self: center;
@@ -10577,10 +10595,94 @@ body {
   padding: 8px 12px;
 }
 
+/* Log Activity form */
+.bank-activity-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.activity-type-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.activity-type-pill {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #2b322e;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+}
+
+.activity-type-pill.is-active {
+  background: var(--accent, #1a3a2a);
+  border-color: var(--accent, #1a3a2a);
+  color: #fff;
+}
+
+.activity-log-field {
+  color: #4a514d;
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 3px;
+}
+
+.activity-log-field input,
+.activity-log-field textarea,
+.activity-log-field select {
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.activity-log-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.activity-log-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.bank-activity-filters {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.activity-filter-chip {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #4a514d;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+}
+
+.activity-filter-chip.is-active {
+  background: rgba(26, 58, 42, 0.1);
+  border-color: var(--accent, #1a3a2a);
+  color: var(--accent, #1a3a2a);
+}
+
 @media (max-width: 700px) {
-  .bank-activity-item { grid-template-columns: 1fr; }
-  .bank-activity-kind { justify-self: start; }
-  .bank-activity-delete-btn { justify-self: start; }
+  .bank-activity-item { grid-template-columns: 22px 1fr; }
+  .bank-activity-delete-btn { grid-column: 2; justify-self: start; }
+  .activity-log-row { grid-template-columns: 1fr; }
 }
 
 /* Saved Views page */

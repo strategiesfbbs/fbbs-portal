@@ -90,7 +90,9 @@ const {
   saveWirpWorkbook
 } = require('./wirp-store');
 const {
+  MANUAL_ACTIVITY_KINDS,
   PRODUCT_FIT_PRODUCTS,
+  activityCountsByRep,
   addBankNote,
   countBillingByState,
   createBankContact,
@@ -104,12 +106,14 @@ const {
   getPreferredPeerGroup,
   getProductFitById,
   getSavedBankCoverageMap,
+  lastActivityByBank,
   listActivitiesForBank,
   listBillingQueue,
   listContactsForBank,
   listProductFitForBank,
   listSavedBanks,
   recordBankActivity,
+  recordManualActivity,
   removeBankNote,
   removeSavedBank,
   setPreferredPeerGroup,
@@ -4418,6 +4422,46 @@ async function handleAddBankNote(req, res, bankId) {
   } catch (err) {
     log('error', 'Bank note add failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not add bank note' });
+  }
+}
+
+// Manual CRM activity (Call/Email/Meeting/Task/Note logged by a rep). Mirrors
+// handleAddBankNote: ensures the bank has a coverage row so the activity has a
+// home, then records a typed bank_activities row. The "Logged by" display can
+// be overridden in the body; the username stays the resolved rep for audit.
+async function handleLogBankActivity(req, res, bankId) {
+  try {
+    const body = await readJsonBody(req);
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+    if (!MANUAL_ACTIVITY_KINDS.includes(String(body.kind || ''))) {
+      return sendJSON(res, 400, { error: 'Invalid activity type' });
+    }
+    upsertSavedBank(BANK_REPORTS_DIR, summary, body.coverage || {});
+    const rep = resolveRequestRep(req);
+    const activity = recordManualActivity(BANK_REPORTS_DIR, {
+      bankId,
+      certNumber: summary.certNumber,
+      kind: body.kind,
+      subject: body.subject,
+      body: body.body,
+      activityDate: body.activityDate,
+      contactId: body.contactId,
+      actorUsername: rep ? rep.username : '',
+      actorDisplay: body.loggedBy || (rep ? rep.displayName : '')
+    });
+    if (!activity) return sendJSON(res, 400, { error: 'Could not log activity' });
+    appendAuditLog({
+      event: 'bank-activity-log',
+      bankId,
+      activityId: activity.id,
+      kind: activity.kind
+    });
+    invalidateBankCaches();
+    return sendJSON(res, 200, { activity });
+  } catch (err) {
+    log('error', 'Bank activity log failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not log activity' });
   }
 }
 
@@ -8995,6 +9039,11 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, {
         activities: listActivitiesForBank(BANK_REPORTS_DIR, bankId, { limit })
       });
+    }
+    if (bankActivityMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankActivityMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return await handleLogBankActivity(req, res, bankId);
     }
 
     const bankActivityItemMatch = pathname.match(/^\/api\/banks\/([^/]+)\/activity\/([^/]+)$/);

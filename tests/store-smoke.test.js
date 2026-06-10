@@ -90,6 +90,26 @@ try {
   coverageStore.deleteBankActivity(tmpDir, 'B-1', act.id);
   ok('activity-delete', coverageStore.listActivitiesForBank(tmpDir, 'B-1').length === 0);
 
+  // Manual typed activities (Call/Email/Meeting/Task/Note) — Phase 1 keystone.
+  const call = coverageStore.recordManualActivity(tmpDir, {
+    bankId: 'B-1', kind: 'call', subject: `Call re ${TRICKY}`, body: 'line one\nline two',
+    activityDate: '2026-06-01', actorUsername: 'Rep1', actorDisplay: 'Rep One', contactId: 'C-9'
+  });
+  ok('manual-activity-record', call && call.kind === 'call' && call.subject.includes('Trust'));
+  ok('manual-activity-body multiline', call && call.body === 'line one\nline two');
+  ok('manual-activity-date', call && call.activityDate === '2026-06-01');
+  ok('manual-activity-contact', call && call.contactId === 'C-9');
+  coverageStore.recordManualActivity(tmpDir, { bankId: 'B-1', kind: 'email', subject: 'Sent rates', activityDate: '2026-06-08', actorUsername: 'Rep1' });
+  ok('manual-activity-bad-kind rejected', coverageStore.recordManualActivity(tmpDir, { bankId: 'B-1', kind: 'bogus', subject: 'x' }) === null);
+  const last = coverageStore.lastActivityByBank(tmpDir);
+  ok('lastActivityByBank max date', last['B-1'] === '2026-06-08', last['B-1']);
+  const counts = coverageStore.activityCountsByRep(tmpDir, { from: '2026-06-01', to: '2026-06-30' });
+  const callRow = counts.find(c => c.kind === 'call');
+  ok('activityCountsByRep call count', callRow && callRow.count === 1 && callRow.actorUsername === 'Rep1');
+  ok('activityCountsByRep date-window excludes', coverageStore.activityCountsByRep(tmpDir, { from: '2026-07-01' }).length === 0);
+  // Clean up so later assertions on B-1 activity counts stay isolated.
+  coverageStore.listActivitiesForBank(tmpDir, 'B-1').forEach(a => coverageStore.deleteBankActivity(tmpDir, 'B-1', a.id));
+
   // Product fit
   const fit = coverageStore.upsertProductFit(tmpDir, bank, { product: 'Bond Swap', notes: TRICKY, flaggedByUsername: 'rep1' });
   ok('productfit-upsert', fit && fit.product === 'Bond Swap' && fit.notes === TRICKY);

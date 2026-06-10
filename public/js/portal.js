@@ -45,6 +45,9 @@
   let selectedBankActivities = [];
   let bankActivityBankId = null;
   let bankActivityRequestId = 0;
+  let bankActivityFilter = 'all';     // 'all' (CRM kinds) | a single kind | 'system'
+  let bankActivityLogKind = 'call';   // selected pill in the Log Activity form
+  let bankActivitySaving = false;
   let bankLoadRequestId = 0;
   let tearSheetCoverageRequestId = 0;
   let selectedBankProductFit = [];
@@ -13296,6 +13299,10 @@
   // ============ Bank Activity Timeline (tear sheet) ============
 
   const BANK_ACTIVITY_KIND_LABELS = {
+    'call': 'Call',
+    'email': 'Email',
+    'meeting': 'Meeting',
+    'task': 'Task',
     'coverage-save': 'Coverage',
     'coverage-update': 'Coverage',
     'coverage-remove': 'Coverage',
@@ -13309,12 +13316,43 @@
     'strategy-delete': 'Strategy'
   };
 
+  // Manual, rep-logged kinds (must mirror MANUAL_ACTIVITY_KINDS server-side).
+  const MANUAL_ACTIVITY_KINDS = ['call', 'email', 'meeting', 'task', 'note'];
+  const ACTIVITY_TYPE_OPTIONS = [
+    { kind: 'call', label: 'Call', icon: '☎' },
+    { kind: 'email', label: 'Email', icon: '✉' },
+    { kind: 'meeting', label: 'Meeting', icon: '📅' },
+    { kind: 'task', label: 'Task', icon: '✓' }
+  ];
+  const ACTIVITY_FILTERS = [
+    { id: 'all', label: 'All' },
+    { id: 'call', label: 'Calls' },
+    { id: 'email', label: 'Emails' },
+    { id: 'meeting', label: 'Meetings' },
+    { id: 'task', label: 'Tasks' },
+    { id: 'note', label: 'Notes' },
+    { id: 'system', label: 'System' }
+  ];
+  const ACTIVITY_KIND_ICONS = { call: '☎', email: '✉', meeting: '📅', task: '✓', note: '📝' };
+
   function bankActivityKindLabel(kind) {
     return BANK_ACTIVITY_KIND_LABELS[kind] || (kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : 'Activity');
   }
 
+  function bankActivityKindIcon(kind) {
+    return ACTIVITY_KIND_ICONS[kind] || '•';
+  }
+
+  function isManualActivityKind(kind) {
+    return MANUAL_ACTIVITY_KINDS.includes(kind);
+  }
+
   function bankActivityKindClass(kind) {
     if (!kind) return '';
+    if (kind === 'call') return 'is-call';
+    if (kind === 'email') return 'is-email';
+    if (kind === 'meeting') return 'is-meeting';
+    if (kind === 'task') return 'is-task';
     if (kind.startsWith('contact')) return 'is-contact';
     if (kind.startsWith('strategy')) return 'is-strategy';
     if (kind.startsWith('coverage') || kind === 'status-change') return 'is-coverage';
@@ -13322,38 +13360,107 @@
     return '';
   }
 
-  function renderBankActivityPanel({ open = false } = {}) {
+  // Apply the active filter chip. 'all' = the CRM feed (manual kinds only, so the
+  // system-audit rows don't drown the rep's logged touches); 'system' = audit
+  // rows only; otherwise a single kind.
+  function filteredBankActivities() {
     const items = selectedBankActivities || [];
-    const rows = items.length
-      ? items.map(renderBankActivityRow).join('')
-      : '<li class="bank-activity-empty">No activity yet. Coverage changes, notes, contacts, and strategy requests show up here.</li>';
+    if (bankActivityFilter === 'all') return items.filter(it => isManualActivityKind(it.kind));
+    if (bankActivityFilter === 'system') return items.filter(it => !isManualActivityKind(it.kind));
+    return items.filter(it => it.kind === bankActivityFilter);
+  }
+
+  function renderBankActivityLogForm() {
+    const contacts = selectedBankContacts || [];
+    const today = new Date().toISOString().slice(0, 10);
+    const repName = (meState.rep && meState.rep.displayName) || '';
+    const pills = ACTIVITY_TYPE_OPTIONS.map(opt => `
+      <button type="button" class="activity-type-pill ${opt.kind === bankActivityLogKind ? 'is-active' : ''}"
+        data-activity-type="${escapeHtml(opt.kind)}" aria-pressed="${opt.kind === bankActivityLogKind ? 'true' : 'false'}">
+        <span aria-hidden="true">${opt.icon}</span> ${escapeHtml(opt.label)}
+      </button>`).join('');
+    const contactOptions = ['<option value="">No contact</option>']
+      .concat(contacts.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name)}${c.role ? ` (${escapeHtml(c.role)})` : ''}</option>`))
+      .join('');
     return `
-      <details class="bank-section bank-activity-section bank-activity-details" id="bankActivityPanel" ${open ? 'open' : ''}>
-        <summary class="bank-section-title">
-          <span>Activity Timeline</span>
-          <em>Open / close</em>
-        </summary>
-        <ol class="bank-activity-list" id="bankActivityList">${rows}</ol>
-      </details>
+      <form class="bank-activity-log" id="bankActivityForm">
+        <input type="hidden" id="bankActivityKind" value="${escapeHtml(bankActivityLogKind)}">
+        <div class="activity-type-pills" role="group" aria-label="Activity type">${pills}</div>
+        <label class="activity-log-field">Subject
+          <input type="text" id="bankActivitySubject" maxlength="300" placeholder="e.g. Bought 1mm T 4 1/2, discussed CD ladder" required>
+        </label>
+        <label class="activity-log-field">Notes / outcome
+          <textarea id="bankActivityBody" rows="3" maxlength="4000" placeholder="What happened, next steps, objections..."></textarea>
+        </label>
+        <div class="activity-log-row">
+          <label class="activity-log-field">Date
+            <input type="date" id="bankActivityDate" value="${escapeHtml(today)}" max="${escapeHtml(today)}">
+          </label>
+          <label class="activity-log-field">Logged by
+            <input type="text" id="bankActivityLoggedBy" maxlength="200" value="${escapeHtml(repName)}" placeholder="Your name">
+          </label>
+          <label class="activity-log-field">Contact
+            <select id="bankActivityContact">${contactOptions}</select>
+          </label>
+        </div>
+        <div class="activity-log-actions">
+          <button type="submit" class="small-btn" id="bankActivityLogBtn" ${bankActivitySaving ? 'disabled' : ''}>${bankActivitySaving ? 'Logging…' : 'Log Activity'}</button>
+        </div>
+      </form>
     `;
   }
 
+  function renderBankActivityFilterBar() {
+    return `<div class="bank-activity-filters" role="group" aria-label="Filter activity">
+      ${ACTIVITY_FILTERS.map(f => `<button type="button" class="activity-filter-chip ${f.id === bankActivityFilter ? 'is-active' : ''}" data-activity-filter="${escapeHtml(f.id)}" aria-pressed="${f.id === bankActivityFilter ? 'true' : 'false'}">${escapeHtml(f.label)}</button>`).join('')}
+    </div>`;
+  }
+
+  function renderBankActivityPanel() {
+    const rows = filteredBankActivities();
+    const list = rows.length
+      ? rows.map(renderBankActivityRow).join('')
+      : '<li class="bank-activity-empty">No activity for this filter yet.</li>';
+    return `
+      <section class="bank-section bank-activity-section" id="bankActivityPanel">
+        <div class="bank-section-title"><span>Activity</span></div>
+        ${renderBankActivityLogForm()}
+        ${renderBankActivityFilterBar()}
+        <ol class="bank-activity-list" id="bankActivityList">${list}</ol>
+      </section>
+    `;
+  }
+
+  function bankActivityContactName(contactId) {
+    if (!contactId) return '';
+    const match = (selectedBankContacts || []).find(c => c.id === contactId);
+    return match ? match.name : '';
+  }
+
   function renderBankActivityRow(item) {
+    const manual = isManualActivityKind(item.kind);
     const actor = item.actorDisplay || item.actorUsername || 'Unknown';
-    const when = item.at ? formatRelativeAt(item.at) : '';
+    const when = manual && item.activityDate ? formatActivityDate(item.activityDate) : (item.at ? formatRelativeAt(item.at) : '');
     const tooltip = item.at ? formatFullTimestamp(item.at) : '';
+    const headline = manual ? (item.subject || bankActivityKindLabel(item.kind)) : (item.summary || bankActivityKindLabel(item.kind));
+    const contactName = bankActivityContactName(item.contactId);
+    const body = manual && item.body
+      ? `<p class="bank-activity-text">${escapeHtml(item.body).replace(/\n/g, '<br>')}</p>`
+      : '';
     const deleteButton = item.id
       ? `<button type="button" class="text-btn danger bank-activity-delete-btn" data-activity-delete="${escapeHtml(item.id)}">Delete</button>`
       : '';
     return `
       <li class="bank-activity-item ${bankActivityKindClass(item.kind)}" data-activity-row="${escapeHtml(item.id || '')}">
-        <span class="bank-activity-kind">${escapeHtml(bankActivityKindLabel(item.kind))}</span>
+        <span class="bank-activity-icon" aria-hidden="true">${bankActivityKindIcon(item.kind)}</span>
         <div class="bank-activity-body">
-          <p class="bank-activity-summary">${escapeHtml(item.summary || bankActivityKindLabel(item.kind))}</p>
+          <p class="bank-activity-summary"><span class="bank-activity-kind">${escapeHtml(bankActivityKindLabel(item.kind))}</span> ${escapeHtml(headline)}</p>
+          ${body}
           <p class="bank-activity-meta">
             <span>${escapeHtml(actor)}</span>
+            ${contactName ? `<span class="bank-activity-dot" aria-hidden="true">&middot;</span><span>${escapeHtml(contactName)}</span>` : ''}
             <span class="bank-activity-dot" aria-hidden="true">&middot;</span>
-            <time datetime="${escapeHtml(item.at)}" title="${escapeHtml(tooltip)}">${escapeHtml(when)}</time>
+            <time datetime="${escapeHtml(item.activityDate || item.at)}" title="${escapeHtml(tooltip)}">${escapeHtml(when)}</time>
           </p>
         </div>
         ${deleteButton}
@@ -13361,11 +13468,16 @@
     `;
   }
 
+  function formatActivityDate(value) {
+    if (!value) return '';
+    const d = new Date(`${value}T00:00:00`);
+    return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
   function refreshBankActivityPanel() {
     const panel = document.getElementById('bankActivityPanel');
     if (!panel) return;
-    const wasOpen = panel.open;
-    panel.outerHTML = renderBankActivityPanel({ open: wasOpen });
+    panel.outerHTML = renderBankActivityPanel();
     wireBankActivityControls();
   }
 
@@ -13375,6 +13487,64 @@
     panel.querySelectorAll('[data-activity-delete]').forEach(btn => {
       btn.addEventListener('click', () => deleteBankActivityById(btn.getAttribute('data-activity-delete')));
     });
+    panel.querySelectorAll('[data-activity-type]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bankActivityLogKind = btn.getAttribute('data-activity-type');
+        const hidden = document.getElementById('bankActivityKind');
+        if (hidden) hidden.value = bankActivityLogKind;
+        panel.querySelectorAll('[data-activity-type]').forEach(b => {
+          const on = b === btn;
+          b.classList.toggle('is-active', on);
+          b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+      });
+    });
+    panel.querySelectorAll('[data-activity-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bankActivityFilter = btn.getAttribute('data-activity-filter');
+        refreshBankActivityPanel();
+      });
+    });
+    const form = document.getElementById('bankActivityForm');
+    if (form) form.addEventListener('submit', submitBankActivityLog);
+  }
+
+  async function submitBankActivityLog(event) {
+    if (event) event.preventDefault();
+    const bankId = bankActivityBankId || selectedBankId();
+    if (!bankId) return showToast('Select a bank first', true);
+    const subjectEl = document.getElementById('bankActivitySubject');
+    const subject = subjectEl ? subjectEl.value.trim() : '';
+    if (!subject) { if (subjectEl) subjectEl.focus(); return showToast('Add a subject for the activity', true); }
+    const payload = {
+      kind: bankActivityLogKind,
+      subject,
+      body: (document.getElementById('bankActivityBody') || {}).value || '',
+      activityDate: (document.getElementById('bankActivityDate') || {}).value || '',
+      loggedBy: (document.getElementById('bankActivityLoggedBy') || {}).value || '',
+      contactId: (document.getElementById('bankActivityContact') || {}).value || ''
+    };
+    bankActivitySaving = true;
+    refreshBankActivityPanel();
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      bankActivitySaving = false;
+      if (data.activity) selectedBankActivities = [data.activity].concat(selectedBankActivities || []);
+      // Surface the newly-logged kind so the rep sees it land.
+      if (bankActivityFilter !== 'all' && bankActivityFilter !== payload.kind) bankActivityFilter = 'all';
+      refreshBankActivityPanel();
+      showToast(`Logged ${bankActivityKindLabel(payload.kind).toLowerCase()}`);
+    } catch (e) {
+      bankActivitySaving = false;
+      refreshBankActivityPanel();
+      showToast(e.message || 'Could not log activity', true);
+    }
   }
 
   async function deleteBankActivityById(activityId) {

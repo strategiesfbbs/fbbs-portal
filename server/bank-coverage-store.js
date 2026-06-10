@@ -8,6 +8,11 @@ const sqliteDb = require('./sqlite-db');
 const COVERAGE_DATABASE_FILENAME = 'bank-coverage.sqlite';
 const COVERAGE_STATUSES = new Set(['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant']);
 const COVERAGE_PRIORITIES = new Set(['High', 'Medium', 'Low']);
+// Manual, rep-logged activity kinds (distinct from the system-audit kinds like
+// 'coverage-save' / 'status-change' that recordBankActivity writes). These are
+// the only kinds counted as a "touch" for last-activity / going-cold logic.
+const MANUAL_ACTIVITY_KINDS = ['call', 'email', 'meeting', 'task', 'note'];
+const MANUAL_ACTIVITY_KIND_SET = new Set(MANUAL_ACTIVITY_KINDS);
 
 function coverageDatabasePathForDir(outputDir) {
   return path.join(outputDir, COVERAGE_DATABASE_FILENAME);
@@ -136,7 +141,30 @@ function ensureCoverageDatabase(outputDir) {
     CREATE INDEX IF NOT EXISTS idx_billing_queue_state_enqueued ON billing_queue(state, enqueued_at DESC);
     CREATE INDEX IF NOT EXISTS idx_billing_queue_bank ON billing_queue(bank_id);
   `);
+  migrateBankActivityColumns(dbPath);
   return dbPath;
+}
+
+// bank_activities started as a passive system-audit log. Manual CRM activities
+// (typed Call/Email/Meeting/Task/Note logged by a rep) reuse the same table so
+// the bank detail feed stays a single timeline; these nullable columns hold the
+// rep-entered fields. Existing audit rows leave them NULL. ALTER ... ADD COLUMN
+// is idempotent here because we first check PRAGMA table_info (mirrors the
+// report_hidden migration pattern in report-store.js).
+function migrateBankActivityColumns(dbPath) {
+  const columns = querySqliteJson(dbPath, `PRAGMA table_info(bank_activities);`);
+  const have = new Set(columns.map(col => col.name));
+  const additions = [
+    ['subject', 'TEXT'],
+    ['body', 'TEXT'],
+    ['activity_date', 'TEXT'],
+    ['contact_id', 'TEXT']
+  ];
+  for (const [name, type] of additions) {
+    if (!have.has(name)) {
+      runSqlite(dbPath, `ALTER TABLE bank_activities ADD COLUMN ${name} ${type};`);
+    }
+  }
 }
 
 const PRODUCT_FIT_PRODUCTS = [
@@ -631,6 +659,10 @@ function activitySelectSql(where = '1 = 1') {
       actor_display AS actorDisplay,
       kind AS kind,
       summary AS summary,
+      subject AS subject,
+      body AS body,
+      activity_date AS activityDate,
+      contact_id AS contactId,
       ref_type AS refType,
       ref_id AS refId
     FROM bank_activities
@@ -649,6 +681,10 @@ function mapActivityRow(row) {
     actorDisplay: row.actorDisplay || '',
     kind: row.kind || '',
     summary: row.summary || '',
+    subject: row.subject || '',
+    body: row.body || '',
+    activityDate: row.activityDate || '',
+    contactId: row.contactId || '',
     refType: row.refType || '',
     refId: row.refId || ''
   };
@@ -725,6 +761,108 @@ function listRecentActivitiesByActor(outputDir, actorUsername, options = {}) {
     LIMIT ?;
   `, [username, limit]);
   return rows.map(mapActivityRow);
+}
+
+// Restrict a caller-supplied kind list to the manual whitelist so it is always
+// safe to inline into an IN (...) clause. Falls back to all manual kinds.
+function sanitizeManualKinds(kinds) {
+  const list = Array.isArray(kinds)
+    ? kinds.map(k => cleanText(k, 60)).filter(k => MANUAL_ACTIVITY_KIND_SET.has(k))
+    : [];
+  return list.length ? list : MANUAL_ACTIVITY_KINDS.slice();
+}
+
+// A manual activity is the rep's CRM "touch": Call/Email/Meeting/Task/Note with
+// a subject, free-text body, and a rep-chosen date (distinct from `at`, the
+// system insert time). Stored in bank_activities alongside audit rows; `summary`
+// is back-filled from the subject so the legacy timeline renderer still reads.
+function recordManualActivity(outputDir, payload = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const bankId = cleanText(payload.bankId, 80);
+  if (!bankId) return null;
+  const kind = cleanText(payload.kind, 60);
+  if (!MANUAL_ACTIVITY_KIND_SET.has(kind)) return null;
+  const id = crypto.randomUUID();
+  const at = payload.at || new Date().toISOString();
+  const activityDate = cleanDate(payload.activityDate) || at.slice(0, 10);
+  const subject = cleanText(payload.subject, 300);
+  const body = cleanMultilineText(payload.body, 4000);
+  // summary keeps the old timeline readable even before the typed UI ships.
+  const summary = subject || (kind.charAt(0).toUpperCase() + kind.slice(1));
+  runSqlite(dbPath, `
+    INSERT INTO bank_activities (
+      id, bank_id, cert_number, at, actor_username, actor_display,
+      kind, summary, subject, body, activity_date, contact_id, ref_type, ref_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    bankId,
+    textOrNull(cleanText(payload.certNumber, 40)),
+    at,
+    textOrNull(cleanText(payload.actorUsername, 80)),
+    textOrNull(cleanText(payload.actorDisplay, 200)),
+    kind,
+    textOrNull(summary),
+    textOrNull(subject),
+    textOrNull(body),
+    activityDate,
+    textOrNull(cleanText(payload.contactId, 80)),
+    'activity',
+    id
+  ]);
+  const rows = querySqliteJson(dbPath, `${activitySelectSql('id = ?')} LIMIT 1;`, [id]);
+  return mapActivityRow(rows[0]);
+}
+
+// Latest manual-touch date per bank → { [bankId]: 'YYYY-MM-DD' }. Uses the
+// rep-chosen activity_date when present, else the insert day. Powers the
+// "going cold" / last-activity surfacing (Phase 2) and Account Touch report.
+function lastActivityByBank(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const kinds = sanitizeManualKinds(options.kinds);
+  const inList = kinds.map(() => '?').join(', ');
+  const rows = querySqliteJson(dbPath, `
+    SELECT bank_id AS bankId,
+           MAX(COALESCE(activity_date, substr(at, 1, 10))) AS lastDate
+    FROM bank_activities
+    WHERE kind IN (${inList})
+    GROUP BY bank_id;
+  `, kinds);
+  const map = {};
+  rows.forEach(row => { if (row.bankId) map[row.bankId] = row.lastDate || ''; });
+  return map;
+}
+
+// Per-rep manual-activity counts by kind within an optional date window
+// (inclusive YYYY-MM-DD on the effective activity date). Powers the
+// Activity-Summary-by-Rep report (Phase 4).
+function activityCountsByRep(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const kinds = sanitizeManualKinds(options.kinds);
+  const inList = kinds.map(() => '?').join(', ');
+  const params = kinds.slice();
+  const where = [`kind IN (${inList})`];
+  const from = cleanDate(options.from);
+  const to = cleanDate(options.to);
+  if (from) { where.push(`COALESCE(activity_date, substr(at, 1, 10)) >= ?`); params.push(from); }
+  if (to) { where.push(`COALESCE(activity_date, substr(at, 1, 10)) <= ?`); params.push(to); }
+  const rows = querySqliteJson(dbPath, `
+    SELECT actor_username AS actorUsername,
+           actor_display AS actorDisplay,
+           kind AS kind,
+           COUNT(*) AS count,
+           MAX(COALESCE(activity_date, substr(at, 1, 10))) AS lastDate
+    FROM bank_activities
+    WHERE ${where.join(' AND ')}
+    GROUP BY actor_username, kind;
+  `, params);
+  return rows.map(row => ({
+    actorUsername: row.actorUsername || '',
+    actorDisplay: row.actorDisplay || '',
+    kind: row.kind || '',
+    count: Number(row.count) || 0,
+    lastDate: row.lastDate || ''
+  }));
 }
 
 // ---------- Product fit ----------
@@ -1020,7 +1158,9 @@ function countBillingByState(outputDir) {
 module.exports = {
   BILLING_STATES,
   COVERAGE_DATABASE_FILENAME,
+  MANUAL_ACTIVITY_KINDS,
   PRODUCT_FIT_PRODUCTS,
+  activityCountsByRep,
   addBankNote,
   countBillingByState,
   coverageDatabasePathForDir,
@@ -1036,6 +1176,7 @@ module.exports = {
   getPreferredPeerGroup,
   getProductFitById,
   getSavedBankCoverageMap,
+  lastActivityByBank,
   listActivitiesForBank,
   listBillingQueue,
   listContactsForBank,
@@ -1045,6 +1186,7 @@ module.exports = {
   listRecentActivitiesByActor,
   listSavedBanks,
   recordBankActivity,
+  recordManualActivity,
   removeBankNote,
   removePreferredPeerGroup,
   removeSavedBank,
