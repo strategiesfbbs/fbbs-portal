@@ -15209,3 +15209,7 @@ body {
 /* CUSIP hits in the nav jump search */
 .jump-result-cusip span { color: var(--racing-green, #003F2A); font-weight: 700; }
 .jump-result-cusip strong { font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+
+/* Muni CUSIP → MSRB EMMA outbound link */
+.cusip-cell .emma-link { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
+.cusip-cell .emma-link:hover { color: var(--racing-green, #003F2A); text-decoration-style: solid; }

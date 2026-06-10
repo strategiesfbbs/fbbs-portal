@@ -12216,7 +12216,7 @@
     const details = [
       ['Account Name', values.name || bank.summary.name],
       ['Phone', values.phone],
-      ['Website', values.website],
+      ['Website', bankWebsiteLink(values.website)],
       ['Location', locationLine],
       ['County', countyLabel],
       ['Fiduciary Assets ($000)', formatBankValue(values.fiduciaryAssets, 'money')],
@@ -15011,6 +15011,16 @@
     return (n / d) * 100;
   }
 
+  // Render the bank's website field as a real link (http/https only); the
+  // call-report workbook stores it as bare text like "www.bank.com".
+  function bankWebsiteLink(website) {
+    const raw = String(website || '').trim();
+    if (!raw) return '';
+    if (/^javascript:|^data:/i.test(raw)) return raw;
+    const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+    return { html: `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(raw)}</a>` };
+  }
+
   function renderBankSection(title, rows, details) {
     const filtered = rows.filter(([, value]) => value !== null && value !== undefined && value !== '—' && value !== '');
     const midpoint = Math.ceil(filtered.length / 2);
@@ -15022,7 +15032,7 @@
           ${columns.map(col => `<div>${col.map(([label, value]) => `
             <div class="bank-field-row">
               <span>${escapeHtml(label)}</span>
-              <strong>${escapeHtml(value)}</strong>
+              <strong>${value && typeof value === 'object' && value.html ? value.html : escapeHtml(value)}</strong>
             </div>
           `).join('')}</div>`).join('')}
         </div>
@@ -15763,6 +15773,19 @@
     }
   }
 
+  // Data-freshness chunk for explorer subtitles: "· Updated 2:30 PM" from the
+  // slot JSON's publish timestamp (extractedAt or uploadedAt), so a rep
+  // looking at the grid mid-afternoon knows whether it's this morning's data.
+  function explorerFreshness(data) {
+    const stamp = data && (data.extractedAt || data.uploadedAt);
+    if (!stamp) return '';
+    const d = new Date(stamp);
+    if (Number.isNaN(d.getTime())) return '';
+    const sameDay = d.toDateString() === new Date().toDateString();
+    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return ` &middot; Updated ${sameDay ? time : `${formatNumericDate(stamp.slice(0, 10))} ${time}`}`;
+  }
+
   // ============ Treasury Notes Explorer ============
 
   let treasuryData = null;   // { asOfDate, notes[], sourceFile, extractedAt }
@@ -15874,7 +15897,7 @@
       ? ` &middot; As of ${formatNumericDate(treasuryData.asOfDate)}`
       : '';
     document.getElementById('treasuryExplorerSub').innerHTML =
-      `${notes.length} treasury notes available${asOf}`;
+      `${notes.length} treasury notes available${asOf}${explorerFreshness(treasuryData)}`;
     document.getElementById('treasuryExplorerKicker').textContent =
       treasuryData.asOfDate ? formatNumericDate(treasuryData.asOfDate) : 'Current package';
   }
@@ -16141,7 +16164,7 @@
       ? ` &middot; As of ${formatNumericDate(offeringsData.asOfDate)}`
       : '';
     document.getElementById('explorerSub').innerHTML =
-      `${off.length} CDs available${asOf}`;
+      `${off.length} CDs available${asOf}${explorerFreshness(offeringsData)}`;
     document.getElementById('explorerKicker').textContent =
       offeringsData.asOfDate ? formatNumericDate(offeringsData.asOfDate) : 'Current package';
   }
@@ -16464,7 +16487,7 @@
       ? ` &middot; As of ${formatNumericDate(muniData.asOfDate)}`
       : '';
     document.getElementById('muniExplorerSub').innerHTML =
-      `${off.length} muni bonds available${asOf}`;
+      `${off.length} muni bonds available${asOf}${explorerFreshness(muniData)}`;
     document.getElementById('muniExplorerKicker').textContent =
       muniData.asOfDate ? formatNumericDate(muniData.asOfDate) : 'Current package';
   }
@@ -16631,7 +16654,7 @@
           <td style="text-align:right">${haircutCell}</td>
           <td style="text-align:right">${deMinCell}</td>
           <td style="text-align:right">${priceCell}</td>
-          <td class="cusip-cell">${escapeHtml(o.cusip)}</td>
+          <td class="cusip-cell">${o.cusip ? `<a class="emma-link" href="https://emma.msrb.org/Security/Details/${encodeURIComponent(String(o.cusip).trim())}" target="_blank" rel="noopener noreferrer" title="Open this CUSIP on MSRB EMMA (trades + official statements)">${escapeHtml(o.cusip)}</a>` : '&mdash;'}</td>
           <td>${creditCell}</td>
           <td><span class="muni-row-actions"><button type="button" class="small-btn muni-map-btn" data-muni-map-idx="${idx}" title="Show this deal on the US Bank Map"><span aria-hidden="true">&#128205;</span> Map</button><button type="button" class="small-btn buyers-btn" data-buyers-product="muni" data-buyers-idx="${idx}">Find buyers</button></span></td>
         </tr>
