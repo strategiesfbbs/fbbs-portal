@@ -57,6 +57,17 @@ Built on `bank_activities` in `bank-coverage.sqlite` (one table, two row species
 - **CRM Pulse:** `#pulse` (NOT the `#dashboard` daily-package slot) renders `GET /api/crm/dashboard` — KPIs, clients/prospects by state, strategies by type, recent activity, 14-day follow-ups; rep-scoped via the acting-rep cookie, `?rep=all` for firm-wide; CSS bars, no chart lib.
 - **Deliberately dropped:** scheduled/emailed report delivery (no email/cron infra; two-npm-dep rule). The Save & Schedule button stays disabled.
 - `tests/frontend-parse.test.js` compiles `portal.js` + every `public/js/modules/*.js` in `npm test` — a syntax error in the no-build SPA now fails CI instead of shipping a blank page.
+- **Activity soft-delete (compliance):** `DELETE /api/banks/:id/activity/:activityId?reason=` requires a reason and stamps `deleted_at/deleted_by/delete_reason` instead of removing the row; every read path filters deleted rows centrally in `activitySelectSql`. Don't add hard deletes back.
+
+## Wave-1 improvement push (2026-06-10)
+
+From the full review in `docs/improvement-roadmap-2026-06-10.md` (read it before starting Wave-2 work — FDIC/FFIEC importer, task engine, opportunities, Graph mailbox are next):
+
+- `server/market-rates.js` — the portal's **first outbound integration**: fetches the no-key home.treasury.gov daily par yield curve XML, caches under `data/market/` (6h TTL, stale-on-failure, never throws). `GET /api/market/yield-curve` serves it; Treasury Explorer shows an official-curve banner; `loadMarketOverlay()` (server.js) prefers the package's Economic Update and falls back to the official curve for the exec-summary market overlay. Tests: `tests/market-rates.test.js` (fixture-driven, no network).
+- **CUSIP-first global search:** `GET /api/search/cusip?q=` scans all current-package slot JSONs + MBS/CMO + structured-notes inventories (`cusipSearchSources()` in server.js); the nav jump search appends security hits for CUSIP-shaped queries and deep-links to the right explorer with `?q=` pre-seeded.
+- **Bloomberg licensing wall (from the API research):** the desk's *own* TOMS inventory is firm data and may be auto-published to the portal (pursue the feed with the Bloomberg rep); terminal/Excel-derived *market data* (BVAL, DES fields) must NOT be redistributed to the LAN portal — Designated-Authorized-Computer restriction.
+- Muni explorer CUSIPs link out to MSRB EMMA; explorer subtitles show an "Updated h:mm" freshness stamp from the slot JSON's `extractedAt`/`uploadedAt`; tear-sheet website field renders as a link.
+- Launch-era docs moved to `docs/archive/go-live/`.
 
 ## Data layout
 
