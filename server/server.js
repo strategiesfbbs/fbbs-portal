@@ -719,7 +719,8 @@ function sniffAgencyWorkbookSlot(buffer) {
     const has = s => hdr.some(h => h.includes(s));
     if (has('call typ') || has('ytnc') || has('nxt call') || has('next call')) return 'agenciesCallables';
     return 'agenciesBullets';
-  } catch (_) {
+  } catch (err) {
+    log('debug', 'Agency workbook content-classify failed:', err.message);
     return null;
   }
 }
@@ -1409,7 +1410,9 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
         if (offerings.costSourceFile && fileExistsInDir(dirPath, offerings.costSourceFile)) {
           pkg.cdoffersCost = offerings.costSourceFile;
         }
-      } catch (_) {}
+      } catch (err) {
+        log('debug', 'Could not read offerings metadata for cost source:', err.message);
+      }
     }
   }
 
@@ -1419,7 +1422,9 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
       try {
         const rv = JSON.parse(fs.readFileSync(rvPath, 'utf-8'));
         if (Array.isArray(rv.rows)) pkg.relativeValueRowsCount = rv.rows.length;
-      } catch (_) {}
+      } catch (err) {
+        log('debug', 'Could not read relative-value metadata:', err.message);
+      }
     }
   }
 
