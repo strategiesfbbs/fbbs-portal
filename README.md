@@ -114,6 +114,7 @@ All settings are environment variables. None are required; defaults are sensible
 | `FBBS_ADMIN_USERS` | empty | Comma/space-separated usernames allowed to publish/import; required in `FBBS_AUTH_MODE=iis` for those actions |
 | `FBBS_REQUIRE_AUTH` | `0` | Set `1` to require a resolved user even outside `FBBS_AUTH_MODE=iis` |
 | `FBBS_ALLOW_REP_OVERRIDE` | `1` in local mode | Set `0` to disable the header rep override locally |
+| `FBBS_AUTO_PUBLISH` | `1` | Watches `data/dropbox/<today>/` and auto-publishes once the folder settles (2-min checks). Set `0` to require the manual Folder Drop button |
 
 Examples:
 

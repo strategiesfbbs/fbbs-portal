@@ -211,6 +211,9 @@ const CD_INTERNAL_DIR = path.join(DATA_DIR, 'cd-internal');
 const EXEC_SUMMARY_DIR = path.join(DATA_DIR, 'exec-summary');
 const MARKET_DIR = path.join(DATA_DIR, 'market');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
+// Folder-drop auto-publish (FBBS_AUTO_PUBLISH=0 disables; see autoPublishTick)
+const AUTO_PUBLISH_ENABLED = process.env.FBBS_AUTO_PUBLISH !== '0';
+const AUTO_PUBLISH_POLL_MS = 2 * 60 * 1000;
 const AUDIT_LOG_MAX_BYTES = (parseInt(process.env.AUDIT_LOG_MAX_MB, 10) || 10) * 1024 * 1024;
 const AUDIT_LOG_KEEP = Math.max(1, parseInt(process.env.AUDIT_LOG_KEEP, 10) || 5);
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
@@ -8056,6 +8059,118 @@ async function handleFolderDropPublish(req, res) {
   }
 }
 
+// ---------- Folder-drop auto-publish ----------
+//
+// Watches today's data/dropbox/YYYY-MM-DD folder and publishes it through the
+// EXACT same path as the Upload page's Folder Drop button (snapshot/rollback,
+// audit log, reference + exec-summary ingest included) once the folder's
+// contents have been stable for one full poll interval — so half-copied files
+// from a network share or Power Automate flow are never ingested.
+// Disable with FBBS_AUTO_PUBLISH=0.
+//
+// Safety gates, in tick order:
+//   - a publish (manual or auto) is already running     → skip this tick
+//   - folder changed since the previous tick            → still copying; wait
+//   - this exact folder state was already handled       → nothing new to do
+//   - two files claim the same daily slot               → human call; skip + audit once
+//   - no publishable slot files                         → nothing to do
+
+const autoPublishState = {
+  date: null,
+  pendingFingerprint: null, // seen once — waiting to confirm the folder settled
+  handledFingerprint: null, // published / attempted / skipped — never retried as-is
+  collisionAudited: false,
+};
+
+// Minimal stand-in for the HTTP response publishPackageFiles() writes to.
+function nullHttpResponse() {
+  const shim = {
+    statusCode: 0,
+    headersSent: false,
+    body: '',
+    writeHead(status) { shim.statusCode = status; shim.headersSent = true; },
+    end(body) { if (body != null) shim.body = body.toString(); },
+  };
+  return shim;
+}
+
+// Every file the scan saw (including ignored ones) goes into the fingerprint:
+// a half-copied workbook usually classifies as nothing, and it still has to
+// hold the publish until it settles.
+function dropFolderFingerprint(scan) {
+  return [...(scan.publishable || []), ...(scan.references || []), ...(scan.execFiles || []), ...(scan.ignored || [])]
+    .map(row => `${row.filename}|${row.size}|${row.modifiedAt}`)
+    .sort()
+    .join('\n');
+}
+
+async function autoPublishTick() {
+  if (publishBusy) return;
+  let scan;
+  try {
+    scan = scanFolderDrop(null); // today
+  } catch (err) {
+    log('warn', 'Auto-publish scan failed:', err.message);
+    return;
+  }
+
+  if (scan.date !== autoPublishState.date) {
+    autoPublishState.date = scan.date;
+    autoPublishState.pendingFingerprint = null;
+    autoPublishState.handledFingerprint = null;
+    autoPublishState.collisionAudited = false;
+  }
+
+  const fingerprint = dropFolderFingerprint(scan);
+  if (!fingerprint || !scan.publishable.length) {
+    autoPublishState.pendingFingerprint = fingerprint || null;
+    return;
+  }
+  if (fingerprint === autoPublishState.handledFingerprint) return;
+  if (fingerprint !== autoPublishState.pendingFingerprint) {
+    autoPublishState.pendingFingerprint = fingerprint;
+    return; // first sighting — confirm it is still byte-identical next tick
+  }
+
+  // Stable folder with something new to publish. The one warning that blocks:
+  // two files claiming the same slot (last-writer-wins would be silent data
+  // loss). Anything else the admin would publish through anyway.
+  const collision = Object.values(scan.slots || {}).some(rows => rows.length > 1);
+  autoPublishState.handledFingerprint = fingerprint; // win or lose, don't hot-loop
+  if (collision) {
+    if (!autoPublishState.collisionAudited) {
+      autoPublishState.collisionAudited = true;
+      log('warn', 'Auto-publish held: slot collision in', scan.folderPath, '— resolve in the folder or publish manually.');
+      appendAuditLog({ event: 'folder-auto-publish-skipped', reason: 'slot-collision', date: scan.date, warnings: scan.warnings });
+    }
+    return;
+  }
+
+  try {
+    const files = folderDropFilesForPublish(scan);
+    const shim = nullHttpResponse();
+    await publishPackageFiles(files, shim, {
+      auditEvent: 'folder-auto-publish',
+      publishedBy: 'Folder Drop (auto)',
+      sourceFolder: scan.folderPath,
+      afterPublish: async () => {
+        const result = ingestFolderDropReferences(scan);
+        result.execSummary = await ingestFolderDropExecSummary(scan, null);
+        return result;
+      }
+    });
+    if (shim.statusCode >= 200 && shim.statusCode < 300) {
+      log('info', `Auto-publish: ${scan.publishable.length} file(s) published from ${scan.folderPath}`);
+    } else {
+      log('error', `Auto-publish failed (${shim.statusCode}):`, String(shim.body).slice(0, 300));
+      appendAuditLog({ event: 'folder-auto-publish-failed', date: scan.date, status: shim.statusCode });
+    }
+  } catch (err) {
+    log('error', 'Auto-publish failed:', err.message);
+    appendAuditLog({ event: 'folder-auto-publish-failed', date: scan.date, error: err.message });
+  }
+}
+
 // ---------- Upload handling ----------
 
 async function handleUpload(req, res) {
@@ -8078,8 +8193,14 @@ async function handleUpload(req, res) {
   return await publishPackageFiles(files, res);
 }
 
+// One publish at a time, manual or automatic: the snapshot/rollback dance in
+// here is not reentrant, and the auto-publisher checks this flag to stay out
+// of the way of an admin clicking Publish at the same moment.
+let publishBusy = false;
+
 async function publishPackageFiles(files, res, options = {}) {
   let snapshotDir = '';
+  publishBusy = true;
   try {
     validatePublishFileSet(files);
     snapshotDir = snapshotCurrentPackageDir();
@@ -8099,6 +8220,7 @@ async function publishPackageFiles(files, res, options = {}) {
     }
     throw err;
   } finally {
+    publishBusy = false;
     if (snapshotDir) {
       try { fs.rmSync(snapshotDir, { recursive: true, force: true }); } catch (_) {}
     }
@@ -10447,6 +10569,13 @@ function listenServer() {
         log('warn', `Coverage holdings prime failed: ${err.message}`);
       }
     });
+
+    if (AUTO_PUBLISH_ENABLED) {
+      setInterval(() => {
+        autoPublishTick().catch(err => log('error', 'Auto-publish tick crashed:', err.message));
+      }, AUTO_PUBLISH_POLL_MS);
+      log('info', `Folder-drop auto-publish armed: watching ${DROPBOX_DIR}/<today> every ${AUTO_PUBLISH_POLL_MS / 60000} min (FBBS_AUTO_PUBLISH=0 disables).`);
+    }
   });
 }
 
@@ -10467,5 +10596,7 @@ module.exports = {
   findSwapCandidates,
   formatSwapCandidateLine,
   mapSwapHoldingPosition,
+  scanFolderDrop,
+  autoPublishTick,
   startServer
 };
