@@ -187,6 +187,7 @@ const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
 const marketRates = require('./market-rates');
 const marketWire = require('./market-wire');
+const fredSeries = require('./fred-series');
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 
@@ -214,6 +215,10 @@ const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
 // Folder-drop auto-publish (FBBS_AUTO_PUBLISH=0 disables; see autoPublishTick)
 const AUTO_PUBLISH_ENABLED = process.env.FBBS_AUTO_PUBLISH !== '0';
 const AUTO_PUBLISH_POLL_MS = 2 * 60 * 1000;
+// FDIC weekly auto-sync (FBBS_AUTO_FDIC_SYNC=0 disables; see autoFdicSyncTick)
+const AUTO_FDIC_SYNC_ENABLED = process.env.FBBS_AUTO_FDIC_SYNC !== '0';
+const AUTO_FDIC_SYNC_CHECK_MS = 6 * 60 * 60 * 1000; // stamp check cadence
+const AUTO_FDIC_SYNC_EVERY_MS = 7 * 24 * 60 * 60 * 1000; // actual run cadence
 const AUDIT_LOG_MAX_BYTES = (parseInt(process.env.AUDIT_LOG_MAX_MB, 10) || 10) * 1024 * 1024;
 const AUDIT_LOG_KEEP = Math.max(1, parseInt(process.env.AUDIT_LOG_KEEP, 10) || 5);
 const MAX_UPLOAD_BYTES = (parseInt(process.env.MAX_UPLOAD_MB, 10) || 50) * 1024 * 1024;
@@ -8171,6 +8176,44 @@ async function autoPublishTick() {
   }
 }
 
+// ---------- FDIC weekly auto-sync ----------
+//
+// Runs the same non-destructive quarterly pull as the admin Upload-page
+// button (adds cert-matched periods, never overwrites; the next FedFis
+// workbook import supersedes it) on a weekly cadence, so a newly filed
+// quarter reaches tear sheets without anyone pressing the button.
+// The check fires every 6h but only RUNS when the last successful sync is
+// more than a week old (stamp in data/market/fdic/auto-sync-state.json);
+// failures skip the stamp and so retry on the next 6h check.
+// Disable with FBBS_AUTO_FDIC_SYNC=0.
+
+function autoFdicStatePath() {
+  return path.join(MARKET_DIR, 'fdic', 'auto-sync-state.json');
+}
+
+async function autoFdicSyncTick() {
+  try {
+    let lastRunAt = null;
+    try {
+      lastRunAt = JSON.parse(fs.readFileSync(autoFdicStatePath(), 'utf-8')).lastRunAt || null;
+    } catch (_) { /* no stamp yet — run */ }
+    if (lastRunAt && Date.now() - Date.parse(lastRunAt) < AUTO_FDIC_SYNC_EVERY_MS) return;
+
+    const result = await fdicBulkSync.syncFdicQuarter(BANK_REPORTS_DIR, { dryRun: false, log });
+    if (result.updated > 0) invalidateBankCaches();
+    appendAuditLog({ event: 'fdic-sync', trigger: 'auto-weekly', ...result });
+    fs.mkdirSync(path.dirname(autoFdicStatePath()), { recursive: true });
+    fs.writeFileSync(autoFdicStatePath(), JSON.stringify({
+      lastRunAt: new Date().toISOString(),
+      period: result.period || null,
+      updated: result.updated || 0,
+    }));
+    log('info', `FDIC auto-sync: ${result.updated} bank(s) gained ${result.period || 'n/a'} (${result.skippedExisting} already had it).`);
+  } catch (err) {
+    log('warn', 'FDIC auto-sync failed (retries on the next 6h check):', err.message);
+  }
+}
+
 // ---------- Upload handling ----------
 
 async function handleUpload(req, res) {
@@ -9342,11 +9385,12 @@ const server = http.createServer(async (req, res) => {
     // economic indicators (keyless BLS) + a curve summary from the cached
     // Treasury feed. Each source degrades independently to stale-or-null.
     if (pathname === '/api/market/wire' && req.method === 'GET') {
-      const [headlines, indicators, curve, auctions] = await Promise.all([
+      const [headlines, indicators, curve, auctions, fred] = await Promise.all([
         marketWire.getLatestHeadlines({ marketDir: MARKET_DIR, log }),
         marketWire.getEconomicIndicators({ marketDir: MARKET_DIR, log }),
         marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }),
         marketWire.getTreasuryAuctions({ marketDir: MARKET_DIR, log }),
+        fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }), // null until FRED_API_KEY is set
       ]);
       let rates = null;
       if (curve && curve.tenors) {
@@ -9360,7 +9404,7 @@ const server = http.createServer(async (req, res) => {
           changes: curve.changes || {},
         };
       }
-      return sendJSON(res, 200, { headlines, indicators, rates, auctions });
+      return sendJSON(res, 200, { headlines, indicators, rates, auctions, fred });
     }
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
@@ -10575,6 +10619,17 @@ function listenServer() {
         autoPublishTick().catch(err => log('error', 'Auto-publish tick crashed:', err.message));
       }, AUTO_PUBLISH_POLL_MS);
       log('info', `Folder-drop auto-publish armed: watching ${DROPBOX_DIR}/<today> every ${AUTO_PUBLISH_POLL_MS / 60000} min (FBBS_AUTO_PUBLISH=0 disables).`);
+    }
+
+    if (AUTO_FDIC_SYNC_ENABLED) {
+      // First check 10 minutes after boot (stay out of startup's way), then 6-hourly.
+      setTimeout(() => {
+        autoFdicSyncTick().catch(err => log('error', 'FDIC auto-sync tick crashed:', err.message));
+        setInterval(() => {
+          autoFdicSyncTick().catch(err => log('error', 'FDIC auto-sync tick crashed:', err.message));
+        }, AUTO_FDIC_SYNC_CHECK_MS);
+      }, 10 * 60 * 1000);
+      log('info', 'FDIC weekly auto-sync armed (FBBS_AUTO_FDIC_SYNC=0 disables).');
     }
   });
 }

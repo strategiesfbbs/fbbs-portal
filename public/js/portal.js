@@ -20401,6 +20401,13 @@
     if (ind && ind.unemployment) {
       cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
     }
+    // FRED benchmarks ride along once FRED_API_KEY is configured server-side.
+    const fred = data.fred || null;
+    ['sofr', 'fedFunds', 'breakeven10Y'].forEach(key => {
+      if (fred && fred[key] && fred[key].value != null) {
+        cards.push(marketWireCard(fred[key].label || key, fred[key].value.toFixed(2) + '%', 'As of ' + (fred[key].date || '')));
+      }
+    });
     let auctionsCard = '';
     if (auctions && ((auctions.results || []).length || (auctions.upcoming || []).length)) {
       const resultRows = (auctions.results || []).slice(0, 3).map(a => `<div class="home-wire-auction-row">
