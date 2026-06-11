@@ -5024,6 +5024,43 @@
     loadBank(bankId, { collapseResults: true, openStrategyRequest: true });
   }
 
+  // FDIC quarterly sync (Upload page): dry-run first to show what would
+  // change, then confirm before writing. Adds the newest FDIC-filed quarter
+  // to every matching bank; never overwrites a period the workbook imported.
+  function setupFdicSyncButton() {
+    const btn = document.getElementById('fdicSyncBtn');
+    const status = document.getElementById('fdicSyncStatus');
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const setStatus = text => { if (status) status.textContent = text; };
+      try {
+        setStatus('Checking the FDIC for the latest filed quarter…');
+        const dryRes = await fetch('/api/admin/fdic-sync?dryRun=1', { method: 'POST' });
+        const dry = await dryRes.json();
+        if (!dryRes.ok) throw new Error(dry.error || `HTTP ${dryRes.status}`);
+        if (!dry.updated) {
+          setStatus(`FDIC latest is ${dry.period} — every matched bank already has it (${dry.matched.toLocaleString()} matched). Nothing to sync.`);
+          return;
+        }
+        const go = window.confirm(`FDIC has ${dry.period} for ${dry.updated.toLocaleString()} of your banks that don't have it yet (${dry.matched.toLocaleString()} matched overall).\n\nAdd ${dry.period} to those tear sheets now? The full workbook import later replaces these stopgap rows.`);
+        if (!go) { setStatus('FDIC sync cancelled.'); return; }
+        setStatus(`Syncing ${dry.period} from the FDIC…`);
+        const res = await fetch('/api/admin/fdic-sync', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setStatus(`FDIC sync complete: ${data.period} added to ${data.updated.toLocaleString()} banks (${data.skippedExisting.toLocaleString()} already had it).`);
+        showToast(`FDIC ${data.period} synced to ${data.updated.toLocaleString()} banks`);
+      } catch (e) {
+        setStatus(`FDIC sync failed: ${e.message}`);
+        showToast(e.message || 'FDIC sync failed', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
   function setupBankSearch() {
     const input = document.getElementById('bankSearchInput');
     const btn = document.getElementById('bankSearchBtn');
@@ -5037,6 +5074,7 @@
     const accountCoverageService = document.getElementById('bankAccountCoverageServiceFilter');
     const accountCoverageSort = document.getElementById('bankAccountCoverageSort');
     setupBankWorkspaceTabs();
+    setupFdicSyncButton();
     if (input) {
       let t = null;
       input.addEventListener('focus', () => {

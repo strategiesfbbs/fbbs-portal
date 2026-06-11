@@ -183,6 +183,7 @@ const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
 const marketRates = require('./market-rates');
 const fdicBankfind = require('./fdic-bankfind');
+const fdicBulkSync = require('./fdic-bulk-sync');
 
 // ---------- Config ----------
 
@@ -9034,6 +9035,26 @@ const server = http.createServer(async (req, res) => {
       const repParam = String(query.get('rep') || '').toLowerCase();
       const rep = repParam === 'all' ? null : resolveRequestRep(req);
       return sendJSON(res, 200, buildCrmDashboard(rep));
+    }
+
+    // Pull the newest FDIC-filed quarter into bank-data.sqlite (stopgap until
+    // the full FedFis workbook arrives — never overwrites existing periods).
+    // Admin-gated like the Upload/Admin pages. ?dryRun=1 reports only.
+    if (pathname === '/api/admin/fdic-sync' && req.method === 'POST') {
+      const { auth } = authInfoForRequest(req);
+      if ((IS_IIS_AUTH_MODE || ADMIN_USERS.size > 0) && !auth.isAdmin) {
+        return sendJSON(res, 403, { error: 'Admin permission is required for the FDIC sync.' });
+      }
+      try {
+        const dryRun = query.get('dryRun') === '1' || query.get('dryRun') === 'true';
+        const result = await fdicBulkSync.syncFdicQuarter(BANK_REPORTS_DIR, { dryRun, log });
+        if (!dryRun && result.updated > 0) invalidateBankCaches();
+        appendAuditLog({ event: 'fdic-sync', ...result });
+        return sendJSON(res, 200, result);
+      } catch (err) {
+        log('error', 'FDIC sync failed:', err.message);
+        return sendJSON(res, err.statusCode || 502, { error: err.message || 'FDIC sync failed' });
+      }
     }
 
     if (pathname === '/api/admin/go-live-status' && req.method === 'GET') {
