@@ -262,15 +262,23 @@ function yieldFromPriceAndMaturity({ price, coupon, maturity, settleDate, freque
   const remainingDays = (nextCoupon.getTime() - settle.getTime()) / (1000 * 60 * 60 * 24);
   const periodFraction = fullPeriodDays > 0 ? Math.max(0, Math.min(1, remainingDays / fullPeriodDays)) : 1;
 
+  // Street convention: the quoted price is CLEAN, but the discounted cash
+  // flows equal the full (dirty) price. Solve PV = clean + accrued, with
+  // accrued = the elapsed fraction of the current coupon. Mid-period this is
+  // worth ~10-15bp on a typical bond; on a coupon date it's zero, so the
+  // historical on-coupon behavior is unchanged.
+  const accruedPer100 = couponPerPeriod * (1 - periodFraction);
+  const target = p + accruedPer100;
+
   // Bisect over yield in [-5%, 30%] annual → [-2.5%, 15%] per period at f=2.
   let lo = -0.05 / freq;
   let hi = 0.30 / freq;
-  let yLo = _bondPV(lo, couponPerPeriod, periodsRemaining, periodFraction) - p;
-  let yHi = _bondPV(hi, couponPerPeriod, periodsRemaining, periodFraction) - p;
+  let yLo = _bondPV(lo, couponPerPeriod, periodsRemaining, periodFraction) - target;
+  let yHi = _bondPV(hi, couponPerPeriod, periodsRemaining, periodFraction) - target;
   if (yLo * yHi > 0) return null; // root outside bracket; bad data
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2;
-    const yMid = _bondPV(mid, couponPerPeriod, periodsRemaining, periodFraction) - p;
+    const yMid = _bondPV(mid, couponPerPeriod, periodsRemaining, periodFraction) - target;
     if (Math.abs(yMid) < 1e-7) return mid * freq * 100;
     if (yLo * yMid < 0) { hi = mid; yHi = yMid; } else { lo = mid; yLo = yMid; }
   }

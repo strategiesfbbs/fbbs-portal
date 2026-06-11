@@ -665,6 +665,35 @@
     return markedModelYield - baseModelYield;
   }
 
+  // Semiannual coupon structure between settle and the end date, anchored on
+  // the end date with a fractional first period — the same street convention
+  // as server/swap-math.js, so commission marks track real DV01 even when the
+  // end date (often a near call) is under six months out.
+  function addMonthsClampedLocal(date, months) {
+    const targetDay = date.getDate();
+    const d = new Date(date.getFullYear(), date.getMonth(), 1);
+    d.setMonth(d.getMonth() + months);
+    const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(targetDay, lastDay));
+    return d;
+  }
+
+  function bondPeriodStructure(settle, endDate) {
+    let periods = 0;
+    let lastCoupon = new Date(endDate.getTime());
+    while (lastCoupon > settle) {
+      periods++;
+      lastCoupon = addMonthsClampedLocal(endDate, -6 * periods);
+    }
+    if (periods < 1) return null;
+    const nextCoupon = addMonthsClampedLocal(endDate, -6 * (periods - 1));
+    const fullPeriodMs = nextCoupon.getTime() - lastCoupon.getTime();
+    const periodFraction = fullPeriodMs > 0
+      ? Math.max(0, Math.min(1, (nextCoupon.getTime() - settle.getTime()) / fullPeriodMs))
+      : 1;
+    return { periods, periodFraction };
+  }
+
   function solveBondYieldPct(couponPct, price, endDateStr, settleDateStr) {
     const priceNum = Number(price);
     const coupon = Number(couponPct);
@@ -673,16 +702,18 @@
     const settle = parseIsoDate(settleDateStr) || new Date();
     const endDate = parseIsoDate(endDateStr);
     if (!endDate || endDate <= settle) return null;
-
-    const periods = Math.max(1, Math.ceil(monthsBetween(settle, endDate) / 6));
+    const structure = bondPeriodStructure(settle, endDate);
+    if (!structure) return null;
     const couponPerPeriod = coupon / 2;
+    // Quoted prices are clean; the discounted cash flows equal clean + accrued.
+    const target = priceNum + couponPerPeriod * (1 - structure.periodFraction);
 
     let low = -0.95;
     let high = 1.5;
     for (let i = 0; i < 80; i++) {
       const mid = (low + high) / 2;
-      const pv = bondPriceFromYield(mid, couponPerPeriod, periods);
-      if (pv > priceNum) low = mid;
+      const pv = bondPriceFromYield(mid, couponPerPeriod, structure);
+      if (pv > target) low = mid;
       else high = mid;
     }
     return ((low + high) / 2) * 100;
@@ -695,17 +726,23 @@
     const settle = parseIsoDate(settleDateStr) || new Date();
     const endDate = parseIsoDate(endDateStr);
     if (!endDate || endDate <= settle) return null;
-    const periods = Math.max(1, Math.ceil(monthsBetween(settle, endDate) / 6));
-    return bondPriceFromYield(yieldNum / 100, coupon / 2, periods);
+    const structure = bondPeriodStructure(settle, endDate);
+    if (!structure) return null;
+    const couponPerPeriod = coupon / 2;
+    // Return the CLEAN model price (dirty PV minus accrued) so price marks add
+    // cleanly to the quoted ask price.
+    return bondPriceFromYield(yieldNum / 100, couponPerPeriod, structure)
+      - couponPerPeriod * (1 - structure.periodFraction);
   }
 
-  function bondPriceFromYield(yieldDecimal, couponPerPeriod, periods) {
+  function bondPriceFromYield(yieldDecimal, couponPerPeriod, structure) {
     const rate = yieldDecimal / 2;
+    const { periods, periodFraction } = structure;
     let pv = 0;
-    for (let i = 1; i <= periods; i++) {
-      pv += couponPerPeriod / Math.pow(1 + rate, i);
+    for (let k = 0; k < periods; k++) {
+      pv += couponPerPeriod / Math.pow(1 + rate, periodFraction + k);
     }
-    pv += 100 / Math.pow(1 + rate, periods);
+    pv += 100 / Math.pow(1 + rate, periodFraction + (periods - 1));
     return pv;
   }
 

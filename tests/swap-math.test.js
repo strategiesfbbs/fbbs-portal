@@ -196,6 +196,17 @@ test('yieldFromPriceAndMaturity: deep-discount muni mirrors observed market', ()
   assert.ok(y > 3.8 && y < 4.6, `expected YTM in 3.8-4.6% range, got ${y}`);
 });
 
+test('yieldFromPriceAndMaturity: mid-period quote is treated as a CLEAN price', () => {
+  // Par bond settling three months after its coupon date: street convention
+  // (Excel YIELD) returns ~the coupon. Solving clean-as-dirty used to
+  // overstate this by ~12.6bp.
+  const y = m.yieldFromPriceAndMaturity({
+    price: 100, coupon: 4,
+    settleDate: '2026-09-15', maturity: '2036-06-15'
+  });
+  near(y, 4.0, 0.02, 'mid-period par YTM');
+});
+
 test('yieldFromPriceAndMaturity: returns null on bad inputs', () => {
   assert.strictEqual(m.yieldFromPriceAndMaturity({ price: 0, coupon: 5, settleDate: '2026-01-01', maturity: '2031-01-01' }), null);
   assert.strictEqual(m.yieldFromPriceAndMaturity({ price: 100, coupon: 5, settleDate: '2026-01-01', maturity: '2025-01-01' }), null);

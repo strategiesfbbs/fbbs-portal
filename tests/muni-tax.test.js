@@ -74,6 +74,22 @@ test('discounted sub-one-year munis still show a zero-year de minimis threshold'
   assert.strictEqual(deMin.isDeMinimis, true);
 });
 
+test('de minimis boundary: a discount exactly AT the threshold is ordinary income', () => {
+  // 16 full years -> threshold 96.0. Discount equal to 0.25 x years is NOT
+  // "less than" the de minimis amount, so it breaches (ordinary income).
+  const at = muniTax.deMinimis({ section: 'Municipals', price: 96.0, maturity: '2042-06-02', settle: null }, { asOfDate: '2026-06-01' });
+  assert.strictEqual(at.isDeMinimis, true, 'price == threshold must breach');
+  const inside = muniTax.deMinimis({ section: 'Municipals', price: 96.01, maturity: '2042-06-02', settle: null }, { asOfDate: '2026-06-01' });
+  assert.strictEqual(inside.isDeMinimis, false, 'price above threshold stays capital-gains');
+});
+
+test('yield solver follows street convention (clean price, fractional period)', () => {
+  // Pre-tax sanity: 4% coupon, 18y, price 96.267 -> textbook YTM 4.30.
+  near(muniTax.solveYieldWithRedemption(4, 96.267, '2044-06-01', '2026-06-01', 100, {}), 4.30, 0.005, 'textbook YTM');
+  // Mid-period par bond quotes clean at 100 -> yield ~= coupon.
+  near(muniTax.solveYieldWithRedemption(4, 100, '2036-06-15', '2026-09-15', 100, {}), 4.0, 0.02, 'mid-period par');
+});
+
 test('discount after-tax yield is deterministic with as-of fallback', () => {
   const row = { section: 'Municipals', coupon: 4, price: 96.267, maturity: '2044-06-01', settle: null };
   const a = muniTax.taxAdjustedYield(row, ccorp, { asOfDate: '2026-06-01' });

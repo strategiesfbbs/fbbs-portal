@@ -92,10 +92,30 @@
       threshold,
       cushion,
       isDiscount: price < 100,
-      isDeMinimis: price < threshold
+      // IRS de minimis rule: the discount stays a capital gain only while it is
+      // strictly LESS than 0.25 x full years. At exactly the threshold the
+      // discount equals that amount and is ordinary income, so the breach test
+      // includes equality.
+      isDeMinimis: price <= threshold
     };
   }
 
+  // Add months with the day-of-month clamped to the target month's last valid
+  // day, so month-end coupon walks don't drift (Aug-31 minus 6mo is Feb-28/29,
+  // not Mar-03).
+  function addMonthsClamped(date, months) {
+    const targetDay = date.getDate();
+    const d = new Date(date.getFullYear(), date.getMonth(), 1);
+    d.setMonth(d.getMonth() + months);
+    const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    d.setDate(Math.min(targetDay, lastDay));
+    return d;
+  }
+
+  // Street-convention semiannual yield solve: coupon dates anchored on the end
+  // date, a fractional first period, and the quoted price treated as CLEAN
+  // (the discounted cash flows equal clean + accrued). Used for the after-tax
+  // yield of discount munis, where the redemption value is the after-tax par.
   function solveYieldWithRedemption(couponPct, price, endDateStr, settleDateStr, redemptionValue, options) {
     const priceNum = Number(price);
     const coupon = Number(couponPct);
@@ -106,8 +126,23 @@
     const endDate = parseIsoDate(endDateStr);
     if (!endDate || endDate <= settle) return null;
 
-    const periods = Math.max(1, Math.ceil(monthsBetween(settle, endDate) / 6));
+    // Walk coupon dates back from the end date in 6-month steps.
+    let periods = 0;
+    let lastCoupon = new Date(endDate.getTime());
+    while (lastCoupon > settle) {
+      periods++;
+      lastCoupon = addMonthsClamped(endDate, -6 * periods);
+    }
+    if (periods < 1) return null;
+    const nextCoupon = addMonthsClamped(endDate, -6 * (periods - 1));
+    const fullPeriodMs = nextCoupon.getTime() - lastCoupon.getTime();
+    const periodFraction = fullPeriodMs > 0
+      ? Math.max(0, Math.min(1, (nextCoupon.getTime() - settle.getTime()) / fullPeriodMs))
+      : 1;
+
     const couponPerPeriod = coupon / 2;
+    const accrued = couponPerPeriod * (1 - periodFraction);
+    const target = priceNum + accrued;
 
     let low = -0.95;
     let high = 1.5;
@@ -115,11 +150,11 @@
       const mid = (low + high) / 2;
       const rate = mid / 2;
       let pv = 0;
-      for (let period = 1; period <= periods; period++) {
-        pv += couponPerPeriod / Math.pow(1 + rate, period);
+      for (let k = 0; k < periods; k++) {
+        pv += couponPerPeriod / Math.pow(1 + rate, periodFraction + k);
       }
-      pv += redemption / Math.pow(1 + rate, periods);
-      if (pv > priceNum) low = mid;
+      pv += redemption / Math.pow(1 + rate, periodFraction + (periods - 1));
+      if (pv > target) low = mid;
       else high = mid;
     }
     return ((low + high) / 2) * 100;
