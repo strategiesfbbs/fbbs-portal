@@ -123,6 +123,9 @@
         <a class="nav-link nav-minor" data-page="banks" href="#banks">
           <span class="nav-label">Bank Tear Sheets</span>
         </a>
+        <a class="nav-link nav-minor" data-page="contacts" href="#contacts">
+          <span class="nav-label">Contacts</span>
+        </a>
         <a class="nav-link nav-minor" data-page="views" href="#views">
           <span class="nav-label">Saved Views</span>
         </a>
@@ -1854,8 +1857,13 @@
         <p id="bankStatusImportStatus">Account statuses default to Open until imported or edited.</p>
         <p id="averagedSeriesImportStatus">Averaged-series peer data has not been imported yet.</p>
         <p id="fdicSyncStatus">FDIC quarterly sync: pulls the newest FDIC-filed quarter into every bank's tear sheet (headline fields) while waiting on the full workbook.</p>
+        <p id="sfContactsImportStatus">Salesforce contacts: export Contacts to CSV in Salesforce, drop it here — rows match to banks by account name.</p>
       </div>
       <button type="button" class="small-btn bank-upload-btn" id="fdicSyncBtn">Sync Latest Quarter from FDIC</button>
+      <label class="small-btn bank-upload-btn">
+        Import Salesforce Contacts
+        <input type="file" id="sfContactsCsvInput" accept=".csv" hidden>
+      </label>
       <label class="small-btn bank-upload-btn">
         Upload Call Reports
         <input type="file" id="bankWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
@@ -2006,6 +2014,54 @@
 </div>
 
 <!-- ========== TREASURY NOTES EXPLORER PAGE ========== -->
+<div class="page" id="p-contacts">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Contacts <strong>Directory</strong></h2>
+        <p class="hero-sub" id="contactsSub">Loading&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="contactsStat">&mdash;</div>
+        <div class="lbl">Contacts</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Every contact across every bank</h3>
+      <div class="kicker">Add contacts from a bank tear sheet</div>
+    </div>
+
+    <div class="explorer-filters">
+      <label class="ef-field">
+        <span>Search</span>
+        <input type="text" id="contactsSearch" placeholder="Name, role, email, phone, bank, city, state&hellip;" autocomplete="off">
+      </label>
+      <div class="ef-field ef-actions">
+        <button type="button" class="small-btn" id="contactsExport">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table" id="contactsTable">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Role</th>
+            <th>Phone</th>
+            <th>Email</th>
+            <th>Bank</th>
+            <th>Location</th>
+          </tr>
+        </thead>
+        <tbody id="contactsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div class="page" id="p-all-offerings">
   <section class="page-hero">
     <div class="page-hero-inner">

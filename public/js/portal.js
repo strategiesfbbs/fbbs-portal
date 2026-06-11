@@ -153,7 +153,7 @@
   const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'all-offerings', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -178,6 +178,7 @@
     { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
     { page: 'structured-notes', group: 'Offerings', label: 'Structured Notes', description: 'New issue and structured note inventory parsed from trader emails', aliases: 'structured notes new issue jpm gs bmo td callable zero steepener cusip' },
     { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
+    { page: 'contacts', group: 'Banks', label: 'Contacts', description: 'Firm-wide contacts directory — every contact across every bank', aliases: 'contacts directory people phone email rolodex cfo president treasurer decision maker' },
     { page: 'maps', group: 'Banks', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' },
     { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
     { page: 'peer-groups', group: 'Banks', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
@@ -208,6 +209,7 @@
     'mbs-cmo': 'offerings',
     'structured-notes': 'offerings',
     banks: 'banks',
+    contacts: 'banks',
     maps: 'banks',
     reports: 'banks',
     'peer-groups': 'banks',
@@ -1420,6 +1422,7 @@
     if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'cd-internal') loadCdInternal();
     if (pageName === 'all-offerings') loadAllOfferings();
+    if (pageName === 'contacts') loadContactsDirectory();
     if (pageName === 'treasury-explorer') loadTreasuryNotes();
     if (pageName === 'explorer') loadOfferings();
     if (pageName === 'muni-explorer') loadMuniOfferings();
@@ -5064,6 +5067,48 @@
     });
   }
 
+  // Salesforce contact-export CSV import (Upload page): dry-run first, show
+  // the match/duplicate/unmatched counts, confirm, then import for real.
+  function setupSfContactsImport() {
+    const input = document.getElementById('sfContactsCsvInput');
+    const status = document.getElementById('sfContactsImportStatus');
+    if (!input || input.dataset.wired) return;
+    input.dataset.wired = '1';
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      input.value = '';
+      if (!file) return;
+      const setStatus = text => { if (status) status.textContent = text; };
+      const post = async (dryRun) => {
+        const fd = new FormData();
+        fd.append('contacts', file);
+        const res = await fetch(`/api/contacts/import${dryRun ? '?dryRun=1' : ''}`, { method: 'POST', body: fd });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        return data;
+      };
+      try {
+        setStatus(`Checking ${file.name}…`);
+        const dry = await post(true);
+        const sampleText = (dry.unmatchedSamples || []).slice(0, 5).map(s => `• ${s.name} (${s.account || 'no account'}) — ${s.reason}`).join('\n');
+        const go = window.confirm(
+          `${file.name}: ${dry.totalRows.toLocaleString()} rows.\n\n` +
+          `Would import ${dry.created.toLocaleString()} contacts · ${dry.duplicates.toLocaleString()} already exist · ${dry.unmatched.toLocaleString()} unmatched.` +
+          (sampleText ? `\n\nFirst unmatched:\n${sampleText}` : '') +
+          `\n\nImport the ${dry.created.toLocaleString()} matched contacts now?`
+        );
+        if (!go) { setStatus('Salesforce import cancelled.'); return; }
+        setStatus('Importing contacts…');
+        const real = await post(false);
+        setStatus(`Imported ${real.created.toLocaleString()} contacts (${real.duplicates.toLocaleString()} duplicates skipped, ${real.unmatched.toLocaleString()} unmatched).`);
+        showToast(`Imported ${real.created.toLocaleString()} Salesforce contacts`);
+      } catch (e) {
+        setStatus(`Salesforce import failed: ${e.message}`);
+        showToast(e.message || 'Salesforce import failed', true);
+      }
+    });
+  }
+
   function setupBankSearch() {
     const input = document.getElementById('bankSearchInput');
     const btn = document.getElementById('bankSearchBtn');
@@ -5078,6 +5123,7 @@
     const accountCoverageSort = document.getElementById('bankAccountCoverageSort');
     setupBankWorkspaceTabs();
     setupFdicSyncButton();
+    setupSfContactsImport();
     if (input) {
       let t = null;
       input.addEventListener('focus', () => {
@@ -16246,6 +16292,63 @@
     const sameDay = d.toDateString() === new Date().toDateString();
     const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     return ` &middot; Updated ${sameDay ? time : `${formatNumericDate(stamp.slice(0, 10))} ${time}`}`;
+  }
+
+  // ============ Contacts directory ============
+  // Firm-wide view over bank_contacts: search across contact AND bank fields
+  // (server-side), rows link to the bank tear sheet. Contacts are still
+  // added/edited on the tear sheet — this is the rolodex.
+
+  let contactsDirectoryRows = [];
+
+  async function loadContactsDirectory() {
+    const body = document.getElementById('contactsBody');
+    if (!body) return;
+    wireContactsDirectoryControls();
+    const q = (document.getElementById('contactsSearch') || {}).value || '';
+    try {
+      const res = await fetch(`/api/contacts?q=${encodeURIComponent(q.trim())}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      contactsDirectoryRows = data.contacts || [];
+      document.getElementById('contactsStat').textContent = contactsDirectoryRows.length.toLocaleString();
+      document.getElementById('contactsSub').textContent =
+        q.trim() ? `${contactsDirectoryRows.length.toLocaleString()} of ${Number(data.total || 0).toLocaleString()} contacts match` : `${Number(data.total || 0).toLocaleString()} contacts across your banks`;
+      body.innerHTML = contactsDirectoryRows.map(c => `
+        <tr>
+          <td><strong>${escapeHtml(c.name)}</strong>${c.isPrimary ? ' <span class="ao-class-pill">Primary</span>' : ''}</td>
+          <td>${escapeHtml(c.role || '—')}</td>
+          <td>${c.phone ? `<a href="tel:${escapeHtml(c.phone.replace(/[^0-9+]/g, ''))}">${escapeHtml(c.phone)}</a>` : '—'}</td>
+          <td>${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '—'}</td>
+          <td><button type="button" class="text-btn" data-contact-bank="${escapeHtml(c.bankId)}">${escapeHtml(c.bankName)}</button></td>
+          <td>${escapeHtml([c.city, c.state].filter(Boolean).join(', ') || '—')}</td>
+        </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text3)">No contacts yet. Add them from a bank tear sheet — or import your Salesforce contact export on the Upload page.</td></tr>';
+      body.querySelectorAll('[data-contact-bank]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          goTo('banks');
+          if (typeof loadBank === 'function') loadBank(btn.getAttribute('data-contact-bank'), { collapseResults: true });
+        });
+      });
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--danger)">Failed to load contacts: ${escapeHtml(e.message)}</td></tr>`;
+    }
+  }
+
+  function wireContactsDirectoryControls() {
+    const search = document.getElementById('contactsSearch');
+    if (!search || search.dataset.wired) return;
+    search.dataset.wired = '1';
+    let t = null;
+    search.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => loadContactsDirectory(), 200);
+    });
+    document.getElementById('contactsExport').addEventListener('click', () => {
+      const header = ['Name', 'Role', 'Phone', 'Email', 'Bank', 'City', 'State', 'Primary'];
+      downloadCsv(`contacts-${new Date().toISOString().slice(0, 10)}.csv`, [header].concat(
+        contactsDirectoryRows.map(c => [c.name, c.role, c.phone, c.email, c.bankName, c.city, c.state, c.isPrimary ? 'Yes' : ''])
+      ));
+    });
   }
 
   // ============ All Offerings (cross-asset) ============

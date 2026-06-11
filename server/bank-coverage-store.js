@@ -692,6 +692,34 @@ function deleteBankContact(outputDir, contactId) {
   return existing || { id: contactId };
 }
 
+// Every contact across every bank, for the firm-wide Contacts directory.
+// The caller joins bank display names and applies the search filter (contact
+// volume is manual-entry scale, so shipping all rows is fine).
+function listAllContacts(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 2000), 10000));
+  const rows = querySqliteJson(dbPath, `
+    SELECT id, bank_id AS bankId, cert_number AS certNumber, name, role, phone, email,
+           is_primary AS isPrimary, notes, created_at AS createdAt, updated_at AS updatedAt
+    FROM bank_contacts
+    ORDER BY name COLLATE NOCASE ASC
+    LIMIT ?;
+  `, [limit]);
+  return rows.map(row => ({
+    id: row.id,
+    bankId: row.bankId,
+    certNumber: row.certNumber || '',
+    name: row.name || '',
+    role: row.role || '',
+    phone: row.phone || '',
+    email: row.email || '',
+    isPrimary: Boolean(row.isPrimary),
+    notes: row.notes || '',
+    createdAt: row.createdAt || '',
+    updatedAt: row.updatedAt || ''
+  }));
+}
+
 // ---------- Bank activity timeline ----------
 
 function activitySelectSql(where = '1 = 1') {
@@ -1687,6 +1715,7 @@ module.exports = {
   getSavedBankCoverageMap,
   lastActivityByBank,
   listActivitiesForBank,
+  listAllContacts,
   listBillingQueue,
   listContactsForBank,
   listContactsForBanks,

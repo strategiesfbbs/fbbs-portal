@@ -120,6 +120,7 @@ const {
   getSavedBankCoverageMap,
   lastActivityByBank,
   listActivitiesForBank,
+  listAllContacts,
   listBillingQueue,
   listContactsForBank,
   listProductFitForBank,
@@ -7270,6 +7271,156 @@ function searchCusipEverywhere(rawQuery, limit = 20) {
   return { query: needle, results };
 }
 
+// ---------- Salesforce contacts CSV import ----------
+
+// Minimal RFC-4180 CSV parser: quoted fields, escaped quotes, CR/LF rows.
+// Returns an array of objects keyed by lowercased/trimmed header names.
+function parseCsvText(text) {
+  const rows = [];
+  let field = '';
+  let row = [];
+  let inQuotes = false;
+  const s = String(text || '');
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && s[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.some(c => c !== '')) rows.push(row);
+      row = [];
+    } else field += ch;
+  }
+  row.push(field);
+  if (row.some(c => c !== '')) rows.push(row);
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => String(h || '').trim().toLowerCase());
+  return rows.slice(1).map(cols => {
+    const obj = {};
+    headers.forEach((h, idx) => { if (h) obj[h] = String(cols[idx] ?? '').trim(); });
+    return obj;
+  });
+}
+
+// Normalize a bank/account name for fuzzy matching between a Salesforce
+// "Account Name" and our bank display/legal names: lowercase, strip
+// punctuation, drop legal-suffix noise. "Bank" itself stays — it's signal.
+function normalizeBankNameForMatch(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/[.,'&/()-]/g, ' ')
+    .replace(/\b(the|inc|incorporated|na|n a|national association|company|co|corp|corporation|ssb|fsb)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Import a Salesforce contact-export CSV: match each row's Account Name to a
+// bank (display or legal name, normalized), dedupe against existing contacts
+// (same bank + email, or same bank + name), and create bank_contacts rows.
+// dryRun reports what would happen without writing.
+function importSalesforceContacts(csvText, { dryRun = false } = {}) {
+  const rows = parseCsvText(csvText);
+  if (!rows.length) return { error: 'No data rows found in the CSV.' };
+
+  const get = (row, names) => {
+    for (const n of names) { if (row[n]) return row[n]; }
+    return '';
+  };
+
+  // Bank name → ids index (display + legal names; collisions marked ambiguous).
+  const summaries = listBankSummaries(BANK_REPORTS_DIR);
+  const summaryById = new Map(summaries.map(s => [String(s.id), s]));
+  const nameIndex = new Map();
+  for (const s of summaries) {
+    for (const candidate of [s.displayName, s.name, s.displayName && s.city ? `${s.displayName} ${s.city}` : null]) {
+      const key = normalizeBankNameForMatch(candidate);
+      if (!key) continue;
+      if (!nameIndex.has(key)) nameIndex.set(key, new Set());
+      nameIndex.get(key).add(String(s.id));
+    }
+  }
+
+  // Existing-contact dedup keys.
+  const existing = listAllContacts(BANK_REPORTS_DIR);
+  const seen = new Set();
+  for (const c of existing) {
+    if (c.email) seen.add(`${c.bankId}|e|${c.email.toLowerCase()}`);
+    if (c.name) seen.add(`${c.bankId}|n|${c.name.toLowerCase()}`);
+  }
+
+  const result = { totalRows: rows.length, created: 0, duplicates: 0, unmatched: 0, unmatchedSamples: [], dryRun };
+  for (const row of rows) {
+    const first = get(row, ['first name', 'firstname']);
+    const last = get(row, ['last name', 'lastname']);
+    const name = get(row, ['full name', 'name', 'contact name']) || [first, last].filter(Boolean).join(' ');
+    const account = get(row, ['account name', 'company / account', 'account', 'company']);
+    if (!name) continue;
+    if (!account) {
+      result.unmatched += 1;
+      if (result.unmatchedSamples.length < 25) result.unmatchedSamples.push({ name, account: '', reason: 'No account name on the row' });
+      continue;
+    }
+    const ids = nameIndex.get(normalizeBankNameForMatch(account));
+    if (!ids || !ids.size) {
+      result.unmatched += 1;
+      if (result.unmatchedSamples.length < 25) result.unmatchedSamples.push({ name, account, reason: 'No bank matched this account name' });
+      continue;
+    }
+    if (ids.size > 1) {
+      result.unmatched += 1;
+      if (result.unmatchedSamples.length < 25) result.unmatchedSamples.push({ name, account, reason: `Ambiguous — matches ${ids.size} banks` });
+      continue;
+    }
+    const bankId = [...ids][0];
+    const email = get(row, ['email', 'email address']).toLowerCase();
+    if ((email && seen.has(`${bankId}|e|${email}`)) || seen.has(`${bankId}|n|${name.toLowerCase()}`)) {
+      result.duplicates += 1;
+      continue;
+    }
+    seen.add(`${bankId}|n|${name.toLowerCase()}`);
+    if (email) seen.add(`${bankId}|e|${email}`);
+    if (!dryRun) {
+      createBankContact(BANK_REPORTS_DIR, summaryById.get(bankId), {
+        name,
+        role: get(row, ['title', 'role', 'job title']),
+        phone: get(row, ['phone', 'business phone', 'mobile', 'mobile phone']),
+        email: get(row, ['email', 'email address']),
+        notes: 'Imported from Salesforce'
+      });
+    }
+    result.created += 1;
+  }
+  return result;
+}
+
+async function handleContactsImport(req, res, dryRun) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const csv = files.find(f => /\.csv$/i.test(f.filename || '')) || files[0];
+    if (!csv || !csv.data) return sendJSON(res, 400, { error: 'Upload a Salesforce contact-export CSV.' });
+    const result = importSalesforceContacts(csv.data.toString('utf-8'), { dryRun });
+    if (result.error) return sendJSON(res, 400, result);
+    if (!dryRun && result.created > 0) {
+      appendAuditLog({ event: 'contacts-import', source: sanitizeFilename(csv.filename || 'contacts.csv'), ...{ totalRows: result.totalRows, created: result.created, duplicates: result.duplicates, unmatched: result.unmatched } });
+    }
+    return sendJSON(res, 200, result);
+  } catch (err) {
+    log('error', 'Contacts import failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Contacts import failed' });
+  }
+}
+
 // Identify which of the Executive Summary files an upload is, by content (the grid
 // filenames are opaque hashes). Fallback for when the form field name is absent.
 // Content-classify one of the Executive Summary daily inputs from a raw
@@ -9063,6 +9214,31 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
       return sendJSON(res, 200, searchCusipEverywhere(query.get('q')));
+    }
+
+    if (pathname === '/api/contacts/import' && req.method === 'POST') {
+      const dryRun = query.get('dryRun') === '1' || query.get('dryRun') === 'true';
+      return await handleContactsImport(req, res, dryRun);
+    }
+
+    // Firm-wide contacts directory: every contact across every bank, joined
+    // to bank display names, filtered by q across contact AND bank fields.
+    if (pathname === '/api/contacts' && req.method === 'GET') {
+      const contacts = listAllContacts(BANK_REPORTS_DIR);
+      const ids = [...new Set(contacts.map(c => c.bankId).filter(Boolean))];
+      const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, ids);
+      const enriched = contacts.map(c => {
+        const s = summaries.get(String(c.bankId)) || {};
+        return { ...c, bankName: s.displayName || s.name || c.bankId, city: s.city || '', state: s.state || '' };
+      });
+      const q = String(query.get('q') || '').trim().toLowerCase();
+      const filtered = q
+        ? enriched.filter(c => {
+            const hay = [c.name, c.role, c.email, c.phone, c.bankName, c.city, c.state].join(' ').toLowerCase();
+            return q.split(/\s+/).every(term => hay.includes(term));
+          })
+        : enriched;
+      return sendJSON(res, 200, { contacts: filtered, total: enriched.length });
     }
 
     if (pathname === '/api/offerings/all' && req.method === 'GET') {
