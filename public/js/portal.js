@@ -12317,6 +12317,7 @@
       </div>
       ${renderAccountDetailsSummary(values, accountStatus)}
       ${renderBankStrategyRequestPanel()}
+      <div class="bank-fdic-check" id="bankFdicCheck" hidden></div>
       ${renderBankSection('Details', details, true)}
       ${renderBankContactsPanel()}
       ${renderBankPeerBanner(bank.peerComparison)}
@@ -12370,6 +12371,7 @@
     loadBankActivity(bank.id);
     loadBankTasks(bank.id);
     loadBankOpportunities(bank.id);
+    loadBankFdicCheck(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
       btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
@@ -14388,6 +14390,46 @@
     return `<div class="bank-activity-filters" role="group" aria-label="Filter activity">
       ${ACTIVITY_FILTERS.map(f => `<button type="button" class="activity-filter-chip ${f.id === bankActivityFilter ? 'is-active' : ''}" data-activity-filter="${escapeHtml(f.id)}" aria-pressed="${f.id === bankActivityFilter ? 'true' : 'false'}">${escapeHtml(f.label)}</button>`).join('')}
     </div>`;
+  }
+
+  // ============ FDIC live check (BankFind API) ============
+  // What the FDIC has on file for this bank — headline financials from the
+  // free api.fdic.gov, fetched server-side with a 24h disk cache. Flags when
+  // the FDIC has a newer quarter than the imported call-report workbook.
+
+  function compactMoneyThousands(thousands) {
+    if (thousands == null || !Number.isFinite(Number(thousands))) return '—';
+    const dollars = Number(thousands) * 1000;
+    if (Math.abs(dollars) >= 1e9) return `$${(dollars / 1e9).toFixed(2)}B`;
+    if (Math.abs(dollars) >= 1e6) return `$${(dollars / 1e6).toFixed(1)}M`;
+    return `$${Math.round(dollars / 1000).toLocaleString()}K`;
+  }
+
+  async function loadBankFdicCheck(bankId) {
+    const bar = document.getElementById('bankFdicCheck');
+    if (!bar || !bankId) return;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/fdic-check`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.fdic || !data.fdic.latest) return;
+      const f = data.fdic.latest;
+      const stats = [
+        ['Assets', compactMoneyThousands(f.totalAssets)],
+        ['Deposits', compactMoneyThousands(f.totalDeposits)],
+        ['Equity', compactMoneyThousands(f.equity)],
+        ['Securities', compactMoneyThousands(f.securities)],
+        ['ROA', f.roa != null ? `${f.roa.toFixed(2)}%` : '—'],
+        ['NIM', f.nim != null ? `${f.nim.toFixed(2)}%` : '—']
+      ].map(([label, value]) => `<span class="fdic-stat"><span class="fdic-stat-label">${label}</span> ${escapeHtml(value)}</span>`).join('');
+      const periodNote = data.newerAvailable
+        ? `<span class="fdic-newer">FDIC has ${escapeHtml(f.period)} — workbook is on ${escapeHtml(data.workbookPeriod)}. Time to refresh the call-report import.</span>`
+        : `<span class="fdic-current">${escapeHtml(f.period)}${data.workbookPeriod === f.period ? ' · matches workbook' : ''}</span>`;
+      bar.innerHTML = `
+        <span class="fdic-label">FDIC live ${periodNote}</span>
+        <span class="fdic-stats">${stats}</span>`;
+      bar.hidden = false;
+    } catch (_) { /* live check is best-effort */ }
   }
 
   // ============ Bank opportunities panel (sales pipeline) ============

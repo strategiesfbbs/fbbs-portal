@@ -15247,3 +15247,19 @@ body {
 .pulse-pipeline-total { margin: 0 0 10px; font-size: 14px; color: var(--text2); }
 .pulse-pipeline-total strong { font-size: 18px; color: var(--racing-green, #003F2A); }
 .pulse-pipeline-list { margin-top: 10px; }
+
+/* ============ FDIC live check bar (tear sheet) ============ */
+.bank-fdic-check {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+  margin: 0 0 16px; padding: 10px 16px; border-radius: 10px;
+  background: #eef4f1; border: 1px solid var(--border-light); font-size: 13px;
+}
+.bank-fdic-check .fdic-label { font-weight: 700; color: var(--racing-green, #003F2A); }
+.bank-fdic-check .fdic-current { font-weight: 400; color: var(--text2); margin-left: 6px; }
+.bank-fdic-check .fdic-newer {
+  font-weight: 600; color: #9a6b00; background: #fdf3e0;
+  padding: 1px 8px; border-radius: 10px; margin-left: 6px;
+}
+.bank-fdic-check .fdic-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.bank-fdic-check .fdic-stat { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+.bank-fdic-check .fdic-stat-label { font-weight: 400; color: var(--text2); font-size: 11px; margin-right: 2px; }

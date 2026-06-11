@@ -182,6 +182,7 @@ const { rotateFileIfNeeded } = require('./log-rotation');
 const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
 const marketRates = require('./market-rates');
+const fdicBankfind = require('./fdic-bankfind');
 
 // ---------- Config ----------
 
@@ -9658,6 +9659,30 @@ const server = http.createServer(async (req, res) => {
       if (!rep) return sendJSON(res, 200, { rep: null, overdue: [], dueToday: [], upcoming: [], openCount: 0 });
       const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
       return sendJSON(res, 200, { rep: { username: rep.username, displayName: rep.displayName }, ...buildMyTasks(rep, savedBanks) });
+    }
+
+    // Live FDIC check: what the FDIC has on file for this bank vs the
+    // imported workbook period. Free keyless API, disk-cached 24h.
+    const bankFdicMatch = pathname.match(/^\/api\/banks\/([^/]+)\/fdic-check$/);
+    if (bankFdicMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankFdicMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      const summary = getBankSummaryForCoverage(bankId);
+      if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+      const cert = String(summary.certNumber || '').trim();
+      if (!cert) return sendJSON(res, 200, { fdic: null, reason: 'no-cert' });
+      const snapshot = await fdicBankfind.getFdicSnapshot(cert, {
+        cacheDir: path.join(MARKET_DIR, 'fdic'),
+        log
+      });
+      if (!snapshot) return sendJSON(res, 200, { fdic: null, reason: 'not-found' });
+      const workbookPeriod = String(summary.period || '');
+      const fdicPeriod = snapshot.latest.period;
+      return sendJSON(res, 200, {
+        fdic: snapshot,
+        workbookPeriod,
+        newerAvailable: Boolean(workbookPeriod && /^\d{4}Q\d$/.test(workbookPeriod) && fdicPeriod > workbookPeriod)
+      });
     }
 
     const bankOppsMatch = pathname.match(/^\/api\/banks\/([^/]+)\/opportunities$/);
