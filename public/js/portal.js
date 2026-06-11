@@ -16323,8 +16323,8 @@
     if (!data.rep) {
       document.getElementById('watchlistSub').textContent = 'Pick a rep in the top bar ("Acting as") to use your watchlist.';
       document.getElementById('watchlistStat').textContent = '—';
-      secBody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">No acting rep selected.</td></tr>';
-      bankBody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text3)">No acting rep selected.</td></tr>';
+      secBody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">Watchlists are per-rep — pick your name in the &ldquo;Acting as&rdquo; menu (top bar) to see yours.</td></tr>';
+      bankBody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text3)">Pick your name in the &ldquo;Acting as&rdquo; menu (top bar) to see your watched banks.</td></tr>';
       return;
     }
     const items = data.items || [];
