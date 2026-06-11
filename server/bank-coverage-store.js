@@ -153,6 +153,26 @@ function ensureCoverageDatabase(outputDir) {
     CREATE INDEX IF NOT EXISTS idx_bank_coverage_priority ON bank_coverage(priority, next_action_date);
     CREATE INDEX IF NOT EXISTS idx_bank_tasks_bank ON bank_tasks(bank_id, status, due_date);
     CREATE INDEX IF NOT EXISTS idx_bank_tasks_assignee ON bank_tasks(assigned_to, status, due_date);
+    CREATE TABLE IF NOT EXISTS bank_opportunities (
+      id TEXT PRIMARY KEY,
+      bank_id TEXT NOT NULL,
+      cert_number TEXT,
+      product TEXT NOT NULL,
+      description TEXT,
+      est_value REAL,
+      stage TEXT NOT NULL DEFAULT 'Prospect',
+      close_date TEXT,
+      owner TEXT,
+      owner_display TEXT,
+      created_by TEXT,
+      created_display TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      stage_changed_at TEXT,
+      closed_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_bank_opps_bank ON bank_opportunities(bank_id, stage);
+    CREATE INDEX IF NOT EXISTS idx_bank_opps_owner ON bank_opportunities(owner, stage);
     CREATE INDEX IF NOT EXISTS idx_bank_notes_bank_created ON bank_notes(bank_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_bank_contacts_bank ON bank_contacts(bank_id, is_primary DESC, name COLLATE NOCASE ASC);
     CREATE INDEX IF NOT EXISTS idx_bank_activities_bank_at ON bank_activities(bank_id, at DESC);
@@ -1418,15 +1438,232 @@ function countOpenTasks(outputDir, options = {}) {
   return { open: Number(row.open) || 0, overdue: Number(row.overdue) || 0 };
 }
 
+// ---------- Bank opportunities (sales pipeline) ----------
+//
+// A deal in flight: "this bank should buy brokered CDs / needs a bond swap /
+// is a BCIS candidate", with an estimated value and a stage. Distinct from
+// the Strategies Queue (which tracks fulfillment of work already requested) —
+// an opportunity is the *selling* side, and a won opportunity often becomes
+// a strategy request.
+
+const OPPORTUNITY_STAGES = ['Prospect', 'Qualified', 'Proposed', 'Won', 'Lost'];
+const OPPORTUNITY_STAGE_SET = new Set(OPPORTUNITY_STAGES);
+const OPPORTUNITY_OPEN_STAGES = ['Prospect', 'Qualified', 'Proposed'];
+
+function opportunitySelectSql(where = '1 = 1') {
+  return `
+    SELECT
+      id AS id,
+      bank_id AS bankId,
+      cert_number AS certNumber,
+      product AS product,
+      description AS description,
+      est_value AS estValue,
+      stage AS stage,
+      close_date AS closeDate,
+      owner AS owner,
+      owner_display AS ownerDisplay,
+      created_by AS createdBy,
+      created_display AS createdDisplay,
+      created_at AS createdAt,
+      updated_at AS updatedAt,
+      stage_changed_at AS stageChangedAt,
+      closed_at AS closedAt
+    FROM bank_opportunities
+    WHERE ${where}
+  `;
+}
+
+function mapOpportunityRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    bankId: row.bankId,
+    certNumber: row.certNumber || '',
+    product: row.product || '',
+    description: row.description || '',
+    estValue: row.estValue == null ? null : Number(row.estValue),
+    stage: row.stage || 'Prospect',
+    closeDate: row.closeDate || '',
+    owner: row.owner || '',
+    ownerDisplay: row.ownerDisplay || '',
+    createdBy: row.createdBy || '',
+    createdDisplay: row.createdDisplay || '',
+    createdAt: row.createdAt || '',
+    updatedAt: row.updatedAt || '',
+    stageChangedAt: row.stageChangedAt || '',
+    closedAt: row.closedAt || ''
+  };
+}
+
+function cleanEstValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function createBankOpportunity(outputDir, payload = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const bankId = cleanText(payload.bankId, 80);
+  const product = cleanText(payload.product, 120);
+  if (!bankId || !product) return null;
+  const stage = OPPORTUNITY_STAGE_SET.has(payload.stage) ? payload.stage : 'Prospect';
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  runSqlite(dbPath, `
+    INSERT INTO bank_opportunities (
+      id, bank_id, cert_number, product, description, est_value, stage, close_date,
+      owner, owner_display, created_by, created_display, created_at, updated_at, stage_changed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    bankId,
+    textOrNull(cleanText(payload.certNumber, 40)),
+    product,
+    textOrNull(cleanMultilineText(payload.description, 2000)),
+    cleanEstValue(payload.estValue),
+    stage,
+    textOrNull(cleanDate(payload.closeDate)),
+    textOrNull(cleanText(payload.owner, 80)),
+    textOrNull(cleanText(payload.ownerDisplay, 200)),
+    textOrNull(cleanText(payload.createdBy, 80)),
+    textOrNull(cleanText(payload.createdDisplay, 200)),
+    now,
+    now,
+    now
+  ]);
+  return getBankOpportunity(outputDir, id);
+}
+
+function getBankOpportunity(outputDir, oppId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `${opportunitySelectSql('id = ?')} LIMIT 1;`, [String(oppId || '')]);
+  return mapOpportunityRow(rows[0]);
+}
+
+// Patch product/description/estValue/closeDate/owner/stage. Stage moves stamp
+// stage_changed_at; moving into Won/Lost stamps closed_at, moving back out
+// clears it.
+function updateBankOpportunity(outputDir, oppId, patch = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const existing = getBankOpportunity(outputDir, oppId);
+  if (!existing) return null;
+  const sets = [];
+  const params = [];
+  if (patch.product !== undefined) {
+    const product = cleanText(patch.product, 120);
+    if (product) { sets.push('product = ?'); params.push(product); }
+  }
+  if (patch.description !== undefined) { sets.push('description = ?'); params.push(textOrNull(cleanMultilineText(patch.description, 2000))); }
+  if (patch.estValue !== undefined) { sets.push('est_value = ?'); params.push(cleanEstValue(patch.estValue)); }
+  if (patch.closeDate !== undefined) { sets.push('close_date = ?'); params.push(textOrNull(cleanDate(patch.closeDate))); }
+  if (patch.owner !== undefined) { sets.push('owner = ?'); params.push(textOrNull(cleanText(patch.owner, 80))); }
+  if (patch.ownerDisplay !== undefined) { sets.push('owner_display = ?'); params.push(textOrNull(cleanText(patch.ownerDisplay, 200))); }
+  if (patch.stage !== undefined && OPPORTUNITY_STAGE_SET.has(patch.stage) && patch.stage !== existing.stage) {
+    const now = new Date().toISOString();
+    sets.push('stage = ?'); params.push(patch.stage);
+    sets.push('stage_changed_at = ?'); params.push(now);
+    if (patch.stage === 'Won' || patch.stage === 'Lost') {
+      sets.push('closed_at = ?'); params.push(now);
+    } else {
+      sets.push('closed_at = NULL');
+    }
+  }
+  if (!sets.length) return existing;
+  sets.push('updated_at = ?'); params.push(new Date().toISOString());
+  params.push(existing.id);
+  runSqlite(dbPath, `UPDATE bank_opportunities SET ${sets.join(', ')} WHERE id = ?;`, params);
+  return getBankOpportunity(outputDir, oppId);
+}
+
+function listOpportunitiesForBank(outputDir, bankId, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(bankId || '');
+  if (!id) return [];
+  const openList = OPPORTUNITY_OPEN_STAGES.map(s => `'${s}'`).join(', ');
+  const where = options.includeClosed ? 'bank_id = ?' : `bank_id = ? AND stage IN (${openList})`;
+  const rows = querySqliteJson(dbPath, `
+    ${opportunityOrderedSql(where)}
+    LIMIT 200;
+  `, [id]);
+  return rows.map(mapOpportunityRow);
+}
+
+// Opportunity list ordered nearest close date first, then newest. Kept out of
+// opportunitySelectSql so summaries can aggregate freely.
+function opportunityOrderedSql(where) {
+  return `${opportunitySelectSql(where)}
+    ORDER BY CASE WHEN close_date IS NULL THEN 1 ELSE 0 END, close_date ASC, created_at DESC`;
+}
+
+// Pipeline rollup for #pulse and the pipeline report: open count + value
+// total, then by stage / product / owner. Rep-scoped when username given.
+function pipelineSummary(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const params = [];
+  let scope = '1 = 1';
+  if (options.username) {
+    scope = `LOWER(COALESCE(owner, '')) = ?`;
+    params.push(String(options.username).toLowerCase());
+  }
+  const openList = OPPORTUNITY_OPEN_STAGES.map(s => `'${s}'`).join(', ');
+  const group = (col, alias) => querySqliteJson(dbPath, `
+    SELECT ${col} AS ${alias}, COUNT(*) AS count, COALESCE(SUM(est_value), 0) AS value
+    FROM bank_opportunities
+    WHERE ${scope} AND stage IN (${openList})
+    GROUP BY ${col};
+  `, params);
+  const stageRows = group('stage', 'key');
+  const byStage = OPPORTUNITY_OPEN_STAGES.map(stage => {
+    const row = stageRows.find(r => r.key === stage);
+    return { stage, count: row ? Number(row.count) : 0, value: row ? Number(row.value) : 0 };
+  });
+  const byProduct = group('product', 'key')
+    .map(r => ({ product: r.key || '—', count: Number(r.count), value: Number(r.value) }))
+    .sort((a, b) => b.value - a.value);
+  const byOwner = group(`COALESCE(owner_display, owner, '—')`, 'key')
+    .map(r => ({ owner: r.key || '—', count: Number(r.count), value: Number(r.value) }))
+    .sort((a, b) => b.value - a.value);
+  const open = byStage.reduce((acc, s) => ({ count: acc.count + s.count, value: acc.value + s.value }), { count: 0, value: 0 });
+  const quarterStartMonth = Math.floor(new Date().getMonth() / 3) * 3 + 1;
+  const quarterStart = `${new Date().getFullYear()}-${String(quarterStartMonth).padStart(2, '0')}-01`;
+  const closedRows = querySqliteJson(dbPath, `
+    SELECT stage AS stage, COUNT(*) AS count, COALESCE(SUM(est_value), 0) AS value
+    FROM bank_opportunities
+    WHERE ${scope} AND stage IN ('Won', 'Lost') AND closed_at >= ?
+    GROUP BY stage;
+  `, [...params, quarterStart]);
+  const wonRow = closedRows.find(r => r.stage === 'Won');
+  const lostRow = closedRows.find(r => r.stage === 'Lost');
+  const openItems = querySqliteJson(dbPath, `
+    ${opportunityOrderedSql(`${scope} AND stage IN (${openList})`)}
+    LIMIT 12;
+  `, params).map(mapOpportunityRow);
+  return {
+    open,
+    byStage,
+    byProduct,
+    byOwner,
+    wonThisQuarter: { count: wonRow ? Number(wonRow.count) : 0, value: wonRow ? Number(wonRow.value) : 0 },
+    lostThisQuarter: { count: lostRow ? Number(lostRow.count) : 0, value: lostRow ? Number(lostRow.value) : 0 },
+    openItems
+  };
+}
+
 module.exports = {
   BILLING_STATES,
   COVERAGE_DATABASE_FILENAME,
   MANUAL_ACTIVITY_KINDS,
   PRODUCT_FIT_PRODUCTS,
+  OPPORTUNITY_STAGES,
   TASK_PRIORITIES,
   TASK_STATUSES,
   countOpenTasks,
+  createBankOpportunity,
   createBankTask,
+  getBankOpportunity,
+  listOpportunitiesForBank,
+  pipelineSummary,
+  updateBankOpportunity,
   getBankTask,
   listTasksForBank,
   listTasksForRep,

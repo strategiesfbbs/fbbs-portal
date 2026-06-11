@@ -141,6 +141,27 @@ try {
   coverageStore.updateBankTask(tmpDir, task.id, { status: 'Cancelled' });
   coverageStore.listTasksForBank(tmpDir, 'B-1').forEach(t => coverageStore.updateBankTask(tmpDir, t.id, { status: 'Cancelled' }));
 
+  // Bank opportunities (sales pipeline)
+  const opp = coverageStore.createBankOpportunity(tmpDir, {
+    bankId: 'B-1', product: 'Brokered CDs', description: TRICKY, estValue: 25000,
+    closeDate: '2026-09-30', owner: 'Rep1', ownerDisplay: 'Rep One', createdBy: 'rep1'
+  });
+  ok('opp-create', opp && opp.stage === 'Prospect' && opp.estValue === 25000 && opp.description === TRICKY);
+  ok('opp-create requires product', coverageStore.createBankOpportunity(tmpDir, { bankId: 'B-1' }) === null);
+  coverageStore.createBankOpportunity(tmpDir, { bankId: 'B-1', product: 'Bond Swap', estValue: 12000, owner: 'rep1', stage: 'Proposed' });
+  ok('opp-list open', coverageStore.listOpportunitiesForBank(tmpDir, 'B-1').length === 2);
+  const moved = coverageStore.updateBankOpportunity(tmpDir, opp.id, { stage: 'Qualified' });
+  ok('opp-stage-move stamps', moved.stage === 'Qualified' && Boolean(moved.stageChangedAt) && !moved.closedAt);
+  const pipe = coverageStore.pipelineSummary(tmpDir, { username: 'rep1' });
+  ok('opp-pipeline totals', pipe.open.count === 2 && pipe.open.value === 37000);
+  ok('opp-pipeline byStage', pipe.byStage.find(s => s.stage === 'Proposed').value === 12000);
+  const won = coverageStore.updateBankOpportunity(tmpDir, opp.id, { stage: 'Won' });
+  ok('opp-won stamps closed', won.stage === 'Won' && Boolean(won.closedAt));
+  const pipe2 = coverageStore.pipelineSummary(tmpDir, { username: 'rep1' });
+  ok('opp-won leaves pipeline', pipe2.open.count === 1 && pipe2.wonThisQuarter.count === 1 && pipe2.wonThisQuarter.value === 25000);
+  ok('opp-list hides closed', coverageStore.listOpportunitiesForBank(tmpDir, 'B-1').length === 1);
+  ok('opp-list includeClosed', coverageStore.listOpportunitiesForBank(tmpDir, 'B-1', { includeClosed: true }).length === 2);
+
   // Product fit
   const fit = coverageStore.upsertProductFit(tmpDir, bank, { product: 'Bond Swap', notes: TRICKY, flaggedByUsername: 'rep1' });
   ok('productfit-upsert', fit && fit.product === 'Bond Swap' && fit.notes === TRICKY);

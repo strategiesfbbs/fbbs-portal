@@ -98,10 +98,15 @@ const {
   countBillingByState,
   countOpenTasks,
   createBankContact,
+  createBankOpportunity,
   createBankTask,
+  getBankOpportunity,
   getBankTask,
+  listOpportunitiesForBank,
   listTasksForBank,
   listTasksForRep,
+  pipelineSummary,
+  updateBankOpportunity,
   updateBankTask,
   deleteBankActivity,
   deleteBankContact,
@@ -4549,6 +4554,72 @@ async function handleUpdateBankTask(req, res, taskId) {
   }
 }
 
+// Sales pipeline: create an opportunity on a bank. Owner defaults to the
+// acting rep; the bank timeline gets a system row.
+async function handleCreateBankOpportunity(req, res, bankId) {
+  try {
+    const body = await readJsonBody(req);
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+    if (!String(body.product || '').trim()) return sendJSON(res, 400, { error: 'A product is required' });
+    const rep = resolveRequestRep(req);
+    const opportunity = createBankOpportunity(BANK_REPORTS_DIR, {
+      bankId,
+      certNumber: summary.certNumber,
+      product: body.product,
+      description: body.description,
+      estValue: body.estValue,
+      stage: body.stage,
+      closeDate: body.closeDate,
+      owner: body.owner || (rep ? rep.username : ''),
+      ownerDisplay: body.ownerDisplay || (body.owner ? body.owner : (rep ? rep.displayName : '')),
+      createdBy: rep ? rep.username : '',
+      createdDisplay: rep ? rep.displayName : ''
+    });
+    if (!opportunity) return sendJSON(res, 400, { error: 'Could not create opportunity' });
+    logBankActivity(req, {
+      bankId,
+      certNumber: summary.certNumber,
+      kind: 'opportunity-create',
+      summary: `Opportunity created: ${opportunity.product}${opportunity.estValue ? ` (~$${Math.round(opportunity.estValue).toLocaleString()})` : ''}`,
+      refType: 'opportunity',
+      refId: opportunity.id
+    });
+    appendAuditLog({ event: 'bank-opportunity-create', bankId, opportunityId: opportunity.id, product: opportunity.product });
+    return sendJSON(res, 200, { opportunity });
+  } catch (err) {
+    log('error', 'Bank opportunity create failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not create opportunity' });
+  }
+}
+
+// Patch an opportunity (stage moves, value/close-date edits, reassignment).
+// Won/Lost moves land on the bank timeline so the record of the outcome
+// lives with the account.
+async function handleUpdateBankOpportunity(req, res, oppId) {
+  try {
+    const body = await readJsonBody(req);
+    const existing = getBankOpportunity(BANK_REPORTS_DIR, oppId);
+    if (!existing) return sendJSON(res, 404, { error: 'Opportunity not found' });
+    const opportunity = updateBankOpportunity(BANK_REPORTS_DIR, oppId, body || {});
+    if ((body.stage === 'Won' || body.stage === 'Lost') && existing.stage !== body.stage) {
+      logBankActivity(req, {
+        bankId: existing.bankId,
+        certNumber: existing.certNumber,
+        kind: body.stage === 'Won' ? 'opportunity-won' : 'opportunity-lost',
+        summary: `Opportunity ${body.stage.toLowerCase()}: ${existing.product}${existing.estValue ? ` (~$${Math.round(existing.estValue).toLocaleString()})` : ''}`,
+        refType: 'opportunity',
+        refId: existing.id
+      });
+    }
+    appendAuditLog({ event: 'bank-opportunity-update', bankId: existing.bankId, opportunityId: existing.id, stage: opportunity.stage });
+    return sendJSON(res, 200, { opportunity });
+  } catch (err) {
+    log('error', 'Bank opportunity update failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not update opportunity' });
+  }
+}
+
 async function handleCreateBankContact(req, res, bankId) {
   try {
     const body = await readJsonBody(req);
@@ -8760,6 +8831,13 @@ function buildCrmDashboard(rep) {
     log('warn', 'CRM dashboard task counts failed:', err.message);
   }
 
+  let pipeline = null;
+  try {
+    pipeline = pipelineSummary(BANK_REPORTS_DIR, { username: rep ? rep.username : null });
+  } catch (err) {
+    log('warn', 'CRM dashboard pipeline failed:', err.message);
+  }
+
   return {
     rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
     asOf: new Date().toISOString(),
@@ -8775,7 +8853,8 @@ function buildCrmDashboard(rep) {
     byState,
     strategiesByType,
     recentActivities,
-    upcomingFollowups: upcoming
+    upcomingFollowups: upcoming,
+    pipeline
   };
 }
 
@@ -9579,6 +9658,35 @@ const server = http.createServer(async (req, res) => {
       if (!rep) return sendJSON(res, 200, { rep: null, overdue: [], dueToday: [], upcoming: [], openCount: 0 });
       const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
       return sendJSON(res, 200, { rep: { username: rep.username, displayName: rep.displayName }, ...buildMyTasks(rep, savedBanks) });
+    }
+
+    const bankOppsMatch = pathname.match(/^\/api\/banks\/([^/]+)\/opportunities$/);
+    if (bankOppsMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankOppsMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      const includeClosed = query.get('includeClosed') === '1' || query.get('includeClosed') === 'true';
+      return sendJSON(res, 200, { opportunities: listOpportunitiesForBank(BANK_REPORTS_DIR, bankId, { includeClosed }) });
+    }
+    if (bankOppsMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankOppsMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return await handleCreateBankOpportunity(req, res, bankId);
+    }
+
+    const bankOppItemMatch = pathname.match(/^\/api\/bank-opportunities\/([^/]+)$/);
+    if (bankOppItemMatch && req.method === 'PATCH') {
+      const oppId = safeDecodeURIComponent(bankOppItemMatch[1]);
+      if (!oppId) return sendJSON(res, 400, { error: 'Invalid opportunity ID' });
+      return await handleUpdateBankOpportunity(req, res, oppId);
+    }
+
+    if (pathname === '/api/reports/pipeline' && req.method === 'GET') {
+      const repParam = String(query.get('rep') || '').toLowerCase();
+      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      return sendJSON(res, 200, {
+        rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
+        pipeline: pipelineSummary(BANK_REPORTS_DIR, { username: rep ? rep.username : null })
+      });
     }
 
     const bankContactsListMatch = pathname.match(/^\/api\/banks\/([^/]+)\/contacts$/);
