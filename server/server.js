@@ -186,6 +186,7 @@ const { rotateFileIfNeeded } = require('./log-rotation');
 const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
 const marketRates = require('./market-rates');
+const marketWire = require('./market-wire');
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 
@@ -9213,6 +9214,30 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/market/yield-curve' && req.method === 'GET') {
       const curve = await marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log });
       return sendJSON(res, 200, { curve });
+    }
+
+    // Live market wire: official headlines (Fed/FDIC/SEC RSS) + headline
+    // economic indicators (keyless BLS) + a curve summary from the cached
+    // Treasury feed. Each source degrades independently to stale-or-null.
+    if (pathname === '/api/market/wire' && req.method === 'GET') {
+      const [headlines, indicators, curve] = await Promise.all([
+        marketWire.getLatestHeadlines({ marketDir: MARKET_DIR, log }),
+        marketWire.getEconomicIndicators({ marketDir: MARKET_DIR, log }),
+        marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }),
+      ]);
+      let rates = null;
+      if (curve && curve.tenors) {
+        const t10 = curve.tenors['10Y'];
+        const t2 = curve.tenors['2Y'];
+        rates = {
+          asOfDate: curve.asOfDate,
+          tenYear: t10 != null ? t10 : null,
+          twoYear: t2 != null ? t2 : null,
+          spread2s10sBp: t10 != null && t2 != null ? Math.round((t10 - t2) * 100) : null,
+          changes: curve.changes || {},
+        };
+      }
+      return sendJSON(res, 200, { headlines, indicators, rates });
     }
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {

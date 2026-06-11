@@ -20276,6 +20276,97 @@
     });
   }
 
+  // ============ Market Wire (live headlines + economic numbers) ============
+
+  const MARKET_WIRE_REFRESH_MS = 15 * 60 * 1000;
+
+  function setupMarketWire() {
+    if (!document.getElementById('homeWireSection')) return;
+    loadMarketWire();
+    setInterval(() => {
+      // Skip refreshes while the tab is backgrounded; the next visible tick picks up.
+      if (document.visibilityState === 'visible') loadMarketWire();
+    }, MARKET_WIRE_REFRESH_MS);
+  }
+
+  async function loadMarketWire() {
+    try {
+      const res = await fetch('/api/market/wire', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      renderMarketWire(await res.json());
+    } catch (e) {
+      console.error('Failed to load market wire:', e);
+    }
+  }
+
+  function marketWireCard(label, value, sub) {
+    return `<div class="home-wire-card">
+      <p class="home-wire-card-label">${escapeHtml(label)}</p>
+      <p class="home-wire-card-value">${escapeHtml(value)}</p>
+      <p class="home-wire-card-sub">${escapeHtml(sub || '')}</p>
+    </div>`;
+  }
+
+  function marketWireChange(bp) {
+    if (bp == null || !Number.isFinite(Number(bp))) return '';
+    const n = Math.round(Number(bp) * 100);
+    if (n === 0) return 'unch on the day';
+    return `${n > 0 ? '+' : ''}${n}bp on the day`;
+  }
+
+  function renderMarketWire(data) {
+    const section = document.getElementById('homeWireSection');
+    if (!section) return;
+    const rates = data.rates || null;
+    const ind = data.indicators || null;
+    const wire = data.headlines || null;
+    const headlines = wire && Array.isArray(wire.headlines) ? wire.headlines : [];
+    if (!rates && !ind && !headlines.length) {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+
+    const cards = [];
+    if (rates && rates.tenYear != null) {
+      cards.push(marketWireCard('10Y Treasury', rates.tenYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['10Y'])));
+    }
+    if (rates && rates.twoYear != null) {
+      cards.push(marketWireCard('2Y Treasury', rates.twoYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['2Y'])));
+    }
+    if (rates && rates.spread2s10sBp != null) {
+      cards.push(marketWireCard('2s10s', rates.spread2s10sBp + 'bp', 'As of ' + (rates.asOfDate || '')));
+    }
+    if (ind && ind.cpiYoY) {
+      cards.push(marketWireCard('CPI YoY', ind.cpiYoY.value.toFixed(1) + '%', ind.cpiYoY.period));
+    }
+    if (ind && ind.unemployment) {
+      cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
+    }
+    const indicatorsEl = document.getElementById('homeWireIndicators');
+    if (indicatorsEl) {
+      indicatorsEl.innerHTML = cards.join('') || '<div class="home-wire-card"><p class="home-wire-card-sub">Live numbers unavailable.</p></div>';
+    }
+
+    const listEl = document.getElementById('homeWireList');
+    if (listEl) {
+      listEl.innerHTML = headlines.slice(0, 8).map(h => `<li class="home-wire-item">
+        <span class="home-wire-source">${escapeHtml(h.source || '')}</span>
+        <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener">${escapeHtml(h.title)}</a>
+        <span class="home-wire-time">${escapeHtml(h.publishedAt ? formatRelativeAt(h.publishedAt) : '')}</span>
+      </li>`).join('') || '<li class="home-wire-item home-wire-empty">No headlines right now.</li>';
+    }
+
+    const updatedEl = document.getElementById('homeWireUpdated');
+    if (updatedEl) {
+      const at = (wire && wire.fetchedAt) || (ind && ind.fetchedAt) || null;
+      const stale = Boolean(wire && wire.stale);
+      updatedEl.textContent = at
+        ? `Fed · FDIC · SEC · BLS — updated ${formatRelativeAt(at)}${stale ? ' (showing cached)' : ''}`
+        : 'Fed · FDIC · SEC · BLS';
+    }
+  }
+
   function setupGlobalErrorLogging() {
     if (window.__fbbsGlobalErrorLoggingBound) return;
     window.__fbbsGlobalErrorLoggingBound = true;
@@ -20300,6 +20391,7 @@
     loadMe();
     setupHome();
     setupHomePolish();
+    setupMarketWire();
     setupUpload();
     setupCdCostCalculator();
     setupCdOpportunityTool();
