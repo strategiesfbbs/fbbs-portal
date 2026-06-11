@@ -7164,43 +7164,77 @@ function cusipSearchSources() {
   const slot = (filename, label) => readCurrentSlotJson(filename, label) || {};
   const fmtPct = v => (v != null && Number.isFinite(Number(v)) ? `${Number(v).toFixed(2)}%` : null);
   const join = parts => parts.filter(Boolean).join(' · ');
+  const pct = v => {
+    const n = Number(String(v ?? '').replace(/%/g, ''));
+    return Number.isFinite(n) ? n : null;
+  };
+  // Each source also carries normalize(row) → the cross-asset All Offerings
+  // row shape: { description, coupon, yield, maturity, price, state, sector }.
+  // `yield` is the asset's quoted economic yield (CD rate, muni YTW, agency/
+  // corporate YTM, MBS yield, structured-note coupon).
   return [
     {
       type: 'cd', typeLabel: 'CD Offering', page: 'explorer',
       rows: slot(OFFERINGS_FILENAME, 'offerings').offerings || [],
       describe: r => join([r.name, r.term, fmtPct(r.rate), r.maturity]),
+      normalize: r => ({ description: join([r.name, r.term]), coupon: null, yield: pct(r.rate), maturity: r.maturity || null, price: null, state: r.issuerState || '', sector: 'CD' }),
     },
     {
       type: 'treasury', typeLabel: 'Treasury', page: 'treasury-explorer',
       rows: slot(TREASURY_NOTES_FILENAME, 'treasury notes').notes || [],
       describe: r => join([r.description, fmtPct(r.yield) && `${fmtPct(r.yield)} YTM`, r.maturity]),
+      normalize: r => ({ description: r.description || '', coupon: pct(r.coupon), yield: pct(r.yield), maturity: r.maturity || null, price: pct(r.price), state: '', sector: 'UST' }),
     },
     {
       type: 'muni', typeLabel: 'Muni', page: 'muni-explorer',
       rows: slot(MUNI_OFFERINGS_FILENAME, 'muni offerings').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity, fmtPct(r.ytw) && `${fmtPct(r.ytw)} YTW`]),
+      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni' }),
     },
     {
       type: 'agency', typeLabel: 'Agency', page: 'agencies',
       rows: slot(AGENCIES_FILENAME, 'agencies').offerings || [],
       describe: r => join([r.ticker, r.structure, fmtPct(r.coupon), r.maturity]),
+      normalize: r => ({ description: join([r.ticker, r.structure]), coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.structure || 'Agency' }),
     },
     {
       type: 'corporate', typeLabel: 'Corporate', page: 'corporates',
       rows: slot(CORPORATES_FILENAME, 'corporates').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity]),
+      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.sector || 'Corporate' }),
     },
     {
       type: 'mbs', typeLabel: 'MBS/CMO', page: 'mbs-cmo',
       rows: (loadMbsCmoInventory(MBS_CMO_DIR) || {}).offers || [],
       describe: r => join([r.description, fmtPct(r.coupon), r.productType]),
+      normalize: r => ({ description: r.description || '', coupon: pct(r.coupon), yield: pct(r.yield), maturity: r.maturityDate || null, price: pct(r.ask) ?? pct(r.price), state: '', sector: r.productType || 'MBS' }),
     },
     {
       type: 'structured-note', typeLabel: 'Structured Note', page: 'structured-notes',
       rows: (loadStructuredNotesInventory(STRUCTURED_NOTES_DIR) || {}).notes || [],
       describe: r => join([r.issuer, r.structure, fmtPct(r.coupon), r.maturityDate]),
+      normalize: r => ({ description: join([r.issuer, r.structure]), coupon: pct(r.coupon), yield: pct(r.coupon), maturity: r.maturityDate || null, price: pct(r.price), state: '', sector: r.structure || 'Structured' }),
     },
   ];
+}
+
+// Cross-asset inventory: every security in today's package + standing
+// inventories, normalized to one row shape for the All Offerings explorer.
+function buildAllOfferingsRows() {
+  const rows = [];
+  for (const source of cusipSearchSources()) {
+    for (const raw of source.rows) {
+      const n = source.normalize(raw);
+      rows.push({
+        assetClass: source.typeLabel,
+        type: source.type,
+        page: source.page,
+        cusip: String(raw.cusip || '').trim(),
+        ...n,
+      });
+    }
+  }
+  return rows;
 }
 
 // Find a CUSIP anywhere in today's inventory. Prefix match first (a rep
@@ -9029,6 +9063,14 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
       return sendJSON(res, 200, searchCusipEverywhere(query.get('q')));
+    }
+
+    if (pathname === '/api/offerings/all' && req.method === 'GET') {
+      const pkg = getCurrentPackage() || {};
+      return sendJSON(res, 200, {
+        date: pkg.date || null,
+        rows: buildAllOfferingsRows(),
+      });
     }
 
     if (pathname === '/api/crm/dashboard' && req.method === 'GET') {

@@ -70,6 +70,9 @@
         <span class="nav-caret">&#8250;</span>
       </button>
       <div class="nav-sub" id="nav-sub-offerings">
+        <a class="nav-link nav-minor" data-page="all-offerings" href="#all-offerings">
+          <span class="nav-label">All Offerings</span>
+        </a>
         <a class="nav-link nav-minor" data-page="treasury-explorer" href="#treasury-explorer">
           <span class="nav-label">Treasury Explorer</span>
         </a>
@@ -2003,6 +2006,69 @@
 </div>
 
 <!-- ========== TREASURY NOTES EXPLORER PAGE ========== -->
+<div class="page" id="p-all-offerings">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>All <strong>Offerings</strong></h2>
+        <p class="hero-sub" id="allOfferingsSub">Loading&hellip;</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="allOfferingsStat">&mdash;</div>
+        <div class="lbl">Securities Shown</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Every security in today's inventory &mdash; one screen</h3>
+      <div class="kicker" id="allOfferingsKicker">&mdash;</div>
+    </div>
+
+    <div class="all-offerings-classes" id="allOfferingsClasses" role="group" aria-label="Asset classes"></div>
+
+    <div class="explorer-filters">
+      <label class="ef-field">
+        <span>Search</span>
+        <input type="text" id="ao-search" placeholder="Issuer, description, CUSIP&hellip;" autocomplete="off">
+      </label>
+      <label class="ef-field">
+        <span>Min yield %</span>
+        <input type="number" id="ao-minyield" step="0.05" min="0" max="20" placeholder="e.g. 5.00">
+      </label>
+      <label class="ef-field">
+        <span>Matures by</span>
+        <input type="date" id="ao-maxmaturity">
+      </label>
+      <div class="ef-field ef-actions">
+        <button type="button" class="small-btn" id="ao-clear">Clear</button>
+        <button type="button" class="small-btn" id="ao-export">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table" id="allOfferingsTable">
+        <thead>
+          <tr>
+            <th data-aosort="assetClass">Class</th>
+            <th data-aosort="description">Description</th>
+            <th data-aosort="cusip">CUSIP</th>
+            <th data-aosort="coupon" style="text-align:right">Coupon</th>
+            <th data-aosort="yield" style="text-align:right">Yield</th>
+            <th data-aosort="maturity">Maturity</th>
+            <th data-aosort="price" style="text-align:right">Price</th>
+            <th data-aosort="state">State</th>
+            <th data-aosort="sector">Sector</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="allOfferingsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div class="page" id="p-treasury-explorer">
   <section class="page-hero">
     <div class="page-hero-inner">

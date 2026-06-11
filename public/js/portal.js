@@ -151,7 +151,7 @@
   };
 
   const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
-                       'treasury-explorer',
+                       'all-offerings', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
@@ -168,6 +168,7 @@
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
+    { page: 'all-offerings', group: 'Offerings', label: 'All Offerings', description: 'Every security in today\'s inventory across all asset classes — one screen', aliases: 'all offerings cross asset unified everything inventory cd muni agency corporate treasury mbs structured screen blotter' },
     { page: 'treasury-explorer', group: 'Offerings', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
     { page: 'explorer', group: 'Offerings', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates offerings' },
     { page: 'munioffers', group: 'Documents', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
@@ -198,6 +199,7 @@
     mmd: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
+    'all-offerings': 'offerings',
     'treasury-explorer': 'offerings',
     explorer: 'offerings',
     'muni-explorer': 'offerings',
@@ -1417,6 +1419,7 @@
     if (pageName === 'archive') loadArchive();
     if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'cd-internal') loadCdInternal();
+    if (pageName === 'all-offerings') loadAllOfferings();
     if (pageName === 'treasury-explorer') loadTreasuryNotes();
     if (pageName === 'explorer') loadOfferings();
     if (pageName === 'muni-explorer') loadMuniOfferings();
@@ -16243,6 +16246,163 @@
     const sameDay = d.toDateString() === new Date().toDateString();
     const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     return ` &middot; Updated ${sameDay ? time : `${formatNumericDate(stamp.slice(0, 10))} ${time}`}`;
+  }
+
+  // ============ All Offerings (cross-asset) ============
+  // One screen over every security in today's inventory — the "show me
+  // anything over 5%, any asset class" view. Server normalizes the rows
+  // (/api/offerings/all); each row deep-links to its native explorer via the
+  // shared data-goto/data-cusip plumbing.
+
+  let allOfferingsData = null;   // { date, rows[] }
+  let allOfferingsFilters = { search: '', classes: new Set(), minYield: null, maxMaturity: '' };
+  let allOfferingsSort = { col: 'yield', dir: 'desc' };
+
+  async function loadAllOfferings() {
+    const body = document.getElementById('allOfferingsBody');
+    if (!body) return;
+    try {
+      const res = await fetch('/api/offerings/all', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      allOfferingsData = await res.json();
+    } catch (e) {
+      body.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--danger)">Failed to load offerings: ${escapeHtml(e.message)}</td></tr>`;
+      return;
+    }
+    const params = hashParamsForPage('all-offerings');
+    if (params.get('q')) {
+      allOfferingsFilters.search = params.get('q');
+      setControlValue('ao-search', allOfferingsFilters.search);
+    }
+    wireAllOfferingsControls();
+    renderAllOfferingsClasses();
+    renderAllOfferings();
+  }
+
+  function renderAllOfferingsClasses() {
+    const wrap = document.getElementById('allOfferingsClasses');
+    if (!wrap || !allOfferingsData) return;
+    const counts = new Map();
+    (allOfferingsData.rows || []).forEach(r => counts.set(r.assetClass, (counts.get(r.assetClass) || 0) + 1));
+    wrap.innerHTML = [...counts.entries()].map(([cls, count]) => `
+      <button type="button" class="activity-filter-chip ${!allOfferingsFilters.classes.size || allOfferingsFilters.classes.has(cls) ? 'is-active' : ''}"
+        data-ao-class="${escapeHtml(cls)}" aria-pressed="${!allOfferingsFilters.classes.size || allOfferingsFilters.classes.has(cls)}">
+        ${escapeHtml(cls)} <span class="ao-chip-count">${count}</span>
+      </button>`).join('');
+    wrap.querySelectorAll('[data-ao-class]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const cls = btn.getAttribute('data-ao-class');
+        if (allOfferingsFilters.classes.has(cls)) allOfferingsFilters.classes.delete(cls);
+        else allOfferingsFilters.classes.add(cls);
+        // All chips off == no filter (everything shows).
+        if (allOfferingsFilters.classes.size === counts.size) allOfferingsFilters.classes.clear();
+        renderAllOfferingsClasses();
+        renderAllOfferings();
+      });
+    });
+  }
+
+  function applyAllOfferingsFilters(rows) {
+    const q = allOfferingsFilters.search.trim().toLowerCase();
+    return rows.filter(r => {
+      if (allOfferingsFilters.classes.size && !allOfferingsFilters.classes.has(r.assetClass)) return false;
+      if (allOfferingsFilters.minYield != null && !(Number(r.yield) >= allOfferingsFilters.minYield)) return false;
+      if (allOfferingsFilters.maxMaturity) {
+        if (!r.maturity || String(r.maturity).slice(0, 10) > allOfferingsFilters.maxMaturity) return false;
+      }
+      if (q) {
+        const hay = [r.description, r.cusip, r.sector, r.state, r.assetClass].join(' ').toLowerCase();
+        if (!q.split(/\s+/).every(term => hay.includes(term))) return false;
+      }
+      return true;
+    });
+  }
+
+  function renderAllOfferings() {
+    const body = document.getElementById('allOfferingsBody');
+    if (!body || !allOfferingsData) return;
+    const filtered = applyAllOfferingsFilters(allOfferingsData.rows || []);
+    const { col, dir } = allOfferingsSort;
+    const mult = dir === 'desc' ? -1 : 1;
+    filtered.sort((a, b) => {
+      const av = a[col]; const bv = b[col];
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === 'number' || typeof bv === 'number') return (Number(av) - Number(bv)) * mult;
+      return String(av).localeCompare(String(bv)) * mult;
+    });
+
+    document.getElementById('allOfferingsStat').textContent = filtered.length.toLocaleString();
+    document.getElementById('allOfferingsKicker').textContent = allOfferingsData.date ? formatNumericDate(allOfferingsData.date) : 'Current package';
+    document.getElementById('allOfferingsSub').textContent =
+      `${(allOfferingsData.rows || []).length.toLocaleString()} securities across ${new Set((allOfferingsData.rows || []).map(r => r.assetClass)).size} asset classes`;
+
+    const num = (v, digits = 2) => (v == null ? '—' : Number(v).toFixed(digits));
+    body.innerHTML = filtered.slice(0, 1000).map(r => `
+      <tr>
+        <td><span class="ao-class-pill ao-class-${escapeHtml(r.type)}">${escapeHtml(r.assetClass)}</span></td>
+        <td class="issuer-cell">${escapeHtml(r.description)}</td>
+        <td class="cusip-cell">${escapeHtml(r.cusip || '—')}</td>
+        <td style="text-align:right">${num(r.coupon, 3)}</td>
+        <td style="text-align:right"><strong>${num(r.yield)}</strong></td>
+        <td>${r.maturity ? escapeHtml(formatNumericDate(String(r.maturity).slice(0, 10))) : '—'}</td>
+        <td style="text-align:right">${num(r.price, 3)}</td>
+        <td>${escapeHtml(r.state || '—')}</td>
+        <td>${escapeHtml(r.sector || '—')}</td>
+        <td><button type="button" class="small-btn" data-goto="${escapeHtml(r.page)}"${r.cusip ? ` data-cusip="${escapeHtml(r.cusip)}"` : ''}>Open</button></td>
+      </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text3)">Nothing matches these filters.</td></tr>`;
+  }
+
+  function wireAllOfferingsControls() {
+    const search = document.getElementById('ao-search');
+    if (!search || search.dataset.wired) return;
+    search.dataset.wired = '1';
+    let t = null;
+    search.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        allOfferingsFilters.search = search.value;
+        replaceHashParams('all-offerings', { q: allOfferingsFilters.search });
+        renderAllOfferings();
+      }, 150);
+    });
+    document.getElementById('ao-minyield').addEventListener('input', e => {
+      allOfferingsFilters.minYield = numberOrNull(e.target.value);
+      renderAllOfferings();
+    });
+    document.getElementById('ao-maxmaturity').addEventListener('change', e => {
+      allOfferingsFilters.maxMaturity = e.target.value || '';
+      renderAllOfferings();
+    });
+    document.getElementById('ao-clear').addEventListener('click', () => {
+      allOfferingsFilters = { search: '', classes: new Set(), minYield: null, maxMaturity: '' };
+      setControlValue('ao-search', '');
+      setControlValue('ao-minyield', '');
+      setControlValue('ao-maxmaturity', '');
+      replaceHashParams('all-offerings', {});
+      renderAllOfferingsClasses();
+      renderAllOfferings();
+    });
+    document.getElementById('ao-export').addEventListener('click', exportAllOfferingsCsv);
+    document.querySelectorAll('#allOfferingsTable th[data-aosort]').forEach(th => {
+      th.style.cursor = 'pointer';
+      th.addEventListener('click', () => {
+        const col = th.getAttribute('data-aosort');
+        if (allOfferingsSort.col === col) allOfferingsSort.dir = allOfferingsSort.dir === 'asc' ? 'desc' : 'asc';
+        else allOfferingsSort = { col, dir: col === 'yield' || col === 'coupon' || col === 'price' ? 'desc' : 'asc' };
+        renderAllOfferings();
+      });
+    });
+  }
+
+  function exportAllOfferingsCsv() {
+    if (!allOfferingsData) return;
+    const rows = applyAllOfferingsFilters(allOfferingsData.rows || []);
+    const header = ['Asset Class', 'Description', 'CUSIP', 'Coupon', 'Yield', 'Maturity', 'Price', 'State', 'Sector'];
+    downloadCsv(`all-offerings-${allOfferingsData.date || 'current'}.csv`, [header].concat(rows.map(r => [
+      r.assetClass, r.description, r.cusip, r.coupon ?? '', r.yield ?? '', r.maturity ?? '', r.price ?? '', r.state ?? '', r.sector ?? ''
+    ])));
   }
 
   // ============ Treasury Notes Explorer ============
