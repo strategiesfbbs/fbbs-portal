@@ -9244,12 +9244,16 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req, 16 * 1024);
       const added = addWatchlistItem(BANK_REPORTS_DIR, { ...body, rep: rep.username });
       if (!added) return sendJSON(res, 400, { error: 'Invalid watchlist item' });
+      appendAuditLog({ event: 'watchlist-add', rep: rep.username, kind: added.kind, refId: added.refId });
       return sendJSON(res, 200, { success: true });
     }
     if (pathname === '/api/me/watchlist' && req.method === 'DELETE') {
       const rep = resolveRequestRep(req);
       if (!rep) return sendJSON(res, 400, { error: 'No acting rep' });
       const removed = removeWatchlistItem(BANK_REPORTS_DIR, rep.username, query.get('kind'), query.get('refId'));
+      if (removed) {
+        appendAuditLog({ event: 'watchlist-remove', rep: rep.username, kind: query.get('kind'), refId: query.get('refId') });
+      }
       return sendJSON(res, removed ? 200 : 404, removed ? { success: true } : { error: 'Not on your watchlist' });
     }
 
