@@ -52,6 +52,18 @@ function blsFixture() {
   };
 }
 
+const UPCOMING_FIXTURE = [
+  { cusip: '912797UG0', securityType: 'Bill', securityTerm: '13-Week', auctionDate: '2026-06-15T00:00:00', issueDate: '2026-06-18T00:00:00' },
+  { cusip: '91282CMZ2', securityType: 'Note', securityTerm: '2-Year', auctionDate: '2026-06-23T00:00:00', issueDate: '2026-06-30T00:00:00' },
+  { cusip: '', securityType: 'Bill', securityTerm: '', auctionDate: '', issueDate: '' }, // junk row
+];
+
+const RESULTS_FIXTURE = [
+  { cusip: '912810UK5', securityType: 'Bond', securityTerm: '29-Year 11-Month', auctionDate: '2026-06-11T00:00:00', highYield: '5.0200', bidToCoverRatio: '2.330000' },
+  { cusip: '912797NH7', securityType: 'Bill', securityTerm: '4-Week', auctionDate: '2026-06-11T00:00:00', highYield: '', highInvestmentRate: '3.674000', highDiscountRate: '3.595000', bidToCoverRatio: '3.130000' },
+  { cusip: 'JUNK', securityType: 'Bill', securityTerm: '8-Week', auctionDate: '2026-06-10T00:00:00', highYield: '', highInvestmentRate: '', highDiscountRate: '', bidToCoverRatio: '' }, // no usable rate
+];
+
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'market-wire-test-'));
 }
@@ -188,6 +200,42 @@ async function main() {
 
     const emptyDir = tmpDir();
     const none = await marketWire.getEconomicIndicators({ marketDir: emptyDir, fetchImpl: dead, now: Date.parse('2026-06-12T08:00:01Z') });
+    assert.strictEqual(none, null);
+  });
+
+  await check('parseAuctions shapes upcoming + results and prefers bond-equivalent stops', () => {
+    const out = marketWire.parseAuctions(UPCOMING_FIXTURE, RESULTS_FIXTURE);
+    assert.strictEqual(out.upcoming.length, 2);
+    assert.strictEqual(out.upcoming[0].auctionDate, '2026-06-15');
+    assert.strictEqual(out.upcoming[0].term, '13-Week');
+    assert.strictEqual(out.results.length, 2);
+    assert.strictEqual(out.results[0].stopYield, 5.02);
+    assert.strictEqual(out.results[0].bidToCover, 2.33);
+    // Bill: highYield blank → falls back to the bond-equivalent investment rate.
+    assert.strictEqual(out.results[1].stopYield, 3.674);
+    assert.deepStrictEqual(marketWire.parseAuctions(null, null), { upcoming: [], results: [] });
+  });
+
+  await check('getTreasuryAuctions caches and serves stale on failure', async () => {
+    const dir = tmpDir();
+    const impl = fetchFor({
+      'securities/upcoming': JSON.stringify(UPCOMING_FIXTURE),
+      'securities/auctioned': JSON.stringify(RESULTS_FIXTURE),
+    });
+    const out = await marketWire.getTreasuryAuctions({ marketDir: dir, fetchImpl: impl, now: Date.parse('2026-06-11T12:00:00Z') });
+    assert.strictEqual(out.stale, false);
+    assert.strictEqual(out.results[0].stopYield, 5.02);
+
+    const callsBefore = impl.calls.length;
+    await marketWire.getTreasuryAuctions({ marketDir: dir, fetchImpl: impl, now: Date.parse('2026-06-11T12:30:00Z') });
+    assert.strictEqual(impl.calls.length, callsBefore, 'served from cache within TTL');
+
+    const dead = fetchFor({});
+    const staleOut = await marketWire.getTreasuryAuctions({ marketDir: dir, fetchImpl: dead, now: Date.parse('2026-06-11T14:00:01Z') });
+    assert.strictEqual(staleOut.stale, true);
+    assert.strictEqual(staleOut.upcoming.length, 2);
+
+    const none = await marketWire.getTreasuryAuctions({ marketDir: tmpDir(), fetchImpl: dead, now: Date.parse('2026-06-11T14:00:01Z') });
     assert.strictEqual(none, null);
   });
 

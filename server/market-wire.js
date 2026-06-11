@@ -25,6 +25,9 @@ const FEEDS = [
   { key: 'sec', label: 'SEC', url: 'https://www.sec.gov/news/pressreleases.rss' },
 ];
 
+const AUCTION_UPCOMING_URL = 'https://www.treasurydirect.gov/TA_WS/securities/upcoming?format=json';
+const AUCTION_RESULTS_URL = 'https://www.treasurydirect.gov/TA_WS/securities/auctioned?days=8&format=json';
+
 const BLS_URL = 'https://api.bls.gov/publicAPI/v2/timeseries/data/';
 const BLS_SERIES = {
   cpi: 'CUUR0000SA0', // CPI-U, all items, NSA index — rendered as YoY %
@@ -33,8 +36,10 @@ const BLS_SERIES = {
 
 const HEADLINES_CACHE = 'market-wire-headlines.json';
 const INDICATORS_CACHE = 'market-wire-indicators.json';
+const AUCTIONS_CACHE = 'market-wire-auctions.json';
 const HEADLINES_TTL_MS = 30 * 60 * 1000;
 const INDICATORS_TTL_MS = 12 * 60 * 60 * 1000;
+const AUCTIONS_TTL_MS = 60 * 60 * 1000; // results post early afternoon on auction days
 const FETCH_TIMEOUT_MS = 15000;
 const MAX_ITEMS_PER_FEED = 10;
 const MAX_HEADLINES = 24;
@@ -129,6 +134,56 @@ function parseBlsResponse(json) {
     }
   }
   return indicators;
+}
+
+// ---------- Treasury auction parsing (pure, fixture-tested) ----------
+
+function auctionDay(value) {
+  const m = String(value || '').match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+
+function auctionNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && String(value).trim() !== '' ? n : null;
+}
+
+/**
+ * Shape the two TreasuryDirect TA_WS payloads into
+ * { upcoming: [...], results: [...] }. Bills publish discount/investment
+ * rates instead of highYield, so the stop is taken from the first of
+ * highYield → highInvestmentRate (bond-equivalent) → highDiscountRate.
+ * Junk rows (no auction date or term) are dropped.
+ */
+function parseAuctions(upcomingJson, resultsJson) {
+  const upcoming = (Array.isArray(upcomingJson) ? upcomingJson : [])
+    .map(a => ({
+      cusip: String(a.cusip || '').trim(),
+      type: String(a.securityType || '').trim(),
+      term: String(a.securityTerm || '').trim(),
+      auctionDate: auctionDay(a.auctionDate),
+      issueDate: auctionDay(a.issueDate),
+    }))
+    .filter(a => a.auctionDate && a.term)
+    .sort((a, b) => a.auctionDate.localeCompare(b.auctionDate))
+    .slice(0, 12);
+
+  const results = (Array.isArray(resultsJson) ? resultsJson : [])
+    .map(a => ({
+      cusip: String(a.cusip || '').trim(),
+      type: String(a.securityType || '').trim(),
+      term: String(a.securityTerm || '').trim(),
+      auctionDate: auctionDay(a.auctionDate),
+      stopYield: auctionNumber(a.highYield) != null
+        ? auctionNumber(a.highYield)
+        : (auctionNumber(a.highInvestmentRate) != null ? auctionNumber(a.highInvestmentRate) : auctionNumber(a.highDiscountRate)),
+      bidToCover: auctionNumber(a.bidToCoverRatio),
+    }))
+    .filter(a => a.auctionDate && a.term && a.stopYield != null)
+    .sort((a, b) => b.auctionDate.localeCompare(a.auctionDate))
+    .slice(0, 10);
+
+  return { upcoming, results };
 }
 
 // ---------- Cache plumbing ----------
@@ -297,10 +352,71 @@ async function getEconomicIndicators(opts) {
   }
 }
 
+// ---------- Treasury auctions ----------
+
+function buildAuctionsResponse(cache, { stale = false } = {}) {
+  if (!cache || (!Array.isArray(cache.upcoming) && !Array.isArray(cache.results))) return null;
+  return {
+    upcoming: cache.upcoming || [],
+    results: cache.results || [],
+    fetchedAt: cache.fetchedAt || null,
+    stale: Boolean(stale),
+  };
+}
+
+let auctionsInflight = null;
+
+/**
+ * Upcoming Treasury auctions + the last week of auction results from the
+ * keyless TreasuryDirect TA_WS API, cache-fresh within ttlMs (default 1h).
+ * Stale cache on failure; null with no cache. Never throws.
+ *
+ * opts: { marketDir (required), ttlMs?, fetchImpl?, now?, log? }
+ */
+async function getTreasuryAuctions(opts) {
+  const marketDir = opts && opts.marketDir;
+  if (!marketDir) throw new Error('getTreasuryAuctions requires opts.marketDir');
+  const ttlMs = opts.ttlMs != null ? opts.ttlMs : AUCTIONS_TTL_MS;
+  const fetchImpl = opts.fetchImpl || fetch;
+  const now = opts.now != null ? opts.now : Date.now();
+  const log = opts.log || (() => {});
+
+  const cache = readCache(marketDir, AUCTIONS_CACHE);
+  if (cache && cache.fetchedAt && now - Date.parse(cache.fetchedAt) < ttlMs) {
+    return buildAuctionsResponse(cache);
+  }
+
+  if (!auctionsInflight) {
+    auctionsInflight = (async () => {
+      const [upcomingText, resultsText] = await Promise.all([
+        fetchText(AUCTION_UPCOMING_URL, fetchImpl),
+        fetchText(AUCTION_RESULTS_URL, fetchImpl),
+      ]);
+      const parsed = parseAuctions(JSON.parse(upcomingText), JSON.parse(resultsText));
+      if (!parsed.upcoming.length && !parsed.results.length) {
+        throw new Error('TreasuryDirect returned no auctions');
+      }
+      const fresh = { fetchedAt: new Date(now).toISOString(), ...parsed };
+      writeCache(marketDir, AUCTIONS_CACHE, fresh);
+      return fresh;
+    })().finally(() => { auctionsInflight = null; });
+  }
+
+  try {
+    return buildAuctionsResponse(await auctionsInflight);
+  } catch (err) {
+    log('warn', 'market-wire auctions refresh failed:', err.message);
+    if (cache) return buildAuctionsResponse(cache, { stale: true });
+    return null;
+  }
+}
+
 module.exports = {
   parseRssItems,
   parseBlsResponse,
+  parseAuctions,
   getLatestHeadlines,
   getEconomicIndicators,
+  getTreasuryAuctions,
   FEEDS,
 };

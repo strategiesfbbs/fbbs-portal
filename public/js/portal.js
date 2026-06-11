@@ -20320,8 +20320,9 @@
     const rates = data.rates || null;
     const ind = data.indicators || null;
     const wire = data.headlines || null;
+    const auctions = data.auctions || null;
     const headlines = wire && Array.isArray(wire.headlines) ? wire.headlines : [];
-    if (!rates && !ind && !headlines.length) {
+    if (!rates && !ind && !auctions && !headlines.length) {
       section.hidden = true;
       return;
     }
@@ -20343,9 +20344,26 @@
     if (ind && ind.unemployment) {
       cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
     }
+    let auctionsCard = '';
+    if (auctions && ((auctions.results || []).length || (auctions.upcoming || []).length)) {
+      const resultRows = (auctions.results || []).slice(0, 3).map(a => `<div class="home-wire-auction-row">
+        <span>${escapeHtml(a.term)} ${escapeHtml(a.type)}</span>
+        <span>${escapeHtml(a.stopYield.toFixed(3))}%${a.bidToCover != null ? ' · ' + escapeHtml(a.bidToCover.toFixed(2)) + 'x' : ''}</span>
+      </div>`).join('');
+      const upcomingRows = (auctions.upcoming || []).slice(0, 3).map(a => `<div class="home-wire-auction-row">
+        <span>${escapeHtml(a.term)} ${escapeHtml(a.type)}</span>
+        <span>${escapeHtml(a.auctionDate || '')}</span>
+      </div>`).join('');
+      auctionsCard = `<div class="home-wire-card home-wire-auctions">
+        <p class="home-wire-card-label">Treasury Auctions</p>
+        ${resultRows ? `<p class="home-wire-auction-head">Latest stops · bid-to-cover</p>${resultRows}` : ''}
+        ${upcomingRows ? `<p class="home-wire-auction-head">Coming up</p>${upcomingRows}` : ''}
+      </div>`;
+    }
+
     const indicatorsEl = document.getElementById('homeWireIndicators');
     if (indicatorsEl) {
-      indicatorsEl.innerHTML = cards.join('') || '<div class="home-wire-card"><p class="home-wire-card-sub">Live numbers unavailable.</p></div>';
+      indicatorsEl.innerHTML = (cards.join('') + auctionsCard) || '<div class="home-wire-card"><p class="home-wire-card-sub">Live numbers unavailable.</p></div>';
     }
 
     const listEl = document.getElementById('homeWireList');
@@ -20362,8 +20380,8 @@
       const at = (wire && wire.fetchedAt) || (ind && ind.fetchedAt) || null;
       const stale = Boolean(wire && wire.stale);
       updatedEl.textContent = at
-        ? `Fed · FDIC · SEC · BLS — updated ${formatRelativeAt(at)}${stale ? ' (showing cached)' : ''}`
-        : 'Fed · FDIC · SEC · BLS';
+        ? `Fed · FDIC · SEC · BLS · TreasuryDirect — updated ${formatRelativeAt(at)}${stale ? ' (showing cached)' : ''}`
+        : 'Fed · FDIC · SEC · BLS · TreasuryDirect';
     }
   }
 

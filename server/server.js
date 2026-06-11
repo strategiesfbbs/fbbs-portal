@@ -9220,10 +9220,11 @@ const server = http.createServer(async (req, res) => {
     // economic indicators (keyless BLS) + a curve summary from the cached
     // Treasury feed. Each source degrades independently to stale-or-null.
     if (pathname === '/api/market/wire' && req.method === 'GET') {
-      const [headlines, indicators, curve] = await Promise.all([
+      const [headlines, indicators, curve, auctions] = await Promise.all([
         marketWire.getLatestHeadlines({ marketDir: MARKET_DIR, log }),
         marketWire.getEconomicIndicators({ marketDir: MARKET_DIR, log }),
         marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }),
+        marketWire.getTreasuryAuctions({ marketDir: MARKET_DIR, log }),
       ]);
       let rates = null;
       if (curve && curve.tenors) {
@@ -9237,7 +9238,7 @@ const server = http.createServer(async (req, res) => {
           changes: curve.changes || {},
         };
       }
-      return sendJSON(res, 200, { headlines, indicators, rates });
+      return sendJSON(res, 200, { headlines, indicators, rates, auctions });
     }
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
