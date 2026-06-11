@@ -9,6 +9,7 @@ data/cd-internal/*
 data/structured-notes/*
 data/market-color/*
 data/exec-summary/*
+data/market/*
 data/audit.log
 !data/current/.gitkeep
 !data/archive/.gitkeep
@@ -20,6 +21,7 @@ data/audit.log
 !data/structured-notes/.gitkeep
 !data/market-color/.gitkeep
 !data/exec-summary/.gitkeep
+!data/market/.gitkeep
 
 # Node / IIS logs
 node_modules/

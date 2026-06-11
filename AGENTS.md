@@ -69,6 +69,12 @@ From the full review in `docs/improvement-roadmap-2026-06-10.md` (read it before
 - Muni explorer CUSIPs link out to MSRB EMMA; explorer subtitles show an "Updated h:mm" freshness stamp from the slot JSON's `extractedAt`/`uploadedAt`; tear-sheet website field renders as a link.
 - Launch-era docs moved to `docs/archive/go-live/`.
 
+## Wave-2 improvement push (2026-06-11)
+
+- **Task engine** (`bank_tasks` in `bank-coverage.sqlite`): future-dated follow-ups per bank — title/body/due_date/priority/assignee, status `Open/Done/Cancelled` with completion stamps. Routes: GET+POST `/api/banks/:id/tasks`, PATCH `/api/bank-tasks/:id`, GET `/api/me/tasks` (overdue/due-today/upcoming buckets). UI: tear-sheet Tasks panel, "Follow-up due" date on the Log Activity form (logs the call AND creates the task), My Work "My Tasks" tile, Pulse open/overdue-task KPIs. Task create/complete write system rows (`task-create`/`task-complete`) to the bank timeline. Distinct from the past-tense `task` activity kind and from `next_action_date`.
+- **Opportunities / pipeline** (`bank_opportunities`): the *selling* side (Strategies Queue stays fulfillment) — product, est value, stage `Prospect→Qualified→Proposed→Won/Lost`, close date, owner; `stage_changed_at`/`closed_at` stamps. Routes: GET+POST `/api/banks/:id/opportunities`, PATCH `/api/bank-opportunities/:id`, GET `/api/reports/pipeline` (rep-scoped, `?rep=all`). `pipelineSummary()` (open $ by stage/product/owner + won/lost this quarter) rides on `/api/crm/dashboard`; Pulse shows a Pipeline card; tear sheet has an Opportunities panel with inline stage moves. Won/Lost land on the bank timeline (`opportunity-won/lost`).
+- **FDIC BankFind live check** (`server/fdic-bankfind.js`): free keyless api.fdic.gov headline financials by FDIC cert, 24h disk cache under `data/market/fdic/`. `GET /api/banks/:id/fdic-check` compares the FDIC's latest quarter to the workbook period; tear sheet shows an "FDIC live" bar that flags when a newer quarter is out (the cue to refresh the 153MB workbook import). Tests: `tests/fdic-bankfind.test.js`. Next step on this lane per the roadmap: FFIEC bulk ZIP importer to replace the workbook entirely.
+
 ## Data layout
 
 ```
