@@ -20276,6 +20276,63 @@
     });
   }
 
+  // ============ Live package polling ============
+
+  const PACKAGE_POLL_MS = 3 * 60 * 1000;
+  const PULSE_REFRESH_MS = 5 * 60 * 1000;
+
+  function packageFingerprint(pkg) {
+    if (!pkg || typeof pkg !== 'object') return '';
+    return [
+      pkg.date, pkg.publishedAt, pkg.offeringsCount, pkg.muniOfferingsCount,
+      pkg.treasuryNotesCount, pkg.agencyCount, pkg.corporatesCount,
+      pkg.relativeValueRowsCount, pkg.mmdCurveCount,
+    ].join('|');
+  }
+
+  // Pages that render today's inventory. When a poll detects a new publish,
+  // the ACTIVE one reloads so an open tab picks up the desk's mid-morning
+  // package without a manual browser refresh. Inactive pages reload anyway
+  // the next time goTo() opens them.
+  const PACKAGE_PAGE_LOADERS = {
+    'all-offerings': () => loadAllOfferings(),
+    'watchlist': () => loadWatchlistPage(),
+    'treasury-explorer': () => loadTreasuryNotes(),
+    'explorer': () => loadOfferings(),
+    'muni-explorer': () => loadMuniOfferings(),
+    'agencies': () => loadAgencies(),
+    'corporates': () => loadCorporates(),
+    'structured-notes': () => loadStructuredNotes(),
+    'mbs-cmo': () => loadMbsCmo(),
+    'market-color': () => loadMarketColor(),
+  };
+
+  function setupLivePolling() {
+    setInterval(async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const res = await fetch('/api/current', { cache: 'no-store' });
+        if (!res.ok) return;
+        const fresh = await res.json();
+        if (packageFingerprint(fresh) === packageFingerprint(currentPackage)) return;
+        await loadCurrent(); // re-renders the home hero, tiles, and inline viewers
+        const active = document.querySelector('.page.active');
+        const pageName = active ? active.id.replace(/^p-/, '') : '';
+        const reload = PACKAGE_PAGE_LOADERS[pageName];
+        if (reload) reload();
+        showToast('Today’s package was updated — data refreshed.');
+      } catch (_) { /* transient — the next poll retries */ }
+    }, PACKAGE_POLL_MS);
+
+    // The CRM Pulse dashboard refreshes itself while it's the open page, so
+    // logged calls and new tasks show up without bouncing off the page.
+    setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const pulse = document.getElementById('p-pulse');
+      if (pulse && pulse.classList.contains('active')) loadCrmPulse(true);
+    }, PULSE_REFRESH_MS);
+  }
+
   // ============ Market Wire (live headlines + economic numbers) ============
 
   const MARKET_WIRE_REFRESH_MS = 15 * 60 * 1000;
@@ -20410,6 +20467,7 @@
     setupHome();
     setupHomePolish();
     setupMarketWire();
+    setupLivePolling();
     setupUpload();
     setupCdCostCalculator();
     setupCdOpportunityTool();
