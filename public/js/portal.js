@@ -48,6 +48,10 @@
   let bankActivityFilter = 'all';     // 'all' (CRM kinds) | a single kind | 'system'
   let bankActivityLogKind = 'call';   // selected pill in the Log Activity form
   let bankActivitySaving = false;
+  let selectedBankTasks = [];         // open tasks on the selected bank (task engine)
+  let bankTasksBankId = null;
+  let bankTaskSaving = false;
+  let bankTaskAdding = false;         // add-task form expanded?
   let bankLoadRequestId = 0;
   let tearSheetCoverageRequestId = 0;
   let selectedBankProductFit = [];
@@ -2108,6 +2112,23 @@
       </li>
     `);
 
+    const tasks = (work && work.myTasks) || { openCount: 0, overdue: [], dueToday: [], upcoming: [] };
+    setMyWorkNum('tasks', tasks.openCount);
+    const taskParts = [];
+    if (tasks.overdue.length) taskParts.push(`<strong>${formatNumber(tasks.overdue.length)}</strong> overdue`);
+    if (tasks.dueToday.length) taskParts.push(`<strong>${formatNumber(tasks.dueToday.length)}</strong> due today`);
+    const taskDetail = document.querySelector('[data-mywork-detail="tasks"]');
+    if (taskDetail) taskDetail.innerHTML = taskParts.join(' &middot; ');
+    const taskRows = [...tasks.overdue, ...tasks.dueToday, ...tasks.upcoming].slice(0, 5);
+    setMyWorkList('tasks', taskRows, row => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(row.title || 'Task')}</span>
+          <span class="my-work-list-meta">${escapeHtml(row.bankName || row.bankId)}${row.dueDate ? ` &middot; due ${escapeHtml(row.dueDate)}` : ''}</span>
+        </button>
+      </li>
+    `);
+
     setMyWorkNum('overdue', overdue.count);
     setMyWorkList('overdue', overdue.items, row => `
       <li>
@@ -2511,6 +2532,8 @@
         <div><strong>${escapeHtml(formatNumber(k.totalProspects || 0))}</strong><span>Prospects</span></div>
         <div><strong>${escapeHtml(formatNumber(k.newThisQuarter || 0))}</strong><span>New this quarter</span></div>
         <div><strong>${escapeHtml(formatNumber(k.openStrategies || 0))}</strong><span>Open strategies</span></div>
+        <div><strong>${escapeHtml(formatNumber(k.openTasks || 0))}</strong><span>Open tasks</span></div>
+        <div><strong>${escapeHtml(formatNumber(k.overdueTasks || 0))}</strong><span>Overdue tasks</span></div>
         <div><strong>${escapeHtml(formatNumber(k.overdueFollowups || 0))}</strong><span>Overdue follow-ups</span></div>
       </div>
       <div class="pulse-grid">
@@ -12268,6 +12291,7 @@
       ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
       ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
       ${renderBankProductFitPanel()}
+      ${renderBankTasksPanel()}
       ${renderBankActivityPanel()}
       ${renderBankAssistantPanel()}
       ${renderBankIntelligencePanel(bank, values, recentPeriods)}
@@ -12303,7 +12327,9 @@
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
     wireBankContactsControls();
     wireBankProductFitControls();
+    wireBankTaskControls();
     loadBankActivity(bank.id);
+    loadBankTasks(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
       btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
@@ -14307,6 +14333,9 @@
           <label class="activity-log-field">Contact
             <select id="bankActivityContact">${contactOptions}</select>
           </label>
+          <label class="activity-log-field">Follow-up due
+            <input type="date" id="bankActivityFollowupDate" min="${escapeHtml(today)}" title="Also create a follow-up task due this date">
+          </label>
         </div>
         <div class="activity-log-actions">
           <button type="submit" class="small-btn" id="bankActivityLogBtn" ${bankActivitySaving ? 'disabled' : ''}>${bankActivitySaving ? 'Logging…' : 'Log Activity'}</button>
@@ -14319,6 +14348,151 @@
     return `<div class="bank-activity-filters" role="group" aria-label="Filter activity">
       ${ACTIVITY_FILTERS.map(f => `<button type="button" class="activity-filter-chip ${f.id === bankActivityFilter ? 'is-active' : ''}" data-activity-filter="${escapeHtml(f.id)}" aria-pressed="${f.id === bankActivityFilter ? 'true' : 'false'}">${escapeHtml(f.label)}</button>`).join('')}
     </div>`;
+  }
+
+  // ============ Bank tasks panel (CRM task engine) ============
+  // Open follow-up tasks on the selected bank: add (title + due + priority +
+  // assignee), complete, and overdue/due-today highlighting. Backed by
+  // /api/banks/:id/tasks + PATCH /api/bank-tasks/:id.
+
+  function renderBankTasksPanel() {
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = (selectedBankTasks || []).map(t => {
+      let dueChip = '';
+      if (t.dueDate) {
+        const cls = t.dueDate < today ? 'task-due-overdue' : (t.dueDate === today ? 'task-due-today' : '');
+        const label = t.dueDate < today ? `Overdue · ${formatActivityDate(t.dueDate)}`
+          : (t.dueDate === today ? 'Due today' : `Due ${formatActivityDate(t.dueDate)}`);
+        dueChip = `<span class="task-due-chip ${cls}">${escapeHtml(label)}</span>`;
+      }
+      const who = t.assignedDisplay || t.assignedTo || '';
+      return `
+        <li class="bank-task-item">
+          <button type="button" class="bank-task-complete" data-task-complete="${escapeHtml(t.id)}" title="Mark done" aria-label="Mark task done"></button>
+          <div class="bank-task-body">
+            <p class="bank-task-title">${escapeHtml(t.title)}${t.priority === 'High' ? ' <span class="task-priority-high">High</span>' : ''}</p>
+            ${t.body ? `<p class="bank-task-notes">${escapeHtml(t.body).replace(/\n/g, '<br>')}</p>` : ''}
+            <p class="bank-task-meta">${dueChip}${who ? `<span>${escapeHtml(who)}</span>` : ''}</p>
+          </div>
+        </li>`;
+    }).join('');
+    const repUser = (meState.rep && meState.rep.username) || '';
+    const form = bankTaskAdding ? `
+      <form class="bank-task-form" id="bankTaskForm">
+        <label class="activity-log-field">Task
+          <input type="text" id="bankTaskTitle" maxlength="300" placeholder="e.g. Call back about the CD ladder" required>
+        </label>
+        <div class="activity-log-row">
+          <label class="activity-log-field">Due
+            <input type="date" id="bankTaskDue" min="${escapeHtml(today)}">
+          </label>
+          <label class="activity-log-field">Priority
+            <select id="bankTaskPriority"><option>Normal</option><option>High</option><option>Low</option></select>
+          </label>
+          <label class="activity-log-field">Assign to
+            <input type="text" id="bankTaskAssignee" maxlength="80" value="${escapeHtml(repUser)}" placeholder="rep username">
+          </label>
+        </div>
+        <div class="activity-log-actions">
+          <button type="submit" class="small-btn" ${bankTaskSaving ? 'disabled' : ''}>${bankTaskSaving ? 'Saving…' : 'Add Task'}</button>
+          <button type="button" class="text-btn" id="bankTaskCancelBtn">Cancel</button>
+        </div>
+      </form>` : '';
+    return `
+      <section class="bank-section bank-tasks-section" id="bankTasksPanel">
+        <div class="bank-section-title"><span>Tasks</span>
+          <button type="button" class="small-btn" id="bankTaskAddBtn" ${bankTaskAdding ? 'hidden' : ''}>+ Task</button>
+        </div>
+        ${form}
+        <ol class="bank-task-list">${rows || '<li class="bank-activity-empty">No open tasks. Add a follow-up so it can’t slip.</li>'}</ol>
+      </section>
+    `;
+  }
+
+  function refreshBankTasksPanel() {
+    const panel = document.getElementById('bankTasksPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankTasksPanel();
+    wireBankTaskControls();
+  }
+
+  function wireBankTaskControls() {
+    const panel = document.getElementById('bankTasksPanel');
+    if (!panel) return;
+    const addBtn = document.getElementById('bankTaskAddBtn');
+    if (addBtn) addBtn.addEventListener('click', () => { bankTaskAdding = true; refreshBankTasksPanel(); const el = document.getElementById('bankTaskTitle'); if (el) el.focus(); });
+    const cancelBtn = document.getElementById('bankTaskCancelBtn');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { bankTaskAdding = false; refreshBankTasksPanel(); });
+    const form = document.getElementById('bankTaskForm');
+    if (form) form.addEventListener('submit', submitBankTask);
+    panel.querySelectorAll('[data-task-complete]').forEach(btn => {
+      btn.addEventListener('click', () => completeBankTask(btn.getAttribute('data-task-complete')));
+    });
+  }
+
+  async function loadBankTasks(bankId) {
+    if (!bankId) { selectedBankTasks = []; bankTasksBankId = null; refreshBankTasksPanel(); return; }
+    bankTasksBankId = bankId;
+    try {
+      const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/tasks`, { cache: 'no-store' }).then(readBankJson);
+      if (bankTasksBankId !== bankId) return; // user moved on
+      selectedBankTasks = data.tasks || [];
+    } catch (_) {
+      selectedBankTasks = [];
+    }
+    refreshBankTasksPanel();
+  }
+
+  async function submitBankTask(event) {
+    if (event) event.preventDefault();
+    const bankId = bankTasksBankId || selectedBankId();
+    if (!bankId) return showToast('Select a bank first', true);
+    const title = (document.getElementById('bankTaskTitle') || {}).value || '';
+    if (!title.trim()) return showToast('Give the task a title', true);
+    const payload = {
+      title: title.trim(),
+      dueDate: (document.getElementById('bankTaskDue') || {}).value || '',
+      priority: (document.getElementById('bankTaskPriority') || {}).value || 'Normal',
+      assignedTo: ((document.getElementById('bankTaskAssignee') || {}).value || '').trim()
+    };
+    bankTaskSaving = true;
+    refreshBankTasksPanel();
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      bankTaskSaving = false;
+      bankTaskAdding = false;
+      if (data.task) selectedBankTasks = (selectedBankTasks || []).concat([data.task]);
+      refreshBankTasksPanel();
+      showToast('Task added');
+    } catch (e) {
+      bankTaskSaving = false;
+      refreshBankTasksPanel();
+      showToast(e.message || 'Could not add task', true);
+    }
+  }
+
+  async function completeBankTask(taskId) {
+    if (!taskId) return;
+    try {
+      const res = await fetch(`/api/bank-tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Done' })
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      selectedBankTasks = (selectedBankTasks || []).filter(t => t.id !== taskId);
+      refreshBankTasksPanel();
+      showToast('Task completed');
+    } catch (e) {
+      showToast(e.message || 'Could not complete task', true);
+    }
   }
 
   function renderBankActivityPanel() {
@@ -14441,6 +14615,23 @@
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       bankActivitySaving = false;
       if (data.activity) selectedBankActivities = [data.activity].concat(selectedBankActivities || []);
+      // "Log call → set follow-up" in one motion: a filled follow-up date also
+      // creates an open task due that day, assigned to the acting rep.
+      const followupDate = (document.getElementById('bankActivityFollowupDate') || {}).value || '';
+      if (followupDate) {
+        try {
+          const taskRes = await fetch(`/api/banks/${encodeURIComponent(bankId)}/tasks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: `Follow up: ${payload.subject}`, dueDate: followupDate })
+          });
+          const taskData = await readBankJson(taskRes);
+          if (taskRes.ok && taskData.task) {
+            selectedBankTasks = (selectedBankTasks || []).concat([taskData.task]);
+            refreshBankTasksPanel();
+          }
+        } catch (_) { /* follow-up task is best-effort; the activity logged fine */ }
+      }
       // Surface the newly-logged kind so the rep sees it land.
       if (bankActivityFilter !== 'all' && bankActivityFilter !== payload.kind) bankActivityFilter = 'all';
       refreshBankActivityPanel();

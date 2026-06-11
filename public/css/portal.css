@@ -15213,3 +15213,23 @@ body {
 /* Muni CUSIP → MSRB EMMA outbound link */
 .cusip-cell .emma-link { color: inherit; text-decoration: underline dotted; text-underline-offset: 2px; }
 .cusip-cell .emma-link:hover { color: var(--racing-green, #003F2A); text-decoration-style: solid; }
+
+/* ============ Bank tasks panel (CRM task engine) ============ */
+.bank-tasks-section .bank-section-title { display: flex; align-items: center; justify-content: space-between; }
+.bank-task-list { list-style: none; margin: 0; padding: 0; }
+.bank-task-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 2px; border-bottom: 1px solid var(--border-light); }
+.bank-task-item:last-child { border-bottom: none; }
+.bank-task-complete {
+  flex: none; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%;
+  border: 2px solid var(--border); background: var(--surface); cursor: pointer;
+}
+.bank-task-complete:hover { border-color: var(--racing-green, #003F2A); background: #e7f1ec; }
+.bank-task-body { min-width: 0; }
+.bank-task-title { margin: 0; font-size: 14px; font-weight: 600; }
+.bank-task-notes { margin: 2px 0 0; font-size: 13px; color: var(--text2); }
+.bank-task-meta { margin: 4px 0 0; font-size: 12px; color: var(--text2); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.task-due-chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--border-light); }
+.task-due-chip.task-due-today { background: #fdf3e0; color: #9a6b00; }
+.task-due-chip.task-due-overdue { background: #f6e9e4; color: var(--danger); }
+.task-priority-high { font-size: 11px; font-weight: 700; color: var(--danger); margin-left: 6px; }
+.bank-task-form { margin-bottom: 10px; }
