@@ -52,6 +52,10 @@
   let bankTasksBankId = null;
   let bankTaskSaving = false;
   let bankTaskAdding = false;         // add-task form expanded?
+  let selectedBankOpps = [];          // open opportunities on the selected bank (pipeline)
+  let bankOppsBankId = null;
+  let bankOppSaving = false;
+  let bankOppAdding = false;
   let bankLoadRequestId = 0;
   let tearSheetCoverageRequestId = 0;
   let selectedBankProductFit = [];
@@ -2507,6 +2511,35 @@
     `;
   }
 
+  // Sales pipeline card: open $ by stage, won-this-quarter line, and the
+  // nearest-close open deals.
+  function pulsePipelineHtml(pipeline) {
+    if (!pipeline || !pipeline.open || !pipeline.open.count) {
+      return '<div class="bank-search-empty">No open opportunities. Add one from a bank tear sheet.</div>';
+    }
+    const maxValue = Math.max(...pipeline.byStage.map(s => s.value), 1);
+    const bars = pipeline.byStage.map(s => `
+      <div class="pulse-bar-row">
+        <span class="pulse-bar-label">${escapeHtml(s.stage)}</span>
+        <span class="pulse-bar-tracks">
+          <span class="pulse-bar-track"><span class="pulse-bar-fill is-clients" style="width:${(s.value / maxValue * 100).toFixed(1)}%"></span><em>${escapeHtml(formatMoney(s.value, 0))}</em></span>
+        </span>
+      </div>`).join('');
+    const items = (pipeline.openItems || []).slice(0, 5).map(o => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(o.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(o.product)}${o.estValue ? ` · ${escapeHtml(formatMoney(o.estValue, 0))}` : ''}</span>
+          <span class="my-work-list-meta">${escapeHtml(o.stage)}${o.closeDate ? ` · close ${escapeHtml(o.closeDate)}` : ''}</span>
+        </button>
+      </li>`).join('');
+    return `
+      <p class="pulse-pipeline-total"><strong>${escapeHtml(formatMoney(pipeline.open.value, 0))}</strong> open across ${escapeHtml(formatNumber(pipeline.open.count))} opportunit${pipeline.open.count === 1 ? 'y' : 'ies'}
+        ${pipeline.wonThisQuarter && pipeline.wonThisQuarter.count ? ` · won ${escapeHtml(formatMoney(pipeline.wonThisQuarter.value, 0))} this quarter` : ''}</p>
+      <div class="pulse-bars">${bars}</div>
+      ${items ? `<ul class="my-work-tile-list pulse-pipeline-list">${items}</ul>` : ''}
+    `;
+  }
+
   function renderCrmPulse() {
     const mount = document.getElementById('pulseMount');
     if (!mount) return;
@@ -2545,6 +2578,10 @@
         <article class="pulse-card">
           <h3>Open Strategies by Type</h3>
           ${pulseSingleBarsHtml(data.strategiesByType || [])}
+        </article>
+        <article class="pulse-card">
+          <h3>Pipeline</h3>
+          ${pulsePipelineHtml(data.pipeline)}
         </article>
         <article class="pulse-card">
           <h3>Recent Activity</h3>
@@ -12291,6 +12328,7 @@
       ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
       ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
       ${renderBankProductFitPanel()}
+      ${renderBankOpportunitiesPanel()}
       ${renderBankTasksPanel()}
       ${renderBankActivityPanel()}
       ${renderBankAssistantPanel()}
@@ -12328,8 +12366,10 @@
     wireBankContactsControls();
     wireBankProductFitControls();
     wireBankTaskControls();
+    wireBankOppControls();
     loadBankActivity(bank.id);
     loadBankTasks(bank.id);
+    loadBankOpportunities(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
       btn.addEventListener('click', () => runBankAssistant(btn.dataset.bankAssistantAction || 'fit'));
@@ -14348,6 +14388,154 @@
     return `<div class="bank-activity-filters" role="group" aria-label="Filter activity">
       ${ACTIVITY_FILTERS.map(f => `<button type="button" class="activity-filter-chip ${f.id === bankActivityFilter ? 'is-active' : ''}" data-activity-filter="${escapeHtml(f.id)}" aria-pressed="${f.id === bankActivityFilter ? 'true' : 'false'}">${escapeHtml(f.label)}</button>`).join('')}
     </div>`;
+  }
+
+  // ============ Bank opportunities panel (sales pipeline) ============
+  // Open deals on the selected bank: product, est value, stage (movable
+  // inline through Prospect→Qualified→Proposed→Won/Lost), close date.
+  // Won/Lost moves drop the row from the open list; the bank timeline keeps
+  // the outcome.
+
+  const OPP_STAGES = ['Prospect', 'Qualified', 'Proposed', 'Won', 'Lost'];
+  const OPP_PRODUCTS = ['Brokered CDs', 'Bond Swap', 'Muni Credit / BCIS', 'ALM / IRR', 'Portfolio Accounting', 'CECL Analysis', 'CD Funding', 'Other'];
+
+  function renderBankOpportunitiesPanel() {
+    const rows = (selectedBankOpps || []).map(o => {
+      const stageOptions = OPP_STAGES.map(s => `<option${s === o.stage ? ' selected' : ''}>${s}</option>`).join('');
+      return `
+        <li class="bank-opp-item">
+          <div class="bank-opp-body">
+            <p class="bank-opp-title">${escapeHtml(o.product)}${o.estValue ? ` <span class="bank-opp-value">${escapeHtml(formatMoney(o.estValue, 0))}</span>` : ''}</p>
+            ${o.description ? `<p class="bank-task-notes">${escapeHtml(o.description).replace(/\n/g, '<br>')}</p>` : ''}
+            <p class="bank-task-meta">
+              ${o.closeDate ? `<span>Close ${escapeHtml(formatActivityDate(o.closeDate))}</span>` : ''}
+              ${o.ownerDisplay || o.owner ? `<span>${escapeHtml(o.ownerDisplay || o.owner)}</span>` : ''}
+            </p>
+          </div>
+          <select class="bank-opp-stage stage-${escapeHtml(o.stage.toLowerCase())}" data-opp-stage="${escapeHtml(o.id)}" aria-label="Opportunity stage">${stageOptions}</select>
+        </li>`;
+    }).join('');
+    const today = new Date().toISOString().slice(0, 10);
+    const productOptions = OPP_PRODUCTS.map(p => `<option>${p}</option>`).join('');
+    const form = bankOppAdding ? `
+      <form class="bank-task-form" id="bankOppForm">
+        <div class="activity-log-row">
+          <label class="activity-log-field">Product
+            <select id="bankOppProduct">${productOptions}</select>
+          </label>
+          <label class="activity-log-field">Est. value $
+            <input type="number" id="bankOppValue" min="0" step="500" placeholder="e.g. 25000">
+          </label>
+          <label class="activity-log-field">Expected close
+            <input type="date" id="bankOppClose" min="${escapeHtml(today)}">
+          </label>
+        </div>
+        <label class="activity-log-field">Notes
+          <input type="text" id="bankOppDesc" maxlength="2000" placeholder="What's the angle — runoff to reinvest, CD wall, exam pressure...">
+        </label>
+        <div class="activity-log-actions">
+          <button type="submit" class="small-btn" ${bankOppSaving ? 'disabled' : ''}>${bankOppSaving ? 'Saving…' : 'Add Opportunity'}</button>
+          <button type="button" class="text-btn" id="bankOppCancelBtn">Cancel</button>
+        </div>
+      </form>` : '';
+    return `
+      <section class="bank-section bank-opps-section" id="bankOppsPanel">
+        <div class="bank-section-title"><span>Opportunities</span>
+          <button type="button" class="small-btn" id="bankOppAddBtn" ${bankOppAdding ? 'hidden' : ''}>+ Opportunity</button>
+        </div>
+        ${form}
+        <ol class="bank-task-list">${rows || '<li class="bank-activity-empty">No open opportunities yet.</li>'}</ol>
+      </section>
+    `;
+  }
+
+  function refreshBankOppsPanel() {
+    const panel = document.getElementById('bankOppsPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankOpportunitiesPanel();
+    wireBankOppControls();
+  }
+
+  function wireBankOppControls() {
+    const panel = document.getElementById('bankOppsPanel');
+    if (!panel) return;
+    const addBtn = document.getElementById('bankOppAddBtn');
+    if (addBtn) addBtn.addEventListener('click', () => { bankOppAdding = true; refreshBankOppsPanel(); });
+    const cancelBtn = document.getElementById('bankOppCancelBtn');
+    if (cancelBtn) cancelBtn.addEventListener('click', () => { bankOppAdding = false; refreshBankOppsPanel(); });
+    const form = document.getElementById('bankOppForm');
+    if (form) form.addEventListener('submit', submitBankOpportunity);
+    panel.querySelectorAll('[data-opp-stage]').forEach(select => {
+      select.addEventListener('change', () => moveBankOpportunityStage(select.getAttribute('data-opp-stage'), select.value));
+    });
+  }
+
+  async function loadBankOpportunities(bankId) {
+    if (!bankId) { selectedBankOpps = []; bankOppsBankId = null; refreshBankOppsPanel(); return; }
+    bankOppsBankId = bankId;
+    try {
+      const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/opportunities`, { cache: 'no-store' }).then(readBankJson);
+      if (bankOppsBankId !== bankId) return;
+      selectedBankOpps = data.opportunities || [];
+    } catch (_) {
+      selectedBankOpps = [];
+    }
+    refreshBankOppsPanel();
+  }
+
+  async function submitBankOpportunity(event) {
+    if (event) event.preventDefault();
+    const bankId = bankOppsBankId || selectedBankId();
+    if (!bankId) return showToast('Select a bank first', true);
+    const payload = {
+      product: (document.getElementById('bankOppProduct') || {}).value || '',
+      estValue: (document.getElementById('bankOppValue') || {}).value || null,
+      closeDate: (document.getElementById('bankOppClose') || {}).value || '',
+      description: (document.getElementById('bankOppDesc') || {}).value || ''
+    };
+    bankOppSaving = true;
+    refreshBankOppsPanel();
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/opportunities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      bankOppSaving = false;
+      bankOppAdding = false;
+      if (data.opportunity) selectedBankOpps = (selectedBankOpps || []).concat([data.opportunity]);
+      refreshBankOppsPanel();
+      showToast('Opportunity added');
+    } catch (e) {
+      bankOppSaving = false;
+      refreshBankOppsPanel();
+      showToast(e.message || 'Could not add opportunity', true);
+    }
+  }
+
+  async function moveBankOpportunityStage(oppId, stage) {
+    if (!oppId || !stage) return;
+    try {
+      const res = await fetch(`/api/bank-opportunities/${encodeURIComponent(oppId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage })
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (stage === 'Won' || stage === 'Lost') {
+        selectedBankOpps = (selectedBankOpps || []).filter(o => o.id !== oppId);
+        showToast(stage === 'Won' ? 'Marked won 🎉' : 'Marked lost');
+      } else if (data.opportunity) {
+        selectedBankOpps = (selectedBankOpps || []).map(o => o.id === oppId ? data.opportunity : o);
+      }
+      refreshBankOppsPanel();
+    } catch (e) {
+      showToast(e.message || 'Could not update opportunity', true);
+      refreshBankOppsPanel();
+    }
   }
 
   // ============ Bank tasks panel (CRM task engine) ============

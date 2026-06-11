@@ -15233,3 +15233,17 @@ body {
 .task-due-chip.task-due-overdue { background: #f6e9e4; color: var(--danger); }
 .task-priority-high { font-size: 11px; font-weight: 700; color: var(--danger); margin-left: 6px; }
 .bank-task-form { margin-bottom: 10px; }
+
+/* ============ Bank opportunities panel + Pulse pipeline ============ */
+.bank-opps-section .bank-section-title { display: flex; align-items: center; justify-content: space-between; }
+.bank-opp-item { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding: 10px 2px; border-bottom: 1px solid var(--border-light); }
+.bank-opp-item:last-child { border-bottom: none; }
+.bank-opp-body { min-width: 0; }
+.bank-opp-title { margin: 0; font-size: 14px; font-weight: 600; }
+.bank-opp-value { color: var(--racing-green, #003F2A); font-weight: 700; margin-left: 6px; }
+.bank-opp-stage { flex: none; font-size: 12px; padding: 3px 6px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
+.bank-opp-stage.stage-proposed { border-color: #9a6b00; color: #9a6b00; }
+.bank-opp-stage.stage-qualified { border-color: var(--racing-green, #003F2A); color: var(--racing-green, #003F2A); }
+.pulse-pipeline-total { margin: 0 0 10px; font-size: 14px; color: var(--text2); }
+.pulse-pipeline-total strong { font-size: 18px; color: var(--racing-green, #003F2A); }
+.pulse-pipeline-list { margin-top: 10px; }
