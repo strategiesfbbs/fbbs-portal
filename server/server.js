@@ -96,7 +96,13 @@ const {
   activityCountsByRep,
   addBankNote,
   countBillingByState,
+  countOpenTasks,
   createBankContact,
+  createBankTask,
+  getBankTask,
+  listTasksForBank,
+  listTasksForRep,
+  updateBankTask,
   deleteBankActivity,
   deleteBankContact,
   deleteProductFit,
@@ -4474,6 +4480,75 @@ async function handleLogBankActivity(req, res, bankId) {
   }
 }
 
+// CRM task engine: create a future-dated follow-up task on a bank. The task
+// defaults to the acting rep as assignee so "remind me Friday" is one field.
+// A system activity row keeps the bank timeline aware of task creation.
+async function handleCreateBankTask(req, res, bankId) {
+  try {
+    const body = await readJsonBody(req);
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+    if (!String(body.title || '').trim()) return sendJSON(res, 400, { error: 'A task title is required' });
+    const rep = resolveRequestRep(req);
+    const task = createBankTask(BANK_REPORTS_DIR, {
+      bankId,
+      certNumber: summary.certNumber,
+      title: body.title,
+      body: body.body,
+      dueDate: body.dueDate,
+      priority: body.priority,
+      assignedTo: body.assignedTo || (rep ? rep.username : ''),
+      assignedDisplay: body.assignedDisplay || (body.assignedTo ? body.assignedTo : (rep ? rep.displayName : '')),
+      createdBy: rep ? rep.username : '',
+      createdDisplay: rep ? rep.displayName : ''
+    });
+    if (!task) return sendJSON(res, 400, { error: 'Could not create task' });
+    logBankActivity(req, {
+      bankId,
+      certNumber: summary.certNumber,
+      kind: 'task-create',
+      summary: `Task created: ${task.title}${task.dueDate ? ` (due ${task.dueDate})` : ''}`,
+      refType: 'task',
+      refId: task.id
+    });
+    appendAuditLog({ event: 'bank-task-create', bankId, taskId: task.id, dueDate: task.dueDate || null });
+    return sendJSON(res, 200, { task });
+  } catch (err) {
+    log('error', 'Bank task create failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not create task' });
+  }
+}
+
+// Patch a task (complete, reopen, reschedule, reassign, edit). Completion is
+// status:'Done' — stamps completed_at/by in the store.
+async function handleUpdateBankTask(req, res, taskId) {
+  try {
+    const body = await readJsonBody(req);
+    const existing = getBankTask(BANK_REPORTS_DIR, taskId);
+    if (!existing) return sendJSON(res, 404, { error: 'Task not found' });
+    const rep = resolveRequestRep(req);
+    const task = updateBankTask(BANK_REPORTS_DIR, taskId, {
+      ...body,
+      completedBy: rep ? (rep.displayName || rep.username) : ''
+    });
+    if (body.status === 'Done' && existing.status !== 'Done') {
+      logBankActivity(req, {
+        bankId: existing.bankId,
+        certNumber: existing.certNumber,
+        kind: 'task-complete',
+        summary: `Task completed: ${existing.title}`,
+        refType: 'task',
+        refId: existing.id
+      });
+    }
+    appendAuditLog({ event: 'bank-task-update', bankId: existing.bankId, taskId: existing.id, status: task.status });
+    return sendJSON(res, 200, { task });
+  } catch (err) {
+    log('error', 'Bank task update failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not update task' });
+  }
+}
+
 async function handleCreateBankContact(req, res, bankId) {
   try {
     const body = await readJsonBody(req);
@@ -8447,6 +8522,7 @@ function buildMyWorkResponse(rep) {
       myOpenStrategies: { count: 0, recent: [], byStatus: { Open: 0, 'In Progress': 0, 'Needs Billed': 0 } },
       myOverdueFollowups: { count: 0, items: [] },
       myColdAccounts: { count: 0, items: [], thresholdDays: COLD_ACCOUNT_DAYS },
+      myTasks: { openCount: 0, overdue: [], dueToday: [], upcoming: [] },
       recentlyTouched: []
     };
   }
@@ -8566,8 +8642,28 @@ function buildMyWorkResponse(rep) {
         lastActivityDate: lastTouchMap[row.bankId] || ''
       }))
     },
+    myTasks: buildMyTasks(rep, savedBanks),
     recentlyTouched
   };
+}
+
+// Open-task buckets for My Work, with bank display names joined from saved
+// coverage (tasks on unsaved banks fall back to the raw bankId).
+function buildMyTasks(rep, savedBanks) {
+  try {
+    const buckets = listTasksForRep(BANK_REPORTS_DIR, rep.username);
+    const names = new Map((savedBanks || []).map(b => [b.bankId, b.displayName]));
+    const decorate = t => ({ ...t, bankName: names.get(t.bankId) || t.bankId });
+    return {
+      openCount: buckets.openCount,
+      overdue: buckets.overdue.slice(0, 10).map(decorate),
+      dueToday: buckets.dueToday.slice(0, 10).map(decorate),
+      upcoming: buckets.upcoming.slice(0, 10).map(decorate)
+    };
+  } catch (err) {
+    log('warn', 'buildMyTasks failed:', err.message);
+    return { openCount: 0, overdue: [], dueToday: [], upcoming: [] };
+  }
 }
 
 function listKnownReps() {
@@ -8657,6 +8753,13 @@ function buildCrmDashboard(rep) {
     log('warn', 'CRM dashboard activities failed:', err.message);
   }
 
+  let taskCounts = { open: 0, overdue: 0 };
+  try {
+    taskCounts = countOpenTasks(BANK_REPORTS_DIR, { username: rep ? rep.username : null });
+  } catch (err) {
+    log('warn', 'CRM dashboard task counts failed:', err.message);
+  }
+
   return {
     rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
     asOf: new Date().toISOString(),
@@ -8665,7 +8768,9 @@ function buildCrmDashboard(rep) {
       totalProspects: prospects.length,
       newThisQuarter,
       openStrategies: openStrategies.length,
-      overdueFollowups: overdue.length
+      overdueFollowups: overdue.length,
+      openTasks: taskCounts.open,
+      overdueTasks: taskCounts.overdue
     },
     byState,
     strategiesByType,
@@ -9447,6 +9552,33 @@ const server = http.createServer(async (req, res) => {
         reason
       });
       return sendJSON(res, 200, { success: true, activity: removed });
+    }
+
+    const bankTasksMatch = pathname.match(/^\/api\/banks\/([^/]+)\/tasks$/);
+    if (bankTasksMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankTasksMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      const includeClosed = query.get('includeClosed') === '1' || query.get('includeClosed') === 'true';
+      return sendJSON(res, 200, { tasks: listTasksForBank(BANK_REPORTS_DIR, bankId, { includeClosed }) });
+    }
+    if (bankTasksMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankTasksMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return await handleCreateBankTask(req, res, bankId);
+    }
+
+    const bankTaskItemMatch = pathname.match(/^\/api\/bank-tasks\/([^/]+)$/);
+    if (bankTaskItemMatch && req.method === 'PATCH') {
+      const taskId = safeDecodeURIComponent(bankTaskItemMatch[1]);
+      if (!taskId) return sendJSON(res, 400, { error: 'Invalid task ID' });
+      return await handleUpdateBankTask(req, res, taskId);
+    }
+
+    if (pathname === '/api/me/tasks' && req.method === 'GET') {
+      const rep = resolveRequestRep(req);
+      if (!rep) return sendJSON(res, 200, { rep: null, overdue: [], dueToday: [], upcoming: [], openCount: 0 });
+      const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
+      return sendJSON(res, 200, { rep: { username: rep.username, displayName: rep.displayName }, ...buildMyTasks(rep, savedBanks) });
     }
 
     const bankContactsListMatch = pathname.match(/^\/api\/banks\/([^/]+)\/contacts$/);

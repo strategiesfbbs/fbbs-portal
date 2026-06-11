@@ -118,6 +118,29 @@ try {
   // Clean up so later assertions on B-1 activity counts stay isolated.
   coverageStore.listActivitiesForBank(tmpDir, 'B-1').forEach(a => coverageStore.deleteBankActivity(tmpDir, 'B-1', a.id));
 
+  // Bank tasks (CRM task engine)
+  const task = coverageStore.createBankTask(tmpDir, {
+    bankId: 'B-1', title: `Call back re ${TRICKY}`, body: 'wants CD ladder ideas',
+    dueDate: '2026-06-12', priority: 'High', assignedTo: 'Rep1', assignedDisplay: 'Rep One',
+    createdBy: 'rep2', createdDisplay: 'Rep Two'
+  });
+  ok('task-create', task && task.status === 'Open' && task.priority === 'High' && task.title.includes('Trust'));
+  ok('task-create bad input rejected', coverageStore.createBankTask(tmpDir, { bankId: 'B-1' }) === null);
+  coverageStore.createBankTask(tmpDir, { bankId: 'B-1', title: 'Overdue one', dueDate: '2026-06-01', assignedTo: 'REP1' });
+  coverageStore.createBankTask(tmpDir, { bankId: 'B-1', title: 'Undated one', assignedTo: 'rep1' });
+  ok('task-list-bank open only', coverageStore.listTasksForBank(tmpDir, 'B-1').length === 3);
+  const buckets = coverageStore.listTasksForRep(tmpDir, 'rep1', { today: '2026-06-10' });
+  ok('task-buckets', buckets.overdue.length === 1 && buckets.upcoming.length === 2 && buckets.openCount === 3);
+  ok('task-counts rep-scoped', coverageStore.countOpenTasks(tmpDir, { username: 'Rep1', today: '2026-06-10' }).overdue === 1);
+  const done = coverageStore.updateBankTask(tmpDir, task.id, { status: 'Done', completedBy: 'Rep One' });
+  ok('task-complete stamps', done.status === 'Done' && Boolean(done.completedAt) && done.completedBy === 'Rep One');
+  ok('task-complete hides from open list', coverageStore.listTasksForBank(tmpDir, 'B-1').length === 2);
+  ok('task-includeClosed shows all', coverageStore.listTasksForBank(tmpDir, 'B-1', { includeClosed: true }).length === 3);
+  const reopened = coverageStore.updateBankTask(tmpDir, task.id, { status: 'Open' });
+  ok('task-reopen clears stamps', reopened.status === 'Open' && !reopened.completedAt);
+  coverageStore.updateBankTask(tmpDir, task.id, { status: 'Cancelled' });
+  coverageStore.listTasksForBank(tmpDir, 'B-1').forEach(t => coverageStore.updateBankTask(tmpDir, t.id, { status: 'Cancelled' }));
+
   // Product fit
   const fit = coverageStore.upsertProductFit(tmpDir, bank, { product: 'Bond Swap', notes: TRICKY, flaggedByUsername: 'rep1' });
   ok('productfit-upsert', fit && fit.product === 'Bond Swap' && fit.notes === TRICKY);

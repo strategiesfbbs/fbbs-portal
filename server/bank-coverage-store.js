@@ -132,7 +132,27 @@ function ensureCoverageDatabase(outputDir) {
       notes TEXT,
       UNIQUE(ref_type, ref_id)
     );
+    CREATE TABLE IF NOT EXISTS bank_tasks (
+      id TEXT PRIMARY KEY,
+      bank_id TEXT NOT NULL,
+      cert_number TEXT,
+      title TEXT NOT NULL,
+      body TEXT,
+      due_date TEXT,
+      priority TEXT NOT NULL DEFAULT 'Normal',
+      status TEXT NOT NULL DEFAULT 'Open',
+      assigned_to TEXT,
+      assigned_display TEXT,
+      created_by TEXT,
+      created_display TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      completed_by TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_bank_coverage_priority ON bank_coverage(priority, next_action_date);
+    CREATE INDEX IF NOT EXISTS idx_bank_tasks_bank ON bank_tasks(bank_id, status, due_date);
+    CREATE INDEX IF NOT EXISTS idx_bank_tasks_assignee ON bank_tasks(assigned_to, status, due_date);
     CREATE INDEX IF NOT EXISTS idx_bank_notes_bank_created ON bank_notes(bank_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_bank_contacts_bank ON bank_contacts(bank_id, is_primary DESC, name COLLATE NOCASE ASC);
     CREATE INDEX IF NOT EXISTS idx_bank_activities_bank_at ON bank_activities(bank_id, at DESC);
@@ -1216,11 +1236,201 @@ function countBillingByState(outputDir) {
   return counts;
 }
 
+// ---------- Bank tasks (CRM task engine) ----------
+//
+// Future-dated follow-up work: "call them back Friday", "send the swap
+// proposal after their board meeting". Distinct from the past-tense `task`
+// activity kind (which logs work already done) and from bank_coverage's
+// single next_action_date. A bank can carry any number of open tasks, each
+// with its own due date and assignee.
+
+const TASK_STATUSES = ['Open', 'Done', 'Cancelled'];
+const TASK_STATUS_SET = new Set(TASK_STATUSES);
+const TASK_PRIORITIES = ['Low', 'Normal', 'High'];
+const TASK_PRIORITY_SET = new Set(TASK_PRIORITIES);
+
+function taskSelectSql(where = '1 = 1') {
+  return `
+    SELECT
+      id AS id,
+      bank_id AS bankId,
+      cert_number AS certNumber,
+      title AS title,
+      body AS body,
+      due_date AS dueDate,
+      priority AS priority,
+      status AS status,
+      assigned_to AS assignedTo,
+      assigned_display AS assignedDisplay,
+      created_by AS createdBy,
+      created_display AS createdDisplay,
+      created_at AS createdAt,
+      updated_at AS updatedAt,
+      completed_at AS completedAt,
+      completed_by AS completedBy
+    FROM bank_tasks
+    WHERE ${where}
+  `;
+}
+
+function mapTaskRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    bankId: row.bankId,
+    certNumber: row.certNumber || '',
+    title: row.title || '',
+    body: row.body || '',
+    dueDate: row.dueDate || '',
+    priority: row.priority || 'Normal',
+    status: row.status || 'Open',
+    assignedTo: row.assignedTo || '',
+    assignedDisplay: row.assignedDisplay || '',
+    createdBy: row.createdBy || '',
+    createdDisplay: row.createdDisplay || '',
+    createdAt: row.createdAt || '',
+    updatedAt: row.updatedAt || '',
+    completedAt: row.completedAt || '',
+    completedBy: row.completedBy || ''
+  };
+}
+
+function createBankTask(outputDir, payload = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const bankId = cleanText(payload.bankId, 80);
+  const title = cleanText(payload.title, 300);
+  if (!bankId || !title) return null;
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const priority = TASK_PRIORITY_SET.has(payload.priority) ? payload.priority : 'Normal';
+  runSqlite(dbPath, `
+    INSERT INTO bank_tasks (
+      id, bank_id, cert_number, title, body, due_date, priority, status,
+      assigned_to, assigned_display, created_by, created_display, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Open', ?, ?, ?, ?, ?, ?);
+  `, [
+    id,
+    bankId,
+    textOrNull(cleanText(payload.certNumber, 40)),
+    title,
+    textOrNull(cleanMultilineText(payload.body, 4000)),
+    textOrNull(cleanDate(payload.dueDate)),
+    priority,
+    textOrNull(cleanText(payload.assignedTo, 80)),
+    textOrNull(cleanText(payload.assignedDisplay, 200)),
+    textOrNull(cleanText(payload.createdBy, 80)),
+    textOrNull(cleanText(payload.createdDisplay, 200)),
+    now,
+    now
+  ]);
+  return getBankTask(outputDir, id);
+}
+
+function getBankTask(outputDir, taskId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(dbPath, `${taskSelectSql('id = ?')} LIMIT 1;`, [String(taskId || '')]);
+  return mapTaskRow(rows[0]);
+}
+
+// Patch title/body/dueDate/priority/assignee/status. Setting status to Done
+// (or Cancelled) stamps completed_at/by; reopening clears them.
+function updateBankTask(outputDir, taskId, patch = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const existing = getBankTask(outputDir, taskId);
+  if (!existing) return null;
+  const sets = [];
+  const params = [];
+  if (patch.title !== undefined) {
+    const title = cleanText(patch.title, 300);
+    if (title) { sets.push('title = ?'); params.push(title); }
+  }
+  if (patch.body !== undefined) { sets.push('body = ?'); params.push(textOrNull(cleanMultilineText(patch.body, 4000))); }
+  if (patch.dueDate !== undefined) { sets.push('due_date = ?'); params.push(textOrNull(cleanDate(patch.dueDate))); }
+  if (patch.priority !== undefined && TASK_PRIORITY_SET.has(patch.priority)) { sets.push('priority = ?'); params.push(patch.priority); }
+  if (patch.assignedTo !== undefined) { sets.push('assigned_to = ?'); params.push(textOrNull(cleanText(patch.assignedTo, 80))); }
+  if (patch.assignedDisplay !== undefined) { sets.push('assigned_display = ?'); params.push(textOrNull(cleanText(patch.assignedDisplay, 200))); }
+  if (patch.status !== undefined && TASK_STATUS_SET.has(patch.status) && patch.status !== existing.status) {
+    sets.push('status = ?'); params.push(patch.status);
+    if (patch.status === 'Open') {
+      sets.push('completed_at = NULL', 'completed_by = NULL');
+    } else {
+      sets.push('completed_at = ?'); params.push(new Date().toISOString());
+      sets.push('completed_by = ?'); params.push(textOrNull(cleanText(patch.completedBy, 200)));
+    }
+  }
+  if (!sets.length) return existing;
+  sets.push('updated_at = ?'); params.push(new Date().toISOString());
+  params.push(existing.id);
+  runSqlite(dbPath, `UPDATE bank_tasks SET ${sets.join(', ')} WHERE id = ?;`, params);
+  return getBankTask(outputDir, taskId);
+}
+
+function listTasksForBank(outputDir, bankId, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(bankId || '');
+  if (!id) return [];
+  const where = options.includeClosed ? 'bank_id = ?' : `bank_id = ? AND status = 'Open'`;
+  const rows = querySqliteJson(dbPath, `
+    ${taskSelectSql(where)}
+    ORDER BY CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, created_at ASC
+    LIMIT 200;
+  `, [id]);
+  return rows.map(mapTaskRow);
+}
+
+// Open tasks for a rep, bucketed for My Work: overdue / due today / upcoming
+// (incl. undated). `today` is injectable for tests (YYYY-MM-DD).
+function listTasksForRep(outputDir, username, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const user = String(username || '').toLowerCase();
+  if (!user) return { overdue: [], dueToday: [], upcoming: [], openCount: 0 };
+  const today = cleanDate(options.today) || new Date().toISOString().slice(0, 10);
+  const rows = querySqliteJson(dbPath, `
+    ${taskSelectSql(`status = 'Open' AND LOWER(COALESCE(assigned_to, '')) = ?`)}
+    ORDER BY CASE WHEN due_date IS NULL THEN 1 ELSE 0 END, due_date ASC, created_at ASC
+    LIMIT 200;
+  `, [user]);
+  const tasks = rows.map(mapTaskRow);
+  const overdue = tasks.filter(t => t.dueDate && t.dueDate < today);
+  const dueToday = tasks.filter(t => t.dueDate === today);
+  const upcoming = tasks.filter(t => !t.dueDate || t.dueDate > today);
+  return { overdue, dueToday, upcoming, openCount: tasks.length };
+}
+
+// Firm-wide open/overdue counts for the CRM dashboard; rep-scoped when a
+// username is given.
+function countOpenTasks(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const today = cleanDate(options.today) || new Date().toISOString().slice(0, 10);
+  const params = [];
+  let where = `status = 'Open'`;
+  if (options.username) {
+    where += ` AND LOWER(COALESCE(assigned_to, '')) = ?`;
+    params.push(String(options.username).toLowerCase());
+  }
+  const rows = querySqliteJson(dbPath, `
+    SELECT COUNT(*) AS open,
+           SUM(CASE WHEN due_date IS NOT NULL AND due_date < ? THEN 1 ELSE 0 END) AS overdue
+    FROM bank_tasks
+    WHERE ${where};
+  `, [today, ...params]);
+  const row = rows[0] || {};
+  return { open: Number(row.open) || 0, overdue: Number(row.overdue) || 0 };
+}
+
 module.exports = {
   BILLING_STATES,
   COVERAGE_DATABASE_FILENAME,
   MANUAL_ACTIVITY_KINDS,
   PRODUCT_FIT_PRODUCTS,
+  TASK_PRIORITIES,
+  TASK_STATUSES,
+  countOpenTasks,
+  createBankTask,
+  getBankTask,
+  listTasksForBank,
+  listTasksForRep,
+  updateBankTask,
   activityCountsByBank,
   activityCountsByRep,
   addBankNote,
