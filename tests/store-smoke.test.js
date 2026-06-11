@@ -162,6 +162,17 @@ try {
   ok('opp-list hides closed', coverageStore.listOpportunitiesForBank(tmpDir, 'B-1').length === 1);
   ok('opp-list includeClosed', coverageStore.listOpportunitiesForBank(tmpDir, 'B-1', { includeClosed: true }).length === 2);
 
+  // Watchlist
+  coverageStore.addWatchlistItem(tmpDir, { rep: 'Rep1', kind: 'security', refId: '06956DBN1', label: `Barton ${TRICKY}`, assetClass: 'Muni', page: 'muni-explorer' });
+  coverageStore.addWatchlistItem(tmpDir, { rep: 'rep1', kind: 'security', refId: '06956DBN1', label: 'dupe ignored' });
+  coverageStore.addWatchlistItem(tmpDir, { rep: 'rep1', kind: 'bank', refId: 'B-1', label: 'First Test Bank' });
+  const watch = coverageStore.listWatchlist(tmpDir, 'REP1');
+  ok('watchlist add + dedupe + case-insensitive rep', watch.length === 2);
+  ok('watchlist keeps first label', watch.find(w => w.kind === 'security').label.includes('Barton'));
+  ok('watchlist invalid kind rejected', coverageStore.addWatchlistItem(tmpDir, { rep: 'rep1', kind: 'bogus', refId: 'x' }) === null);
+  ok('watchlist remove', coverageStore.removeWatchlistItem(tmpDir, 'rep1', 'bank', 'B-1') === true && coverageStore.listWatchlist(tmpDir, 'rep1').length === 1);
+  coverageStore.removeWatchlistItem(tmpDir, 'rep1', 'security', '06956DBN1');
+
   // Product fit
   const fit = coverageStore.upsertProductFit(tmpDir, bank, { product: 'Bond Swap', notes: TRICKY, flaggedByUsername: 'rep1' });
   ok('productfit-upsert', fit && fit.product === 'Bond Swap' && fit.notes === TRICKY);

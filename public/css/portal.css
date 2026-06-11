@@ -15278,3 +15278,8 @@ body {
 .ao-class-pill.ao-class-corporate { background: #f6e9e4; color: #a14b2f; }
 .ao-class-pill.ao-class-mbs { background: #e9f4f6; color: #1f6c7a; }
 .ao-class-pill.ao-class-structured-note { background: #efefef; color: #555; }
+
+/* Watchlist + All Offerings row actions */
+.ao-row-actions { display: inline-flex; gap: 8px; align-items: center; white-space: nowrap; }
+.ao-watch-btn { font-size: 16px; line-height: 1; padding: 0 2px; }
+.ao-watch-btn:disabled { color: #c9a227; opacity: 1; }

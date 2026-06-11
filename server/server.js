@@ -95,6 +95,9 @@ const {
   activityCountsByBank,
   activityCountsByRep,
   addBankNote,
+  addWatchlistItem,
+  listWatchlist,
+  removeWatchlistItem,
   countBillingByState,
   countOpenTasks,
   createBankContact,
@@ -9214,6 +9217,40 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
       return sendJSON(res, 200, searchCusipEverywhere(query.get('q')));
+    }
+
+    // Per-rep watchlist: securities re-joined to today's inventory (live
+    // yield/price + still-offered flag) and banks joined to summaries.
+    if (pathname === '/api/me/watchlist' && req.method === 'GET') {
+      const rep = resolveRequestRep(req);
+      if (!rep) return sendJSON(res, 200, { rep: null, items: [] });
+      const items = listWatchlist(BANK_REPORTS_DIR, rep.username);
+      const live = new Map(buildAllOfferingsRows().filter(r => r.cusip).map(r => [r.cusip, r]));
+      const bankIds = items.filter(i => i.kind === 'bank').map(i => i.refId);
+      const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, bankIds);
+      const enriched = items.map(item => {
+        if (item.kind === 'security') {
+          const row = live.get(item.refId);
+          return { ...item, stillOffered: Boolean(row), live: row ? { yield: row.yield, price: row.price, maturity: row.maturity, assetClass: row.assetClass, page: row.page } : null };
+        }
+        const s = summaries.get(String(item.refId)) || {};
+        return { ...item, bankName: s.displayName || s.name || item.label || item.refId, city: s.city || '', state: s.state || '' };
+      });
+      return sendJSON(res, 200, { rep: { username: rep.username, displayName: rep.displayName }, items: enriched });
+    }
+    if (pathname === '/api/me/watchlist' && req.method === 'POST') {
+      const rep = resolveRequestRep(req);
+      if (!rep) return sendJSON(res, 400, { error: 'Pick a rep first (top bar) so the watchlist has an owner.' });
+      const body = await readJsonBody(req, 16 * 1024);
+      const added = addWatchlistItem(BANK_REPORTS_DIR, { ...body, rep: rep.username });
+      if (!added) return sendJSON(res, 400, { error: 'Invalid watchlist item' });
+      return sendJSON(res, 200, { success: true });
+    }
+    if (pathname === '/api/me/watchlist' && req.method === 'DELETE') {
+      const rep = resolveRequestRep(req);
+      if (!rep) return sendJSON(res, 400, { error: 'No acting rep' });
+      const removed = removeWatchlistItem(BANK_REPORTS_DIR, rep.username, query.get('kind'), query.get('refId'));
+      return sendJSON(res, removed ? 200 : 404, removed ? { success: true } : { error: 'Not on your watchlist' });
     }
 
     if (pathname === '/api/contacts/import' && req.method === 'POST') {

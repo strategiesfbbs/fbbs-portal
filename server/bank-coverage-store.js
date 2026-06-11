@@ -173,6 +173,18 @@ function ensureCoverageDatabase(outputDir) {
     );
     CREATE INDEX IF NOT EXISTS idx_bank_opps_bank ON bank_opportunities(bank_id, stage);
     CREATE INDEX IF NOT EXISTS idx_bank_opps_owner ON bank_opportunities(owner, stage);
+    CREATE TABLE IF NOT EXISTS watchlist_items (
+      id TEXT PRIMARY KEY,
+      rep TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      ref_id TEXT NOT NULL,
+      label TEXT,
+      asset_class TEXT,
+      page TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(rep, kind, ref_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_watchlist_rep ON watchlist_items(rep, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_bank_notes_bank_created ON bank_notes(bank_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_bank_contacts_bank ON bank_contacts(bank_id, is_primary DESC, name COLLATE NOCASE ASC);
     CREATE INDEX IF NOT EXISTS idx_bank_activities_bank_at ON bank_activities(bank_id, at DESC);
@@ -1677,6 +1689,64 @@ function pipelineSummary(outputDir, options = {}) {
   };
 }
 
+// ---------- Watchlist (per-rep, securities + banks) ----------
+//
+// A rep's persistent "keep an eye on this" list: securities (by CUSIP, with
+// a label snapshot + native-explorer page for the deep link) and banks (by
+// bankId). No alerts — just a list the Watchlist page re-joins against
+// today's inventory so the rep sees what's still offered.
+
+const WATCHLIST_KINDS = new Set(['security', 'bank']);
+
+function addWatchlistItem(outputDir, payload = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rep = cleanText(payload.rep, 80).toLowerCase();
+  const kind = WATCHLIST_KINDS.has(payload.kind) ? payload.kind : null;
+  const refId = cleanText(payload.refId, 80);
+  if (!rep || !kind || !refId) return null;
+  const id = crypto.randomUUID();
+  runSqlite(dbPath, `
+    INSERT OR IGNORE INTO watchlist_items (id, rep, kind, ref_id, label, asset_class, page, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+  `, [
+    id, rep, kind, refId,
+    textOrNull(cleanText(payload.label, 300)),
+    textOrNull(cleanText(payload.assetClass, 60)),
+    textOrNull(cleanText(payload.page, 60)),
+    new Date().toISOString()
+  ]);
+  return { rep, kind, refId };
+}
+
+function removeWatchlistItem(outputDir, rep, kind, refId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const result = runSqlite(dbPath, `
+    DELETE FROM watchlist_items WHERE rep = ? AND kind = ? AND ref_id = ?;
+  `, [String(rep || '').toLowerCase(), String(kind || ''), String(refId || '')]);
+  return result.changes > 0;
+}
+
+function listWatchlist(outputDir, rep) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const user = String(rep || '').toLowerCase();
+  if (!user) return [];
+  return querySqliteJson(dbPath, `
+    SELECT id, kind, ref_id AS refId, label, asset_class AS assetClass, page, created_at AS createdAt
+    FROM watchlist_items
+    WHERE rep = ?
+    ORDER BY created_at DESC
+    LIMIT 500;
+  `, [user]).map(row => ({
+    id: row.id,
+    kind: row.kind,
+    refId: row.refId,
+    label: row.label || '',
+    assetClass: row.assetClass || '',
+    page: row.page || '',
+    createdAt: row.createdAt || ''
+  }));
+}
+
 module.exports = {
   BILLING_STATES,
   COVERAGE_DATABASE_FILENAME,
@@ -1699,6 +1769,9 @@ module.exports = {
   activityCountsByBank,
   activityCountsByRep,
   addBankNote,
+  addWatchlistItem,
+  listWatchlist,
+  removeWatchlistItem,
   countBillingByState,
   coverageDatabasePathForDir,
   createBankContact,

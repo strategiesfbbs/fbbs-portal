@@ -151,7 +151,7 @@
   };
 
   const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
-                       'all-offerings', 'treasury-explorer',
+                       'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
@@ -169,6 +169,7 @@
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
     { page: 'all-offerings', group: 'Offerings', label: 'All Offerings', description: 'Every security in today\'s inventory across all asset classes — one screen', aliases: 'all offerings cross asset unified everything inventory cd muni agency corporate treasury mbs structured screen blotter' },
+    { page: 'watchlist', group: 'Offerings', label: 'My Watchlist', description: 'Securities and banks you starred, re-joined to today\'s inventory', aliases: 'watchlist watch starred favorites my list follow' },
     { page: 'treasury-explorer', group: 'Offerings', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
     { page: 'explorer', group: 'Offerings', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates offerings' },
     { page: 'munioffers', group: 'Documents', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
@@ -201,6 +202,7 @@
     cd: 'cds',
     'cd-recap': 'cds',
     'all-offerings': 'offerings',
+    watchlist: 'offerings',
     'treasury-explorer': 'offerings',
     explorer: 'offerings',
     'muni-explorer': 'offerings',
@@ -1422,6 +1424,7 @@
     if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'cd-internal') loadCdInternal();
     if (pageName === 'all-offerings') loadAllOfferings();
+    if (pageName === 'watchlist') loadWatchlistPage();
     if (pageName === 'contacts') loadContactsDirectory();
     if (pageName === 'treasury-explorer') loadTreasuryNotes();
     if (pageName === 'explorer') loadOfferings();
@@ -12393,6 +12396,7 @@
             <button type="button" class="small-btn bank-action-btn" id="bankStrategyToggleBtn">Strategy Request</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPeerReportBtn">Peer Report</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPortfolioReportBtn">Portfolio Review</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankWatchBtn" title="Add this bank to my watchlist">&#9734; Watch</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
             <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
           </div>
@@ -12450,6 +12454,12 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (ownerInput) ownerInput.addEventListener('input', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
+    const watchBtn = document.getElementById('bankWatchBtn');
+    if (watchBtn) watchBtn.addEventListener('click', () => addToWatchlist({
+      kind: 'bank',
+      refId: bank.id,
+      label: values.name || bank.summary.displayName || bank.id
+    }, watchBtn));
     if (exportBtn) exportBtn.addEventListener('click', exportBankProfileCsv);
     wireBankContactsControls();
     wireBankProductFitControls();
@@ -16294,6 +16304,85 @@
     return ` &middot; Updated ${sameDay ? time : `${formatNumericDate(stamp.slice(0, 10))} ${time}`}`;
   }
 
+  // ============ My Watchlist ============
+  // Per-rep starred securities + banks. Securities re-join today's inventory
+  // server-side (live yield/price, still-offered flag); banks link to tear
+  // sheets. Stars live in All Offerings rows and the tear sheet Watch button.
+
+  async function loadWatchlistPage() {
+    const secBody = document.getElementById('watchlistSecuritiesBody');
+    const bankBody = document.getElementById('watchlistBanksBody');
+    if (!secBody) return;
+    let data;
+    try {
+      const res = await fetch('/api/me/watchlist', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (e) {
+      secBody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--danger)">Failed to load watchlist: ${escapeHtml(e.message)}</td></tr>`;
+      return;
+    }
+    if (!data.rep) {
+      document.getElementById('watchlistSub').textContent = 'Pick a rep in the top bar ("Acting as") to use your watchlist.';
+      document.getElementById('watchlistStat').textContent = '—';
+      secBody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">No acting rep selected.</td></tr>';
+      bankBody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text3)">No acting rep selected.</td></tr>';
+      return;
+    }
+    const items = data.items || [];
+    const securities = items.filter(i => i.kind === 'security');
+    const banks = items.filter(i => i.kind === 'bank');
+    document.getElementById('watchlistStat').textContent = items.length.toLocaleString();
+    document.getElementById('watchlistSub').textContent =
+      `${securities.length} securit${securities.length === 1 ? 'y' : 'ies'} and ${banks.length} bank${banks.length === 1 ? '' : 's'} — ${escapeHtml(data.rep.displayName || data.rep.username)}`;
+
+    const num = (v, digits = 2) => (v == null ? '—' : Number(v).toFixed(digits));
+    secBody.innerHTML = securities.map(item => {
+      const live = item.live;
+      const page = (live && live.page) || item.page || 'all-offerings';
+      return `
+        <tr>
+          <td class="issuer-cell">${escapeHtml(item.label || item.refId)}</td>
+          <td>${escapeHtml((live && live.assetClass) || item.assetClass || '—')}</td>
+          <td class="cusip-cell">${escapeHtml(item.refId)}</td>
+          <td style="text-align:right">${live ? `<strong>${num(live.yield)}</strong>` : '—'}</td>
+          <td style="text-align:right">${live ? num(live.price, 3) : '—'}</td>
+          <td>${live && live.maturity ? escapeHtml(formatNumericDate(String(live.maturity).slice(0, 10))) : '—'}</td>
+          <td>${item.stillOffered ? '<span class="ao-class-pill ao-class-cd">Offered today</span>' : '<span class="ao-class-pill">Not in today’s inventory</span>'}</td>
+          <td><span class="ao-row-actions">
+            <button type="button" class="small-btn" data-goto="${escapeHtml(page)}" data-cusip="${escapeHtml(item.refId)}">Open</button>
+            <button type="button" class="text-btn danger" data-watch-remove-kind="security" data-watch-remove="${escapeHtml(item.refId)}">Remove</button>
+          </span></td>
+        </tr>`;
+    }).join('') || '<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">Nothing starred yet — hit the ☆ on any All Offerings row.</td></tr>';
+
+    bankBody.innerHTML = banks.map(item => `
+      <tr>
+        <td><button type="button" class="text-btn" data-watch-bank="${escapeHtml(item.refId)}"><strong>${escapeHtml(item.bankName || item.label || item.refId)}</strong></button></td>
+        <td>${escapeHtml([item.city, item.state].filter(Boolean).join(', ') || '—')}</td>
+        <td>${item.createdAt ? escapeHtml(formatNumericDate(item.createdAt.slice(0, 10))) : '—'}</td>
+        <td><button type="button" class="text-btn danger" data-watch-remove-kind="bank" data-watch-remove="${escapeHtml(item.refId)}">Remove</button></td>
+      </tr>`).join('') || '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text3)">No banks watched — use the ☆ Watch button on a tear sheet.</td></tr>';
+
+    document.querySelectorAll('#p-watchlist [data-watch-remove]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          const res = await fetch(`/api/me/watchlist?kind=${encodeURIComponent(btn.getAttribute('data-watch-remove-kind'))}&refId=${encodeURIComponent(btn.getAttribute('data-watch-remove'))}`, { method: 'DELETE' });
+          if (!res.ok) throw new Error((await readBankJson(res)).error || `HTTP ${res.status}`);
+          loadWatchlistPage();
+        } catch (e) {
+          showToast(e.message || 'Could not remove', true);
+        }
+      });
+    });
+    document.querySelectorAll('#p-watchlist [data-watch-bank]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        goTo('banks');
+        if (typeof loadBank === 'function') loadBank(btn.getAttribute('data-watch-bank'), { collapseResults: true });
+      });
+    });
+  }
+
   // ============ Contacts directory ============
   // Firm-wide view over bank_contacts: search across contact AND bank fields
   // (server-side), rows link to the bank tear sheet. Contacts are still
@@ -16453,8 +16542,33 @@
         <td style="text-align:right">${num(r.price, 3)}</td>
         <td>${escapeHtml(r.state || '—')}</td>
         <td>${escapeHtml(r.sector || '—')}</td>
-        <td><button type="button" class="small-btn" data-goto="${escapeHtml(r.page)}"${r.cusip ? ` data-cusip="${escapeHtml(r.cusip)}"` : ''}>Open</button></td>
+        <td><span class="ao-row-actions">${r.cusip ? `<button type="button" class="text-btn ao-watch-btn" data-ao-watch="${escapeHtml(r.cusip)}" data-ao-watch-label="${escapeHtml(r.description)}" data-ao-watch-class="${escapeHtml(r.assetClass)}" data-ao-watch-page="${escapeHtml(r.page)}" title="Add to my watchlist">&#9734;</button>` : ''}<button type="button" class="small-btn" data-goto="${escapeHtml(r.page)}"${r.cusip ? ` data-cusip="${escapeHtml(r.cusip)}"` : ''}>Open</button></span></td>
       </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text3)">Nothing matches these filters.</td></tr>`;
+    body.querySelectorAll('[data-ao-watch]').forEach(btn => {
+      btn.addEventListener('click', () => addToWatchlist({
+        kind: 'security',
+        refId: btn.getAttribute('data-ao-watch'),
+        label: btn.getAttribute('data-ao-watch-label'),
+        assetClass: btn.getAttribute('data-ao-watch-class'),
+        page: btn.getAttribute('data-ao-watch-page')
+      }, btn));
+    });
+  }
+
+  async function addToWatchlist(item, btn) {
+    try {
+      const res = await fetch('/api/me/watchlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(item)
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (btn) { btn.innerHTML = '&#9733;'; btn.disabled = true; }
+      showToast('Added to your watchlist');
+    } catch (e) {
+      showToast(e.message || 'Could not add to watchlist', true);
+    }
   }
 
   function wireAllOfferingsControls() {
