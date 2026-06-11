@@ -7,20 +7,11 @@
  * artifact suitable for `Save as PDF` from any modern browser — a client-ready
  * portfolio handout. Layout mirrors the swap proposal print view
  * (server/swap-render.js): FBBS header, a summary meta grid, the full holdings
- * table, a sector-mix table, and the institutional footer with the six offices.
+ * table, a sector-mix table, and the institutional footer.
  *
  * Pure render — takes the same object buildPortfolioReview() already returns,
  * so there is no extra data assembly. No I/O.
  */
-
-const OFFICES = [
-  'St. Louis, MO',
-  'Overland Park, KS',
-  'Oklahoma City, OK',
-  'Denver, CO',
-  'Nashville, TN',
-  'Memphis, TN'
-];
 
 const HOLDING_COLUMNS = [
   { key: 'sector',            label: 'Sector',      align: 'left',  fmt: 'text' },
@@ -201,7 +192,6 @@ table.grid th { background: var(--bg-soft); font-weight: 800; font-size: 9.5px; 
 table.grid .r { text-align: right; font-variant-numeric: tabular-nums; }
 .empty { color: var(--muted); font-style: italic; }
 footer.foot { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--rule); font-size: 10px; color: var(--muted); }
-footer.foot .offices { letter-spacing: 0.06em; margin-bottom: 4px; }
 footer.foot .badges { font-weight: 800; letter-spacing: 0.08em; }
 footer.foot .disclosure { margin-top: 6px; }
 .print-controls { background: var(--bg-soft); padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--rule); font-size: 12px; }
@@ -232,7 +222,6 @@ footer.foot .disclosure { margin-top: 6px; }
   ${renderSectorTable(review.sectors)}
 
   <footer class="foot">
-    <div class="offices">${OFFICES.map(escapeHtml).join(' · ')}</div>
     <div class="badges">FINRA · MEMBER SIPC · MSRB</div>
     <div class="disclosure">Internal strategy screen only; desk review controls the final recommendation and client language. For Institutional Use Only. Investments are not FDIC insured, not bank guaranteed &amp; may lose value. First Bankers' Banc Securities, Inc. is a member of FINRA / SIPC. Copyright &copy; ${new Date().getUTCFullYear()} FBBS, Inc.</div>
   </footer>

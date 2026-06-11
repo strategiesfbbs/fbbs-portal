@@ -12,7 +12,7 @@
  *   - Portfolio diff: weighted-avg metrics before vs after
  *   - Funding source (sells) table
  *   - Investments (buys) table
- *   - Footer: institutional disclosure + six FBBS offices
+ *   - Footer: institutional disclosure
  *
  * Renders from snapshot JSON when `status === 'sent'` (the proposal is
  * frozen and the numbers must never silently change). Renders live from
@@ -20,15 +20,6 @@
  */
 
 const swapMath = require('./swap-math');
-
-const OFFICES = [
-  'St. Louis, MO',
-  'Overland Park, KS',
-  'Oklahoma City, OK',
-  'Denver, CO',
-  'Nashville, TN',
-  'Memphis, TN'
-];
 
 // Sells/Buys table columns. Widths sum to 100%. Sector and Mod Duration are
 // dropped from the per-row view: sector is implicit in the Sells / Buys
@@ -411,7 +402,6 @@ header.brand .doc-info strong { display: block; font-size: 22px; color: var(--in
 .leg-table .totals, .leg-table .totals-row td { font-weight: 800; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
 .leg-table .empty { color: var(--muted); font-style: italic; text-align: center; padding: 12px; }
 footer.foot { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--rule); font-size: 10px; color: var(--muted); }
-footer.foot .offices { letter-spacing: 0.06em; margin-bottom: 4px; }
 footer.foot .badges { font-weight: 800; letter-spacing: 0.08em; }
 footer.foot .disclosure { margin-top: 6px; }
 .notation-note { margin-top: 8px; font-style: italic; }
@@ -459,7 +449,6 @@ footer.foot .disclosure { margin-top: 6px; }
   ${renderLegTable('Investments (Buys)', buys, summary && summary.buys, taxRate)}
 
   <footer class="foot">
-    <div class="offices">${OFFICES.map(escapeHtml).join(' · ')}</div>
     <div class="badges">FINRA · MEMBER SIPC · MSRB</div>
     <div class="notation-note">&mdash; = no input. n/a = cannot compute from the supplied inputs.</div>
     <div class="disclosure">For Institutional Use Only. Investments are not FDIC insured, not bank guaranteed &amp; may lose value. Certificate of Deposit investments may qualify for FDIC insurance through the issuing bank. First Bankers' Banc Securities, Inc. is a member of FINRA / SIPC. Copyright &copy; ${new Date().getUTCFullYear()} FBBS, Inc.</div>
