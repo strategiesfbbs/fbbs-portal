@@ -250,7 +250,28 @@ const ADMIN_USERS = new Set(String(process.env.FBBS_ADMIN_USERS || '')
 
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const LOG_LEVEL = LOG_LEVELS[(process.env.LOG_LEVEL || 'info').toLowerCase()] ?? 1;
-const PORTAL_BUILD = 'swap-workflow-2026-05-13';
+const PORTAL_BUILD = resolvePortalBuild();
+
+// Derive the build marker from the checked-out commit so /api/health never
+// reports a stale hand-bumped label. Falls back for git-less deploys (IIS zip).
+function resolvePortalBuild() {
+  try {
+    const { execFileSync } = require('child_process');
+    const out = execFileSync('git', ['log', '-1', '--format=%h %cs'], {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    if (/^[0-9a-f]{7,} \d{4}-\d{2}-\d{2}$/.test(out)) {
+      const [hash, date] = out.split(' ');
+      return `${date}-${hash}`;
+    }
+  } catch {
+    // git missing or not a repo — fall through
+  }
+  return 'unversioned';
+}
 const auditContext = new AsyncLocalStorage();
 
 // ---------- Logging ----------
