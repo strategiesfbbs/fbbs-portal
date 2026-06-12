@@ -15822,3 +15822,94 @@ body {
   font-weight: 500;
   text-transform: none;
 }
+
+/* ===== THC Investment Portfolio enrichment + roll-up ===== */
+.bank-intel-portfolio-asof {
+  color: var(--text3, #8a918d);
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.bank-intel-class-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.bank-intel-class-chip {
+  background: #fff;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 999px;
+  font-size: 11.5px;
+  padding: 4px 12px;
+}
+
+.bank-intel-class-chip strong {
+  margin-right: 4px;
+}
+
+.bank-intel-ladder {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bank-intel-ladder-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 42px 1fr 90px;
+}
+
+.bank-intel-ladder-year {
+  color: var(--text3, #8a918d);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.bank-intel-ladder-bar {
+  background: rgba(26, 58, 42, 0.08);
+  border-radius: 4px;
+  display: block;
+  height: 12px;
+  overflow: hidden;
+}
+
+.bank-intel-ladder-bar i {
+  background: var(--racing-green, #1a3a2a);
+  border-radius: 4px;
+  display: block;
+  height: 100%;
+  opacity: 0.75;
+}
+
+.bank-intel-ladder-amt {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: right;
+}
+
+.bank-intel-holdings-title {
+  margin: 14px 0 6px;
+}
+
+.bank-intel-holdings .explorer-table th,
+.bank-intel-holdings .explorer-table td {
+  font-size: 11.5px;
+  padding: 6px 8px;
+}
+
+.bank-sources-foot {
+  border-top: 1px solid var(--line, #e5e5e5);
+  color: var(--text3, #8a918d);
+  font-size: 11px;
+  margin-top: 18px;
+  padding-top: 10px;
+}
+
+.pulse-rollup-summary {
+  font-size: 13px;
+  margin: 0 0 10px;
+}

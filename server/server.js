@@ -3093,13 +3093,23 @@ function buildCoverageHoldingsIndex() {
     // If multiple portfolio files exist for one bank, keep the latest report date.
     if (existing && existing.reportDate >= (parsed.asOfDate || '')) continue;
     const cusips = parsed.cusipIndex ? Object.keys(parsed.cusipIndex) : [];
+    const totals = parsed.totals || {};
+    const aggregates = parsed.aggregates || {};
+    const bookValue = totals.bookValue != null ? totals.bookValue : (aggregates.bookValue != null ? aggregates.bookValue : null);
+    const marketValue = totals.marketValue != null ? totals.marketValue : (aggregates.marketValue != null ? aggregates.marketValue : null);
+    const gainLoss = totals.unrealizedGainLoss != null
+      ? totals.unrealizedGainLoss
+      : (bookValue != null && marketValue != null ? marketValue - bookValue : null);
     index.set(bankId, {
       reportDate: parsed.asOfDate || row.reportDate || '',
-      totalPositions: parsed.aggregates ? parsed.aggregates.totalPositions : 0,
+      totalPositions: aggregates.totalPositions || 0,
       sectorCounts: parsed.sectorCounts || {},
       cusipSet: new Set(cusips.map(c => c.toUpperCase())),
-      bookYieldYtw: parsed.totals ? parsed.totals.bookYieldYtw : null,
-      marketYieldYtw: parsed.totals ? parsed.totals.marketYieldYtw : null
+      bookYieldYtw: totals.bookYieldYtw != null ? totals.bookYieldYtw : null,
+      marketYieldYtw: totals.marketYieldYtw != null ? totals.marketYieldYtw : null,
+      bookValue,
+      marketValue,
+      gainLoss
     });
   }
   return index;
@@ -6008,6 +6018,29 @@ function buildPortfolioReview(bankId, query) {
     limit: parseInt(query.get('limit'), 10) || 8
   });
 
+  // AFS/HTM accounting split — the workbook's per-position classification
+  // column, aggregated so the tear sheet can reconcile against the call
+  // report's pledged/AFS/HTM rows.
+  const classificationMap = new Map();
+  for (const row of positions) {
+    const raw = String(row.classification || '');
+    const key = /htm|held.?to.?maturity/i.test(raw) ? 'HTM' : (/afs|available.?for.?sale/i.test(raw) ? 'AFS' : 'Other');
+    const bucket = classificationMap.get(key) || { classification: key, positions: 0, bookValue: 0, marketValue: 0 };
+    bucket.positions += 1;
+    bucket.bookValue += nullableNumber(row.bookValue) || 0;
+    bucket.marketValue += nullableNumber(row.marketValue) || 0;
+    classificationMap.set(key, bucket);
+  }
+  const classificationSplit = ['AFS', 'HTM', 'Other']
+    .map(key => classificationMap.get(key))
+    .filter(bucket => bucket && bucket.positions)
+    .map(bucket => ({ ...bucket, bookValue: Math.round(bucket.bookValue), marketValue: Math.round(bucket.marketValue) }));
+
+  const topHoldings = positions
+    .slice()
+    .sort((a, b) => ((nullableNumber(b.bookValue) || nullableNumber(b.par) || 0) - (nullableNumber(a.bookValue) || nullableNumber(a.par) || 0)))
+    .slice(0, 8);
+
   const topLosses = topPortfolioRows(positions, row => (nullableNumber(row.gainLoss) || 0) < 0, row => Math.abs(nullableNumber(row.gainLoss) || 0), 10);
   const lossPct = topPortfolioRows(positions, row => (nullableNumber(row.gainLossPct) || 0) < -2, row => Math.abs(nullableNumber(row.gainLossPct) || 0), 10);
   const yieldReset = topPortfolioRows(positions, row => (nullableNumber(row.yieldGap) || 0) >= 0.75, row => nullableNumber(row.yieldGap) || 0, 10);
@@ -6044,6 +6077,8 @@ function buildPortfolioReview(bankId, query) {
     summary: reviewSummary,
     flags: buildPortfolioReviewFlags(positions, sectors, reviewSummary, profile),
     sectors,
+    classificationSplit,
+    topHoldings,
     ladder: buildPortfolioLadder(positions, parsedHoldings.asOfDate || inventory.asOfDate),
     analytics,
     decisionLayer,
@@ -9548,6 +9583,44 @@ function buildCrmDashboard(rep) {
     log('warn', 'CRM dashboard pipeline failed:', err.message);
   }
 
+  // THC portfolio roll-up across the (rep-scoped) covered book — aggregate
+  // unrealized G/L for desk-level prioritization, worst books first.
+  let portfolioRollup = null;
+  try {
+    const holdingsIdx = getCoverageHoldingsIndex();
+    let banks = 0, bookValue = 0, marketValue = 0, gainLoss = 0;
+    const books = [];
+    for (const row of clients.concat(prospects)) {
+      const h = holdingsIdx.get(String(row.bankId));
+      if (!h || h.bookValue == null) continue;
+      banks += 1;
+      bookValue += h.bookValue;
+      marketValue += h.marketValue || 0;
+      gainLoss += h.gainLoss || 0;
+      books.push({
+        bankId: row.bankId,
+        displayName: row.displayName || row.bankName || '',
+        owner: row.owner || '',
+        gainLoss: Math.round(h.gainLoss || 0),
+        gainLossPct: h.bookValue ? (h.gainLoss || 0) / h.bookValue * 100 : null,
+        reportDate: h.reportDate || ''
+      });
+    }
+    if (banks) {
+      books.sort((a, b) => a.gainLoss - b.gainLoss);
+      portfolioRollup = {
+        banks,
+        bookValue: Math.round(bookValue),
+        marketValue: Math.round(marketValue),
+        gainLoss: Math.round(gainLoss),
+        gainLossPct: bookValue ? gainLoss / bookValue * 100 : null,
+        worst: books.slice(0, 5)
+      };
+    }
+  } catch (err) {
+    log('warn', 'CRM dashboard portfolio rollup failed:', err.message);
+  }
+
   return {
     rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
     asOf: new Date().toISOString(),
@@ -9564,7 +9637,8 @@ function buildCrmDashboard(rep) {
     strategiesByType,
     recentActivities,
     upcomingFollowups: upcoming,
-    pipeline
+    pipeline,
+    portfolioRollup
   };
 }
 

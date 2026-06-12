@@ -2562,6 +2562,30 @@
 
   // Sales pipeline card: open $ by stage, won-this-quarter line, and the
   // nearest-close open deals.
+  // Aggregate THC bond-accounting books across the covered banks in scope —
+  // worst unrealized-loss books first (the swap-conversation call list).
+  function pulsePortfolioRollupHtml(rollup) {
+    if (!rollup || !rollup.banks) {
+      return '<div class="bank-search-empty">No THC bond-accounting books matched to covered banks yet.</div>';
+    }
+    const glPct = rollup.gainLossPct != null ? ` (${rollup.gainLossPct >= 0 ? '+' : '−'}${Math.abs(rollup.gainLossPct).toFixed(1)}%)` : '';
+    return `
+      <p class="pulse-rollup-summary"><strong>${escapeHtml(formatNumber(rollup.banks))}</strong> books · <strong>${escapeHtml(formatMoney(rollup.bookValue))}</strong> book value · unrealized <strong class="${(rollup.gainLoss || 0) < 0 ? 'cd-nat-neg' : 'cd-nat-pos'}">${escapeHtml(formatMoney(rollup.gainLoss))}${escapeHtml(glPct)}</strong></p>
+      ${(rollup.worst || []).length ? `
+        <table class="reports-list pulse-table">
+          <thead><tr><th>Largest unrealized losses</th><th>G/L</th><th>%</th><th>As of</th></tr></thead>
+          <tbody>
+            ${rollup.worst.map(b => `<tr>
+              <td><button type="button" class="text-btn" data-pulse-bank="${escapeHtml(b.bankId)}">${escapeHtml(b.displayName || b.bankId)}</button></td>
+              <td class="${(b.gainLoss || 0) < 0 ? 'cd-nat-neg' : ''}">${escapeHtml(formatMoney(b.gainLoss))}</td>
+              <td>${b.gainLossPct != null ? escapeHtml(b.gainLossPct.toFixed(1)) + '%' : '—'}</td>
+              <td>${escapeHtml(formatShortDate(b.reportDate || '') || '—')}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      ` : ''}`;
+  }
+
   function pulsePipelineHtml(pipeline) {
     if (!pipeline || !pipeline.open || !pipeline.open.count) {
       return '<div class="bank-search-empty">No open opportunities. Add one from a bank tear sheet.</div>';
@@ -2631,6 +2655,10 @@
         <article class="pulse-card">
           <h3>Pipeline</h3>
           ${pulsePipelineHtml(data.pipeline)}
+        </article>
+        <article class="pulse-card">
+          <h3>THC Portfolio Roll-up</h3>
+          ${pulsePortfolioRollupHtml(data.portfolioRollup)}
         </article>
         <article class="pulse-card">
           <h3>Recent Activity</h3>
@@ -12437,6 +12465,19 @@
         ? bankSignalChip('amber', 'FDIC', `${fdic.period} out — refresh import`, 'tab:callreport')
         : bankSignalChip('green', 'FDIC', `${fdic.period} current`, 'tab:callreport'));
     }
+
+    // THC portfolio: unrealized G/L + data vintage in one glance.
+    const thc = bankSignalState.thc;
+    if (thc) {
+      const ageDays = thc.reportDate ? Math.round((Date.parse(todayYmd) - Date.parse(thc.reportDate)) / 86400000) : null;
+      const glPct = thc.gainLossPct;
+      let tone = 'green';
+      if ((glPct != null && glPct < -5) || (ageDays != null && ageDays > 75)) tone = 'red';
+      else if ((glPct != null && glPct < 0) || (ageDays != null && ageDays > 40)) tone = 'amber';
+      const glText = glPct != null ? `${glPct >= 0 ? '+' : '−'}${Math.abs(glPct).toFixed(1)}% G/L` : 'G/L n/a';
+      const ageText = ageDays != null ? (ageDays > 40 ? ` · ${ageDays}d old` : '') : '';
+      chips.push(bankSignalChip(tone, 'THC portfolio', glText + ageText, 'tab:callreport'));
+    }
     return chips.join('');
   }
 
@@ -12463,10 +12504,10 @@
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // Caller must reset bankSignalState for the new bank BEFORE the panel
+  // loaders run — a cached intelligence load resolves synchronously and
+  // writes its chip immediately.
   async function loadBankCdRolloverSignal(bankId) {
-    bankSignalState.bankId = bankId;
-    bankSignalState.cdRollover = null;
-    bankSignalState.fdic = null;
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/cd-rollover?window=180`, { cache: 'no-store' });
       if (!res.ok) return;
@@ -12775,6 +12816,7 @@
         ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
         ${renderBankIntelligencePanel(bank, values, recentPeriods)}
         ${renderBankUploadedFilesPanel(bank)}
+        <p class="bank-sources-foot">Data sources: FFIEC Call Report ${escapeHtml(latest.period || '—')}${bank.bondAccounting && bank.bondAccounting.available ? ` · THC bond accounting as of ${escapeHtml(formatShortDate(bank.bondAccounting.latestReportDate || '') || bank.bondAccounting.latestReportDate || '—')}` : ' · no THC bond-accounting workbook matched'} · FDIC live check + market wire refresh automatically.</p>
       </div>
     `;
     updateBankSaveButton();
@@ -12812,6 +12854,12 @@
     wireBankProductFitControls();
     wireBankTaskControls();
     wireBankOppControls();
+    // Reset the signals strip for this bank before any loader (cached ones
+    // resolve synchronously) writes its chip.
+    bankSignalState.bankId = bank.id;
+    bankSignalState.cdRollover = null;
+    bankSignalState.fdic = null;
+    bankSignalState.thc = null;
     loadBankActivity(bank.id);
     loadBankTasks(bank.id);
     loadBankOpportunities(bank.id);
@@ -13191,6 +13239,14 @@
       }
       if (requestId !== bankIntelligenceRequestId) return;
       mount.innerHTML = renderBankPortfolioIntelligence(data);
+      if (data && data.available !== false && String(bankSignalState.bankId) === String(bankId)) {
+        bankSignalState.thc = {
+          gainLossPct: data.summary ? data.summary.gainLossPct : null,
+          gainLoss: data.summary ? data.summary.gainLoss : null,
+          reportDate: data.reportDate || ''
+        };
+        updateBankSignalStrip();
+      }
     } catch (err) {
       if (requestId !== bankIntelligenceRequestId) return;
       mount.innerHTML = `<div class="bank-search-empty">${escapeHtml(err.message || 'Could not load portfolio intelligence.')}</div>`;
@@ -13208,13 +13264,30 @@
     const summary = data.summary || {};
     const topFlags = Array.isArray(data.flags) ? data.flags.slice(0, 4) : [];
     const topLosses = data.screens && Array.isArray(data.screens.topLosses) ? data.screens.topLosses.slice(0, 4) : [];
+    const asOf = data.reportDate ? `Portfolio as of ${formatShortDate(data.reportDate)}` : '';
     return `
+      ${asOf ? `<p class="bank-intel-portfolio-asof">${escapeHtml(asOf)}${data.sourceFile ? ` · ${escapeHtml(data.sourceFile)}` : ''}</p>` : ''}
       <div class="bank-intel-portfolio-grid">
+        ${intelligenceMetricTile('Book Value', formatMoney(summary.bookValue), `Par ${formatMoney(summary.par)}`)}
         ${intelligenceMetricTile('Market Value', formatMoney(summary.marketValue), `${formatNumber(summary.positions)} positions`)}
         ${intelligenceMetricTile('Unrealized G/L', formatMoney(summary.gainLoss), formatPercentTile(summary.gainLossPct, 2), (summary.gainLoss || 0) < 0 ? 'warn' : 'good')}
-        ${intelligenceMetricTile('Book Yield', formatReviewYield(summary.bookYield), `Market ${formatReviewYield(summary.marketYield)}`)}
+        ${intelligenceMetricTile('Book Yield', formatReviewYield(summary.bookYield), `Market ${formatReviewYield(summary.marketYield)}${summary.taxEquivalentBookYield != null ? ` · TE ${formatReviewYield(summary.taxEquivalentBookYield)}` : ''}`)}
         ${intelligenceMetricTile('WAL / Duration', [summary.weightedAverageLife != null ? summary.weightedAverageLife.toFixed(2) : '', summary.effectiveDuration != null ? summary.effectiveDuration.toFixed(2) : ''].filter(Boolean).join(' / ') || '—', 'Weighted average')}
+        ${intelligenceMetricTile('Coupon (WAC)', summary.weightedCoupon != null ? summary.weightedCoupon.toFixed(2) + '%' : '—', 'Par-weighted')}
       </div>
+      ${bankPortfolioClassificationChips(data.classificationSplit)}
+      <div class="bank-intel-portfolio-body">
+        <div>
+          ${renderIntelligenceBreakdown('THC Sector Allocation',
+            (data.sectors || []).map(s => ({ label: s.sector, amount: s.marketValue })),
+            summary.marketValue) || '<h5>THC Sector Allocation</h5><div class="bank-search-empty">No sector rows parsed.</div>'}
+        </div>
+        <div>
+          <h5>Principal Maturity Ladder</h5>
+          ${bankPortfolioLadderHtml(data.ladder)}
+        </div>
+      </div>
+      ${bankPortfolioHoldingsTable(data.topHoldings)}
       <div class="bank-intel-portfolio-body">
         <div>
           <h5>Review Flags</h5>
@@ -13244,6 +13317,53 @@
       </div>
       ${bankPortfolioAnalyticsHighlights(data.analytics || {})}
     `;
+  }
+
+  function bankPortfolioClassificationChips(split) {
+    if (!Array.isArray(split) || !split.length) return '';
+    const total = split.reduce((sum, b) => sum + (b.bookValue || 0), 0);
+    return `<div class="bank-intel-class-split">
+      ${split.map(b => `<span class="bank-intel-class-chip">
+        <strong>${escapeHtml(b.classification)}</strong>
+        ${escapeHtml(formatMoney(b.bookValue))}${total ? ` (${escapeHtml(Math.round(b.bookValue / total * 100))}%)` : ''} · ${escapeHtml(formatNumber(b.positions))} pos
+      </span>`).join('')}
+    </div>`;
+  }
+
+  function bankPortfolioLadderHtml(ladder) {
+    const rows = (Array.isArray(ladder) ? ladder : []).filter(r => r && r.par > 0).slice(0, 10);
+    if (!rows.length) return '<div class="bank-search-empty">No dated maturities parsed.</div>';
+    const max = Math.max(...rows.map(r => r.par));
+    return `<div class="bank-intel-ladder">
+      ${rows.map(r => `<div class="bank-intel-ladder-row">
+        <span class="bank-intel-ladder-year">${escapeHtml(r.year)}</span>
+        <span class="bank-intel-ladder-bar"><i style="width:${Math.max(2, Math.round(r.par / max * 100))}%"></i></span>
+        <span class="bank-intel-ladder-amt">${escapeHtml(formatMoney(r.par))}</span>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  function bankPortfolioHoldingsTable(rows) {
+    if (!Array.isArray(rows) || !rows.length) return '';
+    return `
+      <h5 class="bank-intel-holdings-title">Top Holdings (by book value)</h5>
+      <div class="explorer-table-wrap bank-intel-holdings">
+        <table class="explorer-table">
+          <thead><tr><th>CUSIP</th><th>Description</th><th>Sector</th><th>Class</th><th>Book Value</th><th>Mkt Value</th><th>Yield</th><th>G/L</th></tr></thead>
+          <tbody>
+            ${rows.map(r => `<tr>
+              <td><code>${escapeHtml(r.cusip || '')}</code></td>
+              <td>${escapeHtml((r.description || '').slice(0, 48))}</td>
+              <td>${escapeHtml(r.sector || '')}</td>
+              <td>${escapeHtml(r.classification || '')}</td>
+              <td>${escapeHtml(formatMoney(r.bookValue))}</td>
+              <td>${escapeHtml(formatMoney(r.marketValue))}</td>
+              <td>${escapeHtml(formatReviewYield(r.bookYield))}</td>
+              <td class="${(r.gainLoss || 0) < 0 ? 'cd-nat-neg' : ''}">${escapeHtml(formatMoney(r.gainLoss))}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
   }
 
   function bankPortfolioAnalyticsHighlights(analytics) {
