@@ -3891,10 +3891,16 @@ const HOLDINGS_SECTOR_BOOST = {
   treasury:  { sectors: ['Treasury'], boost: 8, label: 'treasuries' }
 };
 
-function scoreCoverageBankForOffering(bank, productType, offering, holdingsForBank) {
+function scoreCoverageBankForOffering(bank, productType, offering, holdingsForBank, opts = {}) {
   const status = String(bank.accountStatusLabel || 'Open');
-  const base = BUYER_STATUS_BASE[status] || 0;
-  if (base <= 0) return null;
+  let base = BUYER_STATUS_BASE[status] || 0;
+  if (base <= 0) {
+    // The buyers drawer only ranks covered banks. The inverse (tear-sheet
+    // "today's fits") starts from a specific bank, so an Open bank still
+    // gets scored — on its financials alone, with a token base.
+    if (!opts.allowUncovered) return null;
+    base = 4;
+  }
 
   // Hard exclude if they already own this exact CUSIP.
   const offeringCusip = offering && offering.cusip ? String(offering.cusip).toUpperCase() : '';
@@ -4028,6 +4034,88 @@ async function handleBuyerCandidates(req, res) {
     log('warn', 'Buyer candidates failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not score buyer candidates' });
   }
+}
+
+// Inverse of findBuyerCandidates: one bank, every offering in today's
+// inventory. Each row is scored with the same per-product fit rules the
+// buyers drawer uses (sector presence, in-state munis, owned-CUSIP
+// exclusion), then grouped by asset class so the tear sheet can answer
+// "what in today's package should I pitch this bank?".
+function findOfferingFitsForBank(bankId, limitPerClass = 4) {
+  const mapData = getMapBankData();
+  if (!mapData || !Array.isArray(mapData.banks)) {
+    const err = new Error('Bank dataset not loaded');
+    err.statusCode = 503;
+    throw err;
+  }
+  const bank = mapData.banks.find(b => String(b.id) === String(bankId));
+  if (!bank) {
+    const err = new Error('Bank not found');
+    err.statusCode = 404;
+    throw err;
+  }
+  const holdingsIndex = getCoverageHoldingsIndex();
+  const holdings = holdingsIndex ? holdingsIndex.get(String(bank.id)) : null;
+  const byType = new Map();
+  let scanned = 0;
+  let ownedSkipped = 0;
+  for (const row of buildAllOfferingsRows()) {
+    if (!BUYER_PRODUCT_TYPES.has(row.type)) continue; // no fit rules (structured notes)
+    if (row.yield == null) continue; // nothing to pitch without an economic yield
+    scanned += 1;
+    const result = scoreCoverageBankForOffering(
+      bank, row.type, { cusip: row.cusip, issuerState: row.state }, holdings, { allowUncovered: true }
+    );
+    if (!result) { ownedSkipped += 1; continue; } // already holds this CUSIP
+    const bucket = byType.get(row.type) || [];
+    bucket.push({ row, score: result.score, rationale: result.rationale });
+    byType.set(row.type, bucket);
+  }
+  const perClass = Math.max(1, Math.min(Number(limitPerClass) || 4, 10));
+  const classes = Array.from(byType.entries())
+    .map(([type, list]) => {
+      // In-state munis outrank by score; everything else ties within the
+      // class, so yield decides. Transparent enough for a call list.
+      list.sort((a, b) => (b.score - a.score) || ((b.row.yield ?? 0) - (a.row.yield ?? 0)));
+      const top = list[0];
+      return {
+        type,
+        label: top.row.assetClass,
+        page: top.row.page,
+        score: Math.round(top.score),
+        offeringCount: list.length,
+        rationale: top.rationale,
+        picks: list.slice(0, perClass).map(x => ({
+          cusip: x.row.cusip || '',
+          description: x.row.description || '',
+          coupon: x.row.coupon,
+          yield: x.row.yield,
+          maturity: x.row.maturity,
+          price: x.row.price,
+          state: x.row.state || '',
+          sector: x.row.sector || '',
+          inState: x.row.type === 'muni' && x.row.state
+            && String(x.row.state).toUpperCase() === String(bank.state || '').toUpperCase()
+        }))
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+  let notice = '';
+  if (!scanned) notice = 'No offerings are loaded — has today’s package been published?';
+  return {
+    bank: {
+      id: bank.id,
+      displayName: bank.displayName || bank.legalName || 'Unknown bank',
+      status: bank.accountStatusLabel || 'Open',
+      location: [bank.city, bank.state].filter(Boolean).join(', '),
+      period: bank.period || ''
+    },
+    holdings: holdings ? { reportDate: holdings.reportDate, totalPositions: holdings.totalPositions } : null,
+    scanned,
+    ownedSkipped,
+    classes,
+    notice
+  };
 }
 
 let mapBankCache = null;
@@ -10275,6 +10363,19 @@ const server = http.createServer(async (req, res) => {
         workbookPeriod,
         newerAvailable: Boolean(workbookPeriod && /^\d{4}Q\d$/.test(workbookPeriod) && fdicPeriod > workbookPeriod)
       });
+    }
+
+    // Inverse buyers query: what in today's inventory fits this bank?
+    const bankFitsMatch = pathname.match(/^\/api\/banks\/([^/]+)\/offering-fits$/);
+    if (bankFitsMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankFitsMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      try {
+        return sendJSON(res, 200, findOfferingFitsForBank(bankId, Number(query.get('limit')) || 4));
+      } catch (err) {
+        log('warn', 'Offering fits failed:', err.message);
+        return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not score offerings for this bank' });
+      }
     }
 
     const bankOppsMatch = pathname.match(/^\/api\/banks\/([^/]+)\/opportunities$/);

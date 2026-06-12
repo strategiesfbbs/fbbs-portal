@@ -12444,6 +12444,7 @@
             <button type="button" class="small-btn bank-action-btn" id="bankStrategyToggleBtn">Strategy Request</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPeerReportBtn">Peer Report</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPortfolioReportBtn">Portfolio Review</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankOfferingFitsBtn" title="What in today's inventory fits this bank?">Today's Fits</button>
             <button type="button" class="small-btn bank-action-btn" id="bankWatchBtn" title="Add this bank to my watchlist">&#9734; Watch</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
             <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
@@ -12502,6 +12503,8 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (ownerInput) ownerInput.addEventListener('input', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
+    const fitsBtn = document.getElementById('bankOfferingFitsBtn');
+    if (fitsBtn) fitsBtn.addEventListener('click', () => openOfferingFitsDrawer(bank.id));
     const watchBtn = document.getElementById('bankWatchBtn');
     if (watchBtn) watchBtn.addEventListener('click', () => addToWatchlist({
       kind: 'bank',
@@ -13584,6 +13587,117 @@
       }
       if (subtitle) subtitle.textContent = data.offeringHeadline || '';
       renderBuyersList(data);
+    } catch (e) {
+      if (body) body.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+    }
+  }
+
+  // ----- Today's Fits: the inverse of the buyers drawer -----
+  // One bank, every offering in today's package, grouped by asset class.
+
+  let offeringFitsFocusRelease = null;
+
+  function ensureOfferingFitsDrawer() {
+    let backdrop = document.getElementById('offeringFitsBackdrop');
+    if (backdrop) return backdrop;
+    backdrop = document.createElement('div');
+    backdrop.id = 'offeringFitsBackdrop';
+    backdrop.className = 'maps-modal-backdrop buyers-drawer-backdrop';
+    backdrop.hidden = true;
+    backdrop.innerHTML = `
+      <div class="maps-modal buyers-drawer" role="dialog" aria-modal="true" aria-labelledby="offeringFitsTitle" tabindex="-1">
+        <header>
+          <div>
+            <div class="title" id="offeringFitsTitle">Today's fits</div>
+            <div class="buyers-drawer-subtitle" id="offeringFitsSubtitle"></div>
+          </div>
+          <button type="button" class="text-btn" id="offeringFitsClose" aria-label="Close">✕</button>
+        </header>
+        <div class="maps-modal-body" id="offeringFitsBody">
+          <div class="bank-search-empty">Scoring today's inventory…</div>
+        </div>
+        <footer>
+          <span class="buyers-drawer-disclaimer">Today's inventory scored on call-report fit — same rules as "Who should I call?". Internal sales support.</span>
+          <button type="button" class="small-btn" id="offeringFitsCloseFooter">Close</button>
+        </footer>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => {
+      backdrop.hidden = true;
+      if (offeringFitsFocusRelease) { offeringFitsFocusRelease(); offeringFitsFocusRelease = null; }
+    };
+    backdrop.querySelector('#offeringFitsClose').addEventListener('click', close);
+    backdrop.querySelector('#offeringFitsCloseFooter').addEventListener('click', close);
+    backdrop.addEventListener('click', evt => {
+      if (evt.target === backdrop) { close(); return; }
+      // Deep links (data-goto) are handled by the global delegation; just
+      // make sure the drawer is out of the way when one is clicked.
+      if (evt.target.closest('[data-goto]')) backdrop.hidden = true;
+    });
+    document.addEventListener('keydown', evt => { if (evt.key === 'Escape' && !backdrop.hidden) close(); });
+    return backdrop;
+  }
+
+  function offeringFitPickRow(pick, page) {
+    const yieldText = pick.yield != null ? Number(pick.yield).toFixed(2) + '%' : '—';
+    const detail = [pick.cusip, pick.maturity, pick.sector].filter(Boolean).join(' · ');
+    const openBtn = pick.cusip
+      ? `<button type="button" class="small-btn" data-goto="${escapeHtml(page)}" data-cusip="${escapeHtml(pick.cusip)}">Open</button>`
+      : `<button type="button" class="small-btn" data-goto="${escapeHtml(page)}">Open</button>`;
+    return `<li class="fits-pick">
+      <div class="fits-pick-main">
+        <div class="fits-pick-desc">${escapeHtml(pick.description || pick.cusip || 'Offering')}${pick.inState ? ' <span class="buyer-chip fits-instate">In-state</span>' : ''}</div>
+        <div class="buyer-meta">${escapeHtml(detail)}</div>
+      </div>
+      <div class="fits-pick-yield">${escapeHtml(yieldText)}</div>
+      ${openBtn}
+    </li>`;
+  }
+
+  function renderOfferingFits(data) {
+    const body = document.getElementById('offeringFitsBody');
+    if (!body) return;
+    if (!data || !Array.isArray(data.classes) || !data.classes.length) {
+      const msg = (data && data.notice) || 'Nothing in today\'s inventory scored for this bank.';
+      body.innerHTML = `<div class="bank-search-empty">${escapeHtml(msg)}</div>`;
+      return;
+    }
+    const held = data.ownedSkipped
+      ? ` · ${data.ownedSkipped} already-held CUSIP${data.ownedSkipped === 1 ? '' : 's'} excluded` : '';
+    body.innerHTML = `
+      <div class="buyers-summary">${escapeHtml(data.scanned)} offerings scored across ${escapeHtml(data.classes.length)} asset class${data.classes.length === 1 ? '' : 'es'}${escapeHtml(held)}${data.holdings ? ` · holdings as of ${escapeHtml(data.holdings.reportDate || '')}` : ''}.</div>
+      ${data.classes.map(cls => `
+        <section class="fits-class">
+          <div class="fits-class-head">
+            <div class="fits-class-name">${escapeHtml(cls.label)} <span class="fits-class-count">${escapeHtml(cls.offeringCount)} offered</span></div>
+            <div class="buyer-score">${escapeHtml(cls.score)}</div>
+          </div>
+          <div class="buyer-rationale">${cls.rationale.map(r => `<span class="buyer-chip">${escapeHtml(r)}</span>`).join('')}</div>
+          <ul class="fits-picks">${cls.picks.map(p => offeringFitPickRow(p, cls.page)).join('')}</ul>
+        </section>
+      `).join('')}`;
+  }
+
+  async function openOfferingFitsDrawer(bankId) {
+    const backdrop = ensureOfferingFitsDrawer();
+    backdrop.hidden = false;
+    if (offeringFitsFocusRelease) { offeringFitsFocusRelease(); offeringFitsFocusRelease = null; }
+    offeringFitsFocusRelease = trapModalFocus(backdrop.querySelector('.buyers-drawer'));
+    const subtitle = document.getElementById('offeringFitsSubtitle');
+    const body = document.getElementById('offeringFitsBody');
+    if (subtitle) subtitle.textContent = '';
+    if (body) body.innerHTML = '<div class="bank-search-empty">Scoring today\'s inventory…</div>';
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/offering-fits`, { cache: 'no-store' });
+      const data = await readBankJson(res);
+      if (subtitle) {
+        const name = (data.bank && data.bank.displayName) || '';
+        const loc = (data.bank && data.bank.location) || '';
+        // Workbook display names often already end in "City, ST" — don't repeat it.
+        subtitle.textContent = [name, name.includes(loc) ? '' : loc, data.bank && data.bank.status]
+          .filter(Boolean).join(' · ');
+      }
+      renderOfferingFits(data);
     } catch (e) {
       if (body) body.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
     }
