@@ -66,6 +66,16 @@ async function main() {
     assert.strictEqual(fredSeries.parseFredObservations(observations([{ date: 'x', value: '.' }])), null);
   });
 
+  await check('parseFredHistory returns ascending {d,v} pairs, skipping holes', () => {
+    const hist = fredSeries.parseFredHistory(observations([
+      { date: '2026-06-11', value: '4.35' },
+      { date: '2026-06-10', value: '.' },
+      { date: '2026-06-09', value: '4.30' },
+    ]));
+    assert.deepStrictEqual(hist, [{ d: '2026-06-09', v: 4.30 }, { d: '2026-06-11', v: 4.35 }]);
+    assert.deepStrictEqual(fredSeries.parseFredHistory(null), []);
+  });
+
   await check('no API key → null, and the network is never touched', async () => {
     const impl = fetchFor(FIXTURES);
     const out = await fredSeries.getFredIndicators({ marketDir: tmpDir(), apiKey: '', fetchImpl: impl });

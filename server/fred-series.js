@@ -20,10 +20,31 @@ const path = require('path');
 
 const FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations';
 
+// `group` drives where the frontend surfaces a series (core wire cards vs.
+// the Market Color hub's extended band vs. the CD national-rate strip);
+// `format: 'bp'` marks OAS series quoted in percent but displayed in bp.
 const SERIES = [
-  { id: 'SOFR', key: 'sofr', label: 'SOFR' },
-  { id: 'DFF', key: 'fedFunds', label: 'Fed Funds (effective)' },
-  { id: 'T10YIE', key: 'breakeven10Y', label: '10Y Breakeven' },
+  { id: 'SOFR', key: 'sofr', label: 'SOFR', group: 'core' },
+  { id: 'DFF', key: 'fedFunds', label: 'Fed Funds (effective)', group: 'core' },
+  { id: 'T10YIE', key: 'breakeven10Y', label: '10Y Breakeven', group: 'core' },
+  // Credit spreads — ICE BofA option-adjusted spreads (percent → shown as bp).
+  { id: 'BAMLC0A0CM', key: 'igOas', label: 'IG OAS', group: 'core', format: 'bp' },
+  { id: 'BAMLH0A0HYM2', key: 'hyOas', label: 'HY OAS', group: 'core', format: 'bp' },
+  // Funding complex.
+  { id: 'SOFR30DAYAVG', key: 'sofr30', label: 'SOFR 30d Avg', group: 'extended' },
+  { id: 'SOFR90DAYAVG', key: 'sofr90', label: 'SOFR 90d Avg', group: 'extended' },
+  { id: 'IORB', key: 'iorb', label: 'IORB', group: 'extended' },
+  { id: 'DPRIME', key: 'prime', label: 'Prime', group: 'extended' },
+  // Inflation expectations beyond the 10Y breakeven.
+  { id: 'T5YIE', key: 'breakeven5Y', label: '5Y Breakeven', group: 'extended' },
+  { id: 'T5YIFR', key: 'fwd5y5y', label: '5y5y Fwd Inflation', group: 'extended' },
+  // FDIC national average CD rates by term (monthly; sourced FDIC via FRED).
+  { id: 'NDR3MCD', key: 'ndr3m', label: '3m CD', group: 'deposit', term: '3m' },
+  { id: 'NDR6MCD', key: 'ndr6m', label: '6m CD', group: 'deposit', term: '6m' },
+  { id: 'NDR12MCD', key: 'ndr12m', label: '12m CD', group: 'deposit', term: '12m' },
+  { id: 'NDR24MCD', key: 'ndr24m', label: '24m CD', group: 'deposit', term: '24m' },
+  { id: 'NDR36MCD', key: 'ndr36m', label: '36m CD', group: 'deposit', term: '36m' },
+  { id: 'NDR60MCD', key: 'ndr60m', label: '60m CD', group: 'deposit', term: '60m' },
 ];
 
 const CACHE_FILENAME = 'fred-indicators.json';
@@ -44,6 +65,22 @@ function parseFredObservations(json) {
     }
   }
   return null;
+}
+
+/**
+ * Up to `max` usable observations, ascending by date, as compact
+ * { d, v } pairs — feeds the wire-card sparklines. Desc input expected.
+ */
+function parseFredHistory(json, max = 90) {
+  const rows = json && Array.isArray(json.observations) ? json.observations : [];
+  const out = [];
+  for (const row of rows) {
+    const value = Number(row.value);
+    if (row.value === '.' || !Number.isFinite(value)) continue;
+    out.push({ d: String(row.date || ''), v: Number(value.toFixed(2)) });
+    if (out.length >= max) break;
+  }
+  return out.reverse();
 }
 
 function readCache(marketDir) {
@@ -94,23 +131,33 @@ async function getFredIndicators(opts) {
   if (!inflight) {
     inflight = (async () => {
       const results = await Promise.allSettled(SERIES.map(async s => {
-        const url = `${FRED_BASE}?series_id=${encodeURIComponent(s.id)}&api_key=${encodeURIComponent(apiKey)}&file_type=json&sort_order=desc&limit=10`;
+        // 130 raw rows ≈ 90 usable daily prints after "."-holes — sparkline depth.
+        const url = `${FRED_BASE}?series_id=${encodeURIComponent(s.id)}&api_key=${encodeURIComponent(apiKey)}&file_type=json&sort_order=desc&limit=130`;
         const res = await fetchImpl(url, {
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           headers: { 'User-Agent': 'fbbs-portal/fred-series' },
         });
         if (!res.ok) throw new Error(`FRED ${s.id} responded ${res.status}`);
-        const latest = parseFredObservations(await res.json());
+        const json = await res.json();
+        const latest = parseFredObservations(json);
         if (!latest) throw new Error(`FRED ${s.id} had no usable observations`);
-        return { s, latest };
+        return { s, latest, history: parseFredHistory(json) };
       }));
       const series = { ...(cache && cache.series) };
       let succeeded = 0;
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
         if (r.status === 'fulfilled') {
-          const { s, latest } = r.value;
-          series[s.key] = { ...latest, label: s.label, seriesId: s.id };
+          const { s, latest, history } = r.value;
+          series[s.key] = {
+            ...latest,
+            label: s.label,
+            seriesId: s.id,
+            group: s.group || 'core',
+            ...(s.format ? { format: s.format } : {}),
+            ...(s.term ? { term: s.term } : {}),
+            ...(history && history.length > 1 ? { history } : {})
+          };
           succeeded += 1;
         } else {
           log('warn', `FRED series ${SERIES[i].id} failed:`, r.reason.message);
@@ -134,6 +181,7 @@ async function getFredIndicators(opts) {
 
 module.exports = {
   parseFredObservations,
+  parseFredHistory,
   getFredIndicators,
   SERIES,
 };

@@ -15752,3 +15752,73 @@ body {
   .bank-tab-bar, .bank-workspace-toolbar { display: none !important; }
   .bank-tab-panel[hidden] { display: block !important; }
 }
+
+/* ===== Wire sparklines + FDIC national CD-rate strips ===== */
+.wire-spark {
+  color: var(--racing-green, #1a3a2a);
+  display: block;
+  height: 22px;
+  margin: 4px 0 0;
+  opacity: 0.65;
+  width: 100%;
+}
+
+.cd-national-strip {
+  background: #fff;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 12px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+}
+
+.cd-nat-head {
+  color: var(--text3, #8a918d);
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.cd-nat-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.cd-nat-tile {
+  display: flex;
+  flex-direction: column;
+}
+
+.cd-nat-term {
+  color: var(--text3, #8a918d);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.cd-nat-rate {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.cd-nat-desk {
+  color: var(--text2, #4a514d);
+  font-size: 11px;
+}
+
+.cd-nat-desk em {
+  font-style: normal;
+  font-weight: 700;
+}
+
+.cd-nat-pos { color: #2e7d32; }
+.cd-nat-neg { color: #b71c1c; }
+
+.knob-hint {
+  color: var(--text3, #8a918d);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: none;
+}

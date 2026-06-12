@@ -5657,6 +5657,7 @@
         cdRolloverState.ownerTouched = true;
       }
       renderCdRolloverWall();
+      renderFdicNationalStrip('cdRolloverNational', null);
     } catch (err) {
       app.innerHTML = '<p class="error-note">Could not load the rollover wall: ' + escapeHtml(err.message) + '</p>';
     }
@@ -5943,10 +5944,17 @@
     const bq = Number(k.bqFactor);
     // A single flat reinvest target the rep sets (defaults to 5.00%).
     const reinvVal = k.reinvestRatePct != null ? Number(k.reinvestRatePct).toFixed(2) : '5.00';
+    // Live funding reference for the COF knob (best-effort — the wire cache
+    // is warm whenever Home or the Market Color hub has loaded this session).
+    const fredSofr30 = marketWireClientCache && marketWireClientCache.data && marketWireClientCache.data.fred
+      ? marketWireClientCache.data.fred.sofr30 : null;
+    const cofHint = fredSofr30 && fredSofr30.value != null
+      ? ` <span class="knob-hint" title="FRED SOFR30DAYAVG as of ${escapeHtml(fredSofr30.date || '')}">30d SOFR ${escapeHtml(Number(fredSofr30.value).toFixed(2))}%</span>`
+      : '';
     return `
       <div class="swap-knobs">
         <div class="knob"><label>Tax rate %</label><input type="number" step="1" min="0" max="99" id="kbTax" value="${escapeHtml(String(k.taxRatePct ?? 21))}"></div>
-        <div class="knob"><label>Cost of funds %</label><input type="number" step="0.05" min="0" id="kbCof" value="${escapeHtml(String(k.cofPct ?? 1.5))}"></div>
+        <div class="knob"><label>Cost of funds %${cofHint}</label><input type="number" step="0.05" min="0" id="kbCof" value="${escapeHtml(String(k.cofPct ?? 1.5))}"></div>
         <div class="knob"><label>Muni BQ</label><select id="kbBq">
           <option value="0.20"${bq !== 1 ? ' selected' : ''}>Bank-Qualified</option>
           <option value="1.00"${bq === 1 ? ' selected' : ''}>Non-BQ</option></select></div>
@@ -17549,6 +17557,7 @@
     populateOfferingsFilters();
     hydrateOfferingsFiltersFromUrl();
     renderOfferings();
+    renderFdicNationalStrip('cdNationalStrip', deskCdMediansByMonths(offeringsData.offerings));
   }
 
   function populateOfferingsFilters() {
@@ -19688,11 +19697,8 @@
     if (rates && rates.spread2s10sBp != null) cards.push(marketWireCard('2s10s', rates.spread2s10sBp + 'bp', 'As of ' + (rates.asOfDate || '')));
     if (ind && ind.cpiYoY) cards.push(marketWireCard('CPI YoY', ind.cpiYoY.value.toFixed(1) + '%', ind.cpiYoY.period));
     if (ind && ind.unemployment) cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
-    ['sofr', 'fedFunds', 'breakeven10Y'].forEach(key => {
-      if (fred && fred[key] && fred[key].value != null) {
-        cards.push(marketWireCard(fred[key].label || key, fred[key].value.toFixed(2) + '%', 'As of ' + (fred[key].date || '')));
-      }
-    });
+    // The hub shows the full FRED complex; Home keeps the core five.
+    cards.push(...fredWireCards(fred, HOME_FRED_KEYS.concat(EXTENDED_FRED_KEYS)));
     cardsEl.innerHTML = cards.join('') || '<div class="home-wire-card"><p class="home-wire-card-sub">Live numbers unavailable.</p></div>';
 
     const headlinesEl = document.getElementById('mcHeadlines');
@@ -19722,7 +19728,7 @@
           ${upcomingRows ? `<p class="home-wire-auction-head">Coming up</p>${upcomingRows}` : ''}
         </div>`;
       }
-      auctionsEl.innerHTML = auctionsCard;
+      auctionsEl.innerHTML = auctionsCard + fdicNationalCard(fred);
     }
 
     const updatedEl = document.getElementById('mcWireUpdated');
@@ -21114,20 +21120,127 @@
     }, MARKET_WIRE_REFRESH_MS);
   }
 
+  // Short client-side cache so the Home wire, Market Color hub, CD explorer
+  // strip, and rollover wall don't each hammer /api/market/wire (the server
+  // caches upstream anyway; this just dedups per-page fetches).
+  let marketWireClientCache = null;
+
+  async function fetchMarketWire() {
+    if (marketWireClientCache && Date.now() - marketWireClientCache.at < 5 * 60 * 1000) {
+      return marketWireClientCache.data;
+    }
+    const res = await fetch('/api/market/wire', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    marketWireClientCache = { data, at: Date.now() };
+    return data;
+  }
+
   async function loadMarketWire() {
     try {
-      const res = await fetch('/api/market/wire', { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      renderMarketWire(await res.json());
+      marketWireClientCache = null; // the 15-min poll should always refresh
+      renderMarketWire(await fetchMarketWire());
     } catch (e) {
       console.error('Failed to load market wire:', e);
     }
   }
 
-  function marketWireCard(label, value, sub) {
+  function wireSparkline(history) {
+    if (!Array.isArray(history) || history.length < 2) return '';
+    const vals = history.map(h => h.v);
+    const min = Math.min(...vals);
+    const span = (Math.max(...vals) - min) || 1;
+    const W = 96, H = 22;
+    const pts = history.map((h, i) =>
+      `${(i / (history.length - 1) * W).toFixed(1)},${(H - 2 - (h.v - min) / span * (H - 4)).toFixed(1)}`
+    ).join(' ');
+    return `<svg class="wire-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>`;
+  }
+
+  // Value / 90d-delta sub / sparkline for one FRED series entry. OAS series
+  // arrive in percent but read in bp on a desk.
+  function fredCardParts(entry) {
+    if (!entry || entry.value == null) return null;
+    const isBp = entry.format === 'bp';
+    const fmt = v => isBp ? `${Math.round(v * 100)}bp` : `${Number(v).toFixed(2)}%`;
+    let sub = 'As of ' + (entry.date || '');
+    if (Array.isArray(entry.history) && entry.history.length > 1) {
+      const delta = entry.value - entry.history[0].v;
+      const deltaText = isBp
+        ? `${delta >= 0 ? '+' : '−'}${Math.abs(Math.round(delta * 100))}bp`
+        : `${delta >= 0 ? '+' : '−'}${Math.abs(delta).toFixed(2)}`;
+      sub = `${deltaText} over 90d · ${entry.date || ''}`;
+    }
+    return { value: fmt(entry.value), sub, spark: wireSparkline(entry.history) };
+  }
+
+  const HOME_FRED_KEYS = ['sofr', 'fedFunds', 'breakeven10Y', 'igOas', 'hyOas'];
+  const EXTENDED_FRED_KEYS = ['sofr30', 'sofr90', 'iorb', 'prime', 'breakeven5Y', 'fwd5y5y'];
+  const FDIC_NDR_KEYS = ['ndr3m', 'ndr6m', 'ndr12m', 'ndr24m', 'ndr36m', 'ndr60m'];
+
+  function fredWireCards(fred, keys) {
+    if (!fred) return [];
+    return keys.map(key => {
+      const parts = fredCardParts(fred[key]);
+      return parts ? marketWireCard(fred[key].label || key, parts.value, parts.sub, parts.spark) : '';
+    }).filter(Boolean);
+  }
+
+  const FDIC_TERM_MONTHS = { ndr3m: 3, ndr6m: 6, ndr12m: 12, ndr24m: 24, ndr36m: 36, ndr60m: 60 };
+
+  // Rail card for the Market Color hub (matches the auctions card styling).
+  function fdicNationalCard(fred) {
+    const rows = FDIC_NDR_KEYS.map(k => fred && fred[k]).filter(e => e && e.value != null);
+    if (!rows.length) return '';
+    return `<div class="home-wire-card home-wire-auctions">
+      <p class="home-wire-card-label">FDIC National CD Rates</p>
+      <p class="home-wire-auction-head">National average by term · ${escapeHtml(rows[0].date || '')}</p>
+      ${rows.map(e => `<div class="home-wire-auction-row"><span>${escapeHtml(e.label)}</span><span>${escapeHtml(Number(e.value).toFixed(2))}%</span></div>`).join('')}
+    </div>`;
+  }
+
+  // Inline strip for the CD explorer / rollover wall: national average by
+  // term, with an optional desk-median comparison (Map of termMonths → rate).
+  async function renderFdicNationalStrip(elId, deskMedianByMonths) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    let fred = null;
+    try { fred = (await fetchMarketWire()).fred; } catch (_) { /* strip is optional */ }
+    const entries = Object.entries(FDIC_TERM_MONTHS)
+      .map(([key, months]) => ({ entry: fred && fred[key], months }))
+      .filter(x => x.entry && x.entry.value != null);
+    if (!entries.length) { el.hidden = true; return; }
+    const tiles = entries.map(({ entry, months }) => {
+      const med = deskMedianByMonths ? deskMedianByMonths.get(months) : null;
+      const diffBp = med != null ? Math.round((med - entry.value) * 100) : null;
+      return `<div class="cd-nat-tile">
+        <span class="cd-nat-term">${escapeHtml(entry.label)}</span>
+        <span class="cd-nat-rate">${escapeHtml(Number(entry.value).toFixed(2))}%</span>
+        ${med != null ? `<span class="cd-nat-desk">desk ${escapeHtml(med.toFixed(2))}% <em class="${diffBp >= 0 ? 'cd-nat-pos' : 'cd-nat-neg'}">${diffBp >= 0 ? '+' : ''}${escapeHtml(diffBp)}bp</em></span>` : ''}
+      </div>`;
+    }).join('');
+    el.innerHTML = `<span class="cd-nat-head">FDIC national avg CD rates${entries[0].entry.date ? ` (${escapeHtml(entries[0].entry.date)})` : ''}${deskMedianByMonths ? ' vs desk median' : ''}</span><div class="cd-nat-tiles">${tiles}</div>`;
+    el.hidden = false;
+  }
+
+  // Median desk CD rate per standard term from today's parsed offerings.
+  function deskCdMediansByMonths(offerings) {
+    const map = new Map();
+    for (const months of Object.values(FDIC_TERM_MONTHS)) {
+      const rates = (offerings || [])
+        .filter(o => Number(o.termMonths) === months && o.rate != null && Number.isFinite(Number(o.rate)))
+        .map(o => Number(o.rate))
+        .sort((a, b) => a - b);
+      if (rates.length) map.set(months, rates[Math.floor(rates.length / 2)]);
+    }
+    return map;
+  }
+
+  function marketWireCard(label, value, sub, spark) {
     return `<div class="home-wire-card">
       <p class="home-wire-card-label">${escapeHtml(label)}</p>
       <p class="home-wire-card-value">${escapeHtml(value)}</p>
+      ${spark || ''}
       <p class="home-wire-card-sub">${escapeHtml(sub || '')}</p>
     </div>`;
   }
@@ -21169,13 +21282,8 @@
     if (ind && ind.unemployment) {
       cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
     }
-    // FRED benchmarks ride along once FRED_API_KEY is configured server-side.
-    const fred = data.fred || null;
-    ['sofr', 'fedFunds', 'breakeven10Y'].forEach(key => {
-      if (fred && fred[key] && fred[key].value != null) {
-        cards.push(marketWireCard(fred[key].label || key, fred[key].value.toFixed(2) + '%', 'As of ' + (fred[key].date || '')));
-      }
-    });
+    // FRED benchmarks ride along once a FRED key is configured server-side.
+    cards.push(...fredWireCards(data.fred || null, HOME_FRED_KEYS));
     let auctionsCard = '';
     if (auctions && ((auctions.results || []).length || (auctions.upcoming || []).length)) {
       const resultRows = (auctions.results || []).slice(0, 3).map(a => `<div class="home-wire-auction-row">
