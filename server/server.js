@@ -214,6 +214,18 @@ const CD_INTERNAL_DIR = path.join(DATA_DIR, 'cd-internal');
 const EXEC_SUMMARY_DIR = path.join(DATA_DIR, 'exec-summary');
 const MARKET_DIR = path.join(DATA_DIR, 'market');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
+// FRED API key: env var wins; otherwise a one-line key file under data/
+// (gitignored, travels with DATA_DIR) so the double-click launchers don't
+// need env-var setup. fred-series.js stays dormant when neither is present.
+if (!process.env.FRED_API_KEY) {
+  try {
+    const fredKeyFile = path.join(MARKET_DIR, 'fred-api-key.txt');
+    if (fs.existsSync(fredKeyFile)) {
+      const key = fs.readFileSync(fredKeyFile, 'utf-8').trim();
+      if (key) process.env.FRED_API_KEY = key;
+    }
+  } catch (_) { /* dormant without a key */ }
+}
 // Folder-drop auto-publish (FBBS_AUTO_PUBLISH=0 disables; see autoPublishTick)
 const AUTO_PUBLISH_ENABLED = process.env.FBBS_AUTO_PUBLISH !== '0';
 const AUTO_PUBLISH_POLL_MS = 2 * 60 * 1000;
