@@ -10516,6 +10516,36 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // Per-bank slice of the CD rollover universe — powers the tear sheet's
+    // "CDs rolling off" signal chip without pulling the whole wall.
+    const bankCdRollMatch = pathname.match(/^\/api\/banks\/([^/]+)\/cd-rollover$/);
+    if (bankCdRollMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankCdRollMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      const mapData = getMapBankData();
+      const bank = mapData && Array.isArray(mapData.banks)
+        ? mapData.banks.find(b => String(b.id) === String(bankId)) : null;
+      if (!bank) return sendJSON(res, 404, { error: 'Bank not found' });
+      const windowDays = Math.max(1, Math.min(365, Math.round(Number(query.get('window')) || 180)));
+      const cert = String(bank.certNumber || '').trim();
+      const nameKey = normalizeBankNameForMatch(bank.displayName || bank.legalName || '');
+      const todayMs = Math.floor(Date.now() / 86400000) * 86400000;
+      const horizonMs = todayMs + windowDays * 86400000;
+      const cds = buildCdRolloverUniverse()
+        .filter(cd => {
+          const matMs = Date.parse(cd.maturity);
+          if (!Number.isFinite(matMs) || matMs < todayMs || matMs > horizonMs) return false;
+          return (cert && cd.cert === cert) || (nameKey && normalizeBankNameForMatch(cd.name) === nameKey);
+        })
+        .sort((a, b) => a.maturity.localeCompare(b.maturity))
+        .map(cd => ({
+          cusip: cd.cusip, maturity: cd.maturity,
+          daysOut: Math.round((Date.parse(cd.maturity) - todayMs) / 86400000),
+          rate: cd.rate, term: cd.term
+        }));
+      return sendJSON(res, 200, { windowDays, count: cds.length, cds: cds.slice(0, 20) });
+    }
+
     // Inverse buyers query: what in today's inventory fits this bank?
     const bankFitsMatch = pathname.match(/^\/api\/banks\/([^/]+)\/offering-fits$/);
     if (bankFitsMatch && req.method === 'GET') {

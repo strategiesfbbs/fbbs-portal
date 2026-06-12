@@ -15650,3 +15650,105 @@ body {
   padding: 2px 0;
   white-space: nowrap;
 }
+
+/* ===== Tear-sheet tabs + sales signals strip ===== */
+.bank-tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid var(--line, #ddd);
+  margin: 18px 0 0;
+}
+
+.bank-tab-bar button {
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  color: var(--text3, #8a918d);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: -2px;
+  padding: 10px 18px;
+}
+
+.bank-tab-bar button.active {
+  border-bottom-color: var(--accent, #1a3a2a);
+  color: var(--accent, #1a3a2a);
+}
+
+.bank-tab-panel {
+  padding-top: 16px;
+}
+
+.bank-workspace-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.bank-workspace-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bank-signal-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bank-signal-chip {
+  align-items: baseline;
+  background: #fff;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  padding: 5px 12px;
+}
+
+.bank-signal-chip[data-signal-target=""] { cursor: default; }
+
+.bank-signal-label {
+  color: var(--text3, #8a918d);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.bank-signal-value {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bank-signal-green { border-color: rgba(46, 125, 50, 0.45); }
+.bank-signal-green .bank-signal-value { color: #2e7d32; }
+.bank-signal-amber { border-color: rgba(176, 124, 16, 0.5); }
+.bank-signal-amber .bank-signal-value { color: #b07c10; }
+.bank-signal-red { border-color: rgba(183, 28, 28, 0.45); }
+.bank-signal-red .bank-signal-value { color: #b71c1c; }
+.bank-signal-neutral .bank-signal-value { color: var(--text2, #4a514d); }
+
+.fits-pick-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.bank-assistant-note-btns {
+  display: inline-flex;
+  gap: 10px;
+}
+
+/* Print captures the whole tear sheet regardless of the active tab. */
+@media print {
+  .bank-tab-bar, .bank-workspace-toolbar { display: none !important; }
+  .bank-tab-panel[hidden] { display: block !important; }
+}

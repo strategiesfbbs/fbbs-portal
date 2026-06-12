@@ -12359,6 +12359,116 @@
     `;
   }
 
+  // ----- Tear-sheet tabs (Sales Workspace / Call Report) + signals strip -----
+
+  let bankTearSheetTab = 'sales'; // persists across bank loads within the session
+  const bankSignalState = { bankId: null, cdRollover: null, fdic: null };
+
+  function setBankTearSheetTab(tab) {
+    bankTearSheetTab = tab === 'callreport' ? 'callreport' : 'sales';
+    document.querySelectorAll('#bankTabBar button[data-bank-tab]').forEach(b => {
+      const on = b.dataset.bankTab === bankTearSheetTab;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+    document.querySelectorAll('[data-bank-tab-panel]').forEach(p => {
+      p.hidden = p.dataset.bankTabPanel !== bankTearSheetTab;
+    });
+  }
+
+  function bankSignalChip(tone, label, value, target) {
+    return `<button type="button" class="bank-signal-chip bank-signal-${tone}"${target ? ` data-signal-target="${escapeHtml(target)}"` : ''}>
+      <span class="bank-signal-label">${escapeHtml(label)}</span>
+      <span class="bank-signal-value">${escapeHtml(value)}</span>
+    </button>`;
+  }
+
+  function buildBankSignalChips() {
+    const chips = [];
+    const todayYmd = new Date().toISOString().slice(0, 10);
+
+    // Last manual touch — same 30/60d green/amber/red bands as saved views.
+    const manual = (selectedBankActivities || []).filter(a => isManualActivityKind(a.kind));
+    let touchTone = 'red', touchValue = 'No logged touch';
+    if (manual.length) {
+      const newest = manual.reduce((best, a) => {
+        const when = a.activityDate || (a.at ? String(a.at).slice(0, 10) : '');
+        return when > best ? when : best;
+      }, '');
+      if (newest) {
+        const days = Math.max(0, Math.round((Date.parse(todayYmd) - Date.parse(newest)) / 86400000));
+        touchTone = days <= 30 ? 'green' : (days <= 60 ? 'amber' : 'red');
+        touchValue = days === 0 ? 'Today' : `${days}d ago`;
+      }
+    }
+    chips.push(bankSignalChip(touchTone, 'Last touch', touchValue, 'bankActivityPanel'));
+
+    const tasks = selectedBankTasks || [];
+    const overdue = tasks.filter(t => t.dueDate && t.dueDate < todayYmd).length;
+    const nextDue = tasks.filter(t => t.dueDate).map(t => t.dueDate).sort()[0] || '';
+    if (overdue) chips.push(bankSignalChip('red', 'Tasks', `${overdue} overdue`, 'bankTasksPanel'));
+    else if (nextDue) chips.push(bankSignalChip(nextDue === todayYmd ? 'amber' : 'green', 'Next task', nextDue === todayYmd ? 'Due today' : formatActivityDate(nextDue), 'bankTasksPanel'));
+    else chips.push(bankSignalChip('neutral', 'Tasks', 'None open', 'bankTasksPanel'));
+
+    const opps = selectedBankOpps || [];
+    const oppValue = opps.reduce((sum, o) => sum + (Number(o.estValue) || 0), 0);
+    chips.push(bankSignalChip(opps.length ? 'green' : 'neutral', 'Pipeline',
+      opps.length ? `${opps.length} open${oppValue ? ' · ' + compactMoney(oppValue) : ''}` : 'Empty', 'bankOppsPanel'));
+
+    const roll = bankSignalState.cdRollover;
+    if (roll && roll.count > 0) {
+      chips.push(bankSignalChip('amber', 'CDs rolling',
+        `${roll.count} in ${roll.windowDays}d (next ${roll.cds[0].daysOut}d)`, 'goto:cd-rollover'));
+    } else if (roll) {
+      chips.push(bankSignalChip('neutral', 'CDs rolling', `None in ${roll.windowDays}d`, ''));
+    }
+
+    const fdic = bankSignalState.fdic;
+    if (fdic) {
+      chips.push(fdic.newer
+        ? bankSignalChip('amber', 'FDIC', `${fdic.period} out — refresh import`, 'tab:callreport')
+        : bankSignalChip('green', 'FDIC', `${fdic.period} current`, 'tab:callreport'));
+    }
+    return chips.join('');
+  }
+
+  function renderBankSignalStrip() {
+    return buildBankSignalChips();
+  }
+
+  function updateBankSignalStrip() {
+    const strip = document.getElementById('bankSignalStrip');
+    if (strip) strip.innerHTML = buildBankSignalChips();
+  }
+
+  function handleBankSignalClick(target) {
+    if (!target) return;
+    if (target.startsWith('goto:')) { window.location.hash = '#' + target.slice(5); return; }
+    if (target.startsWith('tab:')) {
+      setBankTearSheetTab(target.slice(4));
+      const fdicBar = document.getElementById('bankFdicCheck');
+      if (fdicBar && !fdicBar.hidden) fdicBar.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    setBankTearSheetTab('sales');
+    const el = document.getElementById(target);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  async function loadBankCdRolloverSignal(bankId) {
+    bankSignalState.bankId = bankId;
+    bankSignalState.cdRollover = null;
+    bankSignalState.fdic = null;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/cd-rollover?window=180`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (bankSignalState.bankId !== bankId) return; // rep moved on to another bank
+      bankSignalState.cdRollover = data;
+      updateBankSignalStrip();
+    } catch (_) { /* signal chip is best-effort */ }
+  }
+
   function renderAccountDetailsSummary(values, status) {
     const address = [values.address, [values.city, values.state, values.zip].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
     const cells = [
@@ -12601,10 +12711,6 @@
             <input type="text" id="bankTearSheetOwner" class="bank-action-input" value="${escapeHtml(currentBankAccountStatus().owner || '')}" placeholder="Account owner" aria-label="Account owner">
             <button type="button" class="small-btn bank-action-btn" id="bankStatusSaveBtn">Save Status / Owner</button>
             <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Bank</button>
-            <button type="button" class="small-btn bank-action-btn" id="bankStrategyToggleBtn">Strategy Request</button>
-            <button type="button" class="small-btn bank-action-btn" id="bankPeerReportBtn">Peer Report</button>
-            <button type="button" class="small-btn bank-action-btn" id="bankPortfolioReportBtn">Portfolio Review</button>
-            <button type="button" class="small-btn bank-action-btn" id="bankOfferingFitsBtn" title="What in today's inventory fits this bank?">Today's Fits</button>
             <button type="button" class="small-btn bank-action-btn" id="bankWatchBtn" title="Add this bank to my watchlist">&#9734; Watch</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
             <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
@@ -12616,30 +12722,52 @@
         </div>
       </div>
       ${renderAccountDetailsSummary(values, accountStatus)}
-      ${renderBankStrategyRequestPanel()}
-      <div class="bank-fdic-check" id="bankFdicCheck" hidden></div>
-      ${renderBankSection('Details', details, true)}
-      ${renderBankContactsPanel()}
-      ${renderBankPeerBanner(bank.peerComparison)}
-      ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
-      ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13, bank.peerComparison)}
-      ${renderBankCallReportSection('Loan Composition', bankLoanCompositionRows(), recentPeriods, 26, bank.peerComparison)}
-      ${renderBankCallReportSection('Capital', bankCapitalRows(), recentPeriods, 31, bank.peerComparison)}
-      ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38, bank.peerComparison)}
-      ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
-      ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
-      ${renderBankProductFitPanel()}
-      ${renderBankOpportunitiesPanel()}
-      ${renderBankTasksPanel()}
-      ${renderBankActivityPanel()}
-      ${renderBankAssistantPanel()}
-      ${renderBankIntelligencePanel(bank, values, recentPeriods)}
-      <div class="bank-services-pair">
-        ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
-        ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
+      <div class="bank-tab-bar" id="bankTabBar" role="tablist" aria-label="Tear sheet sections">
+        <button type="button" role="tab" data-bank-tab="sales" aria-selected="${bankTearSheetTab === 'sales'}" class="${bankTearSheetTab === 'sales' ? 'active' : ''}">Sales Workspace</button>
+        <button type="button" role="tab" data-bank-tab="callreport" aria-selected="${bankTearSheetTab === 'callreport'}" class="${bankTearSheetTab === 'callreport' ? 'active' : ''}">Call Report &amp; Portfolio</button>
       </div>
-      ${renderBankStrategyHistoryPanel()}
-      ${renderBankUploadedFilesPanel(bank)}
+      <div class="bank-tab-panel" data-bank-tab-panel="sales" ${bankTearSheetTab === 'sales' ? '' : 'hidden'}>
+        <div class="bank-workspace-toolbar">
+          <div class="bank-signal-strip" id="bankSignalStrip">${renderBankSignalStrip()}</div>
+          <div class="bank-workspace-actions">
+            <button type="button" class="small-btn bank-action-btn" id="bankOfferingFitsBtn" title="What in today's inventory fits this bank?">Today's Fits</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankStrategyToggleBtn">Strategy Request</button>
+          </div>
+        </div>
+        ${renderBankStrategyRequestPanel()}
+        ${renderBankActivityPanel()}
+        ${renderBankTasksPanel()}
+        ${renderBankOpportunitiesPanel()}
+        ${renderBankContactsPanel()}
+        ${renderBankAssistantPanel()}
+        ${renderBankProductFitPanel()}
+        <div class="bank-services-pair">
+          ${renderServiceGrid('FBBS Services', 'FBBS Service Count', FBBS_SERVICE_NAMES, accountStatus.services)}
+          ${renderServiceGrid("Bankers' Bank Services", "Bankers' Bank Service Count", BANKERS_BANK_SERVICE_NAMES, accountStatus.bankersBankServices)}
+        </div>
+        ${renderBankStrategyHistoryPanel()}
+      </div>
+      <div class="bank-tab-panel" data-bank-tab-panel="callreport" ${bankTearSheetTab === 'callreport' ? '' : 'hidden'}>
+        <div class="bank-workspace-toolbar bank-callreport-toolbar">
+          <div></div>
+          <div class="bank-workspace-actions">
+            <button type="button" class="small-btn bank-action-btn" id="bankPeerReportBtn">Peer Report</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankPortfolioReportBtn">Portfolio Review</button>
+          </div>
+        </div>
+        <div class="bank-fdic-check" id="bankFdicCheck" hidden></div>
+        ${renderBankSection('Details', details, true)}
+        ${renderBankPeerBanner(bank.peerComparison)}
+        ${renderBankCallReportSection('Balance Sheet', bankBalanceSheetRows(), recentPeriods, 1, bank.peerComparison)}
+        ${renderBankCallReportSection('Securities (HTM & AFS-Fair Value)', bankSecuritiesRows(), recentPeriods, 13, bank.peerComparison)}
+        ${renderBankCallReportSection('Loan Composition', bankLoanCompositionRows(), recentPeriods, 26, bank.peerComparison)}
+        ${renderBankCallReportSection('Capital', bankCapitalRows(), recentPeriods, 31, bank.peerComparison)}
+        ${renderBankCallReportSection('Profitability', bankProfitabilityRows(), recentPeriods, 38, bank.peerComparison)}
+        ${renderBankCallReportSection('Asset Quality', bankAssetQualityRows(), recentPeriods, 57, bank.peerComparison)}
+        ${renderBankCallReportSection('Liquidity', bankLiquidityRows(), recentPeriods, 63, bank.peerComparison)}
+        ${renderBankIntelligencePanel(bank, values, recentPeriods)}
+        ${renderBankUploadedFilesPanel(bank)}
+      </div>
     `;
     updateBankSaveButton();
     const saveBtn = document.getElementById('bankSaveBtn');
@@ -12691,6 +12819,17 @@
       btn.addEventListener('click', savePeerCohortPreference);
     });
     wireStrategyDropZones(profile);
+    const tabBar = document.getElementById('bankTabBar');
+    if (tabBar) tabBar.addEventListener('click', e => {
+      const btn = e.target.closest('button[data-bank-tab]');
+      if (btn) setBankTearSheetTab(btn.dataset.bankTab);
+    });
+    const signalStrip = document.getElementById('bankSignalStrip');
+    if (signalStrip) signalStrip.addEventListener('click', e => {
+      const chip = e.target.closest('[data-signal-target]');
+      if (chip) handleBankSignalClick(chip.dataset.signalTarget);
+    });
+    loadBankCdRolloverSignal(bank.id);
   }
 
   function intelligenceNumber(value) {
@@ -13502,7 +13641,10 @@
           <div class="bank-assistant-note">
             <div class="bank-assistant-note-head">
               <strong>Call note</strong>
-              <button type="button" class="text-btn" id="bankAssistantCopyBtn">Copy</button>
+              <span class="bank-assistant-note-btns">
+                <button type="button" class="text-btn" id="bankAssistantLogBtn" title="Save this note to the bank's activity timeline">Log as activity</button>
+                <button type="button" class="text-btn" id="bankAssistantCopyBtn">Copy</button>
+              </span>
             </div>
             <pre>${escapeHtml(data.callNote)}</pre>
           </div>
@@ -13517,6 +13659,7 @@
       </article>
     `;
     document.getElementById('bankAssistantCopyBtn')?.addEventListener('click', copyBankAssistantNote);
+    document.getElementById('bankAssistantLogBtn')?.addEventListener('click', logBankAssistantNote);
     document.getElementById('bankAssistantStrategyBtn')?.addEventListener('click', useAssistantInStrategyRequest);
     output.querySelectorAll('[data-assistant-swap-strategy]').forEach(btn => {
       btn.addEventListener('click', () => useAssistantInStrategyRequest(Number(btn.dataset.assistantSwapStrategy || 0)));
@@ -13532,8 +13675,13 @@
 
   async function runBankAssistant(action = 'fit') {
     const bankId = selectedBankId();
-    const output = document.getElementById('bankAssistantOutput');
     if (!bankId) return showToast('No bank selected', true);
+    // "AI Call Prep" can be triggered from the Call Report tab's intelligence
+    // panel — the output lives in the Sales Workspace, so surface it.
+    setBankTearSheetTab('sales');
+    const assistantPanel = document.getElementById('bankAssistantPanel');
+    if (assistantPanel && assistantPanel.tagName === 'DETAILS') assistantPanel.open = true;
+    const output = document.getElementById('bankAssistantOutput');
     const hasContent = output && output.querySelector('.bank-assistant-card');
     if (output) {
       output.classList.add('is-loading');
@@ -13756,6 +13904,7 @@
   // One bank, every offering in today's package, grouped by asset class.
 
   let offeringFitsFocusRelease = null;
+  let offeringFitsCtx = { bankId: null, data: null };
 
   function ensureOfferingFitsDrawer() {
     let backdrop = document.getElementById('offeringFitsBackdrop');
@@ -13790,6 +13939,10 @@
     backdrop.querySelector('#offeringFitsCloseFooter').addEventListener('click', close);
     backdrop.addEventListener('click', evt => {
       if (evt.target === backdrop) { close(); return; }
+      const oppBtn = evt.target.closest('[data-fits-opp]');
+      if (oppBtn) { createOppFromFitPick(Number(oppBtn.dataset.fitsCls), Number(oppBtn.dataset.fitsOpp), oppBtn); return; }
+      const logBtn = evt.target.closest('[data-fits-log]');
+      if (logBtn) { logPitchFromFitPick(Number(logBtn.dataset.fitsCls), Number(logBtn.dataset.fitsLog), logBtn); return; }
       // Deep links (data-goto) are handled by the global delegation; just
       // make sure the drawer is out of the way when one is clicked.
       if (evt.target.closest('[data-goto]')) backdrop.hidden = true;
@@ -13798,7 +13951,7 @@
     return backdrop;
   }
 
-  function offeringFitPickRow(pick, page) {
+  function offeringFitPickRow(pick, page, clsIdx, pickIdx) {
     const yieldText = pick.yield != null ? Number(pick.yield).toFixed(2) + '%' : '—';
     const detail = [pick.cusip, pick.maturity, pick.sector].filter(Boolean).join(' · ');
     const openBtn = pick.cusip
@@ -13810,8 +13963,70 @@
         <div class="buyer-meta">${escapeHtml(detail)}</div>
       </div>
       <div class="fits-pick-yield">${escapeHtml(yieldText)}</div>
-      ${openBtn}
+      <div class="fits-pick-actions">
+        ${openBtn}
+        <button type="button" class="small-btn" data-fits-opp="${pickIdx}" data-fits-cls="${clsIdx}" title="Create a pipeline opportunity for this pick">+ Opp</button>
+        <button type="button" class="small-btn" data-fits-log="${pickIdx}" data-fits-cls="${clsIdx}" title="Log a 'pitched this' note on the bank timeline">Log pitch</button>
+      </div>
     </li>`;
+  }
+
+  async function createOppFromFitPick(clsIdx, pickIdx, btn) {
+    const { bankId, data } = offeringFitsCtx;
+    const cls = data && data.classes && data.classes[clsIdx];
+    const pick = cls && cls.picks && cls.picks[pickIdx];
+    if (!bankId || !pick) return;
+    if (btn) btn.disabled = true;
+    const description = `${pick.description}${pick.cusip ? ` (${pick.cusip})` : ''} — ${cls.label}${pick.yield != null ? `, ${Number(pick.yield).toFixed(2)}%` : ''} · from Today's Fits`;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/opportunities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product: 'Securities Purchase', description })
+      });
+      const out = await readBankJson(res);
+      if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+      if (out.opportunity && String(selectedBankId()) === String(bankId)) {
+        selectedBankOpps = (selectedBankOpps || []).concat([out.opportunity]);
+        refreshBankOppsPanel();
+      }
+      if (btn) btn.textContent = 'Opp ✓';
+      showToast('Opportunity created from Today’s Fits');
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      showToast(e.message || 'Could not create opportunity', true);
+    }
+  }
+
+  async function logPitchFromFitPick(clsIdx, pickIdx, btn) {
+    const { bankId, data } = offeringFitsCtx;
+    const cls = data && data.classes && data.classes[clsIdx];
+    const pick = cls && cls.picks && cls.picks[pickIdx];
+    if (!bankId || !pick) return;
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'note',
+          subject: `Pitched ${pick.cusip || pick.description}`,
+          body: `${cls.label}: ${pick.description}${pick.yield != null ? ` at ${Number(pick.yield).toFixed(2)}%` : ''}${pick.maturity ? `, matures ${pick.maturity}` : ''} — from Today's Fits.`,
+          activityDate: new Date().toISOString().slice(0, 10)
+        })
+      });
+      const out = await readBankJson(res);
+      if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+      if (out.activity && String(selectedBankId()) === String(bankId)) {
+        selectedBankActivities = [out.activity].concat(selectedBankActivities || []);
+        refreshBankActivityPanel();
+      }
+      if (btn) btn.textContent = 'Logged ✓';
+      showToast('Pitch logged to the bank timeline');
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      showToast(e.message || 'Could not log pitch', true);
+    }
   }
 
   function renderOfferingFits(data) {
@@ -13826,14 +14041,14 @@
       ? ` · ${data.ownedSkipped} already-held CUSIP${data.ownedSkipped === 1 ? '' : 's'} excluded` : '';
     body.innerHTML = `
       <div class="buyers-summary">${escapeHtml(data.scanned)} offerings scored across ${escapeHtml(data.classes.length)} asset class${data.classes.length === 1 ? '' : 'es'}${escapeHtml(held)}${data.holdings ? ` · holdings as of ${escapeHtml(data.holdings.reportDate || '')}` : ''}.</div>
-      ${data.classes.map(cls => `
+      ${data.classes.map((cls, clsIdx) => `
         <section class="fits-class">
           <div class="fits-class-head">
             <div class="fits-class-name">${escapeHtml(cls.label)} <span class="fits-class-count">${escapeHtml(cls.offeringCount)} offered</span></div>
             <div class="buyer-score">${escapeHtml(cls.score)}</div>
           </div>
           <div class="buyer-rationale">${cls.rationale.map(r => `<span class="buyer-chip">${escapeHtml(r)}</span>`).join('')}</div>
-          <ul class="fits-picks">${cls.picks.map(p => offeringFitPickRow(p, cls.page)).join('')}</ul>
+          <ul class="fits-picks">${cls.picks.map((p, pickIdx) => offeringFitPickRow(p, cls.page, clsIdx, pickIdx)).join('')}</ul>
         </section>
       `).join('')}`;
   }
@@ -13847,9 +14062,11 @@
     const body = document.getElementById('offeringFitsBody');
     if (subtitle) subtitle.textContent = '';
     if (body) body.innerHTML = '<div class="bank-search-empty">Scoring today\'s inventory…</div>';
+    offeringFitsCtx = { bankId, data: null };
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/offering-fits`, { cache: 'no-store' });
       const data = await readBankJson(res);
+      offeringFitsCtx = { bankId, data };
       if (subtitle) {
         const name = (data.bank && data.bank.displayName) || '';
         const loc = (data.bank && data.bank.location) || '';
@@ -13887,6 +14104,37 @@
         if (offering) mapsOpenDeal(offering);
       });
     });
+  }
+
+  async function logBankAssistantNote() {
+    const note = bankAssistantLastResponse && bankAssistantLastResponse.callNote;
+    const bankId = selectedBankId();
+    const btn = document.getElementById('bankAssistantLogBtn');
+    if (!note || !bankId) return showToast('No assistant note to log', true);
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'note',
+          subject: 'Call prep — Sales Assistant',
+          body: note,
+          activityDate: new Date().toISOString().slice(0, 10)
+        })
+      });
+      const out = await readBankJson(res);
+      if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+      if (out.activity) {
+        selectedBankActivities = [out.activity].concat(selectedBankActivities || []);
+        refreshBankActivityPanel();
+      }
+      if (btn) btn.textContent = 'Logged ✓';
+      showToast('Call note logged to the bank timeline');
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      showToast(e.message || 'Could not log the note', true);
+    }
   }
 
   async function copyBankAssistantNote() {
@@ -14844,6 +15092,10 @@
       const periodNote = data.newerAvailable
         ? `<span class="fdic-newer">FDIC has ${escapeHtml(f.period)} — workbook is on ${escapeHtml(data.workbookPeriod)}. Time to refresh the call-report import.</span>`
         : `<span class="fdic-current">${escapeHtml(f.period)}${data.workbookPeriod === f.period ? ' · matches workbook' : ''}</span>`;
+      if (bankSignalState.bankId === bankId || !bankSignalState.bankId) {
+        bankSignalState.fdic = { period: f.period, newer: Boolean(data.newerAvailable) };
+        updateBankSignalStrip();
+      }
       bar.innerHTML = `
         <span class="fdic-label">FDIC live ${periodNote}</span>
         <span class="fdic-stats">${stats}</span>`;
@@ -14858,7 +15110,7 @@
   // the outcome.
 
   const OPP_STAGES = ['Prospect', 'Qualified', 'Proposed', 'Won', 'Lost'];
-  const OPP_PRODUCTS = ['Brokered CDs', 'Bond Swap', 'Muni Credit / BCIS', 'ALM / IRR', 'Portfolio Accounting', 'CECL Analysis', 'CD Funding', 'Other'];
+  const OPP_PRODUCTS = ['Securities Purchase', 'Brokered CDs', 'Bond Swap', 'Muni Credit / BCIS', 'ALM / IRR', 'Portfolio Accounting', 'CECL Analysis', 'CD Funding', 'Other'];
 
   function renderBankOpportunitiesPanel() {
     const rows = (selectedBankOpps || []).map(o => {
@@ -14915,6 +15167,7 @@
     if (!panel) return;
     panel.outerHTML = renderBankOpportunitiesPanel();
     wireBankOppControls();
+    updateBankSignalStrip();
   }
 
   function wireBankOppControls() {
@@ -15063,6 +15316,7 @@
     if (!panel) return;
     panel.outerHTML = renderBankTasksPanel();
     wireBankTaskControls();
+    updateBankSignalStrip();
   }
 
   function wireBankTaskControls() {
@@ -15207,6 +15461,7 @@
     if (!panel) return;
     panel.outerHTML = renderBankActivityPanel();
     wireBankActivityControls();
+    updateBankSignalStrip();
   }
 
   function wireBankActivityControls() {
