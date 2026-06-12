@@ -52,6 +52,7 @@ const {
   saveStructuredNotesUpload
 } = require('./structured-notes-store');
 const {
+  getMarketColorEmailArticle,
   getMarketColorSourceFile,
   loadMarketColorInbox,
   saveMarketColorUpload
@@ -9817,6 +9818,16 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/market-color' && req.method === 'GET') {
       return sendJSON(res, 200, loadMarketColorInbox(MARKET_COLOR_DIR));
+    }
+
+    // Parsed article body for the reading pane (vs. the raw .eml download below).
+    const marketColorBodyMatch = pathname.match(/^\/api\/market-color\/files\/([^/]+)\/body$/);
+    if (marketColorBodyMatch && req.method === 'GET') {
+      const fileId = safeDecodeURIComponent(marketColorBodyMatch[1]);
+      if (!fileId) return sendText(res, 400, 'Invalid market color file ID');
+      const article = getMarketColorEmailArticle(MARKET_COLOR_DIR, fileId);
+      if (!article) return sendText(res, 404, 'Not found');
+      return sendJSON(res, 200, article);
     }
 
     const marketColorFileMatch = pathname.match(/^\/api\/market-color\/files\/([^/]+)$/);

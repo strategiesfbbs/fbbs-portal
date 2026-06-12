@@ -58,6 +58,23 @@ function getMarketColorSourceFile(baseDir, fileId) {
   return { ...source, path: filePath };
 }
 
+// Full parsed article for the reading pane — re-parses the stored .eml on
+// demand so the inbox JSON stays small (items only carry a 700-char preview).
+function getMarketColorEmailArticle(baseDir, fileId) {
+  const file = getMarketColorSourceFile(baseDir, fileId);
+  if (!file || !fs.existsSync(file.path)) return null;
+  const text = fs.readFileSync(file.path).toString('utf8');
+  const summary = emailSummary(text, file.filename);
+  return {
+    id: file.id,
+    filename: file.filename,
+    subject: summary.subject,
+    from: summary.from,
+    date: summary.date,
+    body: summary.body
+  };
+}
+
 function inferTags(text) {
   const haystack = String(text || '').toLowerCase();
   const tags = [];
@@ -125,6 +142,7 @@ function saveMarketColorUpload(baseDir, uploadFiles) {
 }
 
 module.exports = {
+  getMarketColorEmailArticle,
   getMarketColorSourceFile,
   loadMarketColorInbox,
   saveMarketColorUpload

@@ -2987,25 +2987,46 @@
 
   <div class="container">
     <div class="section-title-bar">
-      <h3>Inbox</h3>
-      <div class="kicker" id="marketColorKicker">&mdash;</div>
+      <h3>Market Wire</h3>
+      <div class="kicker" id="mcWireUpdated">&mdash;</div>
     </div>
-    <div class="explorer-stats" id="marketColorStatTiles"></div>
-    <div class="explorer-table-wrap">
-      <table class="explorer-table">
-        <thead>
-          <tr>
-            <th>Subject</th>
-            <th style="width:190px">From</th>
-            <th style="width:150px">Tags</th>
-            <th style="width:170px">Email Date</th>
-            <th style="width:90px">Source</th>
-          </tr>
-        </thead>
-        <tbody id="marketColorBody">
-          <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--text3)">Loading market color&hellip;</td></tr>
-        </tbody>
-      </table>
+    <div class="home-wire-indicators mc-wire-band" id="mcWireCards" aria-label="Live economic indicators"></div>
+
+    <div class="mc-hub-grid">
+      <div class="mc-articles">
+        <div class="section-title-bar">
+          <h3>Desk Color</h3>
+          <div class="kicker" id="marketColorKicker">&mdash;</div>
+        </div>
+        <div class="mc-filter-row">
+          <div class="mc-chips" id="mcTagChips"></div>
+          <input type="search" id="mcSearch" class="mc-search" placeholder="Search market color&hellip;" aria-label="Search market color">
+        </div>
+        <div id="mcLead"></div>
+        <div class="mc-article-list" id="mcArticleList">
+          <div class="mc-empty">Loading market color&hellip;</div>
+        </div>
+      </div>
+      <aside class="mc-rail">
+        <div class="section-title-bar">
+          <h3>Official Headlines</h3>
+        </div>
+        <ul class="home-wire-list mc-headlines" id="mcHeadlines" aria-label="Official headlines">
+          <li class="home-wire-item home-wire-empty">Loading headlines&hellip;</li>
+        </ul>
+        <div id="mcAuctions"></div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="maps-modal-backdrop" id="mcReaderBackdrop" hidden>
+    <div class="maps-modal mc-reader" role="dialog" aria-modal="true" aria-label="Market color article">
+      <header>
+        <span class="title" id="mcReaderTitle">Market color</span>
+        <button type="button" class="small-btn" id="mcReaderClose">Close</button>
+      </header>
+      <div class="mc-reader-meta" id="mcReaderMeta"></div>
+      <div class="mc-reader-body" id="mcReaderBody"></div>
     </div>
   </div>
 </div>
