@@ -12197,7 +12197,7 @@
 
   // ----- Tear-sheet tabs (Sales Workspace / Call Report) + signals strip -----
 
-  let bankTearSheetTab = 'sales'; // persists across bank loads within the session
+  let bankTearSheetTab = 'callreport'; // persists across bank loads within the session
   const bankSignalState = { bankId: null, cdRollover: null, fdic: null };
 
   function setBankTearSheetTab(tab) {
@@ -12570,8 +12570,8 @@
       </div>
       ${renderAccountDetailsSummary(values, accountStatus)}
       <div class="bank-tab-bar" id="bankTabBar" role="tablist" aria-label="Tear sheet sections">
-        <button type="button" role="tab" data-bank-tab="sales" aria-selected="${bankTearSheetTab === 'sales'}" class="${bankTearSheetTab === 'sales' ? 'active' : ''}">Sales Workspace</button>
         <button type="button" role="tab" data-bank-tab="callreport" aria-selected="${bankTearSheetTab === 'callreport'}" class="${bankTearSheetTab === 'callreport' ? 'active' : ''}">Call Report &amp; Portfolio</button>
+        <button type="button" role="tab" data-bank-tab="sales" aria-selected="${bankTearSheetTab === 'sales'}" class="${bankTearSheetTab === 'sales' ? 'active' : ''}">Sales Workspace</button>
       </div>
       <div class="bank-tab-panel" data-bank-tab-panel="sales" ${bankTearSheetTab === 'sales' ? '' : 'hidden'}>
         <div class="bank-workspace-toolbar">
