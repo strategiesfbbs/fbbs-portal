@@ -95,7 +95,6 @@ const {
   PRODUCT_FIT_PRODUCTS,
   activityCountsByBank,
   activityCountsByRep,
-  addBankNote,
   addWatchlistItem,
   listWatchlist,
   removeWatchlistItem,
@@ -132,7 +131,6 @@ const {
   listSavedBanks,
   recordBankActivity,
   recordManualActivity,
-  removeBankNote,
   removeSavedBank,
   setPreferredPeerGroup,
   updateBankContact,
@@ -142,7 +140,6 @@ const {
 } = require('./bank-coverage-store');
 const {
   defaultAccountStatus,
-  countBankAccountStatuses,
   getBankAccountStatusImportStatus,
   getBankAccountStatuses,
   importBankAccountStatusWorkbook,
@@ -4505,91 +4502,6 @@ async function handleSaveBankCoverage(req, res) {
   } catch (err) {
     log('error', 'Bank coverage save failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not save bank coverage' });
-  }
-}
-
-async function handleSaveBankAccountStatus(req, res) {
-  try {
-    const body = await readJsonBody(req);
-    const bankId = String(body.bankId || '').trim();
-    if (!bankId) return sendJSON(res, 400, { error: 'Bank ID is required' });
-
-    const summary = getBankSummaryForCoverage(bankId);
-    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
-
-    const previousAccountStatus = getBankAccountStatuses(BANK_REPORTS_DIR, [bankId]).get(String(bankId)) || {};
-    const previousStatus = previousAccountStatus.status || '';
-    const previousOwner = previousAccountStatus.owner || '';
-    const ownerProvided = Object.prototype.hasOwnProperty.call(body || {}, 'owner');
-    const accountStatus = upsertBankAccountStatus(BANK_REPORTS_DIR, summary, {
-      status: body.status,
-      ...(ownerProvided ? { owner: body.owner } : {}),
-      source: 'manual'
-    });
-    const existingCoverage = getBankCoverage(BANK_REPORTS_DIR, bankId).saved;
-    let saved = existingCoverage;
-    if (existingCoverage) {
-      saved = upsertSavedBank(BANK_REPORTS_DIR, summary, {
-        status: accountStatus.status,
-        ...(ownerProvided ? { owner: accountStatus.owner } : {})
-      });
-    }
-    appendAuditLog({
-      event: 'bank-account-status-save',
-      bankId,
-      status: accountStatus.status,
-      owner: accountStatus.owner
-    });
-    const statusChanged = previousStatus !== accountStatus.status;
-    const ownerChanged = ownerProvided && previousOwner !== accountStatus.owner;
-    if (statusChanged || ownerChanged) {
-      const bits = [];
-      if (statusChanged) bits.push(previousStatus ? `Status ${previousStatus} → ${accountStatus.status}` : `Status set to ${accountStatus.status}`);
-      if (ownerChanged) bits.push(`Owner ${previousOwner || '(none)'} → ${accountStatus.owner || '(none)'}`);
-      logBankActivity(req, {
-        bankId,
-        certNumber: summary.certNumber,
-        kind: 'status-change',
-        summary: bits.join(' · '),
-        refType: 'coverage',
-        refId: bankId
-      });
-    }
-    invalidateBankCaches();
-    return sendJSON(res, 200, { accountStatus, saved });
-  } catch (err) {
-    log('error', 'Bank account status save failed:', err.message);
-    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not save bank status' });
-  }
-}
-
-async function handleAddBankNote(req, res, bankId) {
-  try {
-    const body = await readJsonBody(req);
-    const summary = getBankSummaryForCoverage(bankId);
-    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
-
-    upsertSavedBank(BANK_REPORTS_DIR, summary, body.coverage || {});
-    const note = addBankNote(BANK_REPORTS_DIR, bankId, body.text);
-    appendAuditLog({
-      event: 'bank-note-add',
-      bankId,
-      noteId: note && note.id
-    });
-    const notePreview = String(note && note.text || '').replace(/\s+/g, ' ').slice(0, 140);
-    logBankActivity(req, {
-      bankId,
-      certNumber: summary.certNumber,
-      kind: 'note',
-      summary: notePreview || 'Added a note',
-      refType: 'note',
-      refId: note && note.id
-    });
-    invalidateBankCaches();
-    return sendJSON(res, 200, { note });
-  } catch (err) {
-    log('error', 'Bank note add failed:', err.message);
-    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not add bank note' });
   }
 }
 
@@ -10451,30 +10363,8 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { savedBanks: listSavedBanks(BANK_REPORTS_DIR) });
     }
 
-    if (pathname === '/api/bank-account-statuses' && req.method === 'GET') {
-      const filters = {
-        q: query.get('q'),
-        status: query.get('status'),
-        service: query.get('service'),
-        sort: query.get('sort'),
-        limit: query.get('limit')
-      };
-      return sendJSON(res, 200, {
-        accountStatuses: listBankAccountStatuses(BANK_REPORTS_DIR, filters),
-        resultCount: countBankAccountStatuses(BANK_REPORTS_DIR, filters),
-        importStatus: getBankAccountStatusImportStatus(BANK_REPORTS_DIR)
-      });
-    }
-
     if (pathname === '/api/bank-coverage' && req.method === 'POST') {
       return await handleSaveBankCoverage(req, res);
-    }
-
-    const bankCoverageNoteMatch = pathname.match(/^\/api\/bank-coverage\/([^/]+)\/notes$/);
-    if (bankCoverageNoteMatch && req.method === 'POST') {
-      const bankId = safeDecodeURIComponent(bankCoverageNoteMatch[1]);
-      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
-      return await handleAddBankNote(req, res, bankId);
     }
 
     const bankCoverageMatch = pathname.match(/^\/api\/bank-coverage\/([^/]+)$/);
@@ -10735,16 +10625,6 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { success: true });
     }
 
-    const bankNoteMatch = pathname.match(/^\/api\/bank-coverage\/notes\/([^/]+)$/);
-    if (bankNoteMatch && req.method === 'DELETE') {
-      const noteId = safeDecodeURIComponent(bankNoteMatch[1]);
-      if (!noteId) return sendJSON(res, 400, { error: 'Invalid note ID' });
-      removeBankNote(BANK_REPORTS_DIR, noteId);
-      appendAuditLog({ event: 'bank-note-remove', noteId });
-      invalidateBankCaches();
-      return sendJSON(res, 200, { success: true });
-    }
-
     const bankPeerPreferenceMatch = pathname.match(/^\/api\/banks\/([^/]+)\/peer-preference$/);
     if (bankPeerPreferenceMatch && req.method === 'POST') {
       const bankId = safeDecodeURIComponent(bankPeerPreferenceMatch[1]);
@@ -10846,10 +10726,6 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         return sendJSON(res, /not found/i.test(err.message) ? 404 : 500, { error: err.message });
       }
-    }
-
-    if (pathname === '/api/bank-account-status' && req.method === 'POST') {
-      return await handleSaveBankAccountStatus(req, res);
     }
 
     if (pathname === '/api/banks/status' && req.method === 'GET') {

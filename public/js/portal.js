@@ -33,12 +33,8 @@
   let bankDataStatus = null;
   let selectedBank = null;
   let savedBanks = [];
-  let accountCoverageAccounts = [];
-  let accountCoverageRequestId = 0;
   let selectedBankAccountStatus = null;
   let selectedTearSheetCoverage = null;
-  let selectedBankCoverage = null;
-  let selectedBankNotes = [];
   let selectedBankContacts = [];
   let bankContactsEditingId = null;
   let bankContactsAdding = false;
@@ -68,8 +64,6 @@
     loading: false,
     loadingDetailFor: ''
   };
-  let activeCoverageBankId = null;
-  let activeBankWorkspaceView = 'tear-sheet';
   let bankAssistantLastResponse = null;
   const bankAssistantCache = new Map();
   const bankIntelligenceCache = new Map();
@@ -1476,7 +1470,6 @@
     if (pageName === 'banks') {
       loadBankStatus();
       loadSavedBanks();
-      loadAccountCoverageAccounts();
       // Quietly populate the cohort picker for tear-sheet "compare against".
       // Failure is non-fatal — the picker just won't render.
       fetch('/api/peer-groups', { cache: 'no-store' })
@@ -5187,12 +5180,6 @@
     const statusUpload = document.getElementById('bankStatusWorkbookInput');
     const averagedSeriesUpload = document.getElementById('averagedSeriesWorkbookInput');
     const clearRecent = document.getElementById('clearRecentBanksBtn');
-    const savedFilter = document.getElementById('bankSavedFilterInput');
-    const accountCoverageFilter = document.getElementById('bankAccountCoverageFilterInput');
-    const accountCoverageStatus = document.getElementById('bankAccountCoverageStatusFilter');
-    const accountCoverageService = document.getElementById('bankAccountCoverageServiceFilter');
-    const accountCoverageSort = document.getElementById('bankAccountCoverageSort');
-    setupBankWorkspaceTabs();
     setupFdicSyncButton();
     setupSfContactsImport();
     if (input) {
@@ -5244,25 +5231,8 @@
     document.addEventListener('click', event => {
       if (!event.target.closest('.bank-search-panel')) hideBankRecentDropdown();
     });
-    if (savedFilter) savedFilter.addEventListener('input', renderSavedBanks);
-    [accountCoverageFilter, accountCoverageStatus, accountCoverageService, accountCoverageSort].filter(Boolean).forEach(el => {
-      let t = null;
-      el.addEventListener('input', () => {
-        clearTimeout(t);
-        t = setTimeout(loadAccountCoverageAccounts, 180);
-      });
-      el.addEventListener('change', loadAccountCoverageAccounts);
-    });
-    document.querySelectorAll('[data-account-queue]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (accountCoverageStatus) accountCoverageStatus.value = btn.dataset.accountQueue || '';
-        if (accountCoverageService) accountCoverageService.value = '';
-        loadAccountCoverageAccounts();
-      });
-    });
     renderRecentBanks();
     loadSavedBanks();
-    loadAccountCoverageAccounts();
   }
 
   function setupStrategies() {
@@ -11968,36 +11938,6 @@
     }
   }
 
-  function setupBankWorkspaceTabs() {
-    document.querySelectorAll('[data-bank-view]').forEach(btn => {
-      btn.addEventListener('click', () => switchBankWorkspace(btn.dataset.bankView));
-    });
-  }
-
-  function switchBankWorkspace(view) {
-    const next = view === 'coverage' ? 'coverage' : 'tear-sheet';
-    activeBankWorkspaceView = next;
-    document.querySelectorAll('[data-bank-view]').forEach(btn => {
-      const active = btn.dataset.bankView === next;
-      btn.classList.toggle('active', active);
-      btn.setAttribute('aria-selected', active ? 'true' : 'false');
-    });
-    document.querySelectorAll('[data-bank-view-panel]').forEach(panel => {
-      const active = panel.dataset.bankViewPanel === next;
-      panel.classList.toggle('active', active);
-      panel.hidden = !active;
-    });
-    if (next === 'coverage') {
-      if (!activeCoverageBankId && selectedTearSheetCoverage && selectedTearSheetCoverage.bankId) {
-        activeCoverageBankId = selectedTearSheetCoverage.bankId;
-        selectedBankCoverage = selectedTearSheetCoverage;
-      }
-      loadSavedBanks();
-      if (activeCoverageBankId) loadBankCoverage(activeCoverageBankId, { renderDetail: true });
-      else renderCoverageDetailEmpty();
-    }
-  }
-
   async function readBankJson(res) {
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
@@ -12171,6 +12111,10 @@
     return savedBanks.find(row => String(row.bankId) === String(bankId)) || null;
   }
 
+  // Refresh the saved-coverage cache (status/priority/owner per bank). The
+  // dedicated Coverage Workspace tab was consolidated into the tear sheet's
+  // Sales Workspace (2026-06-12); this cache now only backs getSavedBankById
+  // fallbacks while a tear sheet's live coverage fetch is in flight.
   async function loadSavedBanks() {
     try {
       const res = await fetch('/api/bank-coverage', { cache: 'no-store' });
@@ -12178,149 +12122,7 @@
       savedBanks = Array.isArray(data.savedBanks) ? data.savedBanks : [];
     } catch (e) {
       savedBanks = [];
-      const list = document.getElementById('bankSavedList');
-      if (list) list.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
     }
-    renderSavedBanks();
-  }
-
-  function renderSavedBanks() {
-    const list = document.getElementById('bankSavedList');
-    const count = document.getElementById('bankSavedCount');
-    const filter = document.getElementById('bankSavedFilterInput');
-    if (!list) return;
-    if (count) count.textContent = `${formatNumber(savedBanks.length)} saved`;
-    if (!savedBanks.length) {
-      list.innerHTML = '<div class="bank-search-empty">Save a bank from a tear sheet to start a coverage list.</div>';
-      return;
-    }
-    const q = String(filter ? filter.value : '').trim().toLowerCase();
-    const rows = q
-      ? savedBanks.filter(row => [
-          row.displayName, row.legalName, row.city, row.state, row.certNumber,
-          row.primaryRegulator, row.status, row.priority, row.owner, row.nextActionDate
-        ].filter(Boolean).join(' ').toLowerCase().includes(q))
-      : savedBanks;
-    if (!rows.length) {
-      list.innerHTML = '<div class="bank-search-empty">No saved banks match that filter.</div>';
-      return;
-    }
-    list.innerHTML = rows.map(row => `
-      <button type="button" class="bank-saved-item${String(row.bankId) === String(activeCoverageBankId) ? ' active' : ''}" data-bank-id="${escapeHtml(row.bankId)}">
-        <strong>${escapeHtml(bankDisplayName(row))}</strong>
-        <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
-        <div class="bank-saved-meta">
-          <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
-          <em class="bank-pill ${coverageClass(row.priority)}">${escapeHtml(row.priority || 'Medium')}</em>
-          <small>${escapeHtml(row.nextActionDate ? formatShortDate(row.nextActionDate) : 'No date')}</small>
-        </div>
-      </button>
-    `).join('');
-    list.querySelectorAll('[data-bank-id]').forEach(btn => {
-      btn.addEventListener('click', () => openSavedBankCoverage(btn.dataset.bankId));
-    });
-  }
-
-  async function loadAccountCoverageAccounts() {
-    const list = document.getElementById('bankAccountCoverageList');
-    const count = document.getElementById('bankAccountCoverageCount');
-    if (!list) return;
-    const requestId = ++accountCoverageRequestId;
-    const q = document.getElementById('bankAccountCoverageFilterInput')?.value || '';
-    const status = document.getElementById('bankAccountCoverageStatusFilter')?.value || '';
-    const service = document.getElementById('bankAccountCoverageServiceFilter')?.value || '';
-    const sort = document.getElementById('bankAccountCoverageSort')?.value || 'owner';
-    const params = new URLSearchParams({ limit: '300', sort });
-    if (q.trim()) params.set('q', q.trim());
-    if (status) params.set('status', status);
-    if (service) params.set('service', service);
-    list.innerHTML = '<div class="bank-search-empty">Loading account coverage matches...</div>';
-    try {
-      const res = await fetch(`/api/bank-account-statuses?${params.toString()}`, { cache: 'no-store' });
-      const data = await readBankJson(res);
-      if (requestId !== accountCoverageRequestId) return;
-      accountCoverageAccounts = Array.isArray(data.accountStatuses) ? data.accountStatuses : [];
-      if (count) {
-        const total = data.importStatus && data.importStatus.statusCount ? data.importStatus.statusCount : accountCoverageAccounts.length;
-        const resultCount = Number.isFinite(Number(data.resultCount)) ? Number(data.resultCount) : accountCoverageAccounts.length;
-        count.textContent = `${formatNumber(accountCoverageAccounts.length)} shown · ${formatNumber(resultCount)} matches${resultCount !== total ? ` · ${formatNumber(total)} total` : ''}`;
-      }
-      renderAccountCoverageAccounts();
-    } catch (e) {
-      if (requestId !== accountCoverageRequestId) return;
-      accountCoverageAccounts = [];
-      if (count) count.textContent = '0 matched';
-      list.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
-    }
-  }
-
-  function renderAccountCoverageAccounts() {
-    const list = document.getElementById('bankAccountCoverageList');
-    if (!list) return;
-    if (!accountCoverageAccounts.length) {
-      list.innerHTML = '<div class="bank-search-empty">No account coverage matches fit the current filters.</div>';
-      return;
-    }
-    list.innerHTML = accountCoverageAccounts.map(row => {
-      const fbbsCount = serviceCount(row.services);
-      const bankersCount = serviceCount(row.bankersBankServices);
-      const serviceText = [
-        fbbsCount ? `${fbbsCount} FBBS` : '',
-        bankersCount ? `${bankersCount} Bankers Bank` : '',
-        row.affiliate ? `${row.affiliate}${row.affiliateStatus ? ` ${row.affiliateStatus}` : ''}` : ''
-      ].filter(Boolean).join(' · ');
-      return `
-        <button type="button" class="bank-account-coverage-item" data-bank-id="${escapeHtml(row.bankId)}">
-          <strong>${escapeHtml(bankDisplayName(row))}</strong>
-          <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · '))}</span>
-          <span>${escapeHtml(row.owner ? `Owner: ${row.owner}` : 'Owner not assigned')}</span>
-          <div class="bank-saved-meta">
-            <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
-            ${row.affiliate ? `<em class="bank-pill">${escapeHtml(row.affiliate)}</em>` : ''}
-            ${serviceText ? `<small>${escapeHtml(serviceText)}</small>` : '<small>No services marked</small>'}
-          </div>
-        </button>
-      `;
-    }).join('');
-    list.querySelectorAll('[data-bank-id]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        switchBankWorkspace('tear-sheet');
-        loadBank(btn.dataset.bankId, { collapseResults: true });
-      });
-    });
-  }
-
-  function renderCoverageDetailEmpty() {
-    const detail = document.getElementById('bankCoverageDetail');
-    if (!detail) return;
-    detail.innerHTML = `
-      <div class="bank-empty-state">
-        <div class="ff-kicker">Coverage Details</div>
-        <h2>Select a saved bank</h2>
-        <p>Coverage status, next actions, and notes will live here.</p>
-      </div>
-    `;
-  }
-
-  function renderCoverageDetailLoading(row) {
-    const detail = document.getElementById('bankCoverageDetail');
-    if (!detail) return;
-    detail.innerHTML = `
-      <div class="bank-empty-state">
-        <div class="ff-kicker">Coverage Details</div>
-        <h2>${escapeHtml(row && row.displayName ? row.displayName : 'Loading coverage...')}</h2>
-        <p>Loading notes and saved coverage details.</p>
-      </div>
-    `;
-  }
-
-  async function openSavedBankCoverage(bankId) {
-    activeCoverageBankId = String(bankId || '');
-    selectedBankCoverage = getSavedBankById(activeCoverageBankId);
-    selectedBankNotes = [];
-    switchBankWorkspace('coverage');
-    renderCoverageDetailLoading(selectedBankCoverage);
-    await loadBankCoverage(activeCoverageBankId, { renderDetail: true });
   }
 
   function coverageClass(value) {
@@ -12621,7 +12423,6 @@
       selectedBank = loaded;
       selectedBankAccountStatus = (selectedBank.bank && selectedBank.bank.summary && selectedBank.bank.summary.accountStatus) || defaultBankAccountStatus();
       selectedTearSheetCoverage = getSavedBankById(selectedBank.bank.id);
-      selectedBankNotes = [];
       selectedBankStrategyHistory = [];
       bankAssistantLastResponse = bankAssistantCache.get(selectedBank.bank.id) || null;
       renderBankProfile();
@@ -12679,7 +12480,6 @@
         return Promise.all([
           loadBankStatus(),
           loadSavedBanks(),
-          loadAccountCoverageAccounts(),
           selectedBankId() ? loadBank(selectedBankId(), { collapseResults: false }) : Promise.resolve()
         ]);
       })
@@ -12757,9 +12557,9 @@
         <div class="bank-profile-tools">
           <div class="bank-profile-actions">
             <select id="bankTearSheetStatus" class="bank-action-select" aria-label="Bank account status">${coverageSelectOptions(BANK_COVERAGE_STATUSES, currentBankAccountStatus().status || 'Open')}</select>
+            <select id="bankTearSheetPriority" class="bank-action-select" aria-label="Coverage priority" title="Coverage priority">${coverageSelectOptions(BANK_COVERAGE_PRIORITIES, (selectedTearSheetCoverage && selectedTearSheetCoverage.priority) || 'Medium')}</select>
             <input type="text" id="bankTearSheetOwner" class="bank-action-input" value="${escapeHtml(currentBankAccountStatus().owner || '')}" placeholder="Account owner" aria-label="Account owner">
-            <button type="button" class="small-btn bank-action-btn" id="bankStatusSaveBtn">Save Status / Owner</button>
-            <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Bank</button>
+            <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Coverage</button>
             <button type="button" class="small-btn bank-action-btn" id="bankWatchBtn" title="Add this bank to my watchlist">&#9734; Watch</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
             <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
@@ -12821,7 +12621,6 @@
     `;
     updateBankSaveButton();
     const saveBtn = document.getElementById('bankSaveBtn');
-    const statusSaveBtn = document.getElementById('bankStatusSaveBtn');
     const strategyToggleBtn = document.getElementById('bankStrategyToggleBtn');
     const statusSelect = document.getElementById('bankTearSheetStatus');
     const ownerInput = document.getElementById('bankTearSheetOwner');
@@ -12832,7 +12631,6 @@
     const printBtn = document.getElementById('bankPrintBtn');
     const exportBtn = document.getElementById('bankExportBtn');
     if (saveBtn) saveBtn.addEventListener('click', saveCurrentBankCoverage);
-    if (statusSaveBtn) statusSaveBtn.addEventListener('click', saveCurrentBankAccountStatus);
     if (strategyToggleBtn) strategyToggleBtn.addEventListener('click', toggleBankStrategyRequestPanel);
     if (strategySubmitBtn) strategySubmitBtn.addEventListener('click', submitCurrentBankStrategyRequest);
     if (strategyCancelBtn) strategyCancelBtn.addEventListener('click', hideBankStrategyRequestPanel);
@@ -13467,7 +13265,7 @@
   }
 
   function currentVisibleStrategyHistoryBankId() {
-    return activeBankWorkspaceView === 'coverage' ? activeCoverageBankId : selectedBankId();
+    return selectedBankId();
   }
 
   function refreshVisibleStrategyHistoryForRequest(request) {
@@ -14436,123 +14234,26 @@
     }
   }
 
-  function renderBankCoverageSection() {
-    const saved = selectedBankCoverage || {};
-    const status = saved.status || selectedBankAccountStatus?.status || 'Open';
-    const priority = saved.priority || 'Medium';
-    return `
-      <div class="bank-coverage-detail-head">
-        <div>
-          <span class="tool-eyebrow">Coverage Workspace</span>
-          <h3>${escapeHtml(saved.displayName || 'Saved Bank')}</h3>
-          <p>${escapeHtml([saved.city, saved.state, saved.certNumber ? `Cert ${saved.certNumber}` : '', saved.primaryRegulator].filter(Boolean).join(' · '))}</p>
-        </div>
-        <button type="button" class="small-btn" id="bankCoverageOpenTearSheetBtn">Open Tear Sheet</button>
-      </div>
-      <section class="bank-section bank-coverage-section">
-        <div class="bank-section-title">Coverage Details & Notes</div>
-        <div class="bank-coverage-grid">
-          <label>
-            <span>Status</span>
-            <select id="bankCoverageStatus">${coverageSelectOptions(BANK_COVERAGE_STATUSES, status)}</select>
-          </label>
-          <label>
-            <span>Priority</span>
-            <select id="bankCoveragePriority">${coverageSelectOptions(BANK_COVERAGE_PRIORITIES, priority)}</select>
-          </label>
-          <label>
-            <span>Owner</span>
-            <input type="text" id="bankCoverageOwner" value="${escapeHtml(saved.owner || '')}" placeholder="Coverage owner">
-          </label>
-          <label>
-            <span>Next Action</span>
-            <input type="date" id="bankCoverageNextAction" value="${escapeHtml(saved.nextActionDate || '')}">
-          </label>
-        </div>
-        <div class="bank-coverage-actions">
-          <button type="button" class="small-btn" id="bankCoverageSaveBtn">Save Coverage</button>
-          <button type="button" class="text-btn danger" id="bankCoverageRemoveBtn"${saved.bankId ? '' : ' hidden'}>Remove Saved Bank</button>
-          <span class="bank-coverage-status" id="bankCoverageStatusText">${saved.bankId ? `Saved ${escapeHtml(formatFullTimestamp(saved.updatedAt))}` : 'Not saved yet'}</span>
-        </div>
-        <div class="bank-note-composer">
-          <textarea id="bankNoteText" rows="3" placeholder="Add meeting notes, CD appetite, liquidity needs, objections, or follow-up items"></textarea>
-          <button type="button" class="small-btn" id="bankNoteAddBtn">Add Note</button>
-        </div>
-        <div class="bank-notes-list" id="bankNotesList">
-          <div class="bank-search-empty">Loading notes...</div>
-        </div>
-      </section>
-      ${renderBankStrategyHistoryPanel('bankCoverageStrategyHistoryList')}
-    `;
-  }
-
-  function renderCoverageDetail() {
-    const detail = document.getElementById('bankCoverageDetail');
-    if (!detail) return;
-    if (!selectedBankCoverage || !selectedBankCoverage.bankId) {
-      renderCoverageDetailEmpty();
-      return;
-    }
-    detail.innerHTML = renderBankCoverageSection();
-    wireBankCoverageControls();
-    renderBankNotes();
-    updateCoveragePanel();
-    loadBankStrategyHistory(selectedBankCoverage.bankId);
-  }
-
-  function wireBankCoverageControls() {
-    const saveCoverageBtn = document.getElementById('bankCoverageSaveBtn');
-    const removeCoverageBtn = document.getElementById('bankCoverageRemoveBtn');
-    const addNoteBtn = document.getElementById('bankNoteAddBtn');
-    const openTearSheetBtn = document.getElementById('bankCoverageOpenTearSheetBtn');
-    if (saveCoverageBtn) saveCoverageBtn.addEventListener('click', saveCurrentBankCoverage);
-    if (removeCoverageBtn) removeCoverageBtn.addEventListener('click', removeCurrentBankCoverage);
-    if (addNoteBtn) addNoteBtn.addEventListener('click', addCurrentBankNote);
-    if (openTearSheetBtn) openTearSheetBtn.addEventListener('click', () => {
-      if (!activeCoverageBankId) return;
-      switchBankWorkspace('tear-sheet');
-      loadBank(activeCoverageBankId, { collapseResults: true });
-    });
-  }
-
   function bankCoverageFormValues() {
-    const isCoverageWorkspace = activeBankWorkspaceView === 'coverage';
     const tearSheetSaved = selectedTearSheetCoverage || getSavedBankById(selectedBankId()) || {};
-    const tearSheetStatus = document.getElementById('bankTearSheetStatus')?.value || currentBankAccountStatus().status || 'Open';
     return {
-      bankId: isCoverageWorkspace ? activeCoverageBankId : selectedBankId(),
-      status: isCoverageWorkspace ? (document.getElementById('bankCoverageStatus')?.value || 'Open') : tearSheetStatus,
-      priority: isCoverageWorkspace ? (document.getElementById('bankCoveragePriority')?.value || 'Medium') : (tearSheetSaved.priority || 'Medium'),
-      owner: isCoverageWorkspace ? (document.getElementById('bankCoverageOwner')?.value || '') : (tearSheetSaved.owner || ''),
-      nextActionDate: isCoverageWorkspace ? (document.getElementById('bankCoverageNextAction')?.value || '') : (tearSheetSaved.nextActionDate || '')
+      bankId: selectedBankId(),
+      status: document.getElementById('bankTearSheetStatus')?.value || currentBankAccountStatus().status || 'Open',
+      priority: document.getElementById('bankTearSheetPriority')?.value || tearSheetSaved.priority || 'Medium',
+      owner: document.getElementById('bankTearSheetOwner')?.value || ''
     };
   }
 
   function updateBankSaveButton() {
     const btn = document.getElementById('bankSaveBtn');
     const statusSelect = document.getElementById('bankTearSheetStatus');
+    const prioritySelect = document.getElementById('bankTearSheetPriority');
     const ownerInput = document.getElementById('bankTearSheetOwner');
-    if (btn) btn.textContent = selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Bank';
+    if (btn) btn.textContent = selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Coverage';
     if (statusSelect) statusSelect.value = currentBankAccountStatus().status || 'Open';
+    if (prioritySelect) prioritySelect.value = (selectedTearSheetCoverage && selectedTearSheetCoverage.priority) || 'Medium';
     if (ownerInput) ownerInput.value = currentBankAccountStatus().owner || '';
     updateTearSheetCoverageSignal();
-  }
-
-  function updateCoveragePanel() {
-    const saved = selectedBankCoverage || {};
-    const statusEl = document.getElementById('bankCoverageStatus');
-    const priorityEl = document.getElementById('bankCoveragePriority');
-    const ownerEl = document.getElementById('bankCoverageOwner');
-    const nextActionEl = document.getElementById('bankCoverageNextAction');
-    const removeBtn = document.getElementById('bankCoverageRemoveBtn');
-    const statusText = document.getElementById('bankCoverageStatusText');
-    if (statusEl) statusEl.value = saved.status || selectedBankAccountStatus?.status || 'Open';
-    if (priorityEl) priorityEl.value = saved.priority || 'Medium';
-    if (ownerEl) ownerEl.value = saved.owner || '';
-    if (nextActionEl) nextActionEl.value = saved.nextActionDate || '';
-    if (removeBtn) removeBtn.hidden = !saved.bankId;
-    if (statusText) statusText.textContent = saved.bankId ? `Saved ${formatFullTimestamp(saved.updatedAt)}` : 'Not saved yet';
-    updateBankSaveButton();
   }
 
   async function loadTearSheetCoverage(bankId) {
@@ -14579,36 +14280,9 @@
     refreshBankProductFitPanel();
   }
 
-  async function loadBankCoverage(bankId, options = {}) {
-    try {
-      const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { cache: 'no-store' });
-      const data = await readBankJson(res);
-      if (data.accountStatus) selectedBankAccountStatus = data.accountStatus;
-      selectedBankCoverage = data.saved || getSavedBankById(bankId);
-      if (selectedBank && selectedBank.bank && String(selectedBank.bank.id) === String(bankId)) {
-        selectedBank.bank.peerPreference = data.peerPreference || null;
-      }
-      selectedBankNotes = Array.isArray(data.notes) ? data.notes : [];
-      selectedBankContacts = Array.isArray(data.contacts) ? data.contacts : [];
-      if (options.renderDetail) renderCoverageDetail();
-      else {
-        updateCoveragePanel();
-        renderBankNotes();
-      }
-      refreshBankContactsPanel();
-    } catch (e) {
-      selectedBankCoverage = getSavedBankById(bankId);
-      selectedBankNotes = [];
-      selectedBankContacts = [];
-      if (options.renderDetail) renderCoverageDetail();
-      else {
-        updateCoveragePanel();
-        renderBankNotes(e.message);
-      }
-      refreshBankContactsPanel();
-    }
-  }
-
+  // Single save path for status / priority / owner — POST /api/bank-coverage
+  // upserts the coverage row AND syncs the account-status overlay server-side,
+  // so the old separate "Save Status / Owner" route is gone with the tab.
   async function saveCurrentBankCoverage() {
     const formValues = bankCoverageFormValues();
     if (!formValues.bankId) return showToast('No bank selected', true);
@@ -14623,132 +14297,14 @@
       if (selectedBank && selectedBank.bank && selectedBank.bank.summary) {
         selectedBank.bank.summary.accountStatus = selectedBankAccountStatus;
       }
-      if (activeBankWorkspaceView === 'coverage') {
-        selectedBankCoverage = data.saved;
-        activeCoverageBankId = data.saved.bankId;
-        if (selectedBankId() === data.saved.bankId) selectedTearSheetCoverage = data.saved;
-      } else {
-        selectedTearSheetCoverage = data.saved;
-      }
+      selectedTearSheetCoverage = data.saved;
       await loadSavedBanks();
-      if (activeBankWorkspaceView === 'coverage') renderCoverageDetail();
-      else updateCoveragePanel();
+      updateBankSaveButton();
       if (selectedBankId()) loadBankActivity(selectedBankId());
       showToast('Saved bank coverage');
     } catch (e) {
       showToast(e.message, true);
     }
-  }
-
-  async function saveCurrentBankAccountStatus() {
-    const bankId = selectedBankId();
-    const status = document.getElementById('bankTearSheetStatus')?.value || currentBankAccountStatus().status || 'Open';
-    const owner = document.getElementById('bankTearSheetOwner')?.value || '';
-    if (!bankId) return showToast('No bank selected', true);
-    try {
-      const res = await fetch('/api/bank-account-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bankId, status, owner })
-      });
-      const data = await readBankJson(res);
-      selectedBankAccountStatus = data.accountStatus || { status };
-      if (data.saved) selectedTearSheetCoverage = data.saved;
-      if (selectedBank && selectedBank.bank && selectedBank.bank.summary) {
-        selectedBank.bank.summary.accountStatus = selectedBankAccountStatus;
-      }
-      await loadSavedBanks();
-      updateBankSaveButton();
-      if (selectedBankId()) loadBankActivity(selectedBankId());
-      showToast('Saved bank status / owner');
-    } catch (e) {
-      showToast(e.message, true);
-    }
-  }
-
-  async function removeCurrentBankCoverage() {
-    const bankId = activeCoverageBankId || selectedBankId();
-    if (!bankId) return showToast('No bank selected', true);
-    if (!confirm('Remove this bank and its notes from the saved coverage list?')) return;
-    try {
-      const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}`, { method: 'DELETE' });
-      await readBankJson(res);
-      selectedBankCoverage = null;
-      selectedBankNotes = [];
-      if (selectedTearSheetCoverage && selectedTearSheetCoverage.bankId === bankId) selectedTearSheetCoverage = null;
-      if (activeCoverageBankId === bankId) activeCoverageBankId = null;
-      await loadSavedBanks();
-      if (activeBankWorkspaceView === 'coverage') renderCoverageDetailEmpty();
-      else {
-        updateCoveragePanel();
-        renderBankNotes();
-      }
-      showToast('Removed saved bank');
-    } catch (e) {
-      showToast(e.message, true);
-    }
-  }
-
-  async function addCurrentBankNote() {
-    const bankId = activeCoverageBankId || selectedBankId();
-    const textarea = document.getElementById('bankNoteText');
-    const text = textarea ? textarea.value.trim() : '';
-    if (!bankId) return showToast('No bank selected', true);
-    if (!text) return showToast('Add note text first', true);
-    try {
-      const res = await fetch(`/api/bank-coverage/${encodeURIComponent(bankId)}/notes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, coverage: bankCoverageFormValues() })
-      });
-      await readBankJson(res);
-      if (textarea) textarea.value = '';
-      await loadSavedBanks();
-      await loadBankCoverage(bankId, { renderDetail: activeBankWorkspaceView === 'coverage' });
-      if (selectedBankId() === bankId) loadBankActivity(bankId);
-      showToast('Added bank note');
-    } catch (e) {
-      showToast(e.message, true);
-    }
-  }
-
-  async function deleteBankNote(noteId) {
-    if (!noteId) return;
-    if (!confirm('Delete this note?')) return;
-    try {
-      const res = await fetch(`/api/bank-coverage/notes/${encodeURIComponent(noteId)}`, { method: 'DELETE' });
-      await readBankJson(res);
-      selectedBankNotes = selectedBankNotes.filter(note => note.id !== noteId);
-      renderBankNotes();
-      showToast('Deleted bank note');
-    } catch (e) {
-      showToast(e.message, true);
-    }
-  }
-
-  function renderBankNotes(errorMessage) {
-    const list = document.getElementById('bankNotesList');
-    if (!list) return;
-    if (errorMessage) {
-      list.innerHTML = `<div class="bank-search-empty">${escapeHtml(errorMessage)}</div>`;
-      return;
-    }
-    if (!selectedBankNotes.length) {
-      list.innerHTML = '<div class="bank-search-empty">No notes yet.</div>';
-      return;
-    }
-    list.innerHTML = selectedBankNotes.map(note => `
-      <article class="bank-note">
-        <div>
-          <time>${escapeHtml(formatFullTimestamp(note.createdAt))}</time>
-          <p>${escapeHtml(note.text).replace(/\n/g, '<br>')}</p>
-        </div>
-        <button type="button" class="text-btn danger" data-note-id="${escapeHtml(note.id)}">Delete</button>
-      </article>
-    `).join('');
-    list.querySelectorAll('[data-note-id]').forEach(btn => {
-      btn.addEventListener('click', () => deleteBankNote(btn.dataset.noteId));
-    });
   }
 
   // ============ Bank Contacts (tear sheet) ============

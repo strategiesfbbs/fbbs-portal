@@ -497,12 +497,7 @@
   </section>
 
   <div class="container">
-    <div class="bank-workspace-tabs" role="tablist" aria-label="Bank workspace">
-      <button type="button" class="bank-workspace-tab active" data-bank-view="tear-sheet" role="tab" aria-selected="true" aria-controls="bankViewTearSheet">Tear Sheet Search</button>
-      <button type="button" class="bank-workspace-tab" data-bank-view="coverage" role="tab" aria-selected="false" aria-controls="bankViewCoverage">Coverage Workspace</button>
-    </div>
-
-    <section class="bank-workspace-view active" id="bankViewTearSheet" data-bank-view-panel="tear-sheet" role="tabpanel">
+    <section class="bank-workspace-view active" id="bankViewTearSheet">
       <section class="bank-search-panel">
         <div class="bank-search-row">
           <input type="search" id="bankSearchInput" placeholder="Start typing a bank name, city, cert number, or parent..." autocomplete="off">
@@ -530,71 +525,6 @@
           </div>
         </div>
       </section>
-    </section>
-
-    <section class="bank-workspace-view" id="bankViewCoverage" data-bank-view-panel="coverage" role="tabpanel" hidden>
-      <div class="bank-coverage-layout">
-        <section class="bank-saved-panel" id="bankSavedPanel">
-          <div class="bank-recent-head">
-            <h3>Saved Banks</h3>
-            <span class="bank-saved-count" id="bankSavedCount">0 saved</span>
-          </div>
-          <div class="bank-saved-filter">
-            <input type="search" id="bankSavedFilterInput" placeholder="Search saved banks, owner, status, or next action..." autocomplete="off">
-          </div>
-          <div class="bank-saved-list" id="bankSavedList">
-            <div class="bank-search-empty">Save a bank from a tear sheet to start a coverage list.</div>
-          </div>
-          <div class="bank-account-coverage-panel">
-            <div class="bank-recent-head">
-              <h3>Account Coverage</h3>
-              <span class="bank-saved-count" id="bankAccountCoverageCount">0 matched</span>
-            </div>
-            <div class="bank-account-coverage-controls">
-              <input type="search" id="bankAccountCoverageFilterInput" placeholder="Search owner, bank, affiliate, cert, or service..." autocomplete="off">
-              <select id="bankAccountCoverageStatusFilter" aria-label="Account status filter">
-                <option value="">All statuses</option>
-                <option value="Client">Client</option>
-                <option value="Prospect">Prospect</option>
-                <option value="Open">Open</option>
-                <option value="Watchlist">Watchlist</option>
-                <option value="Dormant">Dormant</option>
-              </select>
-              <select id="bankAccountCoverageServiceFilter" aria-label="Account service filter">
-                <option value="">All rows</option>
-                <option value="fbbs">Has FBBS services</option>
-                <option value="bankersBank">Has Bankers Bank services</option>
-                <option value="affiliate">Has affiliate</option>
-              </select>
-              <select id="bankAccountCoverageSort" aria-label="Account coverage sort">
-                <option value="owner">Owner</option>
-                <option value="status">Status</option>
-                <option value="affiliate">Affiliate</option>
-                <option value="services">Services</option>
-                <option value="bank">Bank</option>
-                <option value="updated">Recently updated</option>
-              </select>
-            </div>
-            <div class="bank-queue-shortcuts" aria-label="Coverage queues">
-              <button type="button" data-account-queue="Prospect">Prospects</button>
-              <button type="button" data-account-queue="Watchlist">Watchlist</button>
-              <button type="button" data-account-queue="Dormant">Dormant</button>
-              <button type="button" data-account-queue="Open">Open</button>
-            </div>
-            <div class="bank-account-coverage-list" id="bankAccountCoverageList">
-              <div class="bank-search-empty">Loading account coverage matches...</div>
-            </div>
-          </div>
-        </section>
-
-        <section class="bank-coverage-detail" id="bankCoverageDetail">
-          <div class="bank-empty-state">
-            <div class="ff-kicker">Coverage Details</div>
-            <h2>Select a saved bank</h2>
-            <p>Coverage status, next actions, and notes will live here.</p>
-          </div>
-        </section>
-      </div>
     </section>
   </div>
 </div>

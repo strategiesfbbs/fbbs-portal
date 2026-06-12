@@ -58,6 +58,7 @@ Built on `bank_activities` in `bank-coverage.sqlite` (one table, two row species
 - **Deliberately dropped:** scheduled/emailed report delivery (no email/cron infra; two-npm-dep rule). The Save & Schedule button stays disabled.
 - `tests/frontend-parse.test.js` compiles `portal.js` + every `public/js/modules/*.js` in `npm test` — a syntax error in the no-build SPA now fails CI instead of shipping a blank page.
 - **Activity soft-delete (compliance):** `DELETE /api/banks/:id/activity/:activityId?reason=` requires a reason and stamps `deleted_at/deleted_by/delete_reason` instead of removing the row; every read path filters deleted rows centrally in `activitySelectSql`. Don't add hard deletes back.
+- **Coverage Workspace retired (2026-06-12, pilot-phase consolidation):** the `#banks` page is tear-sheet-only — the old Coverage Workspace tab (saved-banks list, account-coverage filter list, notes composer, next-action date) was removed in favor of the CRM surfaces that superseded it (Sales Workspace tab, saved views, tasks, My Work/Pulse). One save action remains on the tear-sheet header: Status + **Priority** (new select) + Owner → `POST /api/bank-coverage` (which also syncs the account-status overlay; the separate `/api/bank-account-status` POST, the notes routes, and the `/api/bank-account-statuses` GET list are gone). A one-shot guarded migration in `bank-coverage-store.js` (`coverage_meta` flag; `tests/coverage-consolidation.test.js`) folded `bank_notes` into the activity timeline (full text onto the existing preview rows) and turned `next_action_date` into Open tasks, then cleared the column. `bank_notes` data stays in the DB for archival; don't rebuild a parallel notes/next-action UI — log a note activity or create a task. Coverage-workspace CSS blocks in `portal.css` are dead but left in place (scattered through shared rules); safe to prune in a dedicated pass.
 
 ## Wave-1 improvement push (2026-06-10)
 
@@ -107,7 +108,7 @@ data/
 ├── bank-reports/
 │   ├── current-bank-call-reports.xlsm  (~153 MB source workbook)
 │   ├── bank-data.sqlite                (~136 MB derived DB)
-│   ├── bank-coverage.sqlite            (notes + saved-coverage workspace)
+│   ├── bank-coverage.sqlite            (CRM: coverage status/priority/owner, activities, tasks, opps, contacts, watchlists; legacy bank_notes kept archival)
 │   ├── bank-strategies.sqlite          (Strategies Queue requests)
 │   ├── averaged-series/                (FedFis peer-group workbook + parsed JSON)
 │   ├── bond-accounting/                (manifest.json + matched/unmatched portfolio copies)
