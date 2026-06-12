@@ -126,7 +126,7 @@
     agenciesBullets: null, agenciesCallables: null, corporates: null
   };
 
-  const SLOTS = ['dashboard', 'econ', 'relativeValue', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+  const SLOTS = ['econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
   const TOTAL_SLOTS = SLOTS.length;
   const UPLOAD_SLOTS = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 
@@ -1193,13 +1193,11 @@
 
   function packageUploadedCount(pkg) {
     pkg = pkg || {};
-    const canonical = SLOTS.filter(slot => pkg[slot]).length;
-    const companionCount = pkg.cdoffersCost && !SLOTS.includes('cdoffersCost') ? 1 : 0;
-    return Math.min(TOTAL_SLOTS, canonical + companionCount);
+    return SLOTS.filter(slot => pkg[slot]).length;
   }
 
   function packageCountText(pkg) {
-    return `${packageUploadedCount(pkg)} / ${TOTAL_SLOTS}`;
+    return `${packageUploadedCount(pkg)} / ${TOTAL_SLOTS} required`;
   }
 
   async function fetchOptionalJson(path) {
@@ -1261,7 +1259,7 @@
   }
 
   function renderQualityStatus(filled) {
-    const fileText = `${filled} / ${TOTAL_SLOTS}`;
+    const fileText = `${filled} / ${TOTAL_SLOTS} required`;
     const dateText = qualitySummary.datesMatch == null
       ? '—'
       : (qualitySummary.datesMatch ? 'Dates match' : 'Check dates');
@@ -1859,9 +1857,9 @@
     if (filled === 0) {
       if (subtitle) subtitle.textContent = 'No package has been published yet.';
     } else if (filled === TOTAL_SLOTS) {
-      if (subtitle) subtitle.textContent = `Complete package for ${formatShortDate(pkg.date)}`;
+      if (subtitle) subtitle.textContent = `Complete required package for ${formatShortDate(pkg.date)}`;
     } else {
-      if (subtitle) subtitle.textContent = `${filled} of ${TOTAL_SLOTS} package files are ready.`;
+      if (subtitle) subtitle.textContent = `${filled} of ${TOTAL_SLOTS} required files are ready.`;
     }
 
     renderHomeStatusPill(pkg, filled);
@@ -2858,12 +2856,12 @@
     let text = 'Awaiting today’s package';
     if (filled === TOTAL_SLOTS) {
       state = 'full';
-      text = dateLabel ? `Published · ${dateLabel} · ${TOTAL_SLOTS} of ${TOTAL_SLOTS}` : `Published · ${TOTAL_SLOTS} of ${TOTAL_SLOTS}`;
+      text = dateLabel ? `Published · ${dateLabel} · ${TOTAL_SLOTS} of ${TOTAL_SLOTS} required` : `Published · ${TOTAL_SLOTS} of ${TOTAL_SLOTS} required`;
     } else if (filled > 0) {
       state = 'partial';
       text = dateLabel
-        ? `In progress · ${dateLabel} · ${filled} of ${TOTAL_SLOTS}`
-        : `In progress · ${filled} of ${TOTAL_SLOTS}`;
+        ? `In progress · ${dateLabel} · ${filled} of ${TOTAL_SLOTS} required`
+        : `In progress · ${filled} of ${TOTAL_SLOTS} required`;
     }
     // Surface package age so a stale "Published"/"In progress" package never reads
     // as today's. Always label the age; flag it as stale (warning style) at 2+ days.
@@ -20537,7 +20535,7 @@
       const parts = [];
       if (pkg.date) parts.push(`<span><strong>Date</strong>${escapeHtml(formatShortDate(pkg.date))}</span>`);
       const filled = packageUploadedCount(pkg);
-      if (filled) parts.push(`<span><strong>Slots</strong>${filled} of ${TOTAL_SLOTS}</span>`);
+      if (filled) parts.push(`<span><strong>Slots</strong>${filled} of ${TOTAL_SLOTS} required</span>`);
       if (pkg.publishedAt) parts.push(`<span><strong>Published</strong>${escapeHtml(formatImportedDate(pkg.publishedAt))}</span>`);
       if (parts.length) {
         metaEl.innerHTML = parts.join('');
@@ -20646,7 +20644,7 @@
       primaryLabel,
       subText,
       dateLabel: pkg.date ? formatShortDate(pkg.date) : 'Awaiting package',
-      statusLabel: filled === TOTAL_SLOTS ? 'Complete' : `${filled}/${TOTAL_SLOTS} files`,
+      statusLabel: filled === TOTAL_SLOTS ? 'Complete' : `${filled}/${TOTAL_SLOTS} required files`,
       footText: pkg.publishedAt ? `Published ${formatImportedDate(pkg.publishedAt)}` : 'From the most recent published package',
       metrics,
       curve: treasuries,
