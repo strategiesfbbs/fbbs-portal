@@ -15296,6 +15296,13 @@ body {
   display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 9px;
   background: var(--bg-light); color: var(--text2); border: 1px dashed var(--border);
 }
+.mc-chip-likelihood {
+  display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 9px;
+  cursor: help;
+}
+.mc-call-likely { background: #f6e9e4; color: var(--danger); }
+.mc-call-borderline { background: #f7f1df; color: #8a6d1a; }
+.mc-call-unlikely { background: #eef3ef; color: var(--text2); }
 
 .muted-note { color: var(--text2); font-size: 14px; padding: 16px 0; }
 .error-note { color: var(--danger); font-size: 14px; padding: 16px 0; }

@@ -5073,7 +5073,104 @@ function maturityCalendarSplitTotals(lots) {
   return t;
 }
 
-function buildMaturityCalendar(query) {
+// ---------- Maturity-calendar call economics ----------
+//
+// An issuer calls when it can refinance the remaining term cheaper than the
+// coupon it is paying. For each in-window call we compare the lot's COUPON to
+// the current market yield for that product at the bond's remaining term:
+//   - first basis: today's package offerings in the same asset class with a
+//     maturity within ±2.5y of the held bond's (median yield, needs ≥3 quotes)
+//   - fallback (taxable sectors only): the cached official Treasury par curve
+//     interpolated at the remaining term. Tax-exempt munis never fall back to
+//     a Treasury yardstick — the tax-exempt scale would mislabel nearly every
+//     muni call as in-the-money — so with no muni quotes the lot gets no
+//     verdict rather than a wrong one.
+// Verdict: coupon ≥ market +25bp → 'likely' (savings clear typical refunding
+// costs); within ±25bp → 'borderline'; below → 'unlikely'. Advisory chips
+// only — the certain/potential par split never moves off this.
+
+const CALL_LIKELY_THRESHOLD_BP = 25;
+
+function callCompareClassFor(sector) {
+  const s = String(sector || '').toLowerCase();
+  if (/mbs|cmo|cmbs|sba|abs|pass/.test(s)) return null; // amortizing: prepay model, not a discrete call
+  if (/muni/.test(s)) return { type: 'muni', taxExempt: !/taxable/.test(s) };
+  if (/agency|agcy/.test(s)) return { type: 'agency', taxExempt: false };
+  if (/treasur/.test(s)) return { type: 'treasury', taxExempt: false };
+  if (/corp/.test(s)) return { type: 'corporate', taxExempt: false };
+  if (/\bcds?\b|certificate/.test(s)) return { type: 'cd', taxExempt: false };
+  return null;
+}
+
+function treasuryYieldAtYears(curve, years) {
+  if (!curve || !curve.tenors || !Number.isFinite(years)) return null;
+  const TENOR_YEARS = { '1M': 1 / 12, '2M': 2 / 12, '3M': 0.25, '4M': 4 / 12, '6M': 0.5, '1Y': 1, '2Y': 2, '3Y': 3, '5Y': 5, '7Y': 7, '10Y': 10, '20Y': 20, '30Y': 30 };
+  const points = Object.entries(TENOR_YEARS)
+    .filter(([label]) => curve.tenors[label] != null)
+    .map(([label, yrs]) => ({ yrs, yield: curve.tenors[label] }))
+    .sort((a, b) => a.yrs - b.yrs);
+  if (!points.length) return null;
+  if (years <= points[0].yrs) return points[0].yield;
+  if (years >= points[points.length - 1].yrs) return points[points.length - 1].yield;
+  for (let i = 1; i < points.length; i++) {
+    if (years <= points[i].yrs) {
+      const a = points[i - 1], b = points[i];
+      const w = (years - a.yrs) / (b.yrs - a.yrs);
+      return a.yield + w * (b.yield - a.yield);
+    }
+  }
+  return null;
+}
+
+// Per-asset-class {yrs, yield} quote lists from today's package, built once
+// per calendar request.
+function buildCallYardsticks(todayMs) {
+  const byType = new Map();
+  for (const row of buildAllOfferingsRows()) {
+    const y = Number(row.yield);
+    const matMs = row.maturity ? Date.parse(String(row.maturity).slice(0, 10)) : NaN;
+    if (!Number.isFinite(y) || y <= 0 || !Number.isFinite(matMs) || matMs <= todayMs) continue;
+    const yrs = (matMs - todayMs) / (365.25 * 86400000);
+    if (!byType.has(row.type)) byType.set(row.type, []);
+    byType.get(row.type).push({ yrs, yield: y });
+  }
+  return byType;
+}
+
+function medianOf(values) {
+  if (!values.length) return null;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+function assessCallEconomics(pos, remainingYears, yardsticks, curve) {
+  const coupon = Number(pos.coupon);
+  if (!Number.isFinite(coupon) || coupon <= 0 || !Number.isFinite(remainingYears) || remainingYears <= 0) return null;
+  const cls = callCompareClassFor(pos.sector);
+  if (!cls) return null;
+
+  let marketYield = null;
+  let basis = null;
+  const quotes = yardsticks.get(cls.type) || [];
+  const near = quotes.filter(q => Math.abs(q.yrs - remainingYears) <= 2.5).map(q => q.yield);
+  if (near.length >= 3) {
+    marketYield = medianOf(near);
+    basis = 'sector-offerings';
+  } else if (!cls.taxExempt) {
+    marketYield = treasuryYieldAtYears(curve, remainingYears);
+    basis = 'treasury-curve';
+  }
+  if (marketYield == null) return null;
+
+  const spreadBp = Math.round((coupon - marketYield) * 100);
+  const likelihood = spreadBp >= CALL_LIKELY_THRESHOLD_BP ? 'likely'
+    : spreadBp <= -CALL_LIKELY_THRESHOLD_BP ? 'unlikely'
+    : 'borderline';
+  return { likelihood, marketYield: Number(marketYield.toFixed(2)), spreadBp, basis };
+}
+
+function buildMaturityCalendar(query, curve) {
   const windowDays = Math.max(1, Math.min(3650, Math.round(Number(query.get('window')) || 90)));
   const ownerFilter = String(query.get('owner') || '').trim().toLowerCase();
   const stateFilter = String(query.get('state') || '').trim().toUpperCase();
@@ -5099,6 +5196,7 @@ function buildMaturityCalendar(query) {
   // Midnight-UTC today, so "days out" is stable regardless of request time of day.
   const todayMs = Math.floor(Date.now() / 86400000) * 86400000;
   const horizonMs = todayMs + windowDays * 86400000;
+  const callYardsticks = buildCallYardsticks(todayMs);
 
   const seenBank = new Set();
   const owners = new Set();
@@ -5154,12 +5252,20 @@ function buildMaturityCalendar(query) {
         eventType = 'Call'; eventMs = callMs; eventDate = pos.nextCall;
       }
       const daysOut = Math.round((eventMs - todayMs) / 86400000);
+      // Call economics for any lot with an in-window call (the potential
+      // bucket, plus certain maturities flagged callable-sooner). Remaining
+      // term = today → maturity (the term the issuer would refinance).
+      let call = null;
+      if (eventType === 'Call' || callableDate) {
+        const remainingYears = Number.isFinite(matMs) ? (matMs - todayMs) / (365.25 * 86400000) : null;
+        call = remainingYears != null ? assessCallEconomics(pos, remainingYears, callYardsticks, curve) : null;
+      }
       lots.push({
         cusip: pos.cusip, description: pos.description, sector: pos.sector,
         coupon: pos.coupon, par: pos.par || 0, marketValue: pos.marketValue || 0,
         bookYield: pos.bookYield, eventType, eventDate,
         daysOut, bucket: maturityCalendarBucketLabel(daysOut),
-        callableDate, callableDaysOut
+        callableDate, callableDaysOut, call
       });
     }
     if (!lots.length) continue;
@@ -9806,7 +9912,10 @@ const server = http.createServer(async (req, res) => {
     // /api/strategies/:id catchall below.) ----
 
     if (pathname === '/api/maturity-calendar' && req.method === 'GET') {
-      return sendJSON(res, 200, buildMaturityCalendar(query));
+      // Cached Treasury curve feeds the call-economics fallback; never blocks
+      // the calendar (null curve just means no treasury-basis verdicts).
+      const curve = await marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log });
+      return sendJSON(res, 200, buildMaturityCalendar(query, curve));
     }
 
     if (pathname === '/api/swap-proposals/eligible-banks' && req.method === 'GET') {

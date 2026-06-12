@@ -5453,6 +5453,17 @@
       const callWhen = lot.callableDaysOut <= 0 ? 'now' : ('in ' + lot.callableDaysOut + 'd');
       chip += ' <span class="mc-chip-callable" title="Callable before maturity">callable ' + callWhen + '</span>';
     }
+    // Call economics vs current market rates for the product: coupon compared
+    // to today's same-sector offering yields (or the Treasury curve for
+    // taxable sectors) at the bond's remaining term. Advisory only.
+    if (lot.call && lot.call.likelihood) {
+      const c = lot.call;
+      const basisLabel = c.basis === 'sector-offerings' ? "today's same-sector offerings" : 'the Treasury curve';
+      const title = 'Coupon ' + (lot.coupon != null ? Number(lot.coupon).toFixed(2) + '%' : '—')
+        + ' vs ' + c.marketYield.toFixed(2) + '% market (' + basisLabel + '): '
+        + (c.spreadBp >= 0 ? '+' : '') + c.spreadBp + 'bp';
+      chip += ' <span class="mc-chip-likelihood mc-call-' + escapeHtml(c.likelihood) + '" title="' + escapeHtml(title) + '">call ' + escapeHtml(c.likelihood) + '</span>';
+    }
     return chip;
   }
 
