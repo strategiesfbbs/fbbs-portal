@@ -16,9 +16,11 @@ Read `docs/company-portal-context.md` when brainstorming portal direction, Sales
 - **Filesystem-as-database for the daily package.** No DB for the document package; archive/restore is `mv`-ing folders. Bank tear sheets are the one exception (SQLite).
 - **Files prefixed with `_` are private metadata** — never serve them over `/current/` or `/archive/`. Both file-serving routes enforce this.
 
-## Daily package — 10 slots
+## Daily package — 10 required slots + optional companions
 
-`dashboard` (HTML), `econ` (PDF), `relativeValue` (PDF), `treasuryNotes` (xlsx, parsed into Treasury Explorer), `cd` (PDF), `cdoffers` (PDF or Excel workbook), `munioffers` (PDF), `agenciesBullets` (xlsx), `agenciesCallables` (xlsx), `corporates` (xlsx).
+Required (the home/upload "X of 10 required" counters and the Package QA page agree on this set): `econ` (PDF), `relativeValue` (PDF), `mmd` (PDF), `treasuryNotes` (xlsx, parsed into Treasury Explorer), `cd` (PDF), `cdoffers` (PDF or Excel workbook), `munioffers` (PDF), `agenciesBullets` (xlsx), `agenciesCallables` (xlsx), `corporates` (xlsx).
+
+Optional: `dashboard` (HTML), `bairdSyndicate` (xlsx, folded into Muni Offerings), `cdoffersCost` (the CD cost workbook companion — never counted toward the required total). Server-side `SLOT_NAMES` in `server/server.js` carries all twelve slot keys; the SPA's `SLOTS` (portal.js) is the required-only list.
 
 Filename auto-classification lives in `classifyFile()` in `server/server.js`. Same-day re-publishes only replace the slots being re-uploaded (this was the v1.3.3 fix); different-day uploads roll the whole package into `data/archive/YYYY-MM-DD/`.
 
