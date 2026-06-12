@@ -192,8 +192,13 @@ function ensureCoverageDatabase(outputDir) {
     CREATE INDEX IF NOT EXISTS idx_bank_product_fit_bank ON bank_product_fit(bank_id);
     CREATE INDEX IF NOT EXISTS idx_billing_queue_state_enqueued ON billing_queue(state, enqueued_at DESC);
     CREATE INDEX IF NOT EXISTS idx_billing_queue_bank ON billing_queue(bank_id);
+    CREATE TABLE IF NOT EXISTS coverage_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
   `);
   migrateBankActivityColumns(dbPath);
+  migrateCoverageWorkspaceData(dbPath);
   return dbPath;
 }
 
@@ -223,6 +228,95 @@ function migrateBankActivityColumns(dbPath) {
       runSqlite(dbPath, `ALTER TABLE bank_activities ADD COLUMN ${name} ${type};`);
     }
   }
+}
+
+// One-shot consolidation of the retired Coverage Workspace (2026-06-12): the
+// CRM layer superseded its two private data surfaces, so legacy rows fold into
+// the systems that replaced them and the tab's UI could be removed.
+//   1. bank_notes → the bank activity timeline. Notes added through the old UI
+//      already logged a 140-char preview activity (ref_type='note'); those rows
+//      get the full note text as their body instead of a duplicate insert.
+//      Notes with no surviving activity row get a fresh 'note' activity stamped
+//      with the note's original created_at.
+//   2. bank_coverage.next_action_date → an Open bank_tasks row (the task engine
+//      owns follow-up dates now), then the column is cleared so nothing renders
+//      a second, stale "next action" source.
+// Guarded by a coverage_meta flag + a per-process cache so the work runs once
+// per database ever, and the check costs one SELECT per process thereafter.
+const COVERAGE_CONSOLIDATION_KEY = 'coverage-workspace-consolidated';
+const consolidatedCoverageDbs = new Set();
+
+function migrateCoverageWorkspaceData(dbPath) {
+  if (consolidatedCoverageDbs.has(dbPath)) return;
+  const flag = querySqliteJson(dbPath, 'SELECT value FROM coverage_meta WHERE key = ?;', [COVERAGE_CONSOLIDATION_KEY]);
+  if (flag.length) {
+    consolidatedCoverageDbs.add(dbPath);
+    return;
+  }
+  const now = new Date().toISOString();
+
+  const notes = querySqliteJson(dbPath, 'SELECT id, bank_id, note_text, created_at FROM bank_notes ORDER BY created_at ASC;');
+  for (const note of notes) {
+    const existing = querySqliteJson(
+      dbPath,
+      "SELECT id, deleted_at FROM bank_activities WHERE ref_type = 'note' AND ref_id = ? LIMIT 1;",
+      [note.id]
+    );
+    if (existing.length) {
+      // Soft-deleted preview rows stay deleted — compliance removal carries
+      // over to the migrated copy rather than resurrecting the note.
+      if (!existing[0].deleted_at) {
+        runSqlite(
+          dbPath,
+          'UPDATE bank_activities SET body = COALESCE(body, ?), activity_date = COALESCE(activity_date, ?) WHERE id = ?;',
+          [note.note_text, String(note.created_at || now).slice(0, 10), existing[0].id]
+        );
+      }
+      continue;
+    }
+    const cert = querySqliteJson(dbPath, 'SELECT cert_number FROM bank_coverage WHERE bank_id = ?;', [note.bank_id]);
+    runSqlite(dbPath, `
+      INSERT INTO bank_activities (id, bank_id, cert_number, at, kind, summary, body, activity_date, ref_type, ref_id)
+      VALUES (?, ?, ?, ?, 'note', ?, ?, ?, 'note', ?);
+    `, [
+      crypto.randomUUID(),
+      note.bank_id,
+      cert.length ? cert[0].cert_number : null,
+      note.created_at || now,
+      String(note.note_text || '').replace(/\s+/g, ' ').slice(0, 140),
+      note.note_text,
+      String(note.created_at || now).slice(0, 10),
+      note.id
+    ]);
+  }
+
+  const pendingActions = querySqliteJson(
+    dbPath,
+    "SELECT bank_id, cert_number, owner, next_action_date FROM bank_coverage WHERE next_action_date IS NOT NULL AND next_action_date != '';"
+  );
+  for (const row of pendingActions) {
+    runSqlite(dbPath, `
+      INSERT INTO bank_tasks (
+        id, bank_id, cert_number, title, body, due_date, priority, status,
+        assigned_to, assigned_display, created_by, created_display, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'Normal', 'Open', ?, ?, 'coverage-migration', 'Coverage Workspace migration', ?, ?);
+    `, [
+      crypto.randomUUID(),
+      row.bank_id,
+      textOrNull(row.cert_number),
+      'Next action (migrated from Coverage Workspace)',
+      'Carried over from the retired Coverage Workspace next-action date.',
+      row.next_action_date,
+      textOrNull(row.owner),
+      textOrNull(row.owner),
+      now,
+      now
+    ]);
+  }
+  runSqlite(dbPath, 'UPDATE bank_coverage SET next_action_date = NULL WHERE next_action_date IS NOT NULL;');
+
+  runSqlite(dbPath, 'INSERT INTO coverage_meta (key, value) VALUES (?, ?);', [COVERAGE_CONSOLIDATION_KEY, now]);
+  consolidatedCoverageDbs.add(dbPath);
 }
 
 const PRODUCT_FIT_PRODUCTS = [
