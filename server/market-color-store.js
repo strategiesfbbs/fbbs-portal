@@ -22,6 +22,56 @@ function inboxPath(baseDir) {
   return path.join(baseDir, INBOX_FILENAME);
 }
 
+function hashContent(data) {
+  return crypto.createHash('sha1').update(data).digest('hex');
+}
+
+// Older sources predate content-hash dedup — hash their stored .eml on demand
+// so re-uploads of the same email can be recognized. Mutates the source rows;
+// returns true if anything was backfilled (caller decides whether to persist).
+function backfillContentHashes(baseDir, sources) {
+  let changed = false;
+  for (const source of sources) {
+    if (source.contentHash || !source.storedFilename) continue;
+    try {
+      source.contentHash = hashContent(fs.readFileSync(path.join(filesDir(baseDir), source.storedFilename)));
+      changed = true;
+    } catch (_) { /* stored file missing/unreadable — leave unhashed */ }
+  }
+  return changed;
+}
+
+// One-time cleanup for inboxes that accumulated duplicate copies before
+// ingest-time dedup existed (same-day folder re-publishes re-ingested the same
+// .eml batch). Keeps the earliest-uploaded copy of each distinct email, drops
+// the rest (items + stored files). Safe to run repeatedly; writes only on change.
+function dedupeMarketColorInbox(baseDir) {
+  const inbox = loadMarketColorInbox(baseDir);
+  if (!inbox.sources.length) return { removed: 0 };
+  const backfilled = backfillContentHashes(baseDir, inbox.sources);
+
+  const keepIds = new Set();
+  const seenHashes = new Set();
+  const ordered = [...inbox.sources].sort((a, b) => String(a.uploadedAt || '').localeCompare(String(b.uploadedAt || '')));
+  for (const source of ordered) {
+    if (!source.contentHash) { keepIds.add(source.id); continue; }
+    if (seenHashes.has(source.contentHash)) continue;
+    seenHashes.add(source.contentHash);
+    keepIds.add(source.id);
+  }
+
+  const dropped = inbox.sources.filter(source => !keepIds.has(source.id));
+  if (!dropped.length && !backfilled) return { removed: 0 };
+
+  for (const source of dropped) {
+    try { fs.unlinkSync(path.join(filesDir(baseDir), source.storedFilename)); } catch (_) { /* already gone */ }
+  }
+  inbox.sources = inbox.sources.filter(source => keepIds.has(source.id));
+  inbox.items = inbox.items.filter(item => item.sourceFile && keepIds.has(item.sourceFile.id));
+  writeInbox(baseDir, inbox);
+  return { removed: dropped.length };
+}
+
 function filesDir(baseDir) {
   return path.join(baseDir, FILES_DIRNAME);
 }
@@ -115,14 +165,24 @@ function saveMarketColorUpload(baseDir, uploadFiles) {
   const warnings = [];
   const newSources = [];
   const newItems = [];
+  let skippedDuplicates = 0;
+
+  // Same-day folder re-publishes resend the same .eml batch — dedup by content
+  // hash so the inbox holds one copy of each email no matter how often the
+  // package republishes.
+  const hashesChanged = backfillContentHashes(baseDir, inbox.sources);
+  const knownHashes = new Set(inbox.sources.map(source => source.contentHash).filter(Boolean));
 
   for (const file of uploadFiles || []) {
     if (!/\.eml$/i.test(file.filename || '')) continue;
+    const contentHash = hashContent(file.data);
+    if (knownHashes.has(contentHash)) { skippedDuplicates += 1; continue; }
+    knownHashes.add(contentHash);
     const id = crypto.randomUUID();
     const safeName = sanitizeFilename(file.filename);
     const storedFilename = `${id}-${safeName}`;
     fs.writeFileSync(path.join(filesDir(baseDir), storedFilename), file.data);
-    const source = { id, filename: safeName, storedFilename, extension: 'eml', size: file.data.length, uploadedAt };
+    const source = { id, filename: safeName, storedFilename, extension: 'eml', size: file.data.length, uploadedAt, contentHash };
     newSources.push(source);
     try {
       newItems.push(makeMarketColorItem(file.data.toString('utf8'), source));
@@ -131,17 +191,22 @@ function saveMarketColorUpload(baseDir, uploadFiles) {
     }
   }
 
+  if (!newSources.length && !hashesChanged) {
+    return { ...inbox, uploadedSources: [], uploadedItems: [], uploadWarnings: warnings, skippedDuplicates };
+  }
+
   const next = {
-    updatedAt: uploadedAt,
+    updatedAt: newSources.length ? uploadedAt : inbox.updatedAt,
     sources: [...newSources, ...inbox.sources],
     items: [...newItems, ...inbox.items],
     warnings: [...warnings, ...inbox.warnings].slice(0, 100)
   };
   writeInbox(baseDir, next);
-  return { ...next, uploadedSources: newSources, uploadedItems: newItems, uploadWarnings: warnings };
+  return { ...next, uploadedSources: newSources, uploadedItems: newItems, uploadWarnings: warnings, skippedDuplicates };
 }
 
 module.exports = {
+  dedupeMarketColorInbox,
   getMarketColorEmailArticle,
   getMarketColorSourceFile,
   loadMarketColorInbox,

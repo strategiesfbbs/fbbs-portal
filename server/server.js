@@ -52,6 +52,7 @@ const {
   saveStructuredNotesUpload
 } = require('./structured-notes-store');
 const {
+  dedupeMarketColorInbox,
   getMarketColorEmailArticle,
   getMarketColorSourceFile,
   loadMarketColorInbox,
@@ -10996,6 +10997,14 @@ function listenServer() {
         getCoverageHoldingsIndex();
       } catch (err) {
         log('warn', `Coverage holdings prime failed: ${err.message}`);
+      }
+      // One-time cleanup of duplicate market-color emails ingested before
+      // content-hash dedup existed. No-op (no write) once the inbox is clean.
+      try {
+        const { removed } = dedupeMarketColorInbox(MARKET_COLOR_DIR);
+        if (removed) log('info', `Market Color inbox dedup: removed ${removed} duplicate email(s).`);
+      } catch (err) {
+        log('warn', `Market Color inbox dedup failed: ${err.message}`);
       }
     });
 

@@ -19427,6 +19427,17 @@
     });
   }
 
+  // Email previews carry bracketed link annotations — often enormous
+  // security-proxy (safe-link) URLs that drown out the actual text. Strip
+  // URLs from the preview; the full body stays available in the reading pane.
+  function marketColorPreviewText(preview) {
+    return String(preview || '')
+      .replace(/\[?\bhttps?:\/\/\S+\]?/gi, '')
+      .replace(/\[\s*\]/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
   function renderMarketColor() {
     const list = document.getElementById('mcArticleList');
     if (!list || !marketColorData) return;
@@ -19468,7 +19479,7 @@
           <span class="mc-article-when">${escapeHtml(marketColorEmailWhen(lead))}</span>
         </div>
         <h4 class="mc-lead-title">${escapeHtml(lead.subject || 'Market color')}</h4>
-        <p class="mc-lead-preview">${escapeHtml(lead.preview || '')}</p>
+        <p class="mc-lead-preview">${escapeHtml(marketColorPreviewText(lead.preview))}</p>
         <div class="mc-article-foot">
           <span class="mc-article-tags">${(lead.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ')}</span>
           <span class="mc-article-actions">${marketColorItemActions(lead)}</span>
@@ -19483,7 +19494,7 @@
           <span class="mc-article-when">${escapeHtml(marketColorEmailWhen(item))}</span>
         </div>
         <h5 class="mc-article-title">${escapeHtml(item.subject || 'Market color')}</h5>
-        <p class="mc-article-preview">${escapeHtml((item.preview || '').slice(0, 220))}</p>
+        <p class="mc-article-preview">${escapeHtml(marketColorPreviewText(item.preview).slice(0, 220))}</p>
       </div>
       <div class="mc-article-foot">
         <span class="mc-article-tags">${(item.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ')}</span>
