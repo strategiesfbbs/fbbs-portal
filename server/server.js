@@ -176,7 +176,8 @@ const {
 const {
   ensureCdHistoryDir,
   saveCdHistorySnapshot,
-  summarizeWeeklyCdHistory
+  summarizeWeeklyCdHistory,
+  loadCdHistory
 } = require('./cd-history');
 const swapMath = require('./swap-math');
 const swapStore = require('./swap-store');
@@ -5401,6 +5402,150 @@ function buildMaturityCalendar(query, curve) {
   };
 }
 
+// ---------- Brokered-CD rollover wall ----------
+// Which issuing banks have brokered CDs maturing in the forward window —
+// i.e. who has funding rolling off and may need to re-raise (the call cue
+// for the brokered-CD desk). Built entirely from data already on the box:
+//  - data/cd-internal: the desk's new-issue MASTER lists (carry FDIC cert)
+//  - data/cd-history: every daily FBBS offered-CD snapshot back to 2024
+//    (no cert — issuers join to coverage by normalized name)
+// CUSIPs are deduped across sources with cd-internal winning (it has the
+// cert). No par/size rides on either source, so the wall is count-based.
+
+let cdRolloverUniverseCache = null;
+function invalidateCdRolloverUniverse() { cdRolloverUniverseCache = null; }
+
+function buildCdRolloverUniverse() {
+  if (cdRolloverUniverseCache) return cdRolloverUniverseCache;
+  const byCusip = new Map();
+  const put = (row, source) => {
+    const cusip = String(row.cusip || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{9}$/.test(cusip)) return;
+    if (!row.maturity || !/^\d{4}-\d{2}-\d{2}$/.test(row.maturity)) return;
+    const existing = byCusip.get(cusip);
+    if (existing && existing.source === 'cd-internal' && source !== 'cd-internal') return;
+    byCusip.set(cusip, {
+      cusip,
+      name: String(row.name || '').trim(),
+      cert: String(row.fdicNumber || '').trim(),
+      maturity: row.maturity,
+      rate: row.rate != null && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null,
+      term: String(row.term || '').trim(),
+      settle: row.settle || '',
+      state: String(row.domiciled || row.issuerState || '').trim().toUpperCase(),
+      source
+    });
+  };
+  try {
+    for (const snapshot of loadCdHistory(CD_HISTORY_DIR)) {
+      for (const row of snapshot.offerings || []) put(row, 'cd-history');
+    }
+  } catch (err) {
+    log('warn', 'CD rollover: cd-history scan failed:', err.message);
+  }
+  try {
+    for (const row of (loadCdInternalInventory(CD_INTERNAL_DIR).offerings || [])) put(row, 'cd-internal');
+  } catch (err) {
+    log('warn', 'CD rollover: cd-internal scan failed:', err.message);
+  }
+  cdRolloverUniverseCache = Array.from(byCusip.values());
+  return cdRolloverUniverseCache;
+}
+
+function buildCdRolloverWall(query) {
+  const windowDays = Math.max(1, Math.min(365, Math.round(Number(query.get('window')) || 90)));
+  const ownerFilter = String(query.get('owner') || '').trim().toLowerCase();
+  const coveredOnly = String(query.get('covered') || '') === '1';
+  const generatedAt = new Date().toISOString();
+  const universe = buildCdRolloverUniverse();
+  if (!universe.length) {
+    return {
+      available: false, generatedAt, windowDays, owners: [], issuers: [],
+      totals: { issuerCount: 0, cdCount: 0, coveredCount: 0 },
+      notice: 'No CD history or internal CD masters have been ingested yet.'
+    };
+  }
+
+  // Coverage joins: FDIC cert first (exact), then normalized name.
+  const mapData = getMapBankData();
+  const byCert = new Map();
+  const byName = new Map();
+  for (const b of (mapData && mapData.banks) || []) {
+    const cert = String(b.certNumber || '').trim();
+    if (cert && !byCert.has(cert)) byCert.set(cert, b);
+    const key = normalizeBankNameForMatch(b.displayName || b.legalName || '');
+    if (key && !byName.has(key)) byName.set(key, b);
+  }
+
+  const todayMs = Math.floor(Date.now() / 86400000) * 86400000;
+  const horizonMs = todayMs + windowDays * 86400000;
+  const owners = new Set();
+  const issuerMap = new Map();
+  let cdCount = 0;
+
+  for (const cd of universe) {
+    const matMs = Date.parse(cd.maturity);
+    if (!Number.isFinite(matMs) || matMs < todayMs || matMs > horizonMs) continue;
+    const bank = (cd.cert && byCert.get(cd.cert)) || byName.get(normalizeBankNameForMatch(cd.name)) || null;
+    const owner = bank && bank.accountStatus ? String(bank.accountStatus.owner || '') : '';
+    if (owner) owners.add(owner);
+    if (ownerFilter && owner.toLowerCase() !== ownerFilter) continue;
+    if (coveredOnly && !(bank && bank.accountStatusLabel && bank.accountStatusLabel !== 'Open')) continue;
+    const issuerKey = cd.cert || `name:${normalizeBankNameForMatch(cd.name)}`;
+    const daysOut = Math.round((matMs - todayMs) / 86400000);
+    const entry = issuerMap.get(issuerKey) || {
+      name: cd.name,
+      cert: cd.cert,
+      state: cd.state,
+      bankId: bank ? bank.id : null,
+      bankName: bank ? (bank.displayName || bank.legalName || '') : '',
+      status: bank ? (bank.accountStatusLabel || 'Open') : '',
+      owner,
+      cds: []
+    };
+    entry.cds.push({
+      cusip: cd.cusip, maturity: cd.maturity, daysOut,
+      rate: cd.rate, term: cd.term, settle: cd.settle, source: cd.source
+    });
+    issuerMap.set(issuerKey, entry);
+    cdCount += 1;
+  }
+
+  const issuers = Array.from(issuerMap.values()).map(entry => {
+    entry.cds.sort((a, b) => a.daysOut - b.daysOut);
+    return {
+      ...entry,
+      cdCount: entry.cds.length,
+      nearestDays: entry.cds[0].daysOut,
+      nearestMaturity: entry.cds[0].maturity,
+      avgRate: (() => {
+        const rates = entry.cds.map(c => c.rate).filter(r => r != null);
+        return rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+      })()
+    };
+  }).sort((a, b) => {
+    // Covered banks first (they're callable accounts), then nearest wall.
+    const aCovered = a.bankId && a.status && a.status !== 'Open' ? 0 : 1;
+    const bCovered = b.bankId && b.status && b.status !== 'Open' ? 0 : 1;
+    return (aCovered - bCovered) || (a.nearestDays - b.nearestDays) || (b.cdCount - a.cdCount);
+  });
+
+  return {
+    available: true,
+    generatedAt,
+    windowDays,
+    universeSize: universe.length,
+    owners: Array.from(owners).sort(),
+    issuers,
+    totals: {
+      issuerCount: issuers.length,
+      cdCount,
+      coveredCount: issuers.filter(i => i.bankId && i.status && i.status !== 'Open').length
+    },
+    notice: ''
+  };
+}
+
 // Strict numeric coercion for the portfolio review path.
 // Unlike numericValue() above, this returns null for null/''/undefined
 // instead of coercing them to 0. The sector parser leaves yield/duration
@@ -8105,6 +8250,7 @@ function ingestFolderDropReferences(scan) {
 
   if (cdInternalFiles.length) {
     result.cdInternal = saveCdInternalUpload(CD_INTERNAL_DIR, cdInternalFiles);
+    invalidateCdRolloverUniverse();
   }
   result.structuredNotes = saveStructuredNotesUpload(STRUCTURED_NOTES_DIR, structuredEmails, {
     targetDate: scan.date,
@@ -8745,6 +8891,7 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
           uploadedAt: offPayload.extractedAt,
           uploadDate: todayStamp()
         });
+        invalidateCdRolloverUniverse();
         log('info', `Extracted ${offeringsCount} offerings from Daily CD Offerings upload`);
       } catch (err) {
         log('error', 'Failed to write offerings JSON:', err.message);
@@ -10009,6 +10156,10 @@ const server = http.createServer(async (req, res) => {
     // ---- Bond Swap proposals (tab under Strategies; routes namespaced
     // under /api/swap-proposals so they don't tangle with the existing
     // /api/strategies/:id catchall below.) ----
+
+    if (pathname === '/api/cd-rollover-wall' && req.method === 'GET') {
+      return sendJSON(res, 200, buildCdRolloverWall(query));
+    }
 
     if (pathname === '/api/maturity-calendar' && req.method === 'GET') {
       // Cached Treasury curve feeds the call-economics fallback; never blocks

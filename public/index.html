@@ -141,6 +141,9 @@
         <a class="nav-link nav-minor" data-page="maturity-calendar" href="#maturity-calendar">
           <span class="nav-label">Maturity Calendar</span>
         </a>
+        <a class="nav-link nav-minor" data-page="cd-rollover" href="#cd-rollover">
+          <span class="nav-label">CD Rollover Wall</span>
+        </a>
       </div>
     </div>
 
@@ -818,6 +821,52 @@
     </div>
     <p class="maturity-cal-meta" id="maturityCalMeta"></p>
     <section id="maturityCalApp" aria-label="Maturity and call calendar"></section>
+  </div>
+</div>
+
+<!-- ========== CD ROLLOVER WALL PAGE ========== -->
+<div class="page" id="p-cd-rollover">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Brokered-CD <strong>Rollover Wall</strong></h2>
+        <p class="hero-sub">Issuing banks with brokered CDs maturing inside the window &mdash; funding rolling off, and a reason to call about the re-raise.</p>
+      </div>
+      <div class="hero-stat">
+        <span id="cdRolloverHeroStat">&mdash;</span>
+        <small>Issuers in window</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="maturity-cal-controls" id="cdRolloverControls">
+      <div class="mc-control">
+        <label>Window</label>
+        <div class="mc-window-toggle" id="cdRolloverWindow" role="group" aria-label="Horizon window">
+          <button type="button" data-window="30">30d</button>
+          <button type="button" data-window="60">60d</button>
+          <button type="button" class="active" data-window="90">90d</button>
+          <button type="button" data-window="180">180d</button>
+        </div>
+      </div>
+      <div class="mc-control">
+        <label for="cdRolloverScope">Issuers</label>
+        <select id="cdRolloverScope">
+          <option value="covered" selected>Covered banks only</option>
+          <option value="all">All issuers</option>
+        </select>
+      </div>
+      <div class="mc-control">
+        <label for="cdRolloverOwner">Owner</label>
+        <select id="cdRolloverOwner"><option value="">All owners</option></select>
+      </div>
+      <div class="mc-control mc-control-actions">
+        <button type="button" class="small-btn" id="cdRolloverExport">Export CSV</button>
+      </div>
+    </div>
+    <p class="maturity-cal-meta" id="cdRolloverMeta"></p>
+    <section id="cdRolloverApp" aria-label="Brokered-CD rollover wall"></section>
   </div>
 </div>
 

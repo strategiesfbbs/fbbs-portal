@@ -155,7 +155,7 @@
   const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
@@ -186,6 +186,7 @@
     { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
     { page: 'peer-groups', group: 'Banks', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
     { page: 'maturity-calendar', group: 'Banks', label: 'Maturity Calendar', description: 'Covered banks with bonds maturing or first-callable in the window — reinvestment call list', aliases: 'maturity call calendar rollover runoff reinvestment maturing callable proceeds call list coverage bond accounting' },
+    { page: 'cd-rollover', group: 'Banks', label: 'CD Rollover Wall', description: 'Issuing banks with brokered CDs maturing in the window — funding re-raise call list', aliases: 'cd rollover wall brokered funding maturing reissue re-raise liability deposits call list' },
     { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
     { page: 'bond-swap', group: 'Strategies', label: 'Bond Swap', description: 'Portfolio Idea Engine and multi-leg swap-proposal builder', aliases: 'bond swap proposal portfolio idea engine swap builder cusip leg reinvest blotter' },
     { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
@@ -217,7 +218,8 @@
     maps: 'banks',
     reports: 'banks',
     'peer-groups': 'banks',
-    'maturity-calendar': 'banks'
+    'maturity-calendar': 'banks',
+    'cd-rollover': 'banks'
   };
 
   const DEFAULT_BROKERED_CD_TERMS = [
@@ -1509,6 +1511,7 @@
     if (pageName === 'bond-swap') enterBondSwapPage();
     if (pageName === 'peer-groups') loadPeerGroups();
     if (pageName === 'maturity-calendar') enterMaturityCalendarPage();
+    if (pageName === 'cd-rollover') enterCdRolloverPage();
     if (pageName === 'upload') loadBankStatus();
     if (pageName === 'package-qa') renderPackageQa();
     if (pageName === 'admin') loadAuditLog();
@@ -5585,6 +5588,163 @@
     }
     const stamp = new Date().toISOString().slice(0, 10);
     downloadCsv('fbbs_maturity_calendar_' + maturityCalState.window + 'd_' + stamp + '.csv', rows);
+  }
+
+  // ----- Brokered-CD rollover wall (liability-side sibling of the calendar) -----
+
+  const cdRolloverState = {
+    window: 90,
+    scope: 'covered',
+    owner: '',
+    ownerTouched: false,
+    data: null,
+    wired: false
+  };
+
+  function enterCdRolloverPage() {
+    if (!cdRolloverState.wired) {
+      cdRolloverState.wired = true;
+      const windowBar = document.getElementById('cdRolloverWindow');
+      if (windowBar) {
+        windowBar.addEventListener('click', e => {
+          const btn = e.target.closest('button[data-window]');
+          if (!btn) return;
+          const win = Number(btn.dataset.window) || 90;
+          if (win === cdRolloverState.window) return;
+          cdRolloverState.window = win;
+          windowBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+          loadCdRolloverWall();
+        });
+      }
+      const scopeSel = document.getElementById('cdRolloverScope');
+      if (scopeSel) scopeSel.addEventListener('change', () => {
+        cdRolloverState.scope = scopeSel.value;
+        loadCdRolloverWall();
+      });
+      const ownerSel = document.getElementById('cdRolloverOwner');
+      if (ownerSel) ownerSel.addEventListener('change', () => {
+        cdRolloverState.owner = ownerSel.value;
+        cdRolloverState.ownerTouched = true;
+        loadCdRolloverWall();
+      });
+      const exportBtn = document.getElementById('cdRolloverExport');
+      if (exportBtn) exportBtn.addEventListener('click', exportCdRolloverCsv);
+    }
+    loadCdRolloverWall();
+  }
+
+  async function loadCdRolloverWall() {
+    const app = document.getElementById('cdRolloverApp');
+    if (!app) return;
+    app.innerHTML = '<p class="muted-note">Loading rollover wall…</p>';
+    try {
+      const params = new URLSearchParams({ window: String(cdRolloverState.window) });
+      if (cdRolloverState.scope === 'covered') params.set('covered', '1');
+      if (cdRolloverState.owner) params.set('owner', cdRolloverState.owner);
+      const res = await fetch('/api/cd-rollover-wall?' + params.toString(), { cache: 'no-store' });
+      if (!res.ok) throw new Error('Request failed (' + res.status + ')');
+      const data = await res.json();
+      cdRolloverState.data = data;
+      // Same acting-rep default as the maturity calendar, applied once.
+      if (!cdRolloverState.ownerTouched && !cdRolloverState.owner && meState.rep) {
+        const repName = String(meState.rep.displayName || meState.rep.username || '').trim().toLowerCase();
+        const match = (data.owners || []).find(o => String(o).trim().toLowerCase() === repName);
+        if (match) {
+          cdRolloverState.owner = match;
+          cdRolloverState.ownerTouched = true;
+          return loadCdRolloverWall();
+        }
+        cdRolloverState.ownerTouched = true;
+      }
+      renderCdRolloverWall();
+    } catch (err) {
+      app.innerHTML = '<p class="error-note">Could not load the rollover wall: ' + escapeHtml(err.message) + '</p>';
+    }
+  }
+
+  function renderCdRolloverWall() {
+    const data = cdRolloverState.data;
+    const app = document.getElementById('cdRolloverApp');
+    if (!app || !data) return;
+    setText('cdRolloverHeroStat', formatNumber((data.totals && data.totals.issuerCount) || 0));
+
+    const ownerSel = document.getElementById('cdRolloverOwner');
+    if (ownerSel) {
+      const current = cdRolloverState.owner;
+      ownerSel.innerHTML = '<option value="">All owners</option>' + (data.owners || [])
+        .map(o => `<option value="${escapeHtml(o)}"${o === current ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
+    }
+
+    const meta = document.getElementById('cdRolloverMeta');
+    if (meta) {
+      meta.textContent = data.available
+        ? `${formatNumber(data.totals.cdCount)} CDs maturing inside ${data.windowDays}d across ${formatNumber(data.totals.issuerCount)} issuers (${formatNumber(data.totals.coveredCount)} covered) · universe of ${formatNumber(data.universeSize || 0)} tracked CUSIPs from the desk's CD masters + daily offering history. No size/par data rides on these sources — counts only.`
+        : '';
+    }
+
+    if (!data.available || !data.issuers.length) {
+      app.innerHTML = `<p class="muted-note">${escapeHtml(data.notice || 'No brokered CDs mature inside this window for the current filters.')}</p>`;
+      return;
+    }
+
+    app.innerHTML = `
+      <div class="explorer-table-wrap">
+        <table class="explorer-table">
+          <thead>
+            <tr>
+              <th>Issuer</th>
+              <th style="width:110px">Status</th>
+              <th style="width:140px">Owner</th>
+              <th style="width:90px">CDs</th>
+              <th style="width:150px">Nearest Maturity</th>
+              <th style="width:100px">Avg Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${data.issuers.map(issuer => {
+              const nameCell = issuer.bankId
+                ? `<button type="button" class="linklike" data-rollover-bank-id="${escapeHtml(issuer.bankId)}">${escapeHtml(issuer.name)}</button>`
+                : escapeHtml(issuer.name);
+              const statusSlug = String(issuer.status || 'open').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+              const cdsDetail = `<details class="cd-rollover-cds"><summary>${escapeHtml(issuer.cdCount)} maturing</summary>
+                <ul>${issuer.cds.map(cd => `<li><code>${escapeHtml(cd.cusip)}</code> · ${escapeHtml(maturityCalendarDate(cd.maturity))} (${escapeHtml(cd.daysOut)}d)${cd.rate != null ? ' · ' + escapeHtml(Number(cd.rate).toFixed(2)) + '%' : ''}${cd.term ? ' · ' + escapeHtml(cd.term) : ''}</li>`).join('')}</ul>
+              </details>`;
+              return `<tr>
+                <td class="issuer-cell"><strong>${nameCell}</strong>${issuer.state ? `<div class="mbs-note">${escapeHtml(issuer.state)}</div>` : ''}</td>
+                <td>${issuer.status ? `<span class="maps-status-pill maps-status-${escapeHtml(statusSlug)}">${escapeHtml(issuer.status)}</span>` : '<span class="no-restrict">&mdash;</span>'}</td>
+                <td>${escapeHtml(issuer.owner || '')}</td>
+                <td>${cdsDetail}</td>
+                <td>${escapeHtml(maturityCalendarDate(issuer.nearestMaturity))} <span class="mbs-note">(${escapeHtml(issuer.nearestDays)}d)</span></td>
+                <td>${issuer.avgRate != null ? escapeHtml(issuer.avgRate.toFixed(2)) + '%' : '—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    app.querySelectorAll('[data-rollover-bank-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        goTo('banks');
+        setTimeout(() => loadBank(btn.dataset.rolloverBankId), 200);
+      });
+    });
+  }
+
+  function exportCdRolloverCsv() {
+    const data = cdRolloverState.data;
+    if (!data || !data.issuers || !data.issuers.length) { showToast('Nothing to export for the current filters.', true); return; }
+    const header = ['Issuer', 'FDIC Cert', 'State', 'Status', 'Owner', 'CUSIP', 'Maturity', 'Days Out', 'Rate', 'Term', 'Source'];
+    const rows = [header];
+    for (const issuer of data.issuers) {
+      for (const cd of issuer.cds) {
+        rows.push([
+          issuer.name, issuer.cert || '', issuer.state || '', issuer.status || '', issuer.owner || '',
+          cd.cusip, cd.maturity, cd.daysOut,
+          cd.rate != null ? cd.rate : '', cd.term || '', cd.source
+        ]);
+      }
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCsv('fbbs_cd_rollover_wall_' + cdRolloverState.window + 'd_' + stamp + '.csv', rows);
   }
 
   // Entry point fired by goTo() when the Bond Swap page activates. Reads the
