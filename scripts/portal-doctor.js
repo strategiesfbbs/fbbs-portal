@@ -93,6 +93,29 @@ async function main() {
     console.log('');
   }
 
+  // macOS only: iCloud/OneDrive/Dropbox "optimize storage" can evict file
+  // CONTENTS to the cloud (the `dataless` flag) while the file still lists
+  // normally. A synchronous read of an evicted file blocks until the provider
+  // re-downloads it — and if that download stalls, the whole single-threaded
+  // server hangs on the next request that touches the file ("nothing loads").
+  // This bit us on 2026-06-12 with the portal installed under ~/Documents.
+  if (process.platform === 'darwin') {
+    try {
+      const dataDir = process.env.DATA_DIR || require('path').join(__dirname, '..', 'data');
+      const r = await execFileText('ls', ['-lRO', dataDir]);
+      const evicted = (r.stdout.match(/dataless/g) || []).length;
+      if (evicted > 0) {
+        hasRuntimeProblem = true;
+        console.log(`WARNING: ${evicted} file(s) under ${dataDir} have been evicted to the cloud (dataless).`);
+        console.log(`A stalled re-download can freeze the portal mid-request. Fix now with:`);
+        console.log(`  find "${dataDir}" -type f -print0 | xargs -0 -n 50 cat > /dev/null`);
+        console.log(`Fix permanently: move the portal out of iCloud-synced folders (~/Documents, ~/Desktop),`);
+        console.log(`or disable "Optimize Mac Storage", or set DATA_DIR to a non-synced location.`);
+        console.log('');
+      }
+    } catch (_) { /* ls -O unavailable — skip the check */ }
+  }
+
   if (!listeners) {
     console.log(`No process is listening on port ${port}.`);
     console.log(`Start the portal with: npm start`);

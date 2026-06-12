@@ -405,6 +405,16 @@ Refresh the page. The portal polls on load and after each publish.
 **"Upload exceeds maximum allowed size"**
 Bump `MAX_UPLOAD_MB`. If deployed on IIS, also bump `maxAllowedContentLength` in `web.config`.
 
+**Everything hangs — pages spin, even /api/health never answers (macOS)**
+If the portal lives in an iCloud-synced folder (`~/Documents`, `~/Desktop`) with
+"Optimize Mac Storage" on, macOS can evict file contents to the cloud. The next
+read of an evicted file blocks until it re-downloads — and if that download
+stalls, the whole server freezes. Run `npm run doctor` (it now detects evicted
+files), force them back with
+`find data -type f -print0 | xargs -0 -n 50 cat > /dev/null`, and fix it
+permanently by keeping the portal (or at least `DATA_DIR`) outside any
+cloud-synced folder.
+
 ---
 
 ## Security posture
