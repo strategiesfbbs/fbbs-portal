@@ -38,4 +38,6 @@ Thumbs.db
 # two processes write to the same path). Both agents leave artifacts here
 # that aren't meant to ship.
 .claude/
+.agents/
+.codex/
 package-lock[ ]*.json
