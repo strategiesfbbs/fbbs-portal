@@ -3473,7 +3473,7 @@
     }
     if (row2 && row10) {
       cues.push({
-        title: '2s/10s slope',
+        title: 'AAA muni 2s/10s slope',
         detail: `AAA MMD 2s/10s slope is ${bpValue((Number(row10.aaa) - Number(row2.aaa)) * 100)}.`
       });
     }
@@ -3516,7 +3516,7 @@
       { label: 'Coupon', value: data && data.coupon ? `${Number(data.coupon).toFixed(0)}%` : '—' },
       { label: '10Y AAA', value: row10 ? rvRateValue(row10.aaa) : '—' },
       { label: '30Y AAA', value: row30 ? rvRateValue(row30.aaa) : '—' },
-      { label: '2s/10s', value: slope != null ? bpValue(slope) : '—' },
+      { label: 'AAA 2s/10s', value: slope != null ? bpValue(slope) : '—' },
       { label: '10Y Ratio', value: ratio10 ? `${ratio10.ratioPct}%` : '—' }
     ]);
 
