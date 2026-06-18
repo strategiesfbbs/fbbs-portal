@@ -19333,25 +19333,23 @@
   }
 
   function marketColorEmailWhen(item) {
-    const parsed = item.emailDate ? new Date(item.emailDate) : null;
+    const when = item.publishedAt || item.emailDate;
+    const parsed = when ? new Date(when) : null;
     if (parsed && !Number.isNaN(parsed.getTime())) {
       return parsed.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     }
-    return item.emailDate || '';
+    return when || '';
   }
 
-  function marketColorSenderName(from) {
-    // "Desk Strategist <strategist@firm.com>" → "Desk Strategist"
-    const name = String(from || '').replace(/<[^>]*>/g, '').replace(/"/g, '').trim();
-    return name || String(from || '');
+  function marketColorSenderName(item) {
+    // Items are now RSS-sourced — the "from" is the publisher (CNBC, MarketWatch).
+    return String((item && (item.source || item.from)) || '').trim();
   }
 
   function marketColorItemActions(item) {
-    const source = item.sourceFile;
-    if (!source) return '';
-    return `
-      <button type="button" class="small-btn mc-read-btn" data-mc-read="${escapeHtml(source.id)}">Read</button>
-      <a class="source-chip" href="/api/market-color/files/${encodeURIComponent(source.id)}" target="_blank" rel="noopener">eml</a>`;
+    if (!item || !item.url) return '';
+    // Headlines link OUT to the publisher's article — we never republish bodies.
+    return `<a class="small-btn mc-read-btn" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">Open ↗</a>`;
   }
 
   function renderMarketColorWire() {
@@ -19422,7 +19420,7 @@
     const q = marketColorFilters.search.toLowerCase();
     return items.filter(item => {
       if (tag !== 'all' && !(item.tags || []).includes(tag)) return false;
-      if (q && !`${item.subject || ''} ${item.preview || ''} ${item.from || ''}`.toLowerCase().includes(q)) return false;
+      if (q && !`${item.title || ''} ${item.summary || ''} ${item.source || ''}`.toLowerCase().includes(q)) return false;
       return true;
     });
   }
@@ -19443,8 +19441,8 @@
     if (!list || !marketColorData) return;
     const items = Array.isArray(marketColorData.items) ? marketColorData.items : [];
     setText('marketColorStat', formatNumber(items.length));
-    setText('marketColorKicker', marketColorData.updatedAt ? `Updated ${formatFullTimestamp(marketColorData.updatedAt)}` : 'No market color yet');
-    setText('marketColorSub', 'Live market wire, official headlines, and the desk’s market color in one place.');
+    setText('marketColorKicker', marketColorData.updatedAt ? `Updated ${formatFullTimestamp(marketColorData.updatedAt)}${marketColorData.stale ? ' (cached)' : ''}` : 'No market color yet');
+    setText('marketColorSub', 'Live market wire, official headlines, and market-color news from CNBC & MarketWatch in one place.');
 
     const chipsEl = document.getElementById('mcTagChips');
     if (chipsEl) {
@@ -19460,7 +19458,7 @@
     const leadEl = document.getElementById('mcLead');
     if (!items.length) {
       if (leadEl) leadEl.innerHTML = '';
-      list.innerHTML = '<div class="mc-empty">No market color emails have been ingested yet. They arrive with the daily folder drop.</div>';
+      list.innerHTML = '<div class="mc-empty">Market-color news is unavailable right now — the live wire band above is still current.</div>';
       return;
     }
 
@@ -19475,11 +19473,11 @@
     if (leadEl) {
       leadEl.innerHTML = `<article class="mc-lead">
         <div class="mc-lead-meta">
-          <span class="mc-article-from">${escapeHtml(marketColorSenderName(lead.from))}</span>
+          <span class="mc-article-from">${escapeHtml(marketColorSenderName(lead))}</span>
           <span class="mc-article-when">${escapeHtml(marketColorEmailWhen(lead))}</span>
         </div>
-        <h4 class="mc-lead-title">${escapeHtml(lead.subject || 'Market color')}</h4>
-        <p class="mc-lead-preview">${escapeHtml(marketColorPreviewText(lead.preview))}</p>
+        <h4 class="mc-lead-title">${escapeHtml(lead.title || lead.subject || 'Market color')}</h4>
+        <p class="mc-lead-preview">${escapeHtml(marketColorPreviewText(lead.summary || lead.preview))}</p>
         <div class="mc-article-foot">
           <span class="mc-article-tags">${(lead.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ')}</span>
           <span class="mc-article-actions">${marketColorItemActions(lead)}</span>
@@ -19490,11 +19488,11 @@
     list.innerHTML = rest.map(item => `<article class="mc-article-row">
       <div class="mc-article-main">
         <div class="mc-lead-meta">
-          <span class="mc-article-from">${escapeHtml(marketColorSenderName(item.from))}</span>
+          <span class="mc-article-from">${escapeHtml(marketColorSenderName(item))}</span>
           <span class="mc-article-when">${escapeHtml(marketColorEmailWhen(item))}</span>
         </div>
-        <h5 class="mc-article-title">${escapeHtml(item.subject || 'Market color')}</h5>
-        <p class="mc-article-preview">${escapeHtml(marketColorPreviewText(item.preview).slice(0, 220))}</p>
+        <h5 class="mc-article-title">${escapeHtml(item.title || item.subject || 'Market color')}</h5>
+        <p class="mc-article-preview">${escapeHtml(marketColorPreviewText(item.summary || item.preview).slice(0, 220))}</p>
       </div>
       <div class="mc-article-foot">
         <span class="mc-article-tags">${(item.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ')}</span>
@@ -19503,37 +19501,10 @@
     </article>`).join('') || '<div class="mc-empty">That’s everything for today.</div>';
   }
 
-  async function openMarketColorArticle(fileId) {
-    const backdrop = document.getElementById('mcReaderBackdrop');
-    const titleEl = document.getElementById('mcReaderTitle');
-    const metaEl = document.getElementById('mcReaderMeta');
-    const bodyEl = document.getElementById('mcReaderBody');
-    if (!backdrop || !bodyEl) return;
-    backdrop.hidden = false;
-    if (titleEl) titleEl.textContent = 'Market color';
-    if (metaEl) metaEl.textContent = '';
-    bodyEl.innerHTML = '<p class="mc-empty">Loading&hellip;</p>';
-    try {
-      const res = await fetch(`/api/market-color/files/${encodeURIComponent(fileId)}/body`, { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const article = await res.json();
-      if (titleEl) titleEl.textContent = article.subject || 'Market color';
-      if (metaEl) metaEl.textContent = [marketColorSenderName(article.from), article.date].filter(Boolean).join(' · ');
-      const paragraphs = String(article.body || '').split('\n').map(line => line.trim()).filter(Boolean);
-      bodyEl.innerHTML = paragraphs.length
-        ? paragraphs.map(p => `<p>${escapeHtml(p)}</p>`).join('')
-        : '<p class="mc-empty">No readable text in this email — open the .eml source instead.</p>';
-    } catch (e) {
-      bodyEl.innerHTML = `<p class="mc-empty" style="color:var(--danger)">Failed to load article: ${escapeHtml(e.message)}</p>`;
-    }
-  }
-
   function setupMarketColor() {
     const page = document.getElementById('p-market-color');
     if (!page) return;
     page.addEventListener('click', e => {
-      const readBtn = e.target.closest('[data-mc-read]');
-      if (readBtn) { openMarketColorArticle(readBtn.dataset.mcRead); return; }
       const chip = e.target.closest('[data-mc-tag]');
       if (chip) {
         marketColorFilters.tag = chip.dataset.mcTag;

@@ -51,13 +51,7 @@ const {
   loadStructuredNotesInventory,
   saveStructuredNotesUpload
 } = require('./structured-notes-store');
-const {
-  dedupeMarketColorInbox,
-  getMarketColorEmailArticle,
-  getMarketColorSourceFile,
-  loadMarketColorInbox,
-  saveMarketColorUpload
-} = require('./market-color-store');
+const marketColorFeed = require('./market-color-feed');
 const {
   loadCdInternalInventory,
   saveCdInternalUpload
@@ -8221,12 +8215,10 @@ function ingestFolderDropReferences(scan) {
   const cdInternalFiles = files.filter(file => looksLikeInternalCdWorkbook(file.filename));
   const emailFiles = files.filter(file => /\.eml$/i.test(file.filename || ''));
   const structuredEmails = emailFiles.filter(looksLikeStructuredNotesEmail);
-  const marketEmails = emailFiles.filter(file => !structuredEmails.includes(file));
 
   const result = {
     cdInternal: null,
-    structuredNotes: null,
-    marketColor: null
+    structuredNotes: null
   };
 
   if (cdInternalFiles.length) {
@@ -8237,9 +8229,6 @@ function ingestFolderDropReferences(scan) {
     targetDate: scan.date,
     replace: true
   });
-  if (marketEmails.length) {
-    result.marketColor = saveMarketColorUpload(MARKET_COLOR_DIR, marketEmails);
-  }
   return result;
 }
 
@@ -10071,27 +10060,10 @@ const server = http.createServer(async (req, res) => {
       return sendFile(res, file.path, { download: true, filename: file.filename });
     }
 
+    // Market color is now an automatic public-RSS news feed (CNBC + MarketWatch),
+    // not the desk's uploaded .eml inbox — same playbook as the Fed/SEC wire.
     if (pathname === '/api/market-color' && req.method === 'GET') {
-      return sendJSON(res, 200, loadMarketColorInbox(MARKET_COLOR_DIR));
-    }
-
-    // Parsed article body for the reading pane (vs. the raw .eml download below).
-    const marketColorBodyMatch = pathname.match(/^\/api\/market-color\/files\/([^/]+)\/body$/);
-    if (marketColorBodyMatch && req.method === 'GET') {
-      const fileId = safeDecodeURIComponent(marketColorBodyMatch[1]);
-      if (!fileId) return sendText(res, 400, 'Invalid market color file ID');
-      const article = getMarketColorEmailArticle(MARKET_COLOR_DIR, fileId);
-      if (!article) return sendText(res, 404, 'Not found');
-      return sendJSON(res, 200, article);
-    }
-
-    const marketColorFileMatch = pathname.match(/^\/api\/market-color\/files\/([^/]+)$/);
-    if (marketColorFileMatch && req.method === 'GET') {
-      const fileId = safeDecodeURIComponent(marketColorFileMatch[1]);
-      if (!fileId) return sendText(res, 400, 'Invalid market color file ID');
-      const file = getMarketColorSourceFile(MARKET_COLOR_DIR, fileId);
-      if (!file || !fs.existsSync(file.path)) return sendText(res, 404, 'Not found');
-      return sendFile(res, file.path, { download: true, filename: file.filename });
+      return sendJSON(res, 200, await marketColorFeed.getMarketColorFeed({ marketDir: MARKET_DIR, log }));
     }
 
     if (pathname === '/api/cd-internal' && req.method === 'GET') {
@@ -10997,14 +10969,6 @@ function listenServer() {
         getCoverageHoldingsIndex();
       } catch (err) {
         log('warn', `Coverage holdings prime failed: ${err.message}`);
-      }
-      // One-time cleanup of duplicate market-color emails ingested before
-      // content-hash dedup existed. No-op (no write) once the inbox is clean.
-      try {
-        const { removed } = dedupeMarketColorInbox(MARKET_COLOR_DIR);
-        if (removed) log('info', `Market Color inbox dedup: removed ${removed} duplicate email(s).`);
-      } catch (err) {
-        log('warn', `Market Color inbox dedup failed: ${err.message}`);
       }
     });
 
