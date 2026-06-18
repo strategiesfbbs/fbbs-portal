@@ -10920,6 +10920,54 @@ body {
 .daily-summary-body li { margin: 0 0 3px; }
 .daily-summary-empty { color: #5a615e; }
 .daily-summary-error { color: #b4231f; }
+
+/* Pick of the day (All Offerings) — reuses the desk-read card chrome. */
+.daily-picks-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin: 0 0 16px;
+}
+.daily-picks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.daily-picks-title { margin: 0; font-size: 14px; font-weight: 600; }
+.daily-picks-controls { display: flex; align-items: center; gap: 10px; }
+.daily-picks-note { margin: 4px 0 10px; font-size: 11px; color: #7a817d; }
+.daily-picks-body { display: flex; flex-direction: column; gap: 8px; }
+.daily-pick {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fafbfa;
+}
+.daily-pick-main { min-width: 0; }
+.daily-pick-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.daily-pick-headline { font-size: 13px; font-weight: 600; color: #1f2421; }
+.daily-pick-desc { font-size: 11.5px; color: #5a615e; }
+.daily-pick-rationale { font-size: 12.5px; line-height: 1.45; color: #2a2f2d; margin-top: 3px; }
+.daily-pick-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #3a403d;
+  white-space: nowrap;
+}
+.daily-pick-stats strong { font-size: 14px; color: #1f6f5c; }
+@media (max-width: 640px) {
+  .daily-pick { flex-direction: column; align-items: stretch; }
+  .daily-pick-stats { justify-content: flex-start; flex-wrap: wrap; }
+}
 .views-card {
   background: #fff;
   border: 1px solid var(--line);

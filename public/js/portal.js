@@ -16966,6 +16966,83 @@
     wireAllOfferingsControls();
     renderAllOfferingsClasses();
     renderAllOfferings();
+    loadDailyPicksCard(); // AI pick of the day (dormant without an Anthropic key)
+  }
+
+  // AI "Pick of the day" card: Claude curates a handful of today's offerings.
+  // The card only appears when an Anthropic key is configured. GET is read-only
+  // (cached); the button POSTs an explicit, billable refresh. Numbers shown are
+  // the desk's own — Claude only ranks and writes the one-line rationale.
+  function renderDailyPicks(data) {
+    const card = document.getElementById('dailyPicksCard');
+    const body = document.getElementById('dailyPicksBody');
+    const meta = document.getElementById('dailyPicksMeta');
+    const btn = document.getElementById('dailyPicksBtn');
+    if (!card || !body) return;
+    if (!data || !data.configured) { card.hidden = true; return; }
+    card.hidden = false;
+    const num = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
+    if (Array.isArray(data.picks) && data.picks.length) {
+      body.innerHTML = data.picks.map(p => `
+        <div class="daily-pick">
+          <div class="daily-pick-main">
+            <div class="daily-pick-head">
+              <span class="ao-class-pill ao-class-${escapeHtml(p.type || '')}">${escapeHtml(p.assetClass || '')}</span>
+              <span class="daily-pick-headline">${escapeHtml(p.headline || p.description || '')}</span>
+            </div>
+            <div class="daily-pick-desc">${escapeHtml(p.description || '')}</div>
+            <div class="daily-pick-rationale">${escapeHtml(p.rationale || '')}</div>
+          </div>
+          <div class="daily-pick-stats">
+            <span title="Yield"><strong>${num(p.yield)}</strong>% yld</span>
+            <span title="Coupon">${num(p.coupon, 3)}% cpn</span>
+            <span title="Maturity">${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'}</span>
+            <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
+          </div>
+        </div>`).join('');
+      const stale = data.picksDate && data.packageDate && data.picksDate !== data.packageDate;
+      meta.textContent = stale
+        ? `For ${data.picksDate} — package is now ${data.packageDate}`
+        : (data.generatedAt ? `Generated ${new Date(data.generatedAt).toLocaleString()}` : '');
+      if (btn) btn.textContent = data.current ? 'Refresh' : 'Update';
+    } else {
+      body.innerHTML = '<p class="daily-summary-empty">No picks yet for today’s package. Generate a Claude-curated shortlist of the best relative value on offer.</p>';
+      meta.textContent = '';
+      if (btn) btn.textContent = 'Generate';
+    }
+  }
+
+  async function generateDailyPicks() {
+    const btn = document.getElementById('dailyPicksBtn');
+    const body = document.getElementById('dailyPicksBody');
+    if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+    try {
+      const res = await fetch('/api/offerings-pick/refresh', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
+      await loadDailyPicksCard();
+    } catch (e) {
+      if (body) body.innerHTML = `<p class="daily-summary-error">${escapeHtml(e.message || 'Picks failed')}</p>`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadDailyPicksCard() {
+    const card = document.getElementById('dailyPicksCard');
+    const btn = document.getElementById('dailyPicksBtn');
+    if (!card) return;
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', generateDailyPicks);
+    }
+    try {
+      const res = await fetch('/api/offerings-pick', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      renderDailyPicks(await res.json());
+    } catch (_) {
+      card.hidden = true;
+    }
   }
 
   function renderAllOfferingsClasses() {

@@ -188,6 +188,7 @@ const fredSeries = require('./fred-series');
 const { buildMarketSnapshot } = require('./market-snapshot');
 const claudeClient = require('./claude-client');
 const dailySummary = require('./daily-summary');
+const offeringsPick = require('./offerings-pick');
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 
@@ -9977,6 +9978,41 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         log('error', 'Daily summary generation failed:', err.message);
         return sendJSON(res, 502, { configured: true, error: 'Summary generation failed: ' + err.message });
+      }
+    }
+
+    // AI "Pick of the day" (Claude). Same read/refresh split as the desk read:
+    // GET returns the cached picks (never billable); POST .../refresh generates.
+    if (pathname === '/api/offerings-pick' && req.method === 'GET') {
+      const configured = claudeClient.isConfigured();
+      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
+      const packageDate = meta.date || null;
+      const cached = offeringsPick.getCachedPicks(MARKET_DIR);
+      const current = Boolean(cached && packageDate && cached.packageDate === packageDate);
+      return sendJSON(res, 200, {
+        configured,
+        packageDate,
+        current,
+        picks: cached ? cached.picks : null,
+        picksDate: cached ? cached.packageDate : null,
+        generatedAt: cached ? cached.generatedAt : null,
+        model: cached ? cached.model : null,
+      });
+    }
+
+    if (pathname === '/api/offerings-pick/refresh' && req.method === 'POST') {
+      if (!claudeClient.isConfigured()) {
+        return sendJSON(res, 200, { configured: false, picks: null });
+      }
+      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
+      try {
+        const rows = buildAllOfferingsRows();
+        const result = await offeringsPick.generatePicks({ marketDir: MARKET_DIR, rows, meta, force: true, log });
+        appendAuditLog({ event: 'daily-picks-generated', packageDate: result.packageDate, count: result.picks.length, model: result.model });
+        return sendJSON(res, 200, { configured: true, ...result });
+      } catch (err) {
+        log('error', 'Daily picks generation failed:', err.message);
+        return sendJSON(res, 502, { configured: true, error: 'Pick generation failed: ' + err.message });
       }
     }
 
