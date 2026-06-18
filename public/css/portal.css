@@ -10818,6 +10818,50 @@ body {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+
+/* Shared market-snapshot band: desk-canonical value + live delta chip */
+.market-snapshot-strip {
+  margin: 0 0 14px;
+}
+.snap-tiles {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+.snap-tile {
+  background: #fff;
+  border: 1px solid var(--line, #e2e7e4);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+}
+.snap-label {
+  color: #5a615e;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.snap-value {
+  color: #1a1d1c;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.snap-live {
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.snap-live.snap-up { color: var(--danger, #b4232a); }
+.snap-live.snap-down { color: var(--racing-green, #12422b); }
+.snap-live.snap-flat { color: #5a615e; }
+.snap-foot {
+  color: #5a615e;
+  font-size: 10.5px;
+  margin: 8px 0 0;
+}
 .views-card {
   background: #fff;
   border: 1px solid var(--line);

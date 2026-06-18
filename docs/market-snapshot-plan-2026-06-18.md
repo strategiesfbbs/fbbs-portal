@@ -1,5 +1,9 @@
 # Shared Market Snapshot — implementation plan (2026-06-18)
 
+**Build status (updated):** Steps 1–3 shipped — `server/market-snapshot.js` (pure registry + `buildMarketSnapshot`, tests in `tests/market-snapshot.test.js`), `GET /api/market-snapshot` (Economic Update canonical + live wire delta), and the shared `#marketSnapshotStrip` band rendered on Daily Intelligence (`renderMarketSnapshotStrip` / `loadMarketSnapshotStrip` in portal.js), using the agreed **desk-PDF-canonical + live-delta-chip** policy. **Remaining:** adopt the strip on Economic Update / Home / Market Color, and drop the Relative Value PDF's duplicate UST 2Y/10Y/2s10s tiles (RV keeps spreads/pickups). The old per-tab `dailyIntelSummary` tiles still render below the new band (mild duplication) until those tabs migrate.
+
+Original plan below.
+
 Status: **plan for review, not yet built.** Two related fixes already shipped:
 - `feat(market-color)` — Market Color articles now come from public RSS (commit 0677542).
 - `fix(mmd)` — muni slope relabeled "AAA 2s/10s" so it stops colliding with the Treasury label (commit 51585f6).

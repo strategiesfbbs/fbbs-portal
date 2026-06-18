@@ -3331,6 +3331,58 @@
       dailyIntelData = null;
     }
     renderDailyIntelligence();
+    loadMarketSnapshotStrip(); // shared canonical snapshot band, non-blocking
+  }
+
+  // Shared "one source of truth" market band: desk Economic Update values are
+  // canonical; the live wire shows as a delta chip. Reusable across tabs — mount
+  // a #marketSnapshotStrip container and call loadMarketSnapshotStrip().
+  function fmtSnapValue(v, unit, dp) {
+    if (v == null) return '—';
+    if (unit === '%') return v.toFixed(dp) + '%';
+    if (unit === 'bp') return `${v > 0 ? '+' : ''}${v}bp`;
+    return formatNumber(Number(v.toFixed(dp)));
+  }
+
+  function renderMarketSnapshotStrip(snap) {
+    const el = document.getElementById('marketSnapshotStrip');
+    if (!el) return;
+    if (!snap || !snap.metrics) { el.hidden = true; return; }
+    const order = ['two_year', 'five_year', 'ten_year', 'thirty_year', 'twos_tens', 'sofr', 'prime', 'fed_funds', 'spx', 'vix', 'crude'];
+    const tiles = order
+      .map(k => snap.metrics[k])
+      .filter(m => m && m.value != null)
+      .map(m => {
+        let chip = '';
+        if (m.live && m.live.value != null && m.live.deltaBp != null) {
+          const dbp = m.live.deltaBp;
+          const dir = dbp > 0 ? 'up' : (dbp < 0 ? 'down' : 'flat');
+          chip = `<span class="snap-live snap-${dir}">live ${escapeHtml(fmtSnapValue(m.live.value, m.unit, m.dp))} (${dbp > 0 ? '+' : ''}${dbp}bp)</span>`;
+        }
+        return `<div class="snap-tile">
+          <span class="snap-label">${escapeHtml(m.label)}</span>
+          <span class="snap-value">${escapeHtml(fmtSnapValue(m.value, m.unit, m.dp))}</span>
+          ${chip}
+        </div>`;
+      }).join('');
+    if (!tiles) { el.hidden = true; return; }
+    const desk = snap.asOf && snap.asOf.desk ? `Desk pkg ${snap.asOf.desk}` : 'Desk package';
+    const live = snap.asOf && snap.asOf.live ? ` · live ${snap.asOf.live}` : '';
+    el.innerHTML = `<div class="snap-tiles">${tiles}</div>`
+      + `<p class="snap-foot">${escapeHtml(desk + live)} — desk values are canonical; the live wire shows as a delta.</p>`;
+    el.hidden = false;
+  }
+
+  async function loadMarketSnapshotStrip() {
+    const el = document.getElementById('marketSnapshotStrip');
+    if (!el) return;
+    try {
+      const res = await fetch('/api/market-snapshot', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      renderMarketSnapshotStrip(await res.json());
+    } catch (_) {
+      el.hidden = true;
+    }
   }
 
   function dailyMarketRow(rows, labels) {

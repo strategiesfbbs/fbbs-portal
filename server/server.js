@@ -185,6 +185,7 @@ const peerAverages = require('./peer-averages');
 const marketRates = require('./market-rates');
 const marketWire = require('./market-wire');
 const fredSeries = require('./fred-series');
+const { buildMarketSnapshot } = require('./market-snapshot');
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 
@@ -9843,6 +9844,29 @@ const server = http.createServer(async (req, res) => {
         };
       }
       return sendJSON(res, 200, { headlines, indicators, rates, auctions, fred });
+    }
+
+    // One canonical market snapshot: desk Economic Update values (authoritative)
+    // + the live wire as a delta, so every tab can show the SAME number with one
+    // as-of instead of four sources disagreeing.
+    if (pathname === '/api/market-snapshot' && req.method === 'GET') {
+      const [econ, curve, fred] = await Promise.all([
+        loadCurrentEconomicUpdate().catch(() => null),
+        marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
+        fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }).catch(() => null),
+      ]);
+      let rates = null;
+      if (curve && curve.tenors) {
+        const t10 = curve.tenors['10Y'];
+        const t2 = curve.tenors['2Y'];
+        rates = {
+          asOfDate: curve.asOfDate,
+          tenYear: t10 != null ? t10 : null,
+          twoYear: t2 != null ? t2 : null,
+          spread2s10sBp: t10 != null && t2 != null ? Math.round((t10 - t2) * 100) : null,
+        };
+      }
+      return sendJSON(res, 200, buildMarketSnapshot(econ, { rates, fred }));
     }
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
