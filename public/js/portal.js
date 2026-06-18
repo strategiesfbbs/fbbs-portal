@@ -59,6 +59,7 @@
   let savedViewsState = {
     scope: 'me',
     summaries: [],
+    customViews: [],
     selectedId: '',
     selectedResult: null,
     loading: false,
@@ -2371,17 +2372,25 @@
     if (savedViewsState.loading) return;
     savedViewsState.loading = true;
     renderSavedViewsGrid();
-    try {
-      const res = await fetch('/api/bank-views' + repScopeQuery(), { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      savedViewsState.summaries = Array.isArray(data.views) ? data.views : [];
-    } catch (e) {
-      console.error('Failed to load saved views:', e);
+    // Presets + the rep's custom views (saved custom-bank report definitions),
+    // loaded together but isolated so one failing doesn't blank the other.
+    const [presetRes, customRes] = await Promise.allSettled([
+      fetch('/api/bank-views' + repScopeQuery(), { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
+      fetch('/api/reports?type=custom-bank', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    ]);
+    if (presetRes.status === 'fulfilled') {
+      savedViewsState.summaries = Array.isArray(presetRes.value.views) ? presetRes.value.views : [];
+    } else {
+      console.error('Failed to load saved views:', presetRes.reason);
       savedViewsState.summaries = [];
-    } finally {
-      savedViewsState.loading = false;
     }
+    if (customRes.status === 'fulfilled') {
+      const hidden = new Set(customRes.value.hidden || []);
+      savedViewsState.customViews = (customRes.value.reports || []).filter(r => !hidden.has(r.id));
+    } else {
+      savedViewsState.customViews = [];
+    }
+    savedViewsState.loading = false;
     renderSavedViewsGrid();
   }
 
@@ -2417,11 +2426,7 @@
       grid.innerHTML = '<p class="views-loading">Loading saved views&hellip;</p>';
       return;
     }
-    if (!savedViewsState.summaries.length) {
-      grid.innerHTML = '<p class="views-loading">No views available. Make sure the bank workbooks are imported.</p>';
-      return;
-    }
-    grid.innerHTML = savedViewsState.summaries.map(view => {
+    const presetCards = savedViewsState.summaries.map(view => {
       const countLabel = view.count === null || view.count === undefined
         ? (view.requiresRep ? 'Pick a rep' : '0')
         : formatNumber(view.count);
@@ -2431,12 +2436,37 @@
           <p class="views-card-label">${escapeHtml(view.label)}</p>
           <p class="views-card-count">${escapeHtml(countLabel)}</p>
           <p class="views-card-desc">${escapeHtml(view.description || '')}</p>
-        </button>
-      `;
+        </button>`;
     }).join('');
+
+    // Custom views are saved custom-bank report definitions — full filter
+    // builder + column picker + sort. They open and run in the report builder.
+    const customCards = savedViewsState.customViews.map(v => `
+      <button type="button" class="views-card views-card-custom" data-custom-view="${escapeHtml(v.id)}">
+        <p class="views-card-label">${escapeHtml(v.name || 'Custom view')}</p>
+        <p class="views-card-count">Custom</p>
+        <p class="views-card-desc">${escapeHtml(v.description || 'Your saved filter, columns & sort.')}</p>
+      </button>`).join('');
+    const createCard = `
+      <button type="button" class="views-card views-card-create" data-create-view="1">
+        <p class="views-card-label">+ Create custom view</p>
+        <p class="views-card-desc">Build a filtered bank list with your own columns &amp; sort.</p>
+      </button>`;
+
+    const presetSection = savedViewsState.summaries.length
+      ? `<div class="views-section-label">Standard views</div><div class="views-card-row">${presetCards}</div>`
+      : '<p class="views-loading">No standard views available — make sure the bank workbooks are imported.</p>';
+    const customSection = `<div class="views-section-label">My custom views</div><div class="views-card-row">${customCards}${createCard}</div>`;
+    grid.innerHTML = presetSection + customSection;
+
     grid.querySelectorAll('[data-views-card]').forEach(btn => {
       btn.addEventListener('click', () => openSavedView(btn.getAttribute('data-views-card')));
     });
+    grid.querySelectorAll('[data-custom-view]').forEach(btn => {
+      btn.addEventListener('click', () => { window.location.hash = reportBuildHash('custom-bank', btn.getAttribute('data-custom-view'), { autorun: '1' }); });
+    });
+    const createBtn = grid.querySelector('[data-create-view]');
+    if (createBtn) createBtn.addEventListener('click', () => { window.location.hash = reportBuildHash('custom-bank', ''); });
   }
 
   function renderSavedViewDetail() {
