@@ -1,6 +1,14 @@
 # Shared Market Snapshot — implementation plan (2026-06-18)
 
-**Build status (updated):** Steps 1–3 shipped — `server/market-snapshot.js` (pure registry + `buildMarketSnapshot`, tests in `tests/market-snapshot.test.js`), `GET /api/market-snapshot` (Economic Update canonical + live wire delta), and the shared `#marketSnapshotStrip` band rendered on Daily Intelligence (`renderMarketSnapshotStrip` / `loadMarketSnapshotStrip` in portal.js), using the agreed **desk-PDF-canonical + live-delta-chip** policy. **Remaining:** adopt the strip on Economic Update / Home / Market Color, and drop the Relative Value PDF's duplicate UST 2Y/10Y/2s10s tiles (RV keeps spreads/pickups). The old per-tab `dailyIntelSummary` tiles still render below the new band (mild duplication) until those tabs migrate.
+**Build status (COMPLETE for the disagreement bug):**
+- `server/market-snapshot.js` (pure registry + `buildMarketSnapshot`, tests in `tests/market-snapshot.test.js`) + `GET /api/market-snapshot` (Economic Update canonical + live wire delta), agreed **desk-PDF-canonical + live-delta-chip** policy.
+- Shared `#marketSnapshotStrip` band (`renderMarketSnapshotStrip` / `loadMarketSnapshotStrip`, container-id parameterized, one cached fetch) mounted on **Daily Intelligence, Economic Update, and Relative Value** — so those three rate tabs now show the SAME canonical 2s/10s / 10Y / SOFR with one as-of.
+- **Relative Value duplicate UST removed:** the RV PDF's competing 2Y/10Y/2s10s headline tiles are gone; RV keeps its spread/pickup/TEY tiles + the per-term comparison table (its real job).
+- **MMD** muni slope already relabeled "AAA 2s/10s" (separate fix) so it no longer collides with the Treasury label.
+
+**Intentionally NOT adopted on Home / Market Color:** Home has a bespoke package-derived "Market Snapshot" showcase and Market Color shows clearly-labeled **live** wire cards — neither has the unlabeled same-number-different-value confusion the data tabs had, so adding the band there would be redundant clutter, not clarity.
+
+**Remaining (optional polish, not the bug):** the old per-tab `dailyIntelSummary` tiles still render below the new band on Daily Intelligence (mild duplication) — retire them when convenient.
 
 Original plan below.
 

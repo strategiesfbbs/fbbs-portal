@@ -3555,6 +3555,7 @@
       relativeValueData = null;
     }
     renderRelativeValueNative();
+    loadMarketSnapshotStrip('rvMarketSnapshotStrip'); // canonical desk-vs-live band
   }
 
   async function loadMmdCurve() {
@@ -3905,18 +3906,17 @@
     const data = relativeValueData;
     const rows = data && Array.isArray(data.rows) ? data.rows : [];
     const loadFailed = data === null;
-    const ten = rows.find(row => row.term === '10 Yr');
-    const two = rows.find(row => row.term === '2 Yr');
     const topAgency = rvBestBy(rows, 'agencySpread');
     const topCorp = rvBestBy(rows, 'corpSpread');
     const topMuni = rvBestBy(rows, 'muniTey296');
 
     setText('relativeValueNativeKicker', data && data.asOfDate ? formatShortDate(data.asOfDate) : (loadFailed ? 'Not loaded' : 'Current package'));
     setText('rvRateChartLabel', data && data.sourceFile ? data.sourceFile : (loadFailed ? 'Snapshot unavailable' : 'Relative Value PDF'));
+    // UST 2Y/10Y/2s10s headline tiles dropped — they were a second source for
+    // the same Treasury numbers (the shared market-snapshot band above is
+    // canonical). RV owns spreads/pickups; the comparison table below keeps the
+    // per-term UST for spread context.
     renderStatTiles('relativeValueStatTiles', [
-      { label: '2Y UST', value: two ? rvRateValue(two.ust) : '—' },
-      { label: '10Y UST', value: ten ? rvRateValue(ten.ust) : '—' },
-      { label: '2s/10s', value: two && ten ? `${((ten.ust - two.ust) * 100).toFixed(0)} bp` : '—' },
       { label: 'Best Agency Pickup', value: topAgency ? `${rvSpreadValue(topAgency.agencySpread)} bp` : '—' },
       { label: 'Best Corp Pickup', value: topCorp ? `${rvSpreadValue(topCorp.corpSpread)} bp` : '—' },
       { label: 'Top Muni TEY 29.6%', value: topMuni ? rvRateValue(topMuni.muniTey296) : '—' }
