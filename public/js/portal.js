@@ -3104,6 +3104,7 @@
       economicUpdateData = null;
     }
     renderEconomicUpdate();
+    loadMarketSnapshotStrip('econMarketSnapshotStrip'); // canonical desk-vs-live band
   }
 
   function formatMarketValue(row) {
@@ -3344,8 +3345,10 @@
     return formatNumber(Number(v.toFixed(dp)));
   }
 
-  function renderMarketSnapshotStrip(snap) {
-    const el = document.getElementById('marketSnapshotStrip');
+  let marketSnapshotData = null;
+
+  function renderMarketSnapshotStrip(snap, elId = 'marketSnapshotStrip') {
+    const el = document.getElementById(elId);
     if (!el) return;
     if (!snap || !snap.metrics) { el.hidden = true; return; }
     const order = ['two_year', 'five_year', 'ten_year', 'thirty_year', 'twos_tens', 'sofr', 'prime', 'fed_funds', 'spx', 'vix', 'crude'];
@@ -3373,13 +3376,14 @@
     el.hidden = false;
   }
 
-  async function loadMarketSnapshotStrip() {
-    const el = document.getElementById('marketSnapshotStrip');
+  async function loadMarketSnapshotStrip(elId = 'marketSnapshotStrip') {
+    const el = document.getElementById(elId);
     if (!el) return;
     try {
       const res = await fetch('/api/market-snapshot', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      renderMarketSnapshotStrip(await res.json());
+      marketSnapshotData = await res.json();
+      renderMarketSnapshotStrip(marketSnapshotData, elId);
     } catch (_) {
       el.hidden = true;
     }
