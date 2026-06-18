@@ -482,6 +482,16 @@ summary:focus-visible,
   padding: 12px;
   text-align: center;
 }
+.jump-group-label {
+  background: var(--surface-hover);
+  border-bottom: 1px solid var(--border-light);
+  color: var(--text3);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  padding: 6px 12px;
+  text-transform: uppercase;
+}
 .top-strip-links {
   align-items: center;
   margin-left: auto;

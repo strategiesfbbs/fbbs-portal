@@ -1673,8 +1673,70 @@
     let activeIndex = -1;
     let cusipDebounce = null;
     let cusipToken = 0;
+    let globalDebounce = null;
+    let globalToken = 0;
 
-    const optionEls = () => Array.from(results.querySelectorAll('[data-goto]'));
+    const optionEls = () => Array.from(results.querySelectorAll('.jump-result'));
+
+    // One activation path for every result kind (page, security, bank, contact,
+    // saved view, peer group, report) — used by both click and Enter.
+    const activateJumpResult = (el) => {
+      if (!el) return;
+      const kind = el.dataset.jumpKind;
+      const id = el.dataset.jumpId;
+      closeNavSearch();
+      if (!kind) {
+        // Page / CUSIP rows still carry data-goto (+ optional data-cusip).
+        if (el.dataset.cusip) window.location.hash = '#' + el.dataset.goto + '?q=' + encodeURIComponent(el.dataset.cusip);
+        else if (el.dataset.goto) goTo(el.dataset.goto);
+        return;
+      }
+      if (kind === 'bank' || kind === 'contact') { goTo('banks'); if (typeof loadBank === 'function') loadBank(id, { collapseResults: true }); }
+      else if (kind === 'view') { goTo('views'); if (typeof openSavedView === 'function') openSavedView(id); }
+      else if (kind === 'peer') goTo('peer-groups');
+      else if (kind === 'report') goTo('reports');
+    };
+
+    // Live omnisearch over the data domains (banks, contacts, saved views,
+    // peer groups, reports) — appended below the page matches as grouped
+    // sections. Best-effort and isolated like the CUSIP append.
+    const maybeAppendGlobalResults = (rawQuery) => {
+      if (globalDebounce) clearTimeout(globalDebounce);
+      const q = String(rawQuery || '').trim();
+      if (q.length < 2) return;
+      const token = ++globalToken;
+      globalDebounce = setTimeout(async () => {
+        try {
+          const res = await fetch('/api/search/global?q=' + encodeURIComponent(q), { cache: 'no-store' });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (token !== globalToken || !results.classList.contains('show')) return;
+          const row = (kind, jid, badge, title, sub) => `
+            <button type="button" class="jump-result" data-jump-kind="${kind}" data-jump-id="${escapeHtml(jid)}">
+              <span>${escapeHtml(badge)}</span>
+              <strong>${escapeHtml(title)}</strong>
+              <em>${escapeHtml(sub)}</em>
+            </button>`;
+          const section = (label, html) => html ? `<div class="jump-group-label">${escapeHtml(label)}</div>${html}` : '';
+          let html = '';
+          html += section('Banks', (data.banks || []).map(b =>
+            row('bank', b.id, 'Bank', b.displayName, [[b.city, b.state].filter(Boolean).join(', '), b.certNumber ? 'cert ' + b.certNumber : ''].filter(Boolean).join(' · '))).join(''));
+          html += section('Contacts', (data.contacts || []).map(c =>
+            row('contact', c.bankId, 'Contact', c.name, [c.role, c.bankName].filter(Boolean).join(' · '))).join(''));
+          html += section('Saved Views', (data.savedViews || []).map(v =>
+            row('view', v.id, 'View', v.label, v.description)).join(''));
+          html += section('Peer Groups', (data.peerGroups || []).map(g =>
+            row('peer', g.id, 'Peer Group', g.name, g.description)).join(''));
+          html += section('Reports', (data.reports || []).map(r =>
+            row('report', r.id, 'Report', r.name, r.type)).join(''));
+          if (!html) return;
+          const emptyEl = results.querySelector('.jump-empty');
+          if (emptyEl) emptyEl.remove();
+          results.insertAdjacentHTML('beforeend', html);
+          if (activeIndex === -1) setActive(0);
+        } catch (_) { /* data hits are best-effort */ }
+      }, 180);
+    };
 
     // CUSIP-first search: when the query could be (part of) a CUSIP — 4+
     // alphanumeric chars including a digit — ask the server which of today's
@@ -1742,7 +1804,16 @@
       activeIndex = -1;
       if (matches.length) setActive(0);
       maybeAppendCusipResults(input.value.trim());
+      maybeAppendGlobalResults(input.value.trim());
     };
+
+    results.addEventListener('click', e => {
+      const el = e.target.closest('.jump-result');
+      if (!el) return;
+      e.preventDefault();
+      e.stopPropagation(); // don't let the global [data-goto] handler also fire
+      activateJumpResult(el);
+    });
 
     input.addEventListener('input', render);
     input.addEventListener('focus', render);
@@ -1761,11 +1832,7 @@
         const target = opts[activeIndex] || opts[0];
         if (target) {
           e.preventDefault();
-          if (target.dataset.cusip) {
-            window.location.hash = '#' + target.dataset.goto + '?q=' + encodeURIComponent(target.dataset.cusip);
-          } else {
-            goTo(target.dataset.goto);
-          }
+          activateJumpResult(target);
         }
       }
     });

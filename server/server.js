@@ -154,6 +154,7 @@ const {
 } = require('./rep-identity');
 const {
   listBankViewSummaries,
+  listViewDefinitions,
   runBankView,
   viewToCsvRows
 } = require('./bank-views');
@@ -9434,6 +9435,73 @@ function listKnownReps() {
 // recent manual activity, and upcoming follow-ups. Rep-scoped when an acting
 // rep is resolved (?rep=all overrides, same convention as /api/bank-views).
 
+// Unified omnisearch across the firm's data domains — banks, contacts, saved
+// views, peer groups, and saved reports — for the header jump bar. Word-aware
+// (every whitespace term must match), each domain capped, each domain isolated
+// so one store hiccup can't blank the whole result set. Pages and CUSIP
+// securities stay client-side / on their own endpoint.
+function buildGlobalSearch(rawQuery) {
+  const q = String(rawQuery || '').trim();
+  const empty = { query: q, banks: [], contacts: [], savedViews: [], peerGroups: [], reports: [] };
+  if (q.length < 2) return empty;
+  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const matchAll = text => {
+    const hay = String(text || '').toLowerCase();
+    return terms.every(t => hay.includes(t));
+  };
+  const out = { ...empty };
+
+  try {
+    const bankData = searchBanks(q, 6);
+    out.banks = (((bankData && bankData.results) || [])).slice(0, 6).map(b => ({
+      id: b.id,
+      displayName: b.displayName || b.name || b.id,
+      city: b.city || '',
+      state: b.state || '',
+      certNumber: b.certNumber || b.cert || '',
+      status: b.accountStatus || b.status || ''
+    }));
+  } catch (err) { log('warn', 'global search banks failed:', err.message); }
+
+  try {
+    const all = listAllContacts(BANK_REPORTS_DIR);
+    const ids = [...new Set(all.map(c => c.bankId).filter(Boolean))];
+    const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, ids);
+    out.contacts = all
+      .map(c => {
+        const s = summaries.get(String(c.bankId)) || {};
+        return { ...c, bankName: s.displayName || s.name || c.bankId };
+      })
+      .filter(c => matchAll([c.name, c.role, c.email, c.bankName].join(' ')))
+      .slice(0, 6)
+      .map(c => ({ id: c.id, name: c.name, role: c.role || '', email: c.email || '', bankId: c.bankId, bankName: c.bankName }));
+  } catch (err) { log('warn', 'global search contacts failed:', err.message); }
+
+  try {
+    out.savedViews = (listViewDefinitions() || [])
+      .filter(v => matchAll(`${v.label} ${v.description || ''}`))
+      .slice(0, 6)
+      .map(v => ({ id: v.id, label: v.label, description: v.description || '' }));
+  } catch (err) { log('warn', 'global search views failed:', err.message); }
+
+  try {
+    peerGroupStore.seedDefaultPeerGroups(BANK_REPORTS_DIR);
+    out.peerGroups = (peerGroupStore.listPeerGroups(BANK_REPORTS_DIR, {}) || [])
+      .filter(g => matchAll(`${g.name} ${g.description || ''}`))
+      .slice(0, 6)
+      .map(g => ({ id: g.id, name: g.name, description: g.description || '' }));
+  } catch (err) { log('warn', 'global search peer groups failed:', err.message); }
+
+  try {
+    out.reports = (reportStore.listReportDefinitions(BANK_REPORTS_DIR, { limit: 200 }) || [])
+      .filter(r => matchAll(`${r.name} ${r.description || ''}`))
+      .slice(0, 6)
+      .map(r => ({ id: r.id, name: r.name, type: r.type || '' }));
+  } catch (err) { log('warn', 'global search reports failed:', err.message); }
+
+  return out;
+}
+
 function buildCrmDashboard(rep) {
   const today = new Date().toISOString().slice(0, 10);
   const repScope = rows => (rep ? rows.filter(r => ownerStringContainsRep(r.owner, rep)) : rows);
@@ -9779,6 +9847,11 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
       return sendJSON(res, 200, searchCusipEverywhere(query.get('q')));
+    }
+
+    // Unified omnisearch over banks, contacts, saved views, peer groups, reports.
+    if (pathname === '/api/search/global' && req.method === 'GET') {
+      return sendJSON(res, 200, buildGlobalSearch(query.get('q')));
     }
 
     // Per-rep watchlist: securities re-joined to today's inventory (live
