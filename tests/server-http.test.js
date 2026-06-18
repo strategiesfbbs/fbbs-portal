@@ -358,6 +358,62 @@ test('unknown /api GET returns 404 JSON, not the SPA shell; unknown non-api path
   });
 });
 
+test('swap proposal lifecycle: send-gating, strategy link, execute/cancel guards, relink', async () => {
+  // Seed proposals straight into the server's swap store (the create route needs
+  // the bank workbook, which this harness doesn't carry). The server reads the
+  // same sqlite file, so the lifecycle routes operate on what we seed.
+  const swapStore = require('../server/swap-store');
+  await withServer({}, async ({ port, dataDir }) => {
+    const reportsDir = path.join(dataDir, 'bank-reports');
+    const base = { proposalDate: '2026-06-18', settleDate: '2026-06-19', horizonYears: 3 };
+
+    // Incomplete legs → send is blocked with a structured issues[] list.
+    const incomplete = swapStore.createProposal(reportsDir, { bankId: 'BANK-X', ...base });
+    swapStore.addLeg(reportsDir, incomplete.proposal.id, { side: 'sell', cusip: 'S0', par: 100000 });
+    swapStore.addLeg(reportsDir, incomplete.proposal.id, { side: 'buy', cusip: 'B0', par: 100000 });
+    const blocked = await request(port, { method: 'POST', path: `/api/swap-proposals/${incomplete.proposal.id}/send` });
+    assert.strictEqual(blocked.status, 400, blocked.text);
+    assert.ok(Array.isArray(blocked.json.issues) && blocked.json.issues.length, 'send returns issues[] for incomplete legs');
+
+    // Complete legs → send freezes + links a Strategies-queue entry.
+    const p = swapStore.createProposal(reportsDir, { bankId: 'BANK-X', ...base });
+    swapStore.addLeg(reportsDir, p.proposal.id, { side: 'sell', cusip: 'SELL1', par: 100000, coupon: 2.5, maturity: '2031-06-15', bookPrice: 99.5, marketPrice: 95.0 });
+    swapStore.addLeg(reportsDir, p.proposal.id, { side: 'buy', cusip: 'BUY1', par: 100000, coupon: 4.5, maturity: '2031-06-15', marketPrice: 100.0 });
+    const sent = await request(port, { method: 'POST', path: `/api/swap-proposals/${p.proposal.id}/send` });
+    assert.strictEqual(sent.status, 200, sent.text);
+    assert.strictEqual(sent.json.proposal.status, 'sent');
+    assert.ok(sent.json.proposal.strategyId, 'send links a strategy even without a bank summary (minimal fallback)');
+
+    // Re-send is blocked once frozen.
+    const resend = await request(port, { method: 'POST', path: `/api/swap-proposals/${p.proposal.id}/send` });
+    assert.strictEqual(resend.status, 409, 'cannot re-send a sent proposal');
+
+    // Execute once; second execute is blocked (status no longer 'sent').
+    const exec = await request(port, { method: 'POST', path: `/api/swap-proposals/${p.proposal.id}/execute` });
+    assert.strictEqual(exec.status, 200, exec.text);
+    assert.strictEqual(exec.json.proposal.status, 'executed');
+    const exec2 = await request(port, { method: 'POST', path: `/api/swap-proposals/${p.proposal.id}/execute` });
+    assert.strictEqual(exec2.status, 409, 'cannot execute twice');
+
+    // An executed (booked) proposal cannot be cancelled.
+    const cancelExecuted = await request(port, { method: 'POST', path: `/api/swap-proposals/${p.proposal.id}/cancel` });
+    assert.strictEqual(cancelExecuted.status, 409, 'executed proposals cannot be cancelled');
+
+    // Relink: a draft is rejected (the link is created on send); an
+    // already-linked proposal returns 200 idempotently with its strategyId.
+    const draft = swapStore.createProposal(reportsDir, { bankId: 'BANK-Y', ...base });
+    const relinkDraft = await request(port, { method: 'POST', path: `/api/swap-proposals/${draft.proposal.id}/relink-strategy` });
+    assert.strictEqual(relinkDraft.status, 409, 'cannot relink a draft');
+    const relinkLinked = await request(port, { method: 'POST', path: `/api/swap-proposals/${p.proposal.id}/relink-strategy` });
+    assert.strictEqual(relinkLinked.status, 200, relinkLinked.text);
+    assert.strictEqual(relinkLinked.json.proposal.strategyId, sent.json.proposal.strategyId, 'relink is idempotent on a linked proposal');
+
+    // Unknown proposal → 404 on a lifecycle route.
+    const missing = await request(port, { method: 'POST', path: '/api/swap-proposals/SP-9999-9999/send' });
+    assert.strictEqual(missing.status, 404, missing.text);
+  });
+});
+
 async function main() {
   for (const t of tests) {
     try {

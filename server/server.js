@@ -6232,6 +6232,7 @@ async function handleCreateSwapProposal(req, res) {
     const body = await readJsonBody(req);
     const bankId = String(body.bankId || '').trim();
     if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
+    const rep = resolveRequestRep(req);
 
     const summary = getBankSummaryForCoverage(bankId);
     if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
@@ -6248,16 +6249,17 @@ async function handleCreateSwapProposal(req, res) {
       isSubchapterS: body.isSubchapterS != null ? body.isSubchapterS : isSubS,
       taxRate: body.taxRate,
       horizonYears: body.horizonYears,
-      breakevenCapMonths: body.breakevenCapMonths || swapMath.DEFAULT_FBBS_RULES.breakevenCapMonths,
-      maturityFloorMonths: body.maturityFloorMonths || swapMath.DEFAULT_FBBS_RULES.maturityFloorMonths,
-      preparedBy: body.preparedBy,
+      breakevenCapMonths: body.breakevenCapMonths || swapMath.DEFAULT_FBBS_RULES.breakevenSoftCapMonths,
+      maturityFloorMonths: body.maturityFloorMonths || swapMath.DEFAULT_FBBS_RULES.maturitySoftFloorMonths,
+      preparedBy: body.preparedBy || (rep ? rep.displayName : undefined),
       preparedFor: body.preparedFor,
       notes: body.notes
     });
     appendAuditLog({
       event: 'swap-proposal-create',
       proposalId: created.proposal.id,
-      bankId
+      bankId,
+      rep: rep ? rep.username : null
     });
     return sendJSON(res, 200, withComputedSummary(created));
   } catch (err) {
@@ -6404,8 +6406,42 @@ function withComputedSummary(record) {
   };
 }
 
+// Promote a sent swap proposal into the Strategies Queue (type 'Bond Swap') so
+// the rest of the desk sees it in the existing workflow. Idempotent — a proposal
+// that already carries a strategyId is returned untouched. Falls back to a
+// minimal bankId-only summary so a proposal is never orphaned from the queue
+// when the bank has no coverage summary. Throws if the strategy write fails, so
+// callers choose whether that's fatal (send: best-effort; relink: surface it).
+// Returns { record, strategy }.
+function ensureSwapStrategyLink(record, { rep, snapshot } = {}) {
+  if (!record || !record.proposal || record.proposal.strategyId) {
+    return { record, strategy: null };
+  }
+  const p = record.proposal;
+  const summary = getBankSummaryForCoverage(p.bankId) || { id: p.bankId };
+  const legs = record.legs || [];
+  const sells = legs.filter(l => l.side === 'sell').length;
+  const buys = legs.filter(l => l.side === 'buy').length;
+  const econ = snapshot && snapshot.summary;
+  const comments = `Linked to swap proposal ${p.id}.\n` +
+    `${sells} sell / ${buys} buy` +
+    (econ ? ` · total income $${econ.dollars.totalIncome}` +
+      (econ.breakevenMonths != null ? ` · breakeven ${econ.breakevenMonths.toFixed(1)}mo` : '') : '') +
+    `\nPrint: /api/swap-proposals/${p.id}/render`;
+  const strategy = createStrategyRequest(BANK_REPORTS_DIR, summary, {
+    requestType: 'Bond Swap',
+    status: 'In Progress',
+    requestedBy: rep ? rep.displayName : undefined,
+    summary: p.title || `Bond Swap proposal ${p.id}`,
+    comments
+  });
+  const updated = swapStore.updateProposalStrategyLink(BANK_REPORTS_DIR, p.id, strategy.id);
+  return { record: updated, strategy };
+}
+
 async function handleSendSwapProposal(req, res, id) {
   try {
+    const rep = resolveRequestRep(req);
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
     if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
     if (current.proposal.status !== 'draft') {
@@ -6434,31 +6470,17 @@ async function handleSendSwapProposal(req, res, id) {
     }
     let frozen = swapStore.freezeProposal(BANK_REPORTS_DIR, id, snapshot);
 
-    // Promote into the Strategies Queue as type 'Bond Swap' so the rest
-    // of the desk sees it in their existing workflow. Skip if the
-    // proposal is already linked (idempotent re-sends).
+    // Promote into the Strategies Queue (idempotent). Best-effort: a one-time
+    // failure leaves the proposal sent but unlinked — the rep can retry via
+    // POST /relink-strategy (the proposal is no longer draft so re-send is
+    // blocked), so the queue link is never permanently lost.
     let strategy = null;
-    if (!frozen.proposal.strategyId) {
-      const summary = getBankSummaryForCoverage(frozen.proposal.bankId);
-      if (summary) {
-        try {
-          strategy = createStrategyRequest(BANK_REPORTS_DIR, summary, {
-            requestType: 'Bond Swap',
-            status: 'In Progress',
-            summary: frozen.proposal.title || `Bond Swap proposal ${frozen.proposal.id}`,
-            comments: `Linked to swap proposal ${frozen.proposal.id}.\n` +
-                      `${sellsCount} sell / ${buysCount} buy · ` +
-                      `total income $${snapshot.summary.dollars.totalIncome}` +
-                      (snapshot.summary.breakevenMonths != null
-                        ? ` · breakeven ${snapshot.summary.breakevenMonths.toFixed(1)}mo`
-                        : '') + '\n' +
-                      `Print: /api/swap-proposals/${frozen.proposal.id}/render`
-          });
-          frozen = swapStore.updateProposalStrategyLink(BANK_REPORTS_DIR, id, strategy.id);
-        } catch (err) {
-          log('warn', `Swap proposal ${id} sent, but could not create linked strategy: ${err.message}`);
-        }
-      }
+    try {
+      const linked = ensureSwapStrategyLink(frozen, { rep, snapshot });
+      frozen = linked.record;
+      strategy = linked.strategy;
+    } catch (err) {
+      log('warn', `Swap proposal ${id} sent, but could not create linked strategy: ${err.message}. Rep can Relink to retry.`);
     }
 
     appendAuditLog({
@@ -6469,7 +6491,8 @@ async function handleSendSwapProposal(req, res, id) {
       buys: buysCount,
       prunedLegs: pruned,
       totalIncome: snapshot.summary.dollars.totalIncome,
-      strategyId: strategy && strategy.id || frozen.proposal.strategyId || null
+      strategyId: strategy && strategy.id || frozen.proposal.strategyId || null,
+      rep: rep ? rep.username : null
     });
     return sendJSON(res, 200, withComputedSummary(frozen));
   } catch (err) {
@@ -6480,12 +6503,43 @@ async function handleSendSwapProposal(req, res, id) {
 
 function handleCloneSwapProposal(req, res, id) {
   try {
+    const rep = resolveRequestRep(req);
     const cloned = swapStore.cloneProposalToDraft(BANK_REPORTS_DIR, id);
-    appendAuditLog({ event: 'swap-proposal-clone', sourceId: id, newId: cloned.proposal.id });
+    appendAuditLog({ event: 'swap-proposal-clone', sourceId: id, newId: cloned.proposal.id, rep: rep ? rep.username : null });
     return sendJSON(res, 200, withComputedSummary(cloned));
   } catch (err) {
     const status = /not found/i.test(err.message) ? 404 : 500;
     return sendJSON(res, status, { error: err.message });
+  }
+}
+
+// Retry the Strategies-Queue link for a sent/executed proposal that was frozen
+// without one (a one-time createStrategyRequest failure, or the bank had no
+// coverage summary at send time). Idempotent — a proposal that already has a
+// link returns 200 untouched. Draft proposals are rejected (send creates the
+// link); the rep should send first.
+function handleRelinkSwapStrategy(req, res, id) {
+  try {
+    const rep = resolveRequestRep(req);
+    const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
+    if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
+    if (current.proposal.status === 'draft') {
+      return sendJSON(res, 409, { error: 'Send the proposal first — the Strategies link is created on send.' });
+    }
+    if (current.proposal.strategyId) {
+      return sendJSON(res, 200, withComputedSummary(current)); // already linked
+    }
+    const { record, strategy } = ensureSwapStrategyLink(current, { rep });
+    appendAuditLog({
+      event: 'swap-proposal-relink',
+      proposalId: id,
+      strategyId: strategy ? strategy.id : null,
+      rep: rep ? rep.username : null
+    });
+    return sendJSON(res, 200, withComputedSummary(record));
+  } catch (err) {
+    log('error', 'Swap proposal relink failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not link the proposal to the Strategies queue' });
   }
 }
 
@@ -6538,6 +6592,7 @@ function handleSizeBuySwapProposal(res, id, query) {
 
 function handleExecuteSwapProposal(req, res, id) {
   try {
+    const rep = resolveRequestRep(req);
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
     if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
     if (current.proposal.status !== 'sent') {
@@ -6558,7 +6613,8 @@ function handleExecuteSwapProposal(req, res, id) {
     appendAuditLog({
       event: 'swap-proposal-execute',
       proposalId: id,
-      strategyId: current.proposal.strategyId || null
+      strategyId: current.proposal.strategyId || null,
+      rep: rep ? rep.username : null
     });
     return sendJSON(res, 200, withComputedSummary(executed));
   } catch (err) {
@@ -6568,6 +6624,7 @@ function handleExecuteSwapProposal(req, res, id) {
 
 function handleCancelSwapProposal(req, res, id) {
   try {
+    const rep = resolveRequestRep(req);
     const current = swapStore.getProposal(BANK_REPORTS_DIR, id);
     if (!current) return sendJSON(res, 404, { error: 'Proposal not found' });
     // An executed (settled) trade is booked — it can't be reverted to cancelled,
@@ -6595,7 +6652,8 @@ function handleCancelSwapProposal(req, res, id) {
     appendAuditLog({
       event: 'swap-proposal-cancel',
       proposalId: id,
-      strategyId: current.proposal.strategyId || null
+      strategyId: current.proposal.strategyId || null,
+      rep: rep ? rep.username : null
     });
     return sendJSON(res, 200, withComputedSummary(cancelled));
   } catch (err) {
@@ -10357,6 +10415,13 @@ const server = http.createServer(async (req, res) => {
       const id = safeDecodeURIComponent(swapCloneMatch[1]);
       if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
       return handleCloneSwapProposal(req, res, id);
+    }
+
+    const swapRelinkMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/relink-strategy$/);
+    if (swapRelinkMatch && req.method === 'POST') {
+      const id = safeDecodeURIComponent(swapRelinkMatch[1]);
+      if (!id) return sendJSON(res, 400, { error: 'Invalid proposal id' });
+      return handleRelinkSwapStrategy(req, res, id);
     }
 
     const swapRenderMatch = pathname.match(/^\/api\/swap-proposals\/([^/]+)\/render$/);
