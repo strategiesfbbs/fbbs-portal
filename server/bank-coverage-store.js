@@ -1551,6 +1551,50 @@ function listTasksForRep(outputDir, username, options = {}) {
   return { overdue, dueToday, upcoming, openCount: tasks.length };
 }
 
+// Firm-wide overdue Open tasks (due_date strictly before `today`), newest-due
+// first, optionally rep-scoped by assignee. This is the successor to the old
+// bank_coverage.next_action_date "stale follow-up" signal, which the
+// 2026-06-12 coverage consolidation folded into the task engine and cleared.
+function listOverdueOpenTasks(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const today = cleanDate(options.today) || new Date().toISOString().slice(0, 10);
+  const params = [today];
+  let where = `status = 'Open' AND due_date IS NOT NULL AND due_date != '' AND due_date < ?`;
+  if (options.username) {
+    where += ` AND LOWER(COALESCE(assigned_to, '')) = ?`;
+    params.push(String(options.username).toLowerCase());
+  }
+  const limit = Math.min(5000, Math.max(1, Math.floor(Number(options.limit) || 2000)));
+  const rows = querySqliteJson(dbPath, `
+    ${taskSelectSql(where)}
+    ORDER BY due_date ASC, created_at ASC
+    LIMIT ${limit};
+  `, params);
+  return rows.map(mapTaskRow);
+}
+
+// Open tasks due within [today, horizon] inclusive, earliest-due first,
+// optionally rep-scoped by assignee. Powers the CRM dashboard's "upcoming
+// follow-ups" (also a successor to next_action_date).
+function listUpcomingOpenTasks(outputDir, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const today = cleanDate(options.today) || new Date().toISOString().slice(0, 10);
+  const horizon = cleanDate(options.horizon) || today;
+  const params = [today, horizon];
+  let where = `status = 'Open' AND due_date IS NOT NULL AND due_date != '' AND due_date >= ? AND due_date <= ?`;
+  if (options.username) {
+    where += ` AND LOWER(COALESCE(assigned_to, '')) = ?`;
+    params.push(String(options.username).toLowerCase());
+  }
+  const limit = Math.min(5000, Math.max(1, Math.floor(Number(options.limit) || 200)));
+  const rows = querySqliteJson(dbPath, `
+    ${taskSelectSql(where)}
+    ORDER BY due_date ASC, created_at ASC
+    LIMIT ${limit};
+  `, params);
+  return rows.map(mapTaskRow);
+}
+
 // Firm-wide open/overdue counts for the CRM dashboard; rep-scoped when a
 // username is given.
 function countOpenTasks(outputDir, options = {}) {
@@ -1857,6 +1901,8 @@ module.exports = {
   pipelineSummary,
   updateBankOpportunity,
   getBankTask,
+  listOverdueOpenTasks,
+  listUpcomingOpenTasks,
   listTasksForBank,
   listTasksForRep,
   updateBankTask,

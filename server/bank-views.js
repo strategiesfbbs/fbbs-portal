@@ -16,9 +16,10 @@ const {
   listBankAccountStatuses
 } = require('./bank-account-status-store');
 const {
+  getSavedBankCoverageMap,
   lastActivityByBank,
   listBillingQueue,
-  listSavedBanks
+  listOverdueOpenTasks
 } = require('./bank-coverage-store');
 const {
   listStrategyRequests
@@ -71,7 +72,7 @@ const VIEW_DEFINITIONS = [
   {
     id: 'stale-follow-ups',
     label: 'Stale Follow-ups',
-    description: 'Coverage rows whose next-action date has passed.',
+    description: 'Banks with an overdue open task.',
     kind: 'follow-ups',
     supportsRep: true
   },
@@ -145,21 +146,6 @@ function summarizeStrategy(row) {
   };
 }
 
-function summarizeFollowUp(row) {
-  return {
-    bankId: row.bankId,
-    displayName: row.displayName,
-    city: row.city || '',
-    state: row.state || '',
-    certNumber: row.certNumber || '',
-    status: row.status || '',
-    priority: row.priority || '',
-    owner: row.owner || '',
-    nextActionDate: row.nextActionDate || '',
-    updatedAt: row.updatedAt || ''
-  };
-}
-
 // Loading every Open bank can return 5,000+ rows. Cap at 8,000 so even the largest status
 // group fits in one shell-out and the JS-side rep filter has the full set to work with.
 const ACCOUNT_VIEW_FETCH_LIMIT = 8000;
@@ -210,21 +196,43 @@ function runStrategiesView(view, { outputDir, rep }) {
   };
 }
 
+// "Stale follow-ups" = banks with an overdue Open task. (Pre-2026-06-12 this
+// read bank_coverage.next_action_date, which the coverage consolidation folded
+// into the task engine and cleared — so the old query always returned 0.)
+// Rep-scoped by task assignee when a rep is selected. nextActionDate carries
+// the earliest overdue due date per bank, so the existing column set renders
+// unchanged.
 function runFollowUpsView(view, { outputDir, rep }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const saved = listSavedBanks(outputDir) || [];
-  const matches = saved.filter(row => {
-    if (!row.nextActionDate) return false;
-    if (String(row.nextActionDate).slice(0, 10) >= today) return false;
-    if (view.supportsRep && rep) return ownerStringContainsRep(row.owner, rep);
-    return true;
-  });
+  const username = view.supportsRep && rep ? rep.username : null;
+  const overdue = listOverdueOpenTasks(outputDir, { username }) || [];
+  const byBank = new Map();
+  for (const task of overdue) {
+    if (!task.bankId) continue;
+    const existing = byBank.get(task.bankId);
+    if (!existing || String(task.dueDate) < String(existing.dueDate)) byBank.set(task.bankId, task);
+  }
+  const bankIds = [...byBank.keys()];
+  const coverage = getSavedBankCoverageMap(outputDir, bankIds) || new Map();
   const lastActivity = safeLastActivityMap(outputDir);
+  const rows = bankIds.map(bankId => {
+    const task = byBank.get(bankId);
+    const cov = coverage.get(String(bankId)) || {};
+    return {
+      bankId,
+      displayName: cov.displayName || bankId,
+      city: cov.city || '',
+      state: cov.state || '',
+      certNumber: cov.certNumber || task.certNumber || '',
+      status: cov.status || '',
+      priority: task.priority || cov.priority || '',
+      owner: cov.owner || task.assignedDisplay || task.assignedTo || '',
+      nextActionDate: task.dueDate || '',
+      lastActivityDate: lastActivity[bankId] || ''
+    };
+  });
+  rows.sort((a, b) => String(a.nextActionDate).localeCompare(String(b.nextActionDate)));
   return {
-    rows: matches.map(row => ({
-      ...summarizeFollowUp(row),
-      lastActivityDate: lastActivity[row.bankId] || ''
-    })),
+    rows,
     columns: ['displayName', 'city', 'state', 'status', 'priority', 'owner', 'nextActionDate', 'lastActivityDate'],
     rowKind: 'follow-up'
   };

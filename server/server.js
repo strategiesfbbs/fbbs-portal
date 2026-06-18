@@ -121,9 +121,11 @@ const {
   listAllContacts,
   listBillingQueue,
   listContactsForBank,
+  listOverdueOpenTasks,
   listProductFitForBank,
   listRecentManualActivities,
   listSavedBanks,
+  listUpcomingOpenTasks,
   recordBankActivity,
   recordManualActivity,
   removeSavedBank,
@@ -9293,10 +9295,22 @@ function buildMyWorkResponse(rep) {
 
   const today = new Date().toISOString().slice(0, 10);
   const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
-  const myOverdue = savedBanks.filter(row => {
-    if (!ownerStringContainsRep(row.owner, rep)) return false;
-    if (!row.nextActionDate) return false;
-    return String(row.nextActionDate).slice(0, 10) < today;
+  // Overdue follow-ups now come from the task engine (next_action_date retired
+  // in the 2026-06-12 coverage consolidation), rep-scoped by task assignee.
+  const overdueTaskList = listOverdueOpenTasks(BANK_REPORTS_DIR, { username: rep ? rep.username : null, today });
+  const overdueCoverage = getSavedBankCoverageMap(BANK_REPORTS_DIR, overdueTaskList.map(t => t.bankId)) || new Map();
+  const myOverdue = overdueTaskList.map(task => {
+    const cov = overdueCoverage.get(String(task.bankId)) || {};
+    return {
+      bankId: task.bankId,
+      displayName: cov.displayName || task.bankId,
+      city: cov.city || '',
+      state: cov.state || '',
+      nextActionDate: task.dueDate,
+      title: task.title || '',
+      priority: task.priority || cov.priority || 'Normal',
+      status: cov.status || ''
+    };
   });
 
   // "Going cold": owned saved banks whose latest manual CRM touch (call/email/
@@ -9446,19 +9460,24 @@ function buildCrmDashboard(rep) {
   const quarter = Math.floor(new Date().getMonth() / 3);
   const quarterStart = `${new Date().getFullYear()}-${String(quarter * 3 + 1).padStart(2, '0')}-01`;
   const newThisQuarter = myBanks.filter(row => String(row.createdAt || '').slice(0, 10) >= quarterStart).length;
-  const overdue = myBanks.filter(row => row.nextActionDate && String(row.nextActionDate).slice(0, 10) < today);
+  // Follow-ups now come from the task engine (next_action_date was retired in
+  // the 2026-06-12 coverage consolidation). Rep-scoped by task assignee.
+  const repUser = rep ? rep.username : null;
   const horizon = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
-  const upcoming = myBanks
-    .filter(row => row.nextActionDate && String(row.nextActionDate).slice(0, 10) >= today && String(row.nextActionDate).slice(0, 10) <= horizon)
-    .sort((a, b) => String(a.nextActionDate).localeCompare(String(b.nextActionDate)))
-    .slice(0, 12)
-    .map(row => ({
-      bankId: row.bankId,
-      displayName: row.displayName,
-      owner: row.owner || '',
-      nextActionDate: row.nextActionDate,
-      priority: row.priority || 'Medium'
-    }));
+  const overdue = listOverdueOpenTasks(BANK_REPORTS_DIR, { username: repUser, today });
+  const upcomingTasks = listUpcomingOpenTasks(BANK_REPORTS_DIR, { username: repUser, today, horizon }).slice(0, 12);
+  const upcomingCoverage = getSavedBankCoverageMap(BANK_REPORTS_DIR, upcomingTasks.map(t => t.bankId)) || new Map();
+  const upcoming = upcomingTasks.map(task => {
+    const cov = upcomingCoverage.get(String(task.bankId)) || {};
+    return {
+      bankId: task.bankId,
+      displayName: cov.displayName || task.bankId,
+      owner: cov.owner || task.assignedDisplay || task.assignedTo || '',
+      nextActionDate: task.dueDate,
+      title: task.title || '',
+      priority: task.priority || cov.priority || 'Normal'
+    };
+  });
 
   const strategyResult = listStrategyRequests(BANK_REPORTS_DIR, { archived: '' }) || { requests: [] };
   const openStatuses = new Set(['Open', 'In Progress']);

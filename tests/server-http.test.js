@@ -245,8 +245,11 @@ test('my-work surfaces cold accounts; views join lastActivityDate', async () => 
     const reportsDir = path.join(dataDir, 'bank-reports');
     const touched = { id: 'HT-1', displayName: 'Touched Bank', city: 'Alton', state: 'IL', certNumber: '111' };
     const cold = { id: 'HT-2', displayName: 'Cold Bank', city: 'Pana', state: 'IL', certNumber: '222' };
-    coverageStore.upsertSavedBank(reportsDir, touched, { status: 'Client', owner: 'Test Rep', nextActionDate: '2020-01-01' });
+    coverageStore.upsertSavedBank(reportsDir, touched, { status: 'Client', owner: 'Test Rep' });
     coverageStore.upsertSavedBank(reportsDir, cold, { status: 'Prospect', owner: 'Test Rep' });
+    // An overdue open task makes HT-1 a "stale follow-up" (the post-consolidation
+    // successor to next_action_date).
+    coverageStore.createBankTask(reportsDir, { bankId: 'HT-1', title: 'Follow up', dueDate: '2020-01-01' });
     // Fresh manual touch on HT-1 (yesterday) keeps it out of the cold list.
     const fresh = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
     coverageStore.recordManualActivity(reportsDir, { bankId: 'HT-1', kind: 'call', subject: 'Check-in', activityDate: fresh });
@@ -322,7 +325,9 @@ test('crm dashboard aggregates KPIs, by-state, activity, and follow-ups', async 
     statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-2', displayName: 'TX Prospect', city: 'Waco', state: 'TX', certNumber: '2' }, { status: 'Prospect', owner: 'Jim Lewis' });
     statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-3', displayName: 'MO Client', city: 'Alton', state: 'MO', certNumber: '3' }, { status: 'Client', owner: 'Dan Hagemann' });
     const soon = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-    coverageStore.upsertSavedBank(reportsDir, { id: 'CD-1', displayName: 'TX Client', city: 'Austin', state: 'TX', certNumber: '1' }, { status: 'Client', owner: 'Jim Lewis', nextActionDate: soon });
+    coverageStore.upsertSavedBank(reportsDir, { id: 'CD-1', displayName: 'TX Client', city: 'Austin', state: 'TX', certNumber: '1' }, { status: 'Client', owner: 'Jim Lewis' });
+    // Upcoming follow-up = an open task due within the 14-day horizon.
+    coverageStore.createBankTask(reportsDir, { bankId: 'CD-1', title: 'Quarterly review', dueDate: soon });
     coverageStore.recordManualActivity(reportsDir, { bankId: 'CD-1', kind: 'call', subject: 'Quarterly check-in', actorUsername: 'jim', actorDisplay: 'Jim Lewis' });
 
     const res = await request(port, { path: '/api/crm/dashboard' });

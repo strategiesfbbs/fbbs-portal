@@ -79,9 +79,10 @@ test('viewToCsvRows labels lastActivityDate as Last Activity', () => {
   assert.deepStrictEqual(csv[1], ['X', '2026-06-01']);
 });
 
-// Integration: the follow-ups view joins each row to its latest manual CRM
-// touch (lastActivityByBank) — the Phase 2 "going cold" column.
-test('runBankView joins lastActivityDate onto follow-up rows', () => {
+// Integration: the follow-ups view surfaces banks with an OVERDUE OPEN TASK
+// (the post-2026-06-12 successor to the cleared next_action_date column) and
+// joins each row to its latest manual CRM touch (the "going cold" column).
+test('runBankView surfaces banks with an overdue open task + joins lastActivityDate', () => {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
@@ -89,13 +90,20 @@ test('runBankView joins lastActivityDate onto follow-up rows', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-views-'));
   try {
     const bank = { id: 'V-1', displayName: 'View Test Bank', city: 'Alton', state: 'IL', certNumber: '999' };
-    coverageStore.upsertSavedBank(tmpDir, bank, { status: 'Client', owner: 'Jim Lewis', nextActionDate: '2020-01-01' });
+    coverageStore.upsertSavedBank(tmpDir, bank, { status: 'Client', owner: 'Jim Lewis' });
+    coverageStore.createBankTask(tmpDir, { bankId: 'V-1', title: 'Follow up', dueDate: '2020-01-01' });
     coverageStore.recordManualActivity(tmpDir, { bankId: 'V-1', kind: 'call', subject: 'Touch', activityDate: '2026-06-01' });
     const result = v.runBankView({ outputDir: tmpDir, viewId: 'stale-follow-ups', rep: null });
     assert.ok(result.columns.includes('lastActivityDate'), 'follow-ups view exposes lastActivityDate');
     const row = result.rows.find(r => r.bankId === 'V-1');
-    assert.ok(row, 'stale follow-up row present');
+    assert.ok(row, 'overdue-task row present');
+    assert.strictEqual(row.displayName, 'View Test Bank', 'joined bank name from coverage');
+    assert.strictEqual(row.nextActionDate, '2020-01-01', 'shows the earliest overdue due date');
     assert.strictEqual(row.lastActivityDate, '2026-06-01');
+    // A bank with no overdue task must NOT appear.
+    coverageStore.upsertSavedBank(tmpDir, { id: 'V-2', displayName: 'No Task Bank', certNumber: '888' }, { status: 'Client' });
+    const result2 = v.runBankView({ outputDir: tmpDir, viewId: 'stale-follow-ups', rep: null });
+    assert.ok(!result2.rows.find(r => r.bankId === 'V-2'), 'bank without an overdue task is excluded');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
