@@ -3333,6 +3333,7 @@
     }
     renderDailyIntelligence();
     loadMarketSnapshotStrip(); // shared canonical snapshot band, non-blocking
+    loadDailySummaryCard(); // AI desk read (dormant without an Anthropic key)
   }
 
   // Shared "one source of truth" market band: desk Economic Update values are
@@ -3386,6 +3387,90 @@
       renderMarketSnapshotStrip(marketSnapshotData, elId);
     } catch (_) {
       el.hidden = true;
+    }
+  }
+
+  // AI "Desk read" card: a Claude-written narrative of today's package. The card
+  // only appears when an Anthropic key is configured. GET is read-only (cached);
+  // the button POSTs an explicit, billable refresh.
+  function renderDailySummaryMarkdown(md) {
+    const blocks = String(md || '').replace(/\r\n/g, '\n').split(/\n{2,}/);
+    return blocks.map(block => {
+      const lines = block.split('\n');
+      const h = lines[0].match(/^#{2,3}\s+(.*)$/);
+      if (h) return `<h4>${inlineMd(h[1])}</h4>` + renderMdLines(lines.slice(1));
+      return renderMdLines(lines);
+    }).join('');
+  }
+
+  // A run of body lines → a <ul> when every line is a list item, else a <p>.
+  function renderMdLines(lines) {
+    const kept = lines.filter(l => l.trim());
+    if (!kept.length) return '';
+    if (kept.every(l => /^\s*(?:[-*]|\d+\.)\s+/.test(l))) {
+      const items = kept.map(l => `<li>${inlineMd(l.replace(/^\s*(?:[-*]|\d+\.)\s+/, ''))}</li>`).join('');
+      return `<ul>${items}</ul>`;
+    }
+    return `<p>${inlineMd(kept.join('\n'))}</p>`;
+  }
+
+  function inlineMd(text) {
+    return escapeHtml(text).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+  }
+
+  function renderDailySummary(data) {
+    const card = document.getElementById('dailySummaryCard');
+    const body = document.getElementById('dailySummaryBody');
+    const meta = document.getElementById('dailySummaryMeta');
+    const btn = document.getElementById('dailySummaryBtn');
+    if (!card || !body) return;
+    if (!data || !data.configured) { card.hidden = true; return; }
+    card.hidden = false;
+    if (data.summary) {
+      body.innerHTML = renderDailySummaryMarkdown(data.summary);
+      const stale = data.summaryDate && data.packageDate && data.summaryDate !== data.packageDate;
+      meta.textContent = stale
+        ? `For ${data.summaryDate} — package is now ${data.packageDate}`
+        : (data.generatedAt ? `Generated ${new Date(data.generatedAt).toLocaleString()}` : '');
+      if (btn) btn.textContent = data.current ? 'Refresh' : 'Update';
+    } else {
+      body.innerHTML = '<p class="daily-summary-empty">No desk read yet for today’s package. Generate one to get a Claude-written market read for reps.</p>';
+      meta.textContent = '';
+      if (btn) btn.textContent = 'Generate';
+    }
+  }
+
+  async function generateDailySummary() {
+    const btn = document.getElementById('dailySummaryBtn');
+    const body = document.getElementById('dailySummaryBody');
+    if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+    try {
+      const res = await fetch('/api/daily-summary/refresh', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
+      // Re-fetch the read-only view so packageDate/current are consistent.
+      await loadDailySummaryCard();
+    } catch (e) {
+      if (body) body.innerHTML = `<p class="daily-summary-error">${escapeHtml(e.message || 'Summary failed')}</p>`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadDailySummaryCard() {
+    const card = document.getElementById('dailySummaryCard');
+    const btn = document.getElementById('dailySummaryBtn');
+    if (!card) return;
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', generateDailySummary);
+    }
+    try {
+      const res = await fetch('/api/daily-summary', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      renderDailySummary(await res.json());
+    } catch (_) {
+      card.hidden = true;
     }
   }
 

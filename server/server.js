@@ -186,6 +186,8 @@ const marketRates = require('./market-rates');
 const marketWire = require('./market-wire');
 const fredSeries = require('./fred-series');
 const { buildMarketSnapshot } = require('./market-snapshot');
+const claudeClient = require('./claude-client');
+const dailySummary = require('./daily-summary');
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 
@@ -219,6 +221,19 @@ if (!process.env.FRED_API_KEY) {
     if (fs.existsSync(fredKeyFile)) {
       const key = fs.readFileSync(fredKeyFile, 'utf-8').trim();
       if (key) process.env.FRED_API_KEY = key;
+    }
+  } catch (_) { /* dormant without a key */ }
+}
+// Anthropic API key for the AI daily-package summary — same wiring as FRED:
+// env wins, else a one-line data/market/anthropic-api-key.txt (gitignored,
+// travels with DATA_DIR). claude-client.js / daily-summary.js stay dormant
+// (the summary card simply doesn't show) when neither is present.
+if (!process.env.ANTHROPIC_API_KEY) {
+  try {
+    const anthropicKeyFile = path.join(MARKET_DIR, 'anthropic-api-key.txt');
+    if (fs.existsSync(anthropicKeyFile)) {
+      const key = fs.readFileSync(anthropicKeyFile, 'utf-8').trim();
+      if (key) process.env.ANTHROPIC_API_KEY = key;
     }
   } catch (_) { /* dormant without a key */ }
 }
@@ -9925,6 +9940,44 @@ const server = http.createServer(async (req, res) => {
         };
       }
       return sendJSON(res, 200, buildMarketSnapshot(econ, { rates, fred }));
+    }
+
+    // AI daily-package summary (Claude). GET is read-only — it returns the
+    // cached summary and whether it matches today's package; it never makes a
+    // billable call. POST .../refresh is the explicit (billable) generate.
+    if (pathname === '/api/daily-summary' && req.method === 'GET') {
+      const configured = claudeClient.isConfigured();
+      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
+      const packageDate = meta.date || null;
+      const cached = dailySummary.getCachedSummary(MARKET_DIR);
+      const current = Boolean(cached && packageDate && cached.packageDate === packageDate);
+      return sendJSON(res, 200, {
+        configured,
+        packageDate,
+        current,
+        summary: cached ? cached.summary : null,
+        summaryDate: cached ? cached.packageDate : null,
+        generatedAt: cached ? cached.generatedAt : null,
+        model: cached ? cached.model : null,
+      });
+    }
+
+    if (pathname === '/api/daily-summary/refresh' && req.method === 'POST') {
+      if (!claudeClient.isConfigured()) {
+        return sendJSON(res, 200, { configured: false, summary: null });
+      }
+      const [econ, meta] = await Promise.all([
+        loadCurrentEconomicUpdate().catch(() => null),
+        Promise.resolve(readCurrentSlotJson(META_FILENAME, 'meta') || {}),
+      ]);
+      try {
+        const result = await dailySummary.generateSummary({ marketDir: MARKET_DIR, econ, meta, force: true, log });
+        appendAuditLog({ event: 'daily-summary-generated', packageDate: result.packageDate, model: result.model });
+        return sendJSON(res, 200, { configured: true, ...result });
+      } catch (err) {
+        log('error', 'Daily summary generation failed:', err.message);
+        return sendJSON(res, 502, { configured: true, error: 'Summary generation failed: ' + err.message });
+      }
     }
 
     if (pathname === '/api/search/cusip' && req.method === 'GET') {
