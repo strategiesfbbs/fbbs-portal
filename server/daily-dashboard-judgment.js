@@ -740,16 +740,18 @@ async function generateDashboard(opts) {
   // A storage failure (disk full, read-only volume) must not throw away an
   // already-computed (and possibly already-billed) dashboard — return it
   // uncached rather than 5xx'ing. Only missing-marketDir / zero-candidates throw.
+  let cacheError = null;
   try {
     writeCache(o.marketDir, record);
   } catch (err) {
-    log('warn', `Sales dashboard cache write failed (${err && err.message}); returning uncached`);
+    cacheError = err && err.message ? err.message : String(err);
+    log('warn', `Sales dashboard cache write failed (${cacheError}); returning uncached`);
   }
   log('info',
     `Sales dashboard generated for package ${packageDate || '(unknown)'} ` +
     `(coverage ${grounded.coverage.ccorp}/${grounded.coverage.scorp}/${grounded.coverage.ria}` +
     `${grounded.degraded ? ', auto-completed' : ''}) via ${model || 'deterministic'}`);
-  return { ...record, cached: false };
+  return { ...record, cached: false, ...(cacheError ? { cacheError } : {}) };
 }
 
 module.exports = {

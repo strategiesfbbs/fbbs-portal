@@ -41,6 +41,15 @@ function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+function rowYield(row) {
+  const ytm = num(row && row.ytm);
+  const ytnc = num(row && row.ytnc);
+  if (ytm != null && ytnc != null) return Math.min(ytm, ytnc);
+  if (ytm != null) return ytm;
+  if (ytnc != null) return ytnc;
+  return num(row && row.yield);
+}
+
 function cusipKey(v) {
   return String(v || '').replace(/[^0-9a-z]/gi, '').toUpperCase();
 }
@@ -55,7 +64,7 @@ function buildCandidateSet(rows) {
   const byClass = new Map();
   for (const row of Array.isArray(rows) ? rows : []) {
     const cusip = cusipKey(row && row.cusip);
-    const yld = num(row && row.yield);
+    const yld = rowYield(row);
     if (cusip.length < 6 || yld == null) continue;
     const cls = (row.assetClass || 'Other').trim() || 'Other';
     if (!byClass.has(cls)) byClass.set(cls, []);
@@ -65,7 +74,7 @@ function buildCandidateSet(rows) {
   const candidates = [];
   const byCusip = new Map();
   for (const [, list] of byClass) {
-    list.sort((a, b) => (num(b.yield) || 0) - (num(a.yield) || 0));
+    list.sort((a, b) => (rowYield(b) || 0) - (rowYield(a) || 0));
     for (const row of list.slice(0, PER_CLASS_CANDIDATES)) {
       const cusip = cusipKey(row.cusip);
       if (byCusip.has(cusip)) continue;
@@ -77,7 +86,7 @@ function buildCandidateSet(rows) {
         state: row.state || '',
         description: String(row.description || '').slice(0, 120),
         coupon: num(row.coupon),
-        yield: num(row.yield),
+        yield: rowYield(row),
         price: num(row.price),
         maturity: row.maturity || null,
       });
@@ -147,7 +156,7 @@ function groundPicks(rawPicks, byCusip) {
       sector: row.sector || '',
       state: row.state || '',
       coupon: num(row.coupon),
-      yield: num(row.yield),
+      yield: rowYield(row),
       price: num(row.price),
       maturity: row.maturity || null,
       headline: String(p.headline || '').slice(0, 80),
@@ -231,12 +240,19 @@ async function generatePicks(opts) {
     generatedAt: new Date(o.now != null ? o.now : Date.now()).toISOString(),
     usage: result.usage || null,
   };
-  writeCache(o.marketDir, record);
+  let cacheError = null;
+  try {
+    writeCache(o.marketDir, record);
+  } catch (err) {
+    cacheError = err && err.message ? err.message : String(err);
+    log('warn', `Daily picks generated but cache write failed: ${cacheError}`);
+  }
   log('info', `Daily picks generated for package ${packageDate || '(unknown)'} (${picks.length} picks) via ${record.model}`);
-  return { ...record, cached: false };
+  return { ...record, cached: false, ...(cacheError ? { cacheError } : {}) };
 }
 
 module.exports = {
+  rowYield,
   buildCandidateSet,
   buildPicksPrompt,
   parsePicks,

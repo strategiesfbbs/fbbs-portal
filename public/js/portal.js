@@ -5745,8 +5745,16 @@
     const view = maturityCalendarFilteredView();
     if (heroStat) heroStat.textContent = String(view.totals.bankCount);
     if (meta) {
-      const importedNote = data && data.importedAt ? ('Portfolios imported ' + maturityCalendarDate(data.importedAt) + '. ') : '';
+      let staleImport = false;
+      if (data && data.importedAt) {
+        const importedMs = new Date(data.importedAt).getTime();
+        staleImport = Number.isFinite(importedMs) && (Date.now() - importedMs) > 7 * 24 * 60 * 60 * 1000;
+      }
+      const importedNote = data && data.importedAt
+        ? ((staleImport ? 'STALE: ' : '') + 'Portfolios imported ' + maturityCalendarDate(data.importedAt) + '. ')
+        : '';
       meta.textContent = importedNote + 'Dates are only as fresh as the last bond-accounting import — confirm a current portfolio before acting.';
+      meta.classList.toggle('is-stale', staleImport);
     }
 
     if (!view.banks.length) {
@@ -8855,7 +8863,6 @@
               <input type="search" id="reportsSearchInput" placeholder="Search all reports..." value="${escapeHtml(reportsSearchQuery)}">
               <a class="small-btn" href="#reports/new">New Report</a>
               <button type="button" class="small-btn secondary" disabled title="Create a folder by choosing &quot;Move to folder…&quot; on a report and typing a new name">New Folder</button>
-              <button type="button" class="icon-btn" disabled title="Available in Phase 1">⚙</button>
             </div>
           </header>
           ${reportsFreshnessHtml()}
@@ -9518,15 +9525,14 @@
             <div class="reports-output-options">
               <label><input type="radio" name="reportsOutputFormat" value="view" checked> In-app view</label>
               <label><input type="radio" name="reportsOutputFormat" value="csv"> CSV</label>
-              <label title="Coming soon"><input type="radio" name="reportsOutputFormat" value="xlsx" disabled> XLSX</label>
+              <label title="Use CSV export for go-live"><input type="radio" name="reportsOutputFormat" value="xlsx" disabled> XLSX</label>
               <label${type === 'portfolio-peer' ? '' : ' title="Print/PDF is available for Portfolio Review"'}><input type="radio" name="reportsOutputFormat" value="pdf"${type === 'portfolio-peer' ? '' : ' disabled'}> Print / PDF</label>
             </div>
           </section>
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
-            <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Available in Phase 1"'}>Save View</button>
+            <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Save View is available for Custom Bank Lists"'}>Save View</button>
             <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'account-touch'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
-            <button type="button" class="small-btn secondary" disabled title="Available in Phase 3">Save &amp; Schedule</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
         </main>
@@ -16985,6 +16991,13 @@
     if (!data || !data.configured) { card.hidden = true; return; }
     card.hidden = false;
     const num = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
+    const stale = data.picksDate && data.packageDate && data.picksDate !== data.packageDate;
+    if (stale) {
+      body.innerHTML = '<p class="daily-summary-error">Pick of the Day is from ' + escapeHtml(data.picksDate) + ', but the current package is ' + escapeHtml(data.packageDate) + '. Update before using these recommendations.</p>';
+      if (meta) meta.textContent = 'Stale AI cache';
+      if (btn) btn.textContent = 'Update';
+      return;
+    }
     if (Array.isArray(data.picks) && data.picks.length) {
       body.innerHTML = data.picks.map(p => `
         <div class="daily-pick">
@@ -17003,10 +17016,7 @@
             <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
           </div>
         </div>`).join('');
-      const stale = data.picksDate && data.packageDate && data.picksDate !== data.packageDate;
-      meta.textContent = stale
-        ? `For ${data.picksDate} — package is now ${data.packageDate}`
-        : (data.generatedAt ? `Generated ${new Date(data.generatedAt).toLocaleString()}` : '');
+      meta.textContent = data.generatedAt ? `Generated ${new Date(data.generatedAt).toLocaleString()}` : '';
       if (btn) btn.textContent = data.current ? 'Refresh' : 'Update';
     } else {
       body.innerHTML = '<p class="daily-summary-empty">No picks yet for today’s package. Generate a Claude-curated shortlist of the best relative value on offer.</p>';
@@ -17160,6 +17170,14 @@
       return;
     }
     card.hidden = false;
+
+    if (dash && data.stale) {
+      body.innerHTML = '<p class="daily-summary-error">Sales Dashboard is cached for ' + escapeHtml(dash.packageDate || 'a prior package') + ', but the current package is ' + escapeHtml(data.packageDate || 'newer') + '. Refresh before using the ranked calls.</p>';
+      if (stat) stat.textContent = '—';
+      if (metaEl) metaEl.textContent = 'Stale AI cache';
+      if (btn) btn.textContent = 'Update';
+      return;
+    }
 
     if (dash) {
       const audiences = dash.audiences || [];
@@ -20272,6 +20290,33 @@
     return ready.map(slot => `<span class="file-chip" title="${escapeHtml(slot.filename || '')}">${escapeHtml(slot.label)}</span>`).join('');
   }
 
+  function goLiveStateChip(item, labelKey = 'label') {
+    const state = item && item.state ? item.state : 'warn';
+    return `<span class="file-chip go-live-chip-${escapeHtml(state)}" title="${escapeHtml((item && item.detail) || '')}">${escapeHtml((item && item[labelKey]) || '')}</span>`;
+  }
+
+  function goLiveProcessAge(seconds) {
+    const n = Number(seconds);
+    if (!Number.isFinite(n) || n < 0) return 'unknown';
+    const days = Math.floor(n / 86400);
+    const hours = Math.floor((n % 86400) / 3600);
+    const mins = Math.floor((n % 3600) / 60);
+    if (days) return `${days}d ${hours}h`;
+    if (hours) return `${hours}h ${mins}m`;
+    return `${mins}m`;
+  }
+
+  function goLiveAiAuditList(entries) {
+    const rows = Array.isArray(entries) ? entries.slice(0, 5) : [];
+    if (!rows.length) return '<p><span class="go-live-muted">No recent AI refresh audit entries.</span></p>';
+    return '<div class="go-live-mini-list">' + rows.map(row => `
+      <div>
+        <span>${escapeHtml(row.event || '')}</span>
+        <em>${escapeHtml([row.packageDate, row.model, row.actorDisplay].filter(Boolean).join(' · ') || 'No details')}</em>
+      </div>
+    `).join('') + '</div>';
+  }
+
   async function loadGoLiveStatus() {
     const panel = document.getElementById('goLiveStatusPanel');
     if (!panel) return;
@@ -20289,6 +20334,9 @@
       const attention = checks.filter(check => check.state !== 'ok');
       const packageInfo = status.package || {};
       const dataInfo = status.data || {};
+      const aiInfo = status.ai || {};
+      const integrations = status.integrations || {};
+      const processInfo = status.process || {};
       panel.innerHTML = `
         <div class="go-live-summary go-live-${escapeHtml(status.state || 'warn')}">
           <div>
@@ -20329,6 +20377,28 @@
               <span class="file-chip">Account status ${dataInfo.accountStatuses && dataInfo.accountStatuses.available ? 'loaded' : 'pending'}</span>
               <span class="file-chip">Bond accounting ${dataInfo.bondAccounting && dataInfo.bondAccounting.available ? 'loaded' : 'pending'}</span>
             </p>
+          </div>
+          <div>
+            <strong>AI Freshness</strong>
+            <p>${(aiInfo.caches || []).map(cache => goLiveStateChip(cache)).join('') || '<span class="go-live-muted">No AI cache status.</span>'}</p>
+          </div>
+          <div>
+            <strong>Market Caches</strong>
+            <p>${(integrations.marketCaches || []).map(cache => goLiveStateChip(cache, 'filename')).join('') || '<span class="go-live-muted">No market cache status.</span>'}</p>
+          </div>
+          <div>
+            <strong>Process</strong>
+            <p>
+              <span class="file-chip">Build ${escapeHtml(processInfo.build || 'unknown')}</span>
+              <span class="file-chip">Node ${escapeHtml(processInfo.node || 'unknown')}</span>
+              <span class="file-chip">Uptime ${escapeHtml(goLiveProcessAge(processInfo.uptimeSeconds))}</span>
+              <span class="file-chip">Auth ${escapeHtml(processInfo.authMode || 'unknown')}</span>
+              <span class="file-chip">Auto-publish ${processInfo.autoPublishEnabled ? 'on' : 'off'}</span>
+            </p>
+          </div>
+          <div>
+            <strong>AI Audit</strong>
+            ${goLiveAiAuditList(aiInfo.recent)}
           </div>
         </div>
         ${(missing.length || warnings.length || attention.length) ? `

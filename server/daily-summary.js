@@ -149,9 +149,15 @@ async function generateSummary(opts) {
     generatedAt: new Date(o.now != null ? o.now : Date.now()).toISOString(),
     usage: result.usage || null,
   };
-  writeCache(o.marketDir, record);
+  let cacheError = null;
+  try {
+    writeCache(o.marketDir, record);
+  } catch (err) {
+    cacheError = err && err.message ? err.message : String(err);
+    log('warn', `Daily summary generated but cache write failed: ${cacheError}`);
+  }
   log('info', `Daily summary generated for package ${packageDate || '(unknown)'} via ${record.model}`);
-  return { ...record, cached: false };
+  return { ...record, cached: false, ...(cacheError ? { cacheError } : {}) };
 }
 
 module.exports = {

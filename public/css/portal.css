@@ -4144,6 +4144,40 @@ summary:focus-visible,
   margin: 8px 0 0;
 }
 
+.go-live-chip-ok { border-color: rgba(22, 101, 52, 0.24); background: #f0fdf4; color: var(--green); }
+.go-live-chip-warn { border-color: #fcd34d; background: #fffbeb; color: #92400e; }
+.go-live-chip-fail { border-color: rgba(220, 38, 38, 0.24); background: #fff5f5; color: var(--danger); }
+
+.go-live-mini-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.go-live-mini-list div {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.go-live-mini-list div:last-child {
+  border-bottom: 0;
+}
+
+.go-live-mini-list span {
+  color: var(--text);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.go-live-mini-list em {
+  color: var(--text3);
+  font-style: normal;
+  font-size: 12px;
+}
+
 .go-live-attention,
 .go-live-error {
   display: grid;
@@ -10920,6 +10954,7 @@ body {
 .daily-summary-body li { margin: 0 0 3px; }
 .daily-summary-empty { color: #5a615e; }
 .daily-summary-error { color: #b4231f; }
+.maturity-cal-meta.is-stale { color: #b4231f; font-weight: 700; }
 
 /* Pick of the day (All Offerings) — reuses the desk-read card chrome. */
 .daily-picks-card {

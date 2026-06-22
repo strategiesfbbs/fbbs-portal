@@ -68,6 +68,11 @@ function multipartFile(fieldName, filename, content) {
   };
 }
 
+function writeJson(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value));
+}
+
 async function waitForHealth(port, child) {
   const started = Date.now();
   let lastError = null;
@@ -173,7 +178,10 @@ test('iis admin ingest routes reject non-admins before parsing', async () => {
       '/api/banks/averaged-series/upload',
       '/api/banks/bond-accounting/upload',
       '/api/brokered-cd/wirp/upload',
-      '/api/exec-summary/upload'
+      '/api/exec-summary/upload',
+      '/api/daily-summary/refresh',
+      '/api/offerings-pick/refresh',
+      '/api/sales-dashboard/refresh'
     ];
     for (const route of ingestRoutes) {
       const res = await request(port, {
@@ -233,6 +241,89 @@ test('cross-site mutating writes are blocked; same-origin and header-absent pass
     // no origin signals at all -> default-allow (trusted-LAN posture)
     const bare = await post({});
     assert.ok(!blocked.test(bare.text), `header-absent should pass: ${bare.status} ${bare.text}`);
+  });
+});
+
+test('new go-live read APIs return JSON envelopes without seeded data', async () => {
+  await withServer({ ANTHROPIC_API_KEY: '' }, async ({ port, dataDir }) => {
+    writeJson(path.join(dataDir, 'current', '_meta.json'), { date: '2026-06-22' });
+    const routes = [
+      '/api/daily-summary',
+      '/api/offerings-pick',
+      '/api/sales-dashboard',
+      '/api/cd-rollover-wall?window=90',
+      '/api/maturity-calendar?window=90',
+      '/api/offerings/all'
+    ];
+    for (const route of routes) {
+      const res = await request(port, { path: route });
+      assert.strictEqual(res.status, 200, `${route}: ${res.status} ${res.text}`);
+      assert.ok(res.json && typeof res.json === 'object', `${route}: JSON envelope`);
+    }
+  });
+});
+
+test('go-live status includes AI, integration, and process readiness sections', async () => {
+  await withServer({ ANTHROPIC_API_KEY: '', FRED_API_KEY: '' }, async ({ port, dataDir }) => {
+    writeJson(path.join(dataDir, 'current', '_meta.json'), { date: new Date().toISOString().slice(0, 10) });
+    const res = await request(port, { path: '/api/admin/go-live-status' });
+    assert.strictEqual(res.status, 200, res.text);
+    assert.ok(Array.isArray(res.json.checks) && res.json.checks.length, 'checks present');
+    assert.ok(res.json.checks.some(check => check.id === 'ai-cache'), 'AI cache check present');
+    assert.ok(res.json.checks.some(check => check.id === 'market-cache'), 'market cache check present');
+    assert.ok(res.json.ai && Array.isArray(res.json.ai.caches), 'AI cache detail present');
+    assert.ok(res.json.integrations && Array.isArray(res.json.integrations.marketCaches), 'integration cache detail present');
+    assert.ok(res.json.process && res.json.process.build && res.json.process.node, 'process detail present');
+  });
+});
+
+test('all offerings preserves blank YTNC as null and ranks bullets by YTM', async () => {
+  await withServer({}, async ({ port, dataDir }) => {
+    const currentDir = path.join(dataDir, 'current');
+    writeJson(path.join(currentDir, '_meta.json'), { date: '2026-06-22' });
+    writeJson(path.join(currentDir, '_agencies.json'), {
+      offerings: [
+        {
+          cusip: '3130B6R24',
+          ticker: 'FHLB',
+          structure: 'Bullet',
+          coupon: 3.875,
+          ytm: 4.054,
+          ytnc: '',
+          maturity: '2027-06-04',
+          askPrice: 99.833,
+          availableSize: 4.37
+        }
+      ]
+    });
+    writeJson(path.join(currentDir, '_corporates.json'), {
+      offerings: [
+        {
+          cusip: '855244BG3',
+          issuerName: 'STARBUCKS CORP',
+          sector: 'Consumer',
+          coupon: 4,
+          ytm: 4.153,
+          ytnc: null,
+          maturity: '2029-01-01',
+          askPrice: 100,
+          availableSize: 1500
+        }
+      ]
+    });
+
+    const res = await request(port, { path: '/api/offerings/all' });
+    assert.strictEqual(res.status, 200, res.text);
+    const agency = res.json.rows.find(r => r.cusip === '3130B6R24');
+    const corp = res.json.rows.find(r => r.cusip === '855244BG3');
+    assert.ok(agency, 'agency row present');
+    assert.strictEqual(agency.ytnc, null);
+    assert.strictEqual(agency.yield, 4.054);
+    assert.strictEqual(agency.availabilityK, 4370);
+    assert.ok(corp, 'corporate row present');
+    assert.strictEqual(corp.ytnc, null);
+    assert.strictEqual(corp.yield, 4.153);
+    assert.strictEqual(corp.availabilityK, 1500);
   });
 });
 

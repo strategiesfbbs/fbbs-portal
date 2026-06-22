@@ -15,6 +15,8 @@ const ROWS = [
   { assetClass: 'Municipal', type: 'muni', page: 'muni-offerings', cusip: '13063DST7', description: 'CA State GO 5s 2034', coupon: 5.0, yield: 4.62, price: 102.1, maturity: '2034-08-01', state: 'CA', sector: 'GO' },
   { assetClass: 'Municipal', type: 'muni', page: 'muni-offerings', cusip: '64971WJ40', description: 'NYC TFA 4s 2031', coupon: 4.0, yield: 4.20, price: 99.0, maturity: '2031-05-01', state: 'NY', sector: 'Revenue' },
   { assetClass: 'Agency', type: 'agency', page: 'agencies', cusip: '3130AXYZ1', description: 'FHLB 4.5 2029', coupon: 4.5, yield: 4.75, price: 100.0, maturity: '2029-03-15', state: '', sector: 'Callable' },
+  // Callable rows carry both YTM and YTNC; pick logic should use yield-to-worst.
+  { assetClass: 'Agency', type: 'agency', page: 'agencies', cusip: '3130CALL1', description: 'FHLB callable 2030', coupon: 5.0, yield: 5.25, ytm: 5.25, ytnc: 4.10, price: 101.0, maturity: '2030-03-15', state: '', sector: 'Callable' },
   { assetClass: 'Corporate', type: 'corporate', page: 'corporates', cusip: '037833EK1', description: 'AAPL 4.65 2033', coupon: 4.65, yield: 4.90, price: 98.5, maturity: '2033-02-23', state: '', sector: 'IG' },
   { assetClass: 'Treasury', type: 'treasury', page: 'treasury-explorer', cusip: '91282CKK7', description: 'UST 4.25 2030', coupon: 4.25, yield: 4.40, price: 99.3, maturity: '2030-11-15', state: '', sector: 'Note' },
   // No yield → must be excluded from candidates.
@@ -30,12 +32,14 @@ function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-picks-'))
 
 test('buildCandidateSet keeps only rows with a CUSIP and a yield', () => {
   const { candidates, byCusip } = op.buildCandidateSet(ROWS);
-  assert.strictEqual(candidates.length, 5); // the null-yield muni is dropped
+  assert.strictEqual(candidates.length, 6); // the null-yield muni is dropped
   assert.ok(!byCusip.has('999999ZZ9'));
   assert.ok(byCusip.has('037833EK1'));
   // sorted highest-yield first across classes
   assert.strictEqual(candidates[0].cusip, '037833EK1'); // 4.90 corp
   assert.strictEqual(candidates[0].yield, 4.90);
+  const callable = candidates.find(c => c.cusip === '3130CALL1');
+  assert.strictEqual(callable.yield, 4.10);
 });
 
 test('buildPicksPrompt carries the system prompt, the date, and the candidates', () => {

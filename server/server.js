@@ -630,7 +630,10 @@ function isAdminOnlyApiWrite(pathname, method) {
     pathname === '/api/banks/averaged-series/upload' ||
     pathname === '/api/banks/bond-accounting/upload' ||
     pathname === '/api/brokered-cd/wirp/upload' ||
-    pathname === '/api/exec-summary/upload'
+    pathname === '/api/exec-summary/upload' ||
+    pathname === '/api/daily-summary/refresh' ||
+    pathname === '/api/offerings-pick/refresh' ||
+    pathname === '/api/sales-dashboard/refresh'
   );
 }
 
@@ -2586,6 +2589,95 @@ function compactImportStatus(status) {
   };
 }
 
+function ageInfo(iso) {
+  const ms = Date.parse(iso || '');
+  if (!Number.isFinite(ms)) return { valid: false, ageMs: null, ageDays: null };
+  const ageMs = Math.max(0, Date.now() - ms);
+  return { valid: true, ageMs, ageDays: ageMs / 86400000 };
+}
+
+function ageLabel(iso) {
+  const age = ageInfo(iso);
+  if (!age.valid) return '';
+  if (age.ageDays >= 2) return `${Math.floor(age.ageDays)} days ago`;
+  if (age.ageDays >= 1) return '1 day ago';
+  const hours = Math.floor(age.ageMs / 3600000);
+  if (hours >= 2) return `${hours} hours ago`;
+  if (hours >= 1) return '1 hour ago';
+  const mins = Math.max(0, Math.floor(age.ageMs / 60000));
+  return `${mins} min ago`;
+}
+
+function cacheFileStatus(filename, warnAfterMs) {
+  const filePath = path.join(MARKET_DIR, filename);
+  try {
+    const stat = fs.statSync(filePath);
+    const updatedAt = stat.mtime.toISOString();
+    const age = ageInfo(updatedAt);
+    return {
+      filename,
+      exists: true,
+      updatedAt,
+      ageMs: age.ageMs,
+      state: warnAfterMs && age.valid && age.ageMs > warnAfterMs ? 'warn' : 'ok',
+      detail: `${filename} updated ${ageLabel(updatedAt) || 'recently'}.`
+    };
+  } catch (_) {
+    return { filename, exists: false, updatedAt: '', ageMs: null, state: 'warn', detail: `${filename} has not been cached yet.` };
+  }
+}
+
+function aiCacheStatus(label, record, packageDate, configured) {
+  if (!configured) return { label, state: 'warn', current: false, generatedAt: '', packageDate: '', model: '', detail: 'Anthropic key is not configured.' };
+  if (!record) return { label, state: 'warn', current: false, generatedAt: '', packageDate: '', model: '', detail: 'No cached AI result yet.' };
+  const current = Boolean(packageDate && record.packageDate === packageDate);
+  return {
+    label,
+    state: current ? 'ok' : 'warn',
+    current,
+    generatedAt: record.generatedAt || '',
+    packageDate: record.packageDate || '',
+    model: record.model || '',
+    detail: current
+      ? `Current for ${packageDate}${record.generatedAt ? `, generated ${ageLabel(record.generatedAt)}` : ''}.`
+      : `Cached for ${record.packageDate || 'a prior package'}; current package is ${packageDate || 'unknown'}.`
+  };
+}
+
+function importAgeState(status, warnAfterDays) {
+  if (!status || !status.available) return 'warn';
+  if (!status.importedAt) return 'warn';
+  const age = ageInfo(status.importedAt);
+  if (!age.valid) return 'warn';
+  return age.ageDays > warnAfterDays ? 'warn' : 'ok';
+}
+
+function recentAiAuditEntries(entries) {
+  const aiEvents = new Set([
+    'daily-summary-generated',
+    'daily-summary-refresh-skipped',
+    'daily-summary-refresh-failed',
+    'daily-picks-generated',
+    'daily-picks-refresh-skipped',
+    'daily-picks-refresh-failed',
+    'sales-dashboard-refresh',
+    'sales-dashboard-refresh-failed'
+  ]);
+  return entries
+    .filter(entry => aiEvents.has(entry.event))
+    .slice(0, 10)
+    .map(entry => ({
+      at: entry.at || '',
+      event: entry.event || '',
+      packageDate: entry.packageDate || '',
+      model: entry.model || '',
+      actorDisplay: entry.actorDisplay || entry.actorUsername || '',
+      error: entry.error || '',
+      usage: entry.usage || null,
+      cacheError: entry.cacheError || ''
+    }));
+}
+
 function statusCheck(id, label, state, detail) {
   return { id, label, state, detail };
 }
@@ -2626,6 +2718,23 @@ function buildGoLiveStatus(req) {
   const bankData = compactImportStatus(bankStatus);
   const averagedSeries = compactImportStatus(bankStatus.averagedSeries);
   const bondAccounting = compactImportStatus(bankStatus.bondAccounting);
+  const today = todayStamp();
+  const packageDate = pkg.date || '';
+  const claudeConfigured = claudeClient.isConfigured();
+  const dailySummaryCache = aiCacheStatus('Daily Summary', dailySummary.getCachedSummary(MARKET_DIR), packageDate, claudeConfigured);
+  const dailyPicksCache = aiCacheStatus('Pick of Day', offeringsPick.getCachedPicks(MARKET_DIR), packageDate, claudeConfigured);
+  const salesDashboardCache = aiCacheStatus('Sales Dashboard', dailyDashboardJudgment.getCachedDashboard(MARKET_DIR), packageDate, claudeConfigured);
+  const marketCaches = [
+    cacheFileStatus('market-wire-headlines.json', 2 * 60 * 60 * 1000),
+    cacheFileStatus('market-wire-indicators.json', 24 * 60 * 60 * 1000),
+    cacheFileStatus('market-wire-auctions.json', 4 * 60 * 60 * 1000),
+    cacheFileStatus('treasury-yield-curve.json', 12 * 60 * 60 * 1000),
+    cacheFileStatus('market-color-feed.json', 2 * 60 * 60 * 1000),
+    cacheFileStatus('fred-indicators.json', 12 * 60 * 60 * 1000)
+  ];
+  const marketWarnCount = marketCaches.filter(c => c.state !== 'ok').length;
+  const aiCaches = [dailySummaryCache, dailyPicksCache, salesDashboardCache];
+  const aiWarnCount = aiCaches.filter(c => c.state !== 'ok').length;
 
   const checks = [
     statusCheck(
@@ -2655,6 +2764,14 @@ function buildGoLiveStatus(req) {
         : `All ${requiredSlots.length} required internal slots are filled.`
     ),
     statusCheck(
+      'package-date',
+      'Package freshness',
+      packageDate ? (packageDate === today ? 'ok' : 'warn') : 'fail',
+      packageDate
+        ? (packageDate === today ? `Current package is dated today (${today}).` : `Current package is dated ${packageDate}; today is ${today}.`)
+        : 'No current package date is available.'
+    ),
+    statusCheck(
       'publish-warnings',
       'Publish warnings',
       publishWarnings.length ? 'warn' : 'ok',
@@ -2677,6 +2794,48 @@ function buildGoLiveStatus(req) {
       accountStatuses.available
         ? `${accountStatuses.importedCount ? `${accountStatuses.importedCount.toLocaleString('en-US')} rows` : 'Account statuses'} imported.`
         : 'Import account ownership/status workbook for sales workflows.'
+    ),
+    statusCheck(
+      'bond-accounting-age',
+      'Bond accounting portfolios',
+      importAgeState(bondAccounting, 7),
+      bondAccounting.available
+        ? `Imported${bondAccounting.importedAt ? ` ${ageLabel(bondAccounting.importedAt)}` : ''}${bondAccounting.importedCount ? `; ${bondAccounting.importedCount.toLocaleString('en-US')} files/rows tracked.` : '.'}`
+        : 'Import current portfolio files before relying on maturity rollovers.'
+    ),
+    statusCheck(
+      'claude-ai',
+      'Claude AI configuration',
+      claudeConfigured ? 'ok' : 'warn',
+      claudeConfigured ? 'Anthropic API key is configured.' : 'AI summary/picks/dashboard refreshes are dormant until a key is configured.'
+    ),
+    statusCheck(
+      'ai-cache',
+      'AI cache freshness',
+      aiWarnCount ? 'warn' : 'ok',
+      aiWarnCount
+        ? `${aiWarnCount} AI cache${aiWarnCount === 1 ? '' : 's'} need refresh for the current package.`
+        : 'Daily Summary, Pick of Day, and Sales Dashboard are current.'
+    ),
+    statusCheck(
+      'market-cache',
+      'Market data caches',
+      marketWarnCount ? 'warn' : 'ok',
+      marketWarnCount
+        ? `${marketWarnCount} market cache${marketWarnCount === 1 ? '' : 's'} missing or stale.`
+        : 'Market Wire, auctions, yield curve, and market-color caches are fresh.'
+    ),
+    statusCheck(
+      'fred-key',
+      'FRED benchmarks',
+      process.env.FRED_API_KEY ? 'ok' : 'warn',
+      process.env.FRED_API_KEY ? 'FRED key is configured for SOFR/OAS/CD benchmark tiles.' : 'FRED key is not configured; benchmark tiles will omit those series.'
+    ),
+    statusCheck(
+      'auto-publish',
+      'Folder auto-publish',
+      AUTO_PUBLISH_ENABLED ? 'ok' : 'warn',
+      AUTO_PUBLISH_ENABLED ? 'Folder-drop auto-publish is enabled.' : 'Folder-drop auto-publish is disabled by FBBS_AUTO_PUBLISH=0.'
     )
   ];
   const failCount = checks.filter(check => check.state === 'fail').length;
@@ -2715,6 +2874,26 @@ function buildGoLiveStatus(req) {
       accountStatuses,
       averagedSeries,
       bondAccounting
+    },
+    ai: {
+      configured: claudeConfigured,
+      caches: aiCaches,
+      recent: recentAiAuditEntries(auditEntries)
+    },
+    integrations: {
+      fredConfigured: Boolean(process.env.FRED_API_KEY),
+      marketCaches
+    },
+    process: {
+      build: PORTAL_BUILD,
+      node: process.version,
+      uptimeSeconds: Math.round(process.uptime()),
+      pid: process.pid,
+      host: HOST,
+      port: PORT,
+      authMode: IS_IIS_AUTH_MODE ? 'iis' : 'local',
+      autoPublishEnabled: AUTO_PUBLISH_ENABLED,
+      autoFdicSyncEnabled: AUTO_FDIC_SYNC_ENABLED
     },
     checks
   };
@@ -7573,12 +7752,19 @@ function cusipSearchSources() {
   const fmtPct = v => (v != null && Number.isFinite(Number(v)) ? `${Number(v).toFixed(2)}%` : null);
   const join = parts => parts.filter(Boolean).join(' · ');
   const pct = v => {
-    const n = Number(String(v ?? '').replace(/%/g, ''));
+    if (v == null) return null;
+    const raw = String(v).replace(/%/g, '').trim();
+    if (!raw) return null;
+    const n = Number(raw);
     return Number.isFinite(n) ? n : null;
   };
   const numOf = v => {
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
+  };
+  const minNonNull = (...values) => {
+    const nums = values.filter(v => v != null && Number.isFinite(Number(v))).map(Number);
+    return nums.length ? Math.min(...nums) : null;
   };
   // Each source also carries normalize(row) → the cross-asset All Offerings
   // row shape: { description, coupon, yield, maturity, price, state, sector,
@@ -7611,13 +7797,21 @@ function cusipSearchSources() {
       type: 'agency', typeLabel: 'Agency', page: 'agencies',
       rows: slot(AGENCIES_FILENAME, 'agencies').offerings || [],
       describe: r => join([r.ticker, r.structure, fmtPct(r.coupon), r.maturity]),
-      normalize: r => ({ description: join([r.ticker, r.structure]), coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), ytm: pct(r.ytm), ytnc: pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.structure || 'Agency', availabilityK: r.availableSize != null ? numOf(r.availableSize) * 1000 : null, callDate: r.nextCallDate || null }),
+      normalize: r => {
+        const ytm = pct(r.ytm);
+        const ytnc = pct(r.ytnc);
+        return { description: join([r.ticker, r.structure]), coupon: pct(r.coupon), yield: minNonNull(ytm, ytnc) ?? ytm ?? ytnc, ytm, ytnc, maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.structure || 'Agency', availabilityK: r.availableSize != null ? numOf(r.availableSize) * 1000 : null, callDate: r.nextCallDate || null };
+      },
     },
     {
       type: 'corporate', typeLabel: 'Corporate', page: 'corporates',
       rows: slot(CORPORATES_FILENAME, 'corporates').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity]),
-      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), ytm: pct(r.ytm), ytnc: pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.sector || 'Corporate', availabilityK: numOf(r.availableSize), callDate: r.nextCallDate || null }),
+      normalize: r => {
+        const ytm = pct(r.ytm);
+        const ytnc = pct(r.ytnc);
+        return { description: r.issuerName || '', coupon: pct(r.coupon), yield: minNonNull(ytm, ytnc) ?? ytm ?? ytnc, ytm, ytnc, maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.sector || 'Corporate', availabilityK: numOf(r.availableSize), callDate: r.nextCallDate || null };
+      },
     },
     {
       type: 'mbs', typeLabel: 'MBS/CMO', page: 'mbs-cmo',
@@ -9974,19 +10168,21 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/daily-summary/refresh' && req.method === 'POST') {
-      if (!claudeClient.isConfigured()) {
-        return sendJSON(res, 200, { configured: false, summary: null });
-      }
       const [econ, meta] = await Promise.all([
         loadCurrentEconomicUpdate().catch(() => null),
         Promise.resolve(readCurrentSlotJson(META_FILENAME, 'meta') || {}),
       ]);
+      if (!claudeClient.isConfigured()) {
+        appendAuditLog({ event: 'daily-summary-refresh-skipped', packageDate: meta.date || null, reason: 'anthropic-not-configured' });
+        return sendJSON(res, 200, { configured: false, summary: null });
+      }
       try {
         const result = await dailySummary.generateSummary({ marketDir: MARKET_DIR, econ, meta, force: true, log });
-        appendAuditLog({ event: 'daily-summary-generated', packageDate: result.packageDate, model: result.model });
+        appendAuditLog({ event: 'daily-summary-generated', packageDate: result.packageDate, model: result.model, usage: result.usage || null, cacheError: result.cacheError || null, generatedAt: result.generatedAt || null });
         return sendJSON(res, 200, { configured: true, ...result });
       } catch (err) {
         log('error', 'Daily summary generation failed:', err.message);
+        appendAuditLog({ event: 'daily-summary-refresh-failed', packageDate: meta.date || null, error: err.message || String(err) });
         return sendJSON(res, 502, { configured: true, error: 'Summary generation failed: ' + err.message });
       }
     }
@@ -10011,17 +10207,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/offerings-pick/refresh' && req.method === 'POST') {
+      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
       if (!claudeClient.isConfigured()) {
+        appendAuditLog({ event: 'daily-picks-refresh-skipped', packageDate: meta.date || null, reason: 'anthropic-not-configured' });
         return sendJSON(res, 200, { configured: false, picks: null });
       }
-      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
       try {
         const rows = buildAllOfferingsRows();
         const result = await offeringsPick.generatePicks({ marketDir: MARKET_DIR, rows, meta, force: true, log });
-        appendAuditLog({ event: 'daily-picks-generated', packageDate: result.packageDate, count: result.picks.length, model: result.model });
+        appendAuditLog({ event: 'daily-picks-generated', packageDate: result.packageDate, count: result.picks.length, model: result.model, usage: result.usage || null, cacheError: result.cacheError || null, generatedAt: result.generatedAt || null });
         return sendJSON(res, 200, { configured: true, ...result });
       } catch (err) {
         log('error', 'Daily picks generation failed:', err.message);
+        appendAuditLog({ event: 'daily-picks-refresh-failed', packageDate: meta.date || null, error: err.message || String(err) });
         return sendJSON(res, 502, { configured: true, error: 'Pick generation failed: ' + err.message });
       }
     }
@@ -10061,7 +10259,8 @@ const server = http.createServer(async (req, res) => {
         appendAuditLog({
           event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
           degraded: record.degraded, coverage: record.coverage, flags: (record.flags || []).length,
-          candidateCount: record.candidateCount, model: record.model,
+          candidateCount: record.candidateCount, model: record.model, usage: record.usage || null,
+          cacheError: record.cacheError || null, modelError: record.modelError || null,
         });
         return sendJSON(res, 200, { ok: true, configured: claudeClient.isConfigured(), dashboard: record, cached: record.cached });
       } catch (err) {
@@ -10069,6 +10268,7 @@ const server = http.createServer(async (req, res) => {
         // zero candidates) — a model/API failure is already degraded inside
         // generateDashboard into a complete deterministic dashboard.
         log('warn', 'Sales dashboard refresh failed:', err.message);
+        appendAuditLog({ event: 'sales-dashboard-refresh-failed', packageDate: meta.date || null, error: err.message || String(err) });
         return sendJSON(res, 503, { ok: false, error: err.message });
       }
     }
