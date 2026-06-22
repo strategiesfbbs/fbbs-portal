@@ -41,6 +41,18 @@ function extractText(message) {
 }
 
 /**
+ * The `input` of the first tool_use block, or null. When a call forces a tool
+ * (tool_choice), the API returns the model's arguments as an ALREADY-PARSED
+ * object here — well-formed JSON guaranteed by the platform, so callers that
+ * need reliable structured output use this instead of parsing extractText().
+ */
+function extractToolInput(message) {
+  const blocks = message && Array.isArray(message.content) ? message.content : [];
+  const block = blocks.find(b => b && b.type === 'tool_use' && b.input && typeof b.input === 'object');
+  return block ? block.input : null;
+}
+
+/**
  * One Messages API call. Returns { text, model, stopReason, usage }.
  * Throws on a missing key, a non-2xx response, a network/timeout failure, or a
  * safety refusal (stop_reason 'refusal') — the caller decides how to surface it.
@@ -66,6 +78,11 @@ async function createMessage(opts) {
   };
   if (o.system) body.system = o.system;
   if (o.effort) body.output_config = { effort: o.effort };
+  // Optional forced tool-use for reliable structured output. Additive — only
+  // engaged when a caller passes tools; the platform serializes the model's
+  // arguments as well-formed JSON, surfaced via extractToolInput().
+  if (Array.isArray(o.tools) && o.tools.length) body.tools = o.tools;
+  if (o.toolChoice) body.tool_choice = o.toolChoice;
 
   const res = await fetchImpl(ANTHROPIC_URL, {
     method: 'POST',
@@ -94,6 +111,7 @@ async function createMessage(opts) {
   }
   return {
     text: extractText(message),
+    toolInput: extractToolInput(message),
     model: (message && message.model) || body.model,
     stopReason: (message && message.stop_reason) || null,
     usage: (message && message.usage) || null,
@@ -104,6 +122,7 @@ module.exports = {
   createMessage,
   isConfigured,
   extractText,
+  extractToolInput,
   ANTHROPIC_URL,
   ANTHROPIC_VERSION,
   DEFAULT_MODEL,

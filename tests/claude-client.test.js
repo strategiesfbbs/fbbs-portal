@@ -79,6 +79,31 @@ test('createMessage throws on a safety refusal', async () => {
     /refusal/);
 });
 
+test('extractToolInput returns the tool_use input, or null on a text reply', () => {
+  assert.deepStrictEqual(
+    claude.extractToolInput({ content: [{ type: 'text', text: 'x' }, { type: 'tool_use', name: 't', input: { a: 1 } }] }),
+    { a: 1 });
+  assert.strictEqual(claude.extractToolInput({ content: [{ type: 'text', text: 'x' }] }), null);
+  assert.strictEqual(claude.extractToolInput({}), null);
+});
+
+test('createMessage emits tools/tool_choice only when passed, and surfaces toolInput', async () => {
+  // Without tools: body carries neither key; toolInput is null on a text reply.
+  let captured = null;
+  let fetchImpl = async (url, init) => { captured = JSON.parse(init.body); return okResponse({ model: 'm', stop_reason: 'end_turn', content: [{ type: 'text', text: 'hi' }] }); };
+  let out = await claude.createMessage({ apiKey: 'sk-test', messages: [{ role: 'user', content: 'hi' }], fetchImpl });
+  assert.ok(!('tools' in captured) && !('tool_choice' in captured));
+  assert.strictEqual(out.toolInput, null);
+
+  // With tools: body carries both, and a tool_use response surfaces via toolInput.
+  const tool = { name: 'emit', input_schema: { type: 'object' } };
+  fetchImpl = async (url, init) => { captured = JSON.parse(init.body); return okResponse({ model: 'm', stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'emit', input: { picks: { ccorp: [] } } }] }); };
+  out = await claude.createMessage({ apiKey: 'sk-test', messages: [{ role: 'user', content: 'hi' }], tools: [tool], toolChoice: { type: 'tool', name: 'emit' }, fetchImpl });
+  assert.deepStrictEqual(captured.tools, [tool]);
+  assert.deepStrictEqual(captured.tool_choice, { type: 'tool', name: 'emit' });
+  assert.deepStrictEqual(out.toolInput, { picks: { ccorp: [] } });
+});
+
 (async () => {
   for (const { name, fn } of tests) {
     try { await fn(); passed++; }

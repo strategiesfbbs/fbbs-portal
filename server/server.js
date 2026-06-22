@@ -189,6 +189,8 @@ const { buildMarketSnapshot } = require('./market-snapshot');
 const claudeClient = require('./claude-client');
 const dailySummary = require('./daily-summary');
 const offeringsPick = require('./offerings-pick');
+const dailyDashboard = require('./daily-dashboard');                 // Phase 1: audience/tax candidate layer
+const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2: grounded Claude judgment layer
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 
@@ -7574,52 +7576,60 @@ function cusipSearchSources() {
     const n = Number(String(v ?? '').replace(/%/g, ''));
     return Number.isFinite(n) ? n : null;
   };
+  const numOf = v => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
   // Each source also carries normalize(row) → the cross-asset All Offerings
-  // row shape: { description, coupon, yield, maturity, price, state, sector }.
-  // `yield` is the asset's quoted economic yield (CD rate, muni YTW, agency/
-  // corporate YTM, MBS yield, structured-note coupon).
+  // row shape: { description, coupon, yield, maturity, price, state, sector,
+  // availabilityK, callDate }. `yield` is the asset's quoted economic yield (CD
+  // rate, muni YTW, agency/corporate YTM, MBS yield, structured-note coupon).
+  // `availabilityK` is offered size normalized to $000 (thousands of par) so the
+  // Sales Dashboard's ≥$250K featured-pick floor can compare across classes —
+  // null means "size unknown, don't exclude". `callDate` is the next call date
+  // (null = non-callable / unknown).
   return [
     {
       type: 'cd', typeLabel: 'CD Offering', page: 'explorer',
       rows: slot(OFFERINGS_FILENAME, 'offerings').offerings || [],
       describe: r => join([r.name, r.term, fmtPct(r.rate), r.maturity]),
-      normalize: r => ({ description: join([r.name, r.term]), coupon: null, yield: pct(r.rate), maturity: r.maturity || null, price: null, state: r.issuerState || '', sector: 'CD' }),
+      normalize: r => ({ description: join([r.name, r.term]), coupon: null, yield: pct(r.rate), maturity: r.maturity || null, price: null, state: r.issuerState || '', sector: 'CD', availabilityK: null, callDate: null }),
     },
     {
       type: 'treasury', typeLabel: 'Treasury', page: 'treasury-explorer',
       rows: slot(TREASURY_NOTES_FILENAME, 'treasury notes').notes || [],
       describe: r => join([r.description, fmtPct(r.yield) && `${fmtPct(r.yield)} YTM`, r.maturity]),
-      normalize: r => ({ description: r.description || '', coupon: pct(r.coupon), yield: pct(r.yield), maturity: r.maturity || null, price: pct(r.price), state: '', sector: 'UST' }),
+      normalize: r => ({ description: r.description || '', coupon: pct(r.coupon), yield: pct(r.yield), maturity: r.maturity || null, price: pct(r.price), state: '', sector: 'UST', availabilityK: null, callDate: null }),
     },
     {
       type: 'muni', typeLabel: 'Muni', page: 'muni-explorer',
       rows: slot(MUNI_OFFERINGS_FILENAME, 'muni offerings').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity, fmtPct(r.ytw) && `${fmtPct(r.ytw)} YTW`]),
-      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni' }),
+      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni', availabilityK: numOf(r.quantity), callDate: r.callDate || null }),
     },
     {
       type: 'agency', typeLabel: 'Agency', page: 'agencies',
       rows: slot(AGENCIES_FILENAME, 'agencies').offerings || [],
       describe: r => join([r.ticker, r.structure, fmtPct(r.coupon), r.maturity]),
-      normalize: r => ({ description: join([r.ticker, r.structure]), coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.structure || 'Agency' }),
+      normalize: r => ({ description: join([r.ticker, r.structure]), coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), ytm: pct(r.ytm), ytnc: pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.structure || 'Agency', availabilityK: r.availableSize != null ? numOf(r.availableSize) * 1000 : null, callDate: r.nextCallDate || null }),
     },
     {
       type: 'corporate', typeLabel: 'Corporate', page: 'corporates',
       rows: slot(CORPORATES_FILENAME, 'corporates').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity]),
-      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.sector || 'Corporate' }),
+      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytm) ?? pct(r.ytnc), ytm: pct(r.ytm), ytnc: pct(r.ytnc), maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.sector || 'Corporate', availabilityK: numOf(r.availableSize), callDate: r.nextCallDate || null }),
     },
     {
       type: 'mbs', typeLabel: 'MBS/CMO', page: 'mbs-cmo',
       rows: (loadMbsCmoInventory(MBS_CMO_DIR) || {}).offers || [],
       describe: r => join([r.description, fmtPct(r.coupon), r.productType]),
-      normalize: r => ({ description: r.description || '', coupon: pct(r.coupon), yield: pct(r.yield), maturity: r.maturityDate || null, price: pct(r.ask) ?? pct(r.price), state: '', sector: r.productType || 'MBS' }),
+      normalize: r => ({ description: r.description || '', coupon: pct(r.coupon), yield: pct(r.yield), maturity: r.maturityDate || null, price: pct(r.ask) ?? pct(r.price), state: '', sector: r.productType || 'MBS', availabilityK: null, callDate: null }),
     },
     {
       type: 'structured-note', typeLabel: 'Structured Note', page: 'structured-notes',
       rows: (loadStructuredNotesInventory(STRUCTURED_NOTES_DIR) || {}).notes || [],
       describe: r => join([r.issuer, r.structure, fmtPct(r.coupon), r.maturityDate]),
-      normalize: r => ({ description: join([r.issuer, r.structure]), coupon: pct(r.coupon), yield: pct(r.coupon), maturity: r.maturityDate || null, price: pct(r.price), state: '', sector: r.structure || 'Structured' }),
+      normalize: r => ({ description: join([r.issuer, r.structure]), coupon: pct(r.coupon), yield: pct(r.coupon), maturity: r.maturityDate || null, price: pct(r.price), state: '', sector: r.structure || 'Structured', availabilityK: null, callDate: r.nextCallDate || r.callDate || null }),
     },
   ];
 }
@@ -10013,6 +10023,53 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         log('error', 'Daily picks generation failed:', err.message);
         return sendJSON(res, 502, { configured: true, error: 'Pick generation failed: ' + err.message });
+      }
+    }
+
+    // Sales Dashboard (Claude judgment layer over the Phase-1 audience/tax
+    // candidate set). GET is read-only and NEVER billable: it serves the cached
+    // dashboard, or — when nothing is cached yet — a deterministic, no-prose
+    // preview (the Phase-1 per-audience candidate lists) so the page is useful
+    // before anyone pays. POST .../refresh is the explicit billable generate;
+    // it degrades to an all-deterministic dashboard if the model/key is absent.
+    if (pathname === '/api/sales-dashboard' && req.method === 'GET') {
+      const configured = claudeClient.isConfigured();
+      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
+      const packageDate = meta.date || null;
+      const cached = dailyDashboardJudgment.getCachedDashboard(MARKET_DIR);
+      if (cached) {
+        const stale = !(packageDate && cached.packageDate === packageDate);
+        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: cached, cached: true, stale });
+      }
+      // No cache yet — deterministic preview, zero billable cost.
+      let candidatePreview = null;
+      try {
+        const cs = dailyDashboard.buildCandidateSet(buildAllOfferingsRows(), {});
+        candidatePreview = { audiences: cs.audiences, coverage: cs.coverage, coverageOk: cs.coverageOk, byAudience: cs.byAudience };
+      } catch (err) {
+        log('warn', 'Sales dashboard preview build failed:', err.message);
+      }
+      return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: null, cached: false, candidatePreview });
+    }
+
+    if (pathname === '/api/sales-dashboard/refresh' && req.method === 'POST') {
+      const econ = await loadCurrentEconomicUpdate().catch(() => null);
+      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
+      try {
+        const rows = buildAllOfferingsRows();
+        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, force: true, log });
+        appendAuditLog({
+          event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
+          degraded: record.degraded, coverage: record.coverage, flags: (record.flags || []).length,
+          candidateCount: record.candidateCount, model: record.model,
+        });
+        return sendJSON(res, 200, { ok: true, configured: claudeClient.isConfigured(), dashboard: record, cached: record.cached });
+      } catch (err) {
+        // Only the two legitimate hard throws reach here (missing marketDir,
+        // zero candidates) — a model/API failure is already degraded inside
+        // generateDashboard into a complete deterministic dashboard.
+        log('warn', 'Sales dashboard refresh failed:', err.message);
+        return sendJSON(res, 503, { ok: false, error: err.message });
       }
     }
 
