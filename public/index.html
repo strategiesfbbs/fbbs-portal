@@ -46,7 +46,7 @@
           <span class="nav-label">CRM Pulse</span>
         </a>
         <a class="nav-link nav-minor" data-page="dashboard" href="#dashboard">
-          <span class="nav-label">Sales Dashboard</span>
+          <span class="nav-label">Published Dashboard</span>
         </a>
         <a class="nav-link nav-minor" data-page="econ" href="#econ">
           <span class="nav-label">Economic Update</span>
@@ -70,6 +70,9 @@
         <span class="nav-caret">&#8250;</span>
       </button>
       <div class="nav-sub" id="nav-sub-offerings">
+        <a class="nav-link nav-minor" data-page="sales-dashboard" href="#sales-dashboard">
+          <span class="nav-label">Sales Dashboard</span>
+        </a>
         <a class="nav-link nav-minor" data-page="all-offerings" href="#all-offerings">
           <span class="nav-label">All Offerings</span>
         </a>
@@ -349,7 +352,7 @@
       <article class="home-tile" data-tile="daily" data-reveal>
         <header class="home-tile-head">
           <p class="home-tile-kicker">Daily Sheets</p>
-          <button type="button" class="home-tile-jump" data-goto="dashboard" aria-label="Open Sales Dashboard">
+          <button type="button" class="home-tile-jump" data-goto="dashboard" aria-label="Open Published Dashboard">
             Open <span aria-hidden="true">&rarr;</span>
           </button>
         </header>
@@ -2167,6 +2170,45 @@
         <tbody id="allOfferingsBody"></tbody>
       </table>
     </div>
+  </div>
+</div>
+
+<div class="page" id="p-sales-dashboard">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Sales <strong>Dashboard</strong></h2>
+        <p class="hero-sub" id="salesDashSub">Curated daily picks by client tax structure &mdash; C-Corp, S-Corp, and RIA.</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="salesDashStat">&mdash;</div>
+        <div class="lbl">Picks Curated</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="market-snapshot-strip" id="salesDashSnapshotStrip" hidden></div>
+
+    <section class="daily-picks-card" id="salesDashboardCard" hidden>
+      <div class="daily-picks-head">
+        <h3 class="daily-picks-title">Today's audience fit <span class="daily-summary-badge">AI</span></h3>
+        <div class="daily-picks-controls">
+          <span class="daily-summary-meta" id="salesDashboardMeta"></span>
+          <label class="sd-tax-toggle">TEY rate
+            <select id="salesDashTaxSelect" aria-label="Tax rate for taxable-equivalent yield">
+              <option value="">Per client</option>
+              <option value="21">21% C-Corp</option>
+              <option value="29.6">29.6% S-Corp</option>
+              <option value="0">Nominal</option>
+            </select>
+          </label>
+          <button type="button" class="small-btn" id="salesDashboardBtn">Generate</button>
+        </div>
+      </div>
+      <p class="daily-picks-note">Internal desk aid &mdash; Claude ranks today's inventory by client tax structure; yields, prices, and TEY are the desk's own. Taxable-equivalent yields <strong>exclude</strong> the TEFRA interest-expense haircut and the 20% C-Corp bank-qualified disallowance &mdash; clients should consult their own tax/portfolio advisors. Not investment advice. For Institutional Use Only.</p>
+      <div class="daily-picks-body" id="salesDashboardBody"></div>
+    </section>
   </div>
 </div>
 

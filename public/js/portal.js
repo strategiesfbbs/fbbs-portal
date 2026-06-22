@@ -148,7 +148,7 @@
   };
 
   const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
-                       'all-offerings', 'watchlist', 'treasury-explorer',
+                       'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
@@ -157,7 +157,7 @@
     { page: 'pulse', group: 'FBBS', label: 'CRM Pulse', description: 'Live CRM dashboard — clients, prospects, follow-ups, logged activity', aliases: 'crm pulse dashboard kpi clients prospects by state strategies activity follow-ups' },
     { page: 'exec-summary', group: 'Operations', label: 'Exec Summary', description: 'Management-only daily capital, risk, P&L, and desk-activity dashboard', aliases: 'executive summary ceo capital net cap excess requirement buffer risk dv01 pnl revenue desk rep counterparty haircut management board' },
     { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
-    { page: 'dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Open the published FBBS dashboard', aliases: 'sales html full view fbbs' },
+    { page: 'dashboard', group: 'FBBS', label: 'Published Dashboard', description: 'Open the uploaded HTML dashboard artifact (the static morning dashboard)', aliases: 'sales html full view fbbs published static uploaded' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
     { page: 'market-color', group: 'FBBS', label: 'Market Color', description: 'News hub: market wire, official headlines, and desk color', aliases: 'morning iq market color email news s&p macro headlines wire hub' },
@@ -165,6 +165,7 @@
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
+    { page: 'sales-dashboard', group: 'Offerings', label: 'Sales Dashboard', description: 'Curated daily picks by client tax structure (C-Corp / S-Corp / RIA), with the macro→pick call, Bond of the Day, and Strategy of the Day', aliases: 'sales dashboard audience fit picks ccorp scorp ria client tax structure taxable equivalent tey bond of the day botd strategy of the day sod curated morning' },
     { page: 'all-offerings', group: 'Offerings', label: 'All Offerings', description: 'Every security in today\'s inventory across all asset classes — one screen', aliases: 'all offerings cross asset unified everything inventory cd muni agency corporate treasury mbs structured screen blotter' },
     { page: 'watchlist', group: 'Offerings', label: 'My Watchlist', description: 'Securities and banks you starred, re-joined to today\'s inventory', aliases: 'watchlist watch starred favorites my list follow' },
     { page: 'treasury-explorer', group: 'Offerings', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
@@ -199,6 +200,7 @@
     mmd: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
+    'sales-dashboard': 'offerings',
     'all-offerings': 'offerings',
     watchlist: 'offerings',
     'treasury-explorer': 'offerings',
@@ -1455,6 +1457,7 @@
     if (pageName === 'archive') loadArchive();
     if (pageName === 'cd-recap') loadCdRecap();
     if (pageName === 'cd-internal') loadCdInternal();
+    if (pageName === 'sales-dashboard') loadSalesDashboard();
     if (pageName === 'all-offerings') loadAllOfferings();
     if (pageName === 'watchlist') loadWatchlistPage();
     if (pageName === 'contacts') loadContactsDirectory();
@@ -17045,6 +17048,221 @@
     }
   }
 
+  // ===== Sales Dashboard (#sales-dashboard) =====
+  // Native audience-fit view over the grounded /api/sales-dashboard judgment
+  // layer: a 3-column C-Corp/S-Corp/RIA matrix with macro->pick connectors, a
+  // Bond-of-the-Day, a Strategy-of-the-Day, and an interactive TEY tax-rate
+  // selector. Numbers are the desk's own; Claude only ranks + writes prose.
+  let salesDashboardData = null;
+
+  const SD_TILE = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
+
+  function sdClassSlug(assetClass) {
+    const c = String(assetClass || '').toLowerCase();
+    if (c.includes('cd')) return 'cd';
+    if (c.includes('muni')) return 'muni';
+    if (c.includes('agency')) return 'agency';
+    if (c.includes('corp')) return 'corporate';
+    if (c.includes('treasur') || c === 'ust') return 'treasury';
+    if (c.includes('mbs') || c.includes('cmo')) return 'mbs';
+    if (c.includes('structured') || c.includes('note')) return 'structured-note';
+    return 'other';
+  }
+
+  // Effective yield to DISPLAY for a pick under one audience, honoring the tax
+  // selector. Reads our econ — grounded picks carry `eff` (single audience),
+  // BOTD/SoD carry `eff` (per-audience map), preview candidates carry `econ`.
+  // An override recomputes the gross-up live for exempt munis (§3.3) from OUR ytw.
+  function sdEff(p, audKey, override) {
+    const econ = (p.eff && p.eff.effYield != null) ? p.eff
+      : (p.eff && p.eff[audKey]) ? p.eff[audKey]
+        : (p.econ && p.econ[audKey]) ? p.econ[audKey]
+          : null;
+    const ytw = (p.ytw != null) ? Number(p.ytw) : null;
+    if (override != null && p.exemptMuni) {
+      if (override <= 0) return { val: ytw, basis: 'nominal' };
+      return { val: ytw != null ? ytw / (1 - override / 100) : null, basis: 'TEY @' + override + '%' };
+    }
+    if (econ && econ.effYield != null) return { val: econ.effYield, basis: econ.basis || 'eff' };
+    return { val: ytw, basis: 'YTW' };
+  }
+
+  function sdOverride() {
+    const sel = document.getElementById('salesDashTaxSelect');
+    if (!sel || sel.value === '') return null;
+    const n = Number(sel.value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function sdPickRow(p, audKey, override) {
+    const e = sdEff(p, audKey, override);
+    const chips = [];
+    if (p.bq) chips.push('<span class="demin-chip ok">BQ</span>');
+    if (p.deepDiscount) chips.push('<span class="demin-chip breach">deep disc</span>');
+    if (p.source === 'backfill') chips.push('<span class="exec-flag warn" title="Auto-selected to keep the slot filled">auto</span>');
+    return `
+      <div class="sd-pick">
+        <div class="sd-pick-main">
+          <div class="sd-pick-head">
+            <span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span>
+            ${p.state ? `<span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}
+            ${chips.join('')}
+          </div>
+          <div class="sd-pick-headline">${escapeHtml(p.headline || p.description || '')}</div>
+          ${p.rationale ? `<div class="sd-pick-rationale">${escapeHtml(p.rationale)}</div>` : ''}
+        </div>
+        <div class="sd-pick-stats">
+          <span class="sd-eff" title="${escapeHtml(e.basis)}"><strong>${e.val == null ? '—' : Number(e.val).toFixed(2)}</strong>%</span>
+          <span class="sd-sub">${SD_TILE(p.coupon, 3)}% cpn · ${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'}</span>
+          <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
+        </div>
+      </div>`;
+  }
+
+  function sdAudienceColumns(audiences, picksByAud, connectorByAud, override, limit) {
+    return (audiences || []).map(a => {
+      let picks = (picksByAud && picksByAud[a.key]) || [];
+      if (limit) picks = picks.slice(0, limit);
+      const conn = connectorByAud && connectorByAud[a.key];
+      const rateLbl = override != null
+        ? (override <= 0 ? 'nominal' : override + '% TEY')
+        : (a.taxRatePct ? a.taxRatePct + '%' + (a.bankEligible ? ' TEY' : '') : 'taxable');
+      const rows = picks.length
+        ? picks.map(p => sdPickRow(p, a.key, override)).join('')
+        : '<p class="daily-summary-empty">No eligible picks today.</p>';
+      return `<div class="exec-card sd-aud">
+        <div class="sd-aud-head">
+          <span class="sd-aud-name">${escapeHtml(a.label)}</span>
+          <span class="sd-aud-rate" title="Tax rate applied to taxable-equivalent yield">${escapeHtml(rateLbl)}</span>
+        </div>
+        ${conn ? `<p class="exec-narrative-text sd-connector">${escapeHtml(conn)}</p>` : ''}
+        <div class="sd-aud-picks">${rows}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function renderSalesDashboard(data) {
+    const card = document.getElementById('salesDashboardCard');
+    const body = document.getElementById('salesDashboardBody');
+    const metaEl = document.getElementById('salesDashboardMeta');
+    const btn = document.getElementById('salesDashboardBtn');
+    const stat = document.getElementById('salesDashStat');
+    if (!card || !body) return;
+    salesDashboardData = data || {};
+    const dash = data && data.dashboard;
+    const preview = data && data.candidatePreview;
+    const override = sdOverride();
+
+    if (!dash && !preview) {
+      card.hidden = true;
+      if (metaEl) metaEl.textContent = '';
+      if (stat) stat.textContent = '—';
+      return;
+    }
+    card.hidden = false;
+
+    if (dash) {
+      const audiences = dash.audiences || [];
+      const warn = dash.modelError
+        ? `<p class="daily-summary-error">AI prose unavailable (${escapeHtml(dash.modelError)}) — showing deterministic, desk-grounded picks.</p>`
+        : '';
+      const botd = dash.botd;
+      const botdHtml = botd ? `
+        <div class="sd-botd">
+          <div class="sd-botd-tag">Bond of the Day${botd.source === 'backfill' ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
+          <div class="sd-botd-body">
+            <div class="sd-botd-main">
+              <div class="sd-pick-head">
+                <span class="ao-class-pill ao-class-${sdClassSlug(botd.assetClass)}">${escapeHtml(botd.assetClass || '')}</span>
+                ${botd.state ? `<span class="sd-pick-state">${escapeHtml(botd.state)}</span>` : ''}
+                ${botd.bq ? '<span class="demin-chip ok">BQ</span>' : ''}
+                ${botd.deepDiscount ? '<span class="demin-chip breach">deep disc</span>' : ''}
+              </div>
+              <div class="sd-botd-headline">${escapeHtml(botd.headline || botd.description || '')}</div>
+              ${botd.description && botd.headline ? `<div class="sd-pick-state">${escapeHtml(botd.description)}</div>` : ''}
+              ${botd.rationale ? `<div class="sd-pick-rationale">${escapeHtml(botd.rationale)}</div>` : ''}
+            </div>
+            <div class="sd-botd-stats">
+              <span class="sd-eff"><strong>${(function () { const e = sdEff(botd, 'ccorp', override); return e.val == null ? '—' : Number(e.val).toFixed(2); })()}</strong>% ${escapeHtml(botd.exemptMuni && (override == null || override > 0) ? 'TEY' : 'yld')}</span>
+              <span class="sd-sub">${SD_TILE(botd.coupon, 3)}% cpn · ${botd.maturity ? escapeHtml(formatNumericDate(String(botd.maturity).slice(0, 10))) : '—'}</span>
+              <button type="button" class="small-btn" data-goto="${escapeHtml(botd.page || 'all-offerings')}"${botd.cusip ? ` data-cusip="${escapeHtml(botd.cusip)}"` : ''}>Open</button>
+            </div>
+          </div>
+        </div>` : '';
+      const sod = dash.sod;
+      const sodHtml = sod ? `
+        <div class="sd-sod">
+          <div class="sd-sod-tag">Strategy of the Day${sod.source === 'backfill' ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
+          <h4 class="sd-sod-title">${escapeHtml(sod.title || '')}</h4>
+          <p class="sd-sod-narrative">${escapeHtml(sod.narrative || '')}</p>
+          <div class="sd-sod-secs">${(sod.securities || []).map(s => `
+            <span class="sd-sod-sec">
+              <span class="ao-class-pill ao-class-${sdClassSlug(s.assetClass)}">${escapeHtml(s.assetClass || '')}</span>
+              <span class="sd-sod-sec-name">${escapeHtml(s.description || s.cusip || '')}</span>
+              <button type="button" class="small-btn" data-goto="${escapeHtml(s.page || 'all-offerings')}"${s.cusip ? ` data-cusip="${escapeHtml(s.cusip)}"` : ''}>Open</button>
+            </span>`).join('')}</div>
+        </div>` : '';
+      const matrix = `<div class="sd-matrix exec-three-col">${sdAudienceColumns(audiences, dash.picks, dash.connector, override)}</div>`;
+      body.innerHTML = warn + `<div class="sd-feature">${botdHtml}${sodHtml}</div>` + matrix;
+
+      if (stat) stat.textContent = audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
+      if (metaEl) {
+        const bits = [];
+        if (data.stale) bits.push('package is newer — refresh for today');
+        else if (dash.generatedAt) bits.push('Generated ' + new Date(dash.generatedAt).toLocaleString());
+        bits.push(dash.model ? dash.model : 'deterministic (no AI key)');
+        metaEl.textContent = bits.join(' · ');
+      }
+      if (btn) btn.textContent = data.cached ? 'Refresh' : 'Generate';
+    } else {
+      // No cached read yet — deterministic preview from the candidate set.
+      const matrix = `<div class="sd-matrix exec-three-col">${sdAudienceColumns(preview.audiences, preview.byAudience, null, override, 5)}</div>`;
+      body.innerHTML = '<p class="daily-summary-empty">Deterministic preview — the top candidates by client tax structure. Generate today’s AI read for ranked picks, the macro→pick call per client, and the Bond &amp; Strategy of the Day.</p>' + matrix;
+      if (stat) stat.textContent = (preview.audiences || []).reduce((n, a) => n + (((preview.coverage || {})[a.key]) || 0), 0);
+      if (metaEl) metaEl.textContent = data.configured ? 'No AI read generated yet' : 'Add an Anthropic API key for the AI read';
+      if (btn) btn.textContent = 'Generate';
+    }
+  }
+
+  async function refreshSalesDashboard() {
+    const btn = document.getElementById('salesDashboardBtn');
+    const body = document.getElementById('salesDashboardBody');
+    if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+    try {
+      const res = await fetch('/api/sales-dashboard/refresh', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
+      renderSalesDashboard(data);
+      showToast(data.dashboard && data.dashboard.degraded ? 'Refreshed (auto-completed some slots).' : 'Sales Dashboard refreshed.');
+    } catch (e) {
+      if (body) body.innerHTML = `<p class="daily-summary-error">${escapeHtml(e.message || 'Refresh failed')}</p>`;
+      showToast('Refresh failed.', true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function loadSalesDashboard() {
+    const card = document.getElementById('salesDashboardCard');
+    if (!card) return;
+    const btn = document.getElementById('salesDashboardBtn');
+    if (btn && !btn.dataset.bound) {
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', refreshSalesDashboard);
+    }
+    const sel = document.getElementById('salesDashTaxSelect');
+    if (sel && !sel.dataset.bound) {
+      sel.dataset.bound = '1';
+      sel.addEventListener('change', () => { if (salesDashboardData) renderSalesDashboard(salesDashboardData); });
+    }
+    loadMarketSnapshotStrip('salesDashSnapshotStrip');
+    try {
+      const res = await fetch('/api/sales-dashboard', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      renderSalesDashboard(await res.json());
+    } catch (_) { /* leave the prior render in place */ }
+  }
+
   function renderAllOfferingsClasses() {
     const wrap = document.getElementById('allOfferingsClasses');
     if (!wrap || !allOfferingsData) return;
@@ -21040,6 +21258,7 @@
   // package without a manual browser refresh. Inactive pages reload anyway
   // the next time goTo() opens them.
   const PACKAGE_PAGE_LOADERS = {
+    'sales-dashboard': () => loadSalesDashboard(),
     'all-offerings': () => loadAllOfferings(),
     'watchlist': () => loadWatchlistPage(),
     'treasury-explorer': () => loadTreasuryNotes(),

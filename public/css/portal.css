@@ -15759,3 +15759,42 @@ body {
   font-size: 13px;
   margin: 0 0 10px;
 }
+
+/* ===== Sales Dashboard (audience-fit picks) ===== */
+.sd-tax-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.sd-tax-toggle select { font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+
+.sd-feature { display: flex; flex-wrap: wrap; gap: 14px; margin: 4px 0 18px; }
+.sd-botd, .sd-sod { flex: 1 1 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.sd-botd { border-top: 3px solid var(--racing-green); }
+.sd-sod { border-top: 3px solid var(--hookers-green); }
+.sd-botd-tag, .sd-sod-tag { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--hookers-green); margin-bottom: 8px; }
+.sd-botd-body { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.sd-botd-main { flex: 1 1 200px; min-width: 0; }
+.sd-botd-headline { font-size: 15px; font-weight: 650; color: var(--text); margin: 4px 0; }
+.sd-botd-stats { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; white-space: nowrap; }
+.sd-sod-title { margin: 0 0 4px; font-size: 14px; color: var(--racing-green); }
+.sd-sod-narrative { margin: 0 0 10px; font-size: 13px; line-height: 1.5; color: var(--text2); }
+.sd-sod-secs { display: flex; flex-direction: column; gap: 6px; }
+.sd-sod-sec { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+.sd-sod-sec-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.sd-matrix { margin-top: 4px; }
+.sd-aud { margin: 0 !important; }
+.sd-aud-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; border-bottom: 2px solid var(--border-light); padding-bottom: 6px; margin-bottom: 8px; }
+.sd-aud-name { font-weight: 700; color: var(--racing-green); font-size: 14px; }
+.sd-aud-rate { font-size: 11px; color: var(--text3); }
+.sd-connector { font-size: 12.5px; font-style: italic; color: var(--text2); margin: 0 0 10px; line-height: 1.5; }
+.sd-aud-picks { display: flex; flex-direction: column; gap: 8px; }
+
+.sd-pick { display: flex; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border-light); }
+.sd-pick:first-child { border-top: 0; }
+.sd-pick-main { flex: 1 1 auto; min-width: 0; }
+.sd-pick-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px; }
+.sd-pick-state { font-size: 11px; color: var(--text3); }
+.sd-pick-headline { font-size: 13px; font-weight: 600; color: var(--text); }
+.sd-pick-rationale { font-size: 12px; color: var(--text2); line-height: 1.45; margin-top: 2px; }
+.sd-pick-stats { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; white-space: nowrap; }
+.sd-eff { font-size: 14px; color: var(--racing-green); }
+.sd-eff strong { font-size: 15px; }
+.sd-sub { font-size: 11px; color: var(--text3); }
