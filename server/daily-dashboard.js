@@ -177,6 +177,10 @@ function toCandidate(row) {
     availabilityK: availabilityK(row),
     bq: isBankQualified(row),
     exemptMuni: isExemptMuni(row),
+    // Credit ratings, when the source carries them (muni / corporate) — used by
+    // the relative-value engine for rating-peer grouping and caveats. Null otherwise.
+    moody: row.moody || null,
+    sp: row.sp || null,
     audiences: audiencesForRow(row),
   };
 }

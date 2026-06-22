@@ -17059,13 +17059,16 @@
   }
 
   // ===== Sales Dashboard (#sales-dashboard) =====
-  // Native audience-fit view over the grounded /api/sales-dashboard judgment
-  // layer: a 3-column C-Corp/S-Corp/RIA matrix with macro->pick connectors, a
-  // Bond-of-the-Day, a Strategy-of-the-Day, and an interactive TEY tax-rate
-  // selector. Numbers are the desk's own; Claude only ranks + writes prose.
+  // Relative-value Sales Dashboard over /api/sales-dashboard. The desk sells
+  // CHEAPNESS, not raw yield: every security is scored against the matched
+  // Treasury, FDIC CD benchmarks and same-sector/maturity/rating peers, then
+  // risk-adjusted (long maturity, call risk, deep premium and tiny blocks are
+  // docked). The deterministic RV read is FREE on load; Claude (Generate) layers
+  // the prose/talking points. Numbers are always the desk's own.
   let salesDashboardData = null;
 
   const SD_TILE = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
+  function sdNum(v, d = 2) { return (v == null || v === '' || isNaN(v)) ? '—' : Number(v).toFixed(d); }
 
   function sdClassSlug(assetClass) {
     const c = String(assetClass || '').toLowerCase();
@@ -17079,47 +17082,91 @@
     return 'other';
   }
 
-  // Effective yield to DISPLAY for a pick under one audience, honoring the tax
-  // selector. Reads our econ — grounded picks carry `eff` (single audience),
-  // BOTD/SoD carry `eff` (per-audience map), preview candidates carry `econ`.
-  // An override recomputes the gross-up live for exempt munis (§3.3) from OUR ytw.
-  function sdEff(p, audKey, override) {
+  // Effective yield to DISPLAY for a pick under one audience. Reads OUR econ —
+  // grounded picks carry `eff` (single audience), BOTD/SoD/board rows carry `eff`
+  // (per-audience map). The tax-rate LENS recomputes server-side (free GET), so
+  // econ already reflects the chosen rate; no client-side gross-up is needed.
+  function sdEff(p, audKey) {
     const econ = (p.eff && p.eff.effYield != null) ? p.eff
-      : (p.eff && p.eff[audKey]) ? p.eff[audKey]
-        : (p.econ && p.econ[audKey]) ? p.econ[audKey]
+      : (p.eff && audKey && p.eff[audKey]) ? p.eff[audKey]
+        : (p.econ && audKey && p.econ[audKey]) ? p.econ[audKey]
           : null;
     const ytw = (p.ytw != null) ? Number(p.ytw) : null;
-    if (override != null && p.exemptMuni) {
-      if (override <= 0) return { val: ytw, basis: 'nominal' };
-      return { val: ytw != null ? ytw / (1 - override / 100) : null, basis: 'TEY @' + override + '%' };
-    }
     if (econ && econ.effYield != null) return { val: econ.effYield, basis: econ.basis || 'eff' };
     return { val: ytw, basis: 'YTW' };
   }
 
-  function sdOverride() {
-    const sel = document.getElementById('salesDashTaxSelect');
-    if (!sel || sel.value === '') return null;
-    const n = Number(sel.value);
-    return Number.isFinite(n) ? n : null;
+  // Risk-adjusted relative-value percentile (0–100) badge.
+  function sdScoreBadge(rv) {
+    if (!rv || rv.score == null) return '';
+    const s = rv.score;
+    const cls = s >= 70 ? 'hi' : (s >= 40 ? 'mid' : 'lo');
+    return `<span class="sd-score sd-score-${cls}" title="Risk-adjusted relative-value percentile (0–100) — already docks long maturity, call risk, deep premiums and tiny blocks">${s}</span>`;
   }
 
-  function sdPickRow(p, audKey, override) {
-    const e = sdEff(p, audKey, override);
+  const SD_TREND = {
+    new: ['new', 'New on the run today'],
+    wider: ['wider', 'Spread wider vs the prior run — cheaper today'],
+    improved: ['better entry', 'Dollar price improved vs the prior run'],
+    richer: ['richer', 'Spread tighter vs the prior run'],
+    repeat: ['repeat', 'Carried over from the prior run'],
+  };
+  function sdTrendChip(rv) {
+    if (!rv || !rv.trend || !SD_TREND[rv.trend]) return '';
+    const [lbl, title] = SD_TREND[rv.trend];
+    return `<span class="sd-trend sd-trend-${rv.trend}" title="${escapeHtml(rv.trendDetail || title)}">${escapeHtml(lbl)}</span>`;
+  }
+
+  // A scannable board table (Relative Value Leaders + per-class boards). The
+  // "Benchmark" column is the desk-computed comparison string already on the row.
+  function sdBoardTable(rows, kind) {
+    if (!rows || !rows.length) return '<p class="daily-summary-empty">Nothing screens here on today\'s run.</p>';
+    const benchHead = { leaders: 'Cheap to', treasury: 'Spread to Treasury', cd: 'Spread (UST / FDIC)', muni: 'Muni value' }[kind] || 'Benchmark';
+    const head = `<tr><th>Security</th><th>Maturity</th><th class="sd-num">Yield</th><th>${escapeHtml(benchHead)}</th><th class="sd-num">RV</th><th></th></tr>`;
+    const bodyRows = rows.map(p => {
+      const cls = sdClassSlug(p.assetClass);
+      const tey = (p.exemptMuni && p.rv && p.rv.audSpreadBps && p.rv.audSpreadBps.ccorp != null)
+        ? ` <span class="sd-teylbl" title="C-Corp taxable-equivalent yield">TEY ${sdNum(sdEff(p, 'ccorp').val)}</span>` : '';
+      return `<tr>
+        <td><span class="ao-class-pill ao-class-${cls}">${escapeHtml(p.assetClass || '')}</span> <span class="sd-secname">${escapeHtml(p.description || p.cusip || '')}</span>${p.state ? ` <span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}${p.rv && p.rv.ratingLabel && p.rv.ratingLabel !== 'NR' ? ` <span class="sd-rating">${escapeHtml(p.rv.ratingLabel)}</span>` : ''} ${sdTrendChip(p.rv)}</td>
+        <td class="sd-matcell">${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'} <span class="sd-bucket">${escapeHtml((p.rv && p.rv.bucketLabel) || '')}</span></td>
+        <td class="sd-num"><strong>${sdNum(p.ytw)}</strong>%${tey}</td>
+        <td class="sd-bench">${escapeHtml(p.benchmark || '—')}</td>
+        <td class="sd-num">${sdScoreBadge(p.rv)}</td>
+        <td><button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button></td>
+      </tr>`;
+    }).join('');
+    return `<div class="sd-board-scroll"><table class="sd-board-table">${head}${bodyRows}</table></div>`;
+  }
+
+  // A detailed audience pick card carrying the five desk fields: why it screens,
+  // benchmark comparison, risk/structure caveat, best buyer type, talking point.
+  function sdPickCard(p, audKey) {
+    const e = sdEff(p, audKey);
     const chips = [];
     if (p.bq) chips.push('<span class="demin-chip ok">BQ</span>');
     if (p.deepDiscount) chips.push('<span class="demin-chip breach">deep disc</span>');
-    if (p.source === 'backfill') chips.push('<span class="exec-flag warn" title="Auto-selected to keep the slot filled">auto</span>');
+    // The "auto" flag only means something against an AI read (a slot Claude
+    // didn't fill). In the free deterministic read every row is "backfill", so
+    // suppress it there.
+    const aiRead = salesDashboardData && (salesDashboardData.aiGenerated || salesDashboardData.cached);
+    if (p.source === 'backfill' && aiRead) chips.push('<span class="exec-flag warn" title="Auto-selected to keep the slot filled">auto</span>');
     return `
       <div class="sd-pick">
         <div class="sd-pick-main">
           <div class="sd-pick-head">
             <span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span>
             ${p.state ? `<span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}
-            ${chips.join('')}
+            ${sdScoreBadge(p.rv)} ${sdTrendChip(p.rv)} ${chips.join('')}
           </div>
           <div class="sd-pick-headline">${escapeHtml(p.headline || p.description || '')}</div>
           ${p.rationale ? `<div class="sd-pick-rationale">${escapeHtml(p.rationale)}</div>` : ''}
+          <dl class="sd-facts">
+            ${p.benchmark ? `<div><dt>Benchmark</dt><dd>${escapeHtml(p.benchmark)}</dd></div>` : ''}
+            ${p.caveat ? `<div><dt>Watch</dt><dd>${escapeHtml(p.caveat)}</dd></div>` : ''}
+            ${p.buyer ? `<div><dt>Buyer</dt><dd>${escapeHtml(p.buyer)}</dd></div>` : ''}
+            ${p.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(p.talkingPoint)}</dd></div>` : ''}
+          </dl>
         </div>
         <div class="sd-pick-stats">
           <span class="sd-eff" title="${escapeHtml(e.basis)}"><strong>${e.val == null ? '—' : Number(e.val).toFixed(2)}</strong>%</span>
@@ -17129,26 +17176,59 @@
       </div>`;
   }
 
-  function sdAudienceColumns(audiences, picksByAud, connectorByAud, override, limit) {
+  function sdAudienceColumns(audiences, picksByAud, connectorByAud) {
     return (audiences || []).map(a => {
-      let picks = (picksByAud && picksByAud[a.key]) || [];
-      if (limit) picks = picks.slice(0, limit);
+      const picks = (picksByAud && picksByAud[a.key]) || [];
       const conn = connectorByAud && connectorByAud[a.key];
-      const rateLbl = override != null
-        ? (override <= 0 ? 'nominal' : override + '% TEY')
-        : (a.taxRatePct ? a.taxRatePct + '%' + (a.bankEligible ? ' TEY' : '') : 'taxable');
+      const rateLbl = a.taxRatePct ? a.taxRatePct + '%' + (a.bankEligible ? ' TEY' : '') : 'taxable';
       const rows = picks.length
-        ? picks.map(p => sdPickRow(p, a.key, override)).join('')
+        ? picks.map(p => sdPickCard(p, a.key)).join('')
         : '<p class="daily-summary-empty">No eligible picks today.</p>';
       return `<div class="exec-card sd-aud">
         <div class="sd-aud-head">
           <span class="sd-aud-name">${escapeHtml(a.label)}</span>
-          <span class="sd-aud-rate" title="Tax rate applied to taxable-equivalent yield">${escapeHtml(rateLbl)}</span>
+          <span class="sd-aud-rate" title="Tax rate applied to the taxable-equivalent yield for this client">${escapeHtml(rateLbl)}</span>
         </div>
         ${conn ? `<p class="exec-narrative-text sd-connector">${escapeHtml(conn)}</p>` : ''}
         <div class="sd-aud-picks">${rows}</div>
       </div>`;
     }).join('');
+  }
+
+  // Best idea per maturity bucket — so the long end can't sweep the board on yield.
+  function sdBuckets(byBucket) {
+    const order = ['0-1y', '1-3y', '3-5y', '5-7y', '7-10y', '10y+'];
+    const cols = order.map(k => {
+      const b = byBucket && byBucket[k];
+      if (!b) return '';
+      const top = b.top || [];
+      const inner = top.length ? top.map(p => `
+        <div class="sd-bucket-pick">
+          <div class="sd-bucket-row"><span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span> ${sdScoreBadge(p.rv)}</div>
+          <div class="sd-bucket-name">${escapeHtml(p.description || p.cusip || '')}</div>
+          <div class="sd-bucket-bench">${escapeHtml(p.benchmark || '')}</div>
+          <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
+        </div>`).join('') : '<p class="sd-bucket-empty">—</p>';
+      return `<div class="sd-bucket-col"><div class="sd-bucket-head">${escapeHtml(b.label)} <span class="sd-bucket-count">${b.count}</span></div>${inner}</div>`;
+    }).join('');
+    return `<div class="sd-buckets">${cols}</div>`;
+  }
+
+  // "What changed" — trend rollups vs the prior package.
+  function sdTrends(trends) {
+    if (!trends) return '';
+    const group = (key, label) => {
+      const list = trends[key] || [];
+      if (!list.length) return '';
+      const chips = list.slice(0, 10).map(p => `<span class="sd-trend-item"><span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span><button type="button" class="sd-link" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>${escapeHtml(p.description || p.cusip || '')}</button></span>`).join('');
+      return `<div class="sd-trend-group"><div class="sd-trend-label sd-trend-${key}">${escapeHtml(label)} <span class="sd-bucket-count">${list.length}</span></div><div class="sd-trend-items">${chips}</div></div>`;
+    };
+    const html = group('new', 'New today') + group('wider', 'Wider / cheaper') + group('improved', 'Price improved') + group('repeated', 'Repeated standout');
+    return html ? `<div class="sd-trends">${html}</div>` : '<p class="daily-summary-empty">No prior package to compare against yet — trends appear once a second package has been published.</p>';
+  }
+
+  function sdSection(title, sub, inner) {
+    return `<section class="sd-section"><div class="sd-section-head"><h4>${escapeHtml(title)}</h4>${sub ? `<span class="sd-section-sub">${escapeHtml(sub)}</span>` : ''}</div>${inner}</section>`;
   }
 
   function renderSalesDashboard(data) {
@@ -17160,86 +17240,141 @@
     if (!card || !body) return;
     salesDashboardData = data || {};
     const dash = data && data.dashboard;
-    const preview = data && data.candidatePreview;
-    const override = sdOverride();
 
-    if (!dash && !preview) {
-      card.hidden = true;
+    if (!dash) {
+      card.hidden = false;
+      body.innerHTML = '<p class="daily-summary-empty">No audience-eligible offerings in the current package yet — publish today\'s package to build the relative-value board.</p>';
       if (metaEl) metaEl.textContent = '';
       if (stat) stat.textContent = '—';
+      if (btn) btn.textContent = 'Generate';
       return;
     }
     card.hidden = false;
 
-    if (dash && data.stale) {
-      body.innerHTML = '<p class="daily-summary-error">Sales Dashboard is cached for ' + escapeHtml(dash.packageDate || 'a prior package') + ', but the current package is ' + escapeHtml(data.packageDate || 'newer') + '. Refresh before using the ranked calls.</p>';
-      if (stat) stat.textContent = '—';
-      if (metaEl) metaEl.textContent = 'Stale AI cache';
-      if (btn) btn.textContent = 'Update';
-      return;
+    const audiences = dash.audiences || [];
+    const rv = dash.rv || null;
+    const bm = (dash.benchmarks) || (rv && rv.benchmarks) || {};
+    const aiRead = !!(data.aiGenerated || data.cached);
+
+    // Non-blocking banners.
+    const banners = [];
+    if (dash.modelError) banners.push(`<p class="sd-banner warn">AI prose unavailable (${escapeHtml(dash.modelError)}) — showing the deterministic, desk-grounded relative-value read.</p>`);
+    if (data.stale) banners.push(`<p class="sd-banner warn">An AI read is cached for ${escapeHtml(data.aiCachedDate || 'a prior package')}; this is today's live relative-value read. Click <strong>Generate</strong> for today's AI-ranked calls &amp; talking points.</p>`);
+    if (data.customTax) banners.push('<p class="sd-banner">Custom tax-rate lens — rankings recomputed live from the desk\'s yields. (Deterministic; the AI prose reflects the per-client rates.)</p>');
+
+    // Benchmark legend — names the live benchmark sources.
+    const legendBits = [];
+    legendBits.push(bm.treasury ? `Treasury par curve${bm.treasuryAsOf ? ' ' + escapeHtml(bm.treasuryAsOf) : ''}` : 'Treasury curve unavailable');
+    legendBits.push(bm.mmd ? `MMD scale${bm.mmdAsOf ? ' ' + escapeHtml(bm.mmdAsOf) : ''} (by grade)` : 'MMD scale unavailable');
+    legendBits.push(bm.fdicCd ? 'FDIC national CD averages' : 'FDIC CD averages unavailable');
+    legendBits.push('same sector/maturity/rating peers');
+    const mmdNote = bm.mmd ? '' : ' Munis fall back to the muni/Treasury ratio + rating &amp; maturity peers.';
+    const legend = `<p class="sd-legend">Benchmarks: ${legendBits.join(' · ')}.${mmdNote} Every figure is the desk's own; spreads are computed live.</p>`;
+
+    const sections = [];
+
+    // 1 — Relative Value Leaders (the headline; cheapest risk-adjusted, all classes).
+    if (rv && rv.leaders) {
+      sections.push(sdSection('Relative Value Leaders', 'Cheapest risk-adjusted on today\'s run — ranked by spread to benchmark, not raw yield', sdBoardTable(rv.leaders, 'leaders')));
     }
 
-    if (dash) {
-      const audiences = dash.audiences || [];
-      const warn = dash.modelError
-        ? `<p class="daily-summary-error">AI prose unavailable (${escapeHtml(dash.modelError)}) — showing deterministic, desk-grounded picks.</p>`
-        : '';
-      const botd = dash.botd;
-      const botdHtml = botd ? `
-        <div class="sd-botd">
-          <div class="sd-botd-tag">Bond of the Day${botd.source === 'backfill' ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
-          <div class="sd-botd-body">
-            <div class="sd-botd-main">
-              <div class="sd-pick-head">
-                <span class="ao-class-pill ao-class-${sdClassSlug(botd.assetClass)}">${escapeHtml(botd.assetClass || '')}</span>
-                ${botd.state ? `<span class="sd-pick-state">${escapeHtml(botd.state)}</span>` : ''}
-                ${botd.bq ? '<span class="demin-chip ok">BQ</span>' : ''}
-                ${botd.deepDiscount ? '<span class="demin-chip breach">deep disc</span>' : ''}
-              </div>
-              <div class="sd-botd-headline">${escapeHtml(botd.headline || botd.description || '')}</div>
-              ${botd.description && botd.headline ? `<div class="sd-pick-state">${escapeHtml(botd.description)}</div>` : ''}
-              ${botd.rationale ? `<div class="sd-pick-rationale">${escapeHtml(botd.rationale)}</div>` : ''}
+    // 2 — Best by maturity bucket.
+    if (rv && rv.byBucket) {
+      sections.push(sdSection('Best idea by maturity bucket', 'One read per part of the curve so long bonds don\'t win on yield alone', sdBuckets(rv.byBucket)));
+    }
+
+    // 3 — Cheap to Treasury · CD Value Board · Munis vs peers.
+    if (rv) {
+      const boards = `<div class="sd-board-grid">
+        <div class="sd-board-cell">${sdSection('Cheap to Treasury', 'Biggest spread over the matched Treasury', sdBoardTable(rv.cheapToTreasury, 'treasury'))}</div>
+        <div class="sd-board-cell">${sdSection('CD Value Board', 'Beats Treasury AND the FDIC national average — ranked by spread per month of term', sdBoardTable(rv.cdBoard, 'cd'))}</div>
+        <div class="sd-board-cell">${sdSection('Munis — cheap to MMD & peers', 'Spread to the grade-matched MMD scale, the muni/Treasury ratio, and rating/maturity peers', sdBoardTable(rv.muniValue, 'muni'))}</div>
+      </div>`;
+      sections.push(boards);
+    }
+
+    // 4 — Bond of the Day + Strategy of the Day (merit = best relative value).
+    const botd = dash.botd;
+    const botdHtml = botd ? `
+      <div class="sd-botd">
+        <div class="sd-botd-tag">Bond of the Day${botd.source === 'backfill' && aiRead ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
+        <div class="sd-botd-body">
+          <div class="sd-botd-main">
+            <div class="sd-pick-head">
+              <span class="ao-class-pill ao-class-${sdClassSlug(botd.assetClass)}">${escapeHtml(botd.assetClass || '')}</span>
+              ${botd.state ? `<span class="sd-pick-state">${escapeHtml(botd.state)}</span>` : ''}
+              ${sdScoreBadge(botd.rv)} ${sdTrendChip(botd.rv)}
+              ${botd.bq ? '<span class="demin-chip ok">BQ</span>' : ''}
+              ${botd.deepDiscount ? '<span class="demin-chip breach">deep disc</span>' : ''}
             </div>
-            <div class="sd-botd-stats">
-              <span class="sd-eff"><strong>${(function () { const e = sdEff(botd, 'ccorp', override); return e.val == null ? '—' : Number(e.val).toFixed(2); })()}</strong>% ${escapeHtml(botd.exemptMuni && (override == null || override > 0) ? 'TEY' : 'yld')}</span>
-              <span class="sd-sub">${SD_TILE(botd.coupon, 3)}% cpn · ${botd.maturity ? escapeHtml(formatNumericDate(String(botd.maturity).slice(0, 10))) : '—'}</span>
-              <button type="button" class="small-btn" data-goto="${escapeHtml(botd.page || 'all-offerings')}"${botd.cusip ? ` data-cusip="${escapeHtml(botd.cusip)}"` : ''}>Open</button>
-            </div>
+            <div class="sd-botd-headline">${escapeHtml(botd.headline || botd.description || '')}</div>
+            ${botd.description && botd.headline ? `<div class="sd-pick-state">${escapeHtml(botd.description)}</div>` : ''}
+            ${botd.rationale ? `<div class="sd-pick-rationale">${escapeHtml(botd.rationale)}</div>` : ''}
+            ${botd.benchmark ? `<div class="sd-botd-bench">${escapeHtml(botd.benchmark)}</div>` : ''}
+            ${botd.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(botd.talkingPoint)}</dd></div>` : ''}
           </div>
-        </div>` : '';
-      const sod = dash.sod;
-      const sodHtml = sod ? `
-        <div class="sd-sod">
-          <div class="sd-sod-tag">Strategy of the Day${sod.source === 'backfill' ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
-          <h4 class="sd-sod-title">${escapeHtml(sod.title || '')}</h4>
-          <p class="sd-sod-narrative">${escapeHtml(sod.narrative || '')}</p>
-          <div class="sd-sod-secs">${(sod.securities || []).map(s => `
-            <span class="sd-sod-sec">
-              <span class="ao-class-pill ao-class-${sdClassSlug(s.assetClass)}">${escapeHtml(s.assetClass || '')}</span>
-              <span class="sd-sod-sec-name">${escapeHtml(s.description || s.cusip || '')}</span>
-              <button type="button" class="small-btn" data-goto="${escapeHtml(s.page || 'all-offerings')}"${s.cusip ? ` data-cusip="${escapeHtml(s.cusip)}"` : ''}>Open</button>
-            </span>`).join('')}</div>
-        </div>` : '';
-      const matrix = `<div class="sd-matrix exec-three-col">${sdAudienceColumns(audiences, dash.picks, dash.connector, override)}</div>`;
-      body.innerHTML = warn + `<div class="sd-feature">${botdHtml}${sodHtml}</div>` + matrix;
+          <div class="sd-botd-stats">
+            <span class="sd-eff"><strong>${(function () { const e = sdEff(botd, 'ccorp'); return e.val == null ? '—' : Number(e.val).toFixed(2); })()}</strong>% ${escapeHtml(botd.exemptMuni ? 'TEY' : 'yld')}</span>
+            <span class="sd-sub">${SD_TILE(botd.coupon, 3)}% cpn · ${botd.maturity ? escapeHtml(formatNumericDate(String(botd.maturity).slice(0, 10))) : '—'}</span>
+            <button type="button" class="small-btn" data-goto="${escapeHtml(botd.page || 'all-offerings')}"${botd.cusip ? ` data-cusip="${escapeHtml(botd.cusip)}"` : ''}>Open</button>
+          </div>
+        </div>
+      </div>` : '';
+    const sod = dash.sod;
+    const sodHtml = sod ? `
+      <div class="sd-sod">
+        <div class="sd-sod-tag">Strategy of the Day${sod.source === 'backfill' && aiRead ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
+        <h4 class="sd-sod-title">${escapeHtml(sod.title || '')}</h4>
+        <p class="sd-sod-narrative">${escapeHtml(sod.narrative || '')}</p>
+        <div class="sd-sod-secs">${(sod.securities || []).map(s => `
+          <span class="sd-sod-sec">
+            <span class="ao-class-pill ao-class-${sdClassSlug(s.assetClass)}">${escapeHtml(s.assetClass || '')}</span>
+            <span class="sd-sod-sec-name">${escapeHtml(s.description || s.cusip || '')}</span>
+            <button type="button" class="small-btn" data-goto="${escapeHtml(s.page || 'all-offerings')}"${s.cusip ? ` data-cusip="${escapeHtml(s.cusip)}"` : ''}>Open</button>
+          </span>`).join('')}</div>
+      </div>` : '';
+    if (botdHtml || sodHtml) sections.push(`<div class="sd-feature">${botdHtml}${sodHtml}</div>`);
 
-      if (stat) stat.textContent = audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
-      if (metaEl) {
-        const bits = [];
-        if (data.stale) bits.push('package is newer — refresh for today');
-        else if (dash.generatedAt) bits.push('Generated ' + new Date(dash.generatedAt).toLocaleString());
-        bits.push(dash.model ? dash.model : 'deterministic (no AI key)');
-        metaEl.textContent = bits.join(' · ');
-      }
-      if (btn) btn.textContent = data.cached ? 'Refresh' : 'Generate';
-    } else {
-      // No cached read yet — deterministic preview from the candidate set.
-      const matrix = `<div class="sd-matrix exec-three-col">${sdAudienceColumns(preview.audiences, preview.byAudience, null, override, 5)}</div>`;
-      body.innerHTML = '<p class="daily-summary-empty">Deterministic preview — the top candidates by client tax structure. Generate today’s AI read for ranked picks, the macro→pick call per client, and the Bond &amp; Strategy of the Day.</p>' + matrix;
-      if (stat) stat.textContent = (preview.audiences || []).reduce((n, a) => n + (((preview.coverage || {})[a.key]) || 0), 0);
-      if (metaEl) metaEl.textContent = data.configured ? 'No AI read generated yet' : 'Add an Anthropic API key for the AI read';
-      if (btn) btn.textContent = 'Generate';
+    // 5 — What changed (trends).
+    if (rv && rv.trends) {
+      sections.push(sdSection('What changed vs the prior package', 'New, cheaper, better-entry and repeated-standout names', sdTrends(rv.trends)));
     }
+
+    // 6 — Audience fit (re-ranked by the tax-aware spread each client earns).
+    sections.push(sdSection('Audience fit — ranked by relative value', 'Each client\'s picks ordered by the spread THAT buyer earns over Treasury after tax',
+      `<div class="sd-matrix exec-three-col">${sdAudienceColumns(audiences, dash.picks, dash.connector)}</div>`));
+
+    body.innerHTML = banners.join('') + legend + sections.join('');
+
+    if (stat) stat.textContent = (rv && rv.leaders) ? rv.leaders.length : audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
+    if (metaEl) {
+      const bits = [];
+      if (data.aiGenerated || data.cached) {
+        if (dash.generatedAt) bits.push('AI read ' + new Date(dash.generatedAt).toLocaleString());
+        bits.push(dash.model || 'deterministic');
+      } else {
+        bits.push('Live relative-value read (free)');
+        bits.push(data.configured ? 'Generate for AI calls' : 'Add an Anthropic key for AI calls');
+      }
+      metaEl.textContent = bits.join(' · ');
+    }
+    if (btn) btn.textContent = (data.aiGenerated || data.cached) ? 'Refresh AI read' : 'Generate AI read';
+  }
+
+  // The tax-rate lens → query params. Per-client (blank) = no override; a chosen
+  // rate applies to the bank (muni gross-up) audiences and recomputes the ranking.
+  function sdTaxParams() {
+    const sel = document.getElementById('salesDashTaxSelect');
+    if (!sel) return '';
+    let v = sel.value;
+    if (v === 'custom') {
+      const inp = document.getElementById('salesDashTaxCustom');
+      v = (inp && inp.value !== '') ? inp.value : '';
+    }
+    if (v === '' || v === 'per') return '';
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '';
+    return `?tax_ccorp=${encodeURIComponent(n)}&tax_scorp=${encodeURIComponent(n)}`;
   }
 
   async function refreshSalesDashboard() {
@@ -17251,10 +17386,9 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
       renderSalesDashboard(data);
-      showToast(data.dashboard && data.dashboard.degraded ? 'Refreshed (auto-completed some slots).' : 'Sales Dashboard refreshed.');
+      showToast(data.dashboard && data.dashboard.degraded ? 'AI read refreshed (auto-completed some prose).' : 'Sales Dashboard AI read refreshed.');
     } catch (e) {
-      if (body) body.innerHTML = `<p class="daily-summary-error">${escapeHtml(e.message || 'Refresh failed')}</p>`;
-      showToast('Refresh failed.', true);
+      showToast((e && e.message) || 'Refresh failed.', true);
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -17271,11 +17405,17 @@
     const sel = document.getElementById('salesDashTaxSelect');
     if (sel && !sel.dataset.bound) {
       sel.dataset.bound = '1';
-      sel.addEventListener('change', () => { if (salesDashboardData) renderSalesDashboard(salesDashboardData); });
+      const custom = document.getElementById('salesDashTaxCustom');
+      const sync = () => { if (custom) custom.hidden = sel.value !== 'custom'; loadSalesDashboard(); };
+      sel.addEventListener('change', sync);
+      if (custom) {
+        let t = null;
+        custom.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => loadSalesDashboard(), 450); });
+      }
     }
     loadMarketSnapshotStrip('salesDashSnapshotStrip');
     try {
-      const res = await fetch('/api/sales-dashboard', { cache: 'no-store' });
+      const res = await fetch('/api/sales-dashboard' + sdTaxParams(), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       renderSalesDashboard(await res.json());
     } catch (_) { /* leave the prior render in place */ }

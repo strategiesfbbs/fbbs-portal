@@ -2178,11 +2178,11 @@
     <div class="page-hero-inner">
       <div>
         <h2>Sales <strong>Dashboard</strong></h2>
-        <p class="hero-sub" id="salesDashSub">Curated daily picks by client tax structure &mdash; C-Corp, S-Corp, and RIA.</p>
+        <p class="hero-sub" id="salesDashSub">A morning relative-value sheet &mdash; what's cheap to benchmark, what changed, who should care, and what to say.</p>
       </div>
       <div class="hero-stat">
         <div class="num" id="salesDashStat">&mdash;</div>
-        <div class="lbl">Picks Curated</div>
+        <div class="lbl">RV Leaders</div>
       </div>
     </div>
   </section>
@@ -2192,21 +2192,23 @@
 
     <section class="daily-picks-card" id="salesDashboardCard" hidden>
       <div class="daily-picks-head">
-        <h3 class="daily-picks-title">Today's audience fit <span class="daily-summary-badge">AI</span></h3>
+        <h3 class="daily-picks-title">Relative value &mdash; cheap to benchmark, not just high yield <span class="daily-summary-badge">AI</span></h3>
         <div class="daily-picks-controls">
           <span class="daily-summary-meta" id="salesDashboardMeta"></span>
-          <label class="sd-tax-toggle">TEY rate
-            <select id="salesDashTaxSelect" aria-label="Tax rate for taxable-equivalent yield">
+          <label class="sd-tax-toggle">Tax lens
+            <select id="salesDashTaxSelect" aria-label="Tax-rate lens for taxable-equivalent yield and ranking">
               <option value="">Per client</option>
               <option value="21">21% C-Corp</option>
               <option value="29.6">29.6% S-Corp</option>
               <option value="0">Nominal</option>
+              <option value="custom">Custom&hellip;</option>
             </select>
+            <input type="number" id="salesDashTaxCustom" class="sd-tax-custom" min="0" max="60" step="0.1" placeholder="%" aria-label="Custom tax rate (percent)" hidden>
           </label>
           <button type="button" class="small-btn" id="salesDashboardBtn">Generate</button>
         </div>
       </div>
-      <p class="daily-picks-note">Internal desk aid &mdash; Claude ranks today's inventory by client tax structure; yields, prices, and TEY are the desk's own. Taxable-equivalent yields <strong>exclude</strong> the TEFRA interest-expense haircut and the 20% C-Corp bank-qualified disallowance &mdash; clients should consult their own tax/portfolio advisors. Not investment advice. For Institutional Use Only.</p>
+      <p class="daily-picks-note">Internal desk aid &mdash; every security is scored against the matched Treasury, FDIC CD benchmarks and same-sector/maturity/rating peers, then risk-adjusted. The relative-value read is computed live from the desk's own yields; Claude only ranks and writes the talking points. Taxable-equivalent yields <strong>exclude</strong> the TEFRA interest-expense haircut and the 20% C-Corp bank-qualified disallowance &mdash; clients should consult their own tax/portfolio advisors. Not investment advice. For Institutional Use Only.</p>
       <div class="daily-picks-body" id="salesDashboardBody"></div>
     </section>
   </div>

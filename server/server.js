@@ -7791,7 +7791,7 @@ function cusipSearchSources() {
       type: 'muni', typeLabel: 'Muni', page: 'muni-explorer',
       rows: slot(MUNI_OFFERINGS_FILENAME, 'muni offerings').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity, fmtPct(r.ytw) && `${fmtPct(r.ytw)} YTW`]),
-      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni', availabilityK: numOf(r.quantity), callDate: r.callDate || null }),
+      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni', availabilityK: numOf(r.quantity), callDate: r.callDate || null, moody: r.moodysRating || null, sp: r.spRating || null }),
     },
     {
       type: 'agency', typeLabel: 'Agency', page: 'agencies',
@@ -7810,7 +7810,7 @@ function cusipSearchSources() {
       normalize: r => {
         const ytm = pct(r.ytm);
         const ytnc = pct(r.ytnc);
-        return { description: r.issuerName || '', coupon: pct(r.coupon), yield: minNonNull(ytm, ytnc) ?? ytm ?? ytnc, ytm, ytnc, maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.sector || 'Corporate', availabilityK: numOf(r.availableSize), callDate: r.nextCallDate || null };
+        return { description: r.issuerName || '', coupon: pct(r.coupon), yield: minNonNull(ytm, ytnc) ?? ytm ?? ytnc, ytm, ytnc, maturity: r.maturity || null, price: pct(r.askPrice), state: '', sector: r.sector || 'Corporate', availabilityK: numOf(r.availableSize), callDate: r.nextCallDate || null, moody: r.moodysRating || null, sp: r.spRating || null };
       },
     },
     {
@@ -7845,6 +7845,22 @@ function buildAllOfferingsRows() {
     }
   }
   return rows;
+}
+
+// Per-audience tax-rate overrides for the Sales Dashboard custom lens, parsed
+// from ?tax_ccorp=&tax_scorp=&tax_ria= query params. Out-of-band values are
+// clamped/ignored downstream (daily-dashboard.audienceByKey). null = no override.
+function parseDashboardTaxRates(query) {
+  if (!query) return null;
+  const out = {};
+  let any = false;
+  for (const k of ['ccorp', 'scorp', 'ria']) {
+    const raw = query.get('tax_' + k);
+    if (raw == null || raw === '') continue;
+    const n = Number(raw);
+    if (Number.isFinite(n)) { out[k] = n; any = true; }
+  }
+  return any ? out : null;
 }
 
 // Find a CUSIP anywhere in today's inventory. Prefix match first (a rep
@@ -10234,32 +10250,53 @@ const server = http.createServer(async (req, res) => {
       const configured = claudeClient.isConfigured();
       const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
       const packageDate = meta.date || null;
+      const taxRates = parseDashboardTaxRates(query);
       const cached = dailyDashboardJudgment.getCachedDashboard(MARKET_DIR);
-      if (cached) {
-        const stale = !(packageDate && cached.packageDate === packageDate);
-        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: cached, cached: true, stale });
+      // Default view: a fresh AI read (with prose) for the current package is the
+      // richest answer. A custom tax-rate lens always recomputes live (free). A
+      // pre-relative-value cache (no `rv` block) is treated as outdated so the
+      // live RV read is shown until the next refresh re-caches in the new shape.
+      if (!taxRates && cached && cached.rv && cached.packageDate && cached.packageDate === packageDate) {
+        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: cached, cached: true, aiGenerated: !!cached.aiGenerated, stale: false });
       }
-      // No cache yet — deterministic preview, zero billable cost.
-      let candidatePreview = null;
+      // Otherwise build the FREE, live relative-value dashboard for the current
+      // package — deterministic, zero billable cost, never stale.
       try {
-        const cs = dailyDashboard.buildCandidateSet(buildAllOfferingsRows(), {});
-        candidatePreview = { audiences: cs.audiences, coverage: cs.coverage, coverageOk: cs.coverageOk, byAudience: cs.byAudience };
+        const [curve, fred, mmd] = await Promise.all([
+          marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
+          fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }).catch(() => null),
+          loadCurrentMmdCurve().catch(() => null),
+        ]);
+        const econ = await loadCurrentEconomicUpdate().catch(() => null);
+        const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
+        const live = dailyDashboardJudgment.buildLiveDashboard({ rows: buildAllOfferingsRows(), econ, meta, curve, fred, mmd, priorMap, taxRates });
+        const staleAi = !!(cached && cached.packageDate && cached.packageDate !== packageDate);
+        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: live, cached: false, aiGenerated: false, stale: staleAi, aiCachedDate: cached ? cached.packageDate : null, customTax: !!taxRates });
       } catch (err) {
-        log('warn', 'Sales dashboard preview build failed:', err.message);
+        log('warn', 'Sales dashboard live build failed:', err.message);
+        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: null, cached: false });
       }
-      return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: null, cached: false, candidatePreview });
     }
 
     if (pathname === '/api/sales-dashboard/refresh' && req.method === 'POST') {
       const econ = await loadCurrentEconomicUpdate().catch(() => null);
       const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
+      const packageDate = meta.date || null;
+      const taxRates = parseDashboardTaxRates(query);
       try {
+        const [curve, fred, mmd] = await Promise.all([
+          marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
+          fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }).catch(() => null),
+          loadCurrentMmdCurve().catch(() => null),
+        ]);
+        const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
         const rows = buildAllOfferingsRows();
-        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, force: true, log });
+        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, priorMap, taxRates, force: true, log });
         appendAuditLog({
           event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
           degraded: record.degraded, coverage: record.coverage, flags: (record.flags || []).length,
           candidateCount: record.candidateCount, model: record.model, usage: record.usage || null,
+          benchmarks: record.benchmarks ? { treasury: record.benchmarks.treasury, fdicCd: record.benchmarks.fdicCd, priorSnapshot: record.benchmarks.priorSnapshot } : null,
           cacheError: record.cacheError || null, modelError: record.modelError || null,
         });
         return sendJSON(res, 200, { ok: true, configured: claudeClient.isConfigured(), dashboard: record, cached: record.cached });

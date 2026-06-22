@@ -34,6 +34,7 @@ const path = require('path');
 
 const claudeClient = require('./claude-client');
 const dailyDashboard = require('./daily-dashboard');   // Phase 1 candidate/tax layer
+const rvEngine = require('./daily-dashboard-rv');       // relative-value engine
 const dailySummary = require('./daily-summary');        // buildSummaryInput → macro context
 
 const AUDIENCE_KEYS = dailyDashboard.AUDIENCE_KEYS;
@@ -50,7 +51,7 @@ const MAX_PER_CLASS = 3;        // per audience
 const SOD_MIN = 2;
 const SOD_MAX_CUSIPS = 4;
 
-const LEN = { headline: 80, rationale: 160, botdRationale: 400, sodTitle: 80, sodNarrative: 500, connector: 240 };
+const LEN = { headline: 80, rationale: 160, botdRationale: 400, sodTitle: 80, sodNarrative: 500, connector: 240, talkingPoint: 200, benchmark: 160 };
 
 const SYSTEM_PROMPT =
   'You are a fixed-income desk analyst at First Bankers\' Banc Securities, Inc. ' +
@@ -61,37 +62,50 @@ const SYSTEM_PROMPT =
   'gross-up, no bank-qualified mechanics).\n\n' +
   'You are given (1) a grounded MACRO context for today (Treasury curve, money-market ' +
   'rates, indices, headlines, economic releases, sales cues) and (2) a grounded ' +
-  'CANDIDATE SET of securities the desk is offering. Every candidate carries a CUSIP ' +
-  'and the desk\'s OWN worked numbers, including each audience\'s effective yield ' +
-  '(eff: the taxable-equivalent yield a bank buyer grosses an exempt muni up to, ' +
-  'otherwise the yield-to-worst).\n\n' +
+  'CANDIDATE SET of securities the desk is offering. Every candidate carries a CUSIP, ' +
+  'the desk\'s OWN worked numbers (yield-to-worst, price, coupon, maturity), each ' +
+  'audience\'s effective yield (eff: the taxable-equivalent yield a bank buyer grosses ' +
+  'an exempt muni up to, otherwise the YTW), AND a RELATIVE-VALUE read computed by the ' +
+  'desk: ustSpreadBps (spread over the matched Treasury), rvScore (0-100, a risk-' +
+  'ADJUSTED cheapness percentile that already docks long maturity, call risk, deep ' +
+  'premiums and tiny blocks), fdicSpreadBps and perMonthBps (CDs), mmdSpreadBps (a ' +
+  'muni\'s spread to the MMD scale for its grade — the desk\'s true muni cheapness) and ' +
+  'ratioPct (muni/Treasury yield ratio), peerSpreadBps (vs same sector/maturity/rating peers), bucket ' +
+  '(maturity band), rating, and trend (new/wider/improved/repeat vs the prior run).\n\n' +
+  'THE DESK SELLS RELATIVE VALUE, NOT RAW YIELD. Rank and choose on CHEAPNESS — spread ' +
+  'to the matched Treasury / FDIC / peers and rvScore — NOT on the highest absolute ' +
+  'yield. A long bond that only wins because it carries more yield is exactly what to ' +
+  'AVOID; prefer the security that is mispriced for its maturity, structure and credit.\n\n' +
   'YOUR JOB IS JUDGMENT, NOT ARITHMETIC. You RANK within the candidate set, choose ' +
-  'which securities best fit each audience today, write a short prose rationale per ' +
-  'pick, write one macro-to-pick connector sentence per audience, and choose a ' +
-  'Bond-of-the-Day and a Strategy-of-the-Day. You NEVER compute, estimate, round, or ' +
-  'restate a yield, price, coupon, maturity, spread, or size — those are shown to the ' +
-  'user from the desk\'s data, not from your text. You NEVER name a CUSIP that is not ' +
-  'in the candidate set, and you NEVER invent a security. The firm re-attaches its own ' +
-  'numbers to whatever you select.\n\n' +
+  'which securities best fit each audience today, write a short "why it screens" ' +
+  'rationale and a one-line REP TALKING POINT per pick, write one macro-to-pick ' +
+  'connector sentence per audience, and choose a Bond-of-the-Day and a Strategy-of-the-' +
+  'Day. You NEVER compute, estimate, round, or restate a yield, price, coupon, ' +
+  'maturity, spread, ratio or size — those are shown to the user from the desk\'s data, ' +
+  'not from your text (you MAY refer to them qualitatively, e.g. "wide to the curve", ' +
+  '"cheap to FDIC"). You NEVER name a CUSIP not in the candidate set, and never invent ' +
+  'a security. The firm re-attaches its own numbers to whatever you select.\n\n' +
   'Binding desk rules:\n' +
   '- Audience balance: choose AT LEAST 3 and at most 5 picks for EACH of ccorp, scorp, ' +
   'and ria. Use a candidate for an audience ONLY if that audience key appears in that ' +
   'candidate\'s "aud" list.\n' +
   '- Diversify: no more than 3 picks from any one assetClass within a single audience.\n' +
-  '- Rank each audience\'s picks by that audience\'s own effective yield and relative-' +
-  'value merit, best first.\n' +
+  '- Rank each audience\'s picks by RELATIVE VALUE for that client — the audSpreadBps / ' +
+  'rvScore — best (cheapest) first, NOT by raw effective yield.\n' +
+  '- rationale = WHY IT SCREENS: one sentence on the cheapness (spread to Treasury / ' +
+  'FDIC / peers, structure, rating, trend) — not a yield restatement.\n' +
+  '- talkingPoint = a single ready-to-say line a rep can read to the client.\n' +
   '- Connector sentence format, EXACTLY: "<driver context> -> <why these picks fit ' +
-  'this client today>" — one sentence, one " -> " arrow, tying today\'s macro story to ' +
-  'that audience\'s picks.\n' +
-  '- Bond of the Day (botd): pick on credit, structure, or spread MERIT — quality over ' +
-  'liquidity. Do NOT anchor it on the single largest agency block just because it is ' +
-  'liquid. It must be one CUSIP from the candidate set.\n' +
-  '- Strategy of the Day (sod): one strategy THEME for today (e.g. "deep-discount ' +
-  'agencies as effective bullets"), a short title plus a two-sentence narrative, with ' +
-  '2 to 4 CUSIPs from the candidate set that express that theme.\n' +
-  '- The effective yields shown are taxable-equivalent figures that EXCLUDE the TEFRA ' +
-  'interest-expense haircut and the 20% C-corp bank-qualified disallowance (both are ' +
-  'disclaimed separately on the page). Do not net, adjust, or mention netting them.\n' +
+  'this client today>" — one sentence, one " -> " arrow.\n' +
+  '- Bond of the Day (botd): the single best RELATIVE VALUE on the run — credit/' +
+  'structure/spread merit, quality over liquidity. Do NOT anchor it on the largest ' +
+  'agency block just because it is liquid. One CUSIP from the candidate set.\n' +
+  '- Strategy of the Day (sod): one relative-value THEME for today (e.g. "short CDs ' +
+  'cheap to bills", "BQ munis screen well for S-corps", "agency bullets — clean spread, ' +
+  'no call risk"), a short title plus a two-sentence narrative, with 2 to 4 CUSIPs that ' +
+  'express it.\n' +
+  '- Effective yields EXCLUDE the TEFRA interest-expense haircut and the 20% C-corp ' +
+  'bank-qualified disallowance (both disclaimed separately). Do not net or mention them.\n' +
   '- Use the words "deep discount" only for a candidate whose dollar price is at or ' +
   'below 99.00.\n\n' +
   'For Institutional Use Only. Respond with STRICT JSON only — no prose outside the ' +
@@ -101,12 +115,12 @@ const SYSTEM_PROMPT =
 // ONLY CUSIP keys + prose — never a number; grounding re-attaches OUR figures.
 const OUTPUT_SHAPE_HINT = JSON.stringify({
   picks: {
-    ccorp: [{ cusip: '<from securities>', headline: '<=8 words', rationale: '<one sentence <=160 chars>' }],
-    scorp: [{ cusip: '...', headline: '...', rationale: '...' }],
-    ria: [{ cusip: '...', headline: '...', rationale: '...' }],
+    ccorp: [{ cusip: '<from securities>', headline: '<=8 words', rationale: '<why it screens, <=160 chars>', talkingPoint: '<one line a rep can say, <=200 chars>' }],
+    scorp: [{ cusip: '...', headline: '...', rationale: '...', talkingPoint: '...' }],
+    ria: [{ cusip: '...', headline: '...', rationale: '...', talkingPoint: '...' }],
   },
   connector: { ccorp: '<driver> -> <why these fit this client today>', scorp: '...', ria: '...' },
-  botd: { cusip: '...', headline: '<=10 words', rationale: '<two sentences>' },
+  botd: { cusip: '...', headline: '<=10 words', rationale: '<two sentences>', talkingPoint: '...' },
   sod: { title: '...', narrative: '<two sentences>', cusips: ['...', '...'] },
 });
 
@@ -141,7 +155,9 @@ function compactCandidate(c) {
     const e = c.econ && c.econ[k];
     if (e && e.effYield != null) eff[k] = { y: round2(e.effYield), b: e.basis };
   }
-  return {
+  const rv = c.rv || {};
+  const defined = obj => { const o = {}; for (const k in obj) if (obj[k] != null) o[k] = obj[k]; return o; };
+  return defined({
     cusip: c.cusip,
     cls: c.assetClass,
     sector: c.sector || undefined,
@@ -158,7 +174,20 @@ function compactCandidate(c) {
     aud: c.audiences,                                // the eligibility GATE
     eff,                                             // { ccorp:{y,b}, ... }
     deep: (c.price != null && c.price <= 99.0) || undefined,
-  };
+    // Relative-value read the model RANKS on (never restated as numbers in prose).
+    rvScore: rv.score,                               // 0-100 risk-adjusted cheapness
+    bucket: rv.bucketLabel,
+    rating: rv.ratingLabel && rv.ratingLabel !== 'NR' ? rv.ratingLabel : undefined,
+    ustSpreadBps: rv.ustSpreadBps,
+    fdicSpreadBps: rv.fdicSpreadBps,
+    perMonthBps: rv.spreadPerMonthBps,
+    ratioPct: rv.ratioPct,
+    mmdSpreadBps: rv.mmdSpreadBps,
+    mmdGrade: rv.mmdGrade,
+    peerSpreadBps: rv.peerSpreadBps,
+    audSpreadBps: rv.audSpreadBps && Object.keys(rv.audSpreadBps).length ? rv.audSpreadBps : undefined,
+    trend: rv.trend,
+  });
 }
 
 /** Trim the daily-summary macro context to prose-only drivers. Pure. */
@@ -197,21 +226,23 @@ function buildDashboardPrompt(candidateSet, macroInput, meta) {
     'the candidate details — the ONLY securities and numbers you may use).\n\n' +
     'Do ALL of the following, using ONLY CUSIPs that appear in securities:\n' +
     '1. picks — for EACH audience (ccorp, scorp, ria): choose 3 to 5 CUSIPs, best first by ' +
-    'that audience\'s effective yield and relative-value merit. A CUSIP is eligible for an ' +
-    'audience ONLY if that audience key is in the candidate\'s "aud" list; the byAudience list ' +
-    'is the desk\'s top-ranked eligible CUSIPs to start from, but any "aud"-eligible candidate ' +
-    'is allowed. No more than 3 picks of one assetClass within an audience. For ' +
-    'each pick give a <=8-word headline and a one-sentence (<=160 char) rationale grounded in ' +
-    'its eff yield / coupon / structure / sector / state versus the rest of the list. Do not ' +
-    'state a number the data does not show; do not say "deep discount" unless its price <= 99.00.\n' +
+    'RELATIVE VALUE for that client (rvScore / audSpreadBps / spread to Treasury, FDIC or ' +
+    'peers) — NOT by the highest raw yield. A CUSIP is eligible for an audience ONLY if that ' +
+    'audience key is in the candidate\'s "aud" list; the byAudience list is the desk\'s ' +
+    'relative-value ranking to start from, but any "aud"-eligible candidate is allowed. No more ' +
+    'than 3 picks of one assetClass within an audience. For each pick give a <=8-word headline, ' +
+    'a one-sentence (<=160 char) rationale = WHY IT SCREENS (cite the cheapness qualitatively: ' +
+    'spread to the curve / FDIC / peers, structure, rating, trend — not a yield restatement), ' +
+    'and a one-line talkingPoint a rep can say to the client. Do not state a number the data ' +
+    'does not show; do not say "deep discount" unless its price <= 99.00.\n' +
     '2. connector — for EACH audience: ONE sentence in EXACTLY this format: ' +
     '"<driver context from today\'s macro> -> <why these picks fit this client today>". One ' +
     'sentence, one " -> ", <=40 words.\n' +
-    '3. botd — ONE CUSIP chosen on credit/structure/spread merit (quality over liquidity; do ' +
-    'NOT default to the largest agency block), with a <=10-word headline and a two-sentence ' +
-    'rationale.\n' +
-    '4. sod — one theme (short title + two-sentence narrative) plus 2 to 4 CUSIPs that express ' +
-    'it.\n\n' +
+    '3. botd — the single best RELATIVE VALUE on the run (credit/structure/spread merit; ' +
+    'quality over liquidity; do NOT default to the largest agency block), with a <=10-word ' +
+    'headline, a two-sentence rationale, and a talkingPoint.\n' +
+    '4. sod — one relative-value theme (short title + two-sentence narrative) plus 2 to 4 ' +
+    'CUSIPs that express it.\n\n' +
     'Every "cusip" you return MUST appear in securities. Never write a number that is not in ' +
     'the data. Respond with STRICT JSON only (no prose, no code fence), exactly this shape:\n' +
     OUTPUT_SHAPE_HINT + '\n\n' +
@@ -343,7 +374,7 @@ function normalizeRaw(obj) {
 // malformation the text path has to salvage. Same contract as OUTPUT_SHAPE_HINT.
 const PICK_ITEM = {
   type: 'object',
-  properties: { cusip: { type: 'string' }, headline: { type: 'string' }, rationale: { type: 'string' } },
+  properties: { cusip: { type: 'string' }, headline: { type: 'string' }, rationale: { type: 'string' }, talkingPoint: { type: 'string' } },
   required: ['cusip'],
 };
 const DASHBOARD_TOOL = {
@@ -364,7 +395,7 @@ const DASHBOARD_TOOL = {
       },
       botd: {
         type: 'object',
-        properties: { cusip: { type: 'string' }, headline: { type: 'string' }, rationale: { type: 'string' } },
+        properties: { cusip: { type: 'string' }, headline: { type: 'string' }, rationale: { type: 'string' }, talkingPoint: { type: 'string' } },
         required: ['cusip'],
       },
       sod: {
@@ -379,12 +410,83 @@ const DASHBOARD_TOOL = {
 
 // ---------- grounding (the trust boundary) ----------
 
+// ---------- deterministic, grounded prose from OUR relative-value read ----------
+// These never read the model. They compose the benchmark comparison, the "why it
+// screens" line, and a rep talking point straight from the rv object the engine
+// attached — so the five per-recommendation fields are always present, with or
+// without an AI read, and never carry a number the desk didn't compute.
+
+function fmtBps(n) { return n == null ? null : `${n >= 0 ? '+' : ''}${n}bp`; }
+
+/** "Benchmark comparison" line — class-appropriate (UST / FDIC / muni ratio / peers). */
+function benchmarkLine(rv, cls) {
+  if (!rv) return null;
+  const parts = [];
+  const c = String(cls || '').toLowerCase();
+  if (/cd|certificate/.test(c)) {
+    if (rv.ustSpreadBps != null) parts.push(`${fmtBps(rv.ustSpreadBps)} vs matched UST`);
+    if (rv.fdicSpreadBps != null) parts.push(`${fmtBps(rv.fdicSpreadBps)} vs FDIC ${rv.cdTermMonths || ''}m avg`);
+    if (rv.spreadPerMonthBps != null) parts.push(`${rv.spreadPerMonthBps}bp/mo`);
+  } else if (/muni/.test(c)) {
+    if (rv.mmdSpreadBps != null) parts.push(`${fmtBps(rv.mmdSpreadBps)} vs ${rv.mmdGrade || 'AAA'} MMD${rv.mmdAssumedGrade ? '*' : ''}`);
+    if (rv.audSpreadBps && rv.audSpreadBps.ccorp != null) parts.push(`TEY ${fmtBps(rv.audSpreadBps.ccorp)} vs UST (C-corp)`);
+    if (rv.ratioPct != null) parts.push(`${rv.ratioPct}% muni/UST`);
+    if (rv.peerSpreadBps != null) parts.push(`${fmtBps(rv.peerSpreadBps)} vs ${rv.ratingBucket || ''} peers`);
+  } else {
+    if (rv.ustSpreadBps != null) parts.push(`${fmtBps(rv.ustSpreadBps)} vs ${rv.benchmarkTenorYears || ''}y UST${rv.benchmarkYield != null ? ` (${rv.benchmarkYield}%)` : ''}`);
+    if (rv.peerSpreadBps != null) parts.push(`${fmtBps(rv.peerSpreadBps)} vs peers`);
+  }
+  return parts.length ? parts.join(' · ') : null;
+}
+
+const TREND_WORDS = { wider: 'wider to the curve vs the prior run', improved: 'a better entry than the prior run', new: 'new on the run today', richer: 'richer than the prior run', repeat: 'a repeated standout' };
+
+/** Deterministic "why it screens" — RV score + dominant benchmark + trend. */
+function whyScreensLine(row) {
+  const rv = row.rv;
+  const cls = row.assetClass || 'Security';
+  if (!rv) return `${cls} on today's run.`;
+  const bits = [];
+  if (rv.score != null) bits.push(`relative value ${rv.score}/100`);
+  const bm = benchmarkLine(rv, cls);
+  if (bm) bits.push(bm);
+  if (rv.trend && TREND_WORDS[rv.trend]) bits.push(TREND_WORDS[rv.trend]);
+  return bits.length ? `${cls} — ${bits.join('; ')}.` : `${cls} on today's run.`;
+}
+
+/** Deterministic rep talking point keyed off the cheapest-screening benchmark. */
+function talkingPointLine(row) {
+  const rv = row.rv;
+  if (!rv) return 'Screens cheap for its maturity and structure on today\'s run.';
+  const c = String(row.assetClass || '').toLowerCase();
+  if (/cd|certificate/.test(c) && rv.fdicSpreadBps != null) {
+    return `This ${rv.cdTermMonths || ''}-month CD pays about ${fmtBps(rv.fdicSpreadBps)} over the FDIC national average${rv.ustSpreadBps != null ? ` and ${fmtBps(rv.ustSpreadBps)} over the matched Treasury` : ''} — hard to beat for insured short money.`;
+  }
+  if (/muni/.test(c)) {
+    if (rv.mmdSpreadBps != null && rv.mmdSpreadBps > 0) {
+      return `This name is about ${fmtBps(rv.mmdSpreadBps)} cheap to the ${rv.mmdGrade || 'AAA'} MMD scale at its maturity${rv.audSpreadBps && rv.audSpreadBps.ccorp != null ? `, ~${fmtBps(rv.audSpreadBps.ccorp)} over Treasuries on a C-corp taxable-equivalent basis` : ''}.`;
+    }
+    if (rv.audSpreadBps && rv.audSpreadBps.ccorp != null) {
+      return `On a taxable-equivalent basis this works out to roughly ${fmtBps(rv.audSpreadBps.ccorp)} over the matched Treasury for a bank book.`;
+    }
+  }
+  if (rv.ustSpreadBps != null) {
+    return `You pick up about ${fmtBps(rv.ustSpreadBps)} over the matched Treasury here${rv.peerSpreadBps != null && rv.peerSpreadBps > 0 ? `, and it's cheap to its ${rv.bucketLabel || ''} peers` : ''}.`;
+  }
+  return 'Screens cheap for its maturity and structure on today\'s run.';
+}
+
 /**
- * Re-attach OUR numbers to a candidate row, reading ONLY headline/rationale from
- * the model. `audKey` null → attach the full per-audience econ map (BOTD/SoD);
- * otherwise attach that audience's econ. deepDiscount is COMPUTED from our price.
+ * Re-attach OUR numbers to a candidate row, reading ONLY headline/rationale/
+ * talkingPoint prose from the model. The relative-value read (benchmark, caveat,
+ * buyer, score) and the deterministic fallbacks for every prose field come from
+ * the desk's own rv object — never the model. `audKey` null → attach the full
+ * per-audience econ map (BOTD/SoD). deepDiscount is COMPUTED from our price.
  */
-function attachRow(row, audKey, headline, rationale, source, rationaleMax) {
+function attachRow(row, audKey, headline, rationale, source, rationaleMax, talkingPoint) {
+  const rv = row.rv || null;
+  const why = (rationale && String(rationale).trim()) ? clamp(rationale, rationaleMax || LEN.rationale) : clamp(whyScreensLine(row), rationaleMax || LEN.rationale);
+  const tp = (talkingPoint && String(talkingPoint).trim()) ? clamp(talkingPoint, LEN.talkingPoint) : clamp(talkingPointLine(row), LEN.talkingPoint);
   return {
     cusip: row.cusip,
     assetClass: row.assetClass || 'Other',
@@ -401,18 +503,16 @@ function attachRow(row, audKey, headline, rationale, source, rationaleMax) {
     bq: !!row.bq,
     exemptMuni: !!row.exemptMuni,
     eff: audKey ? (row.econ && row.econ[audKey]) || null : (row.econ || null),
+    rv,
+    benchmark: clamp(benchmarkLine(rv, row.assetClass), LEN.benchmark),
+    caveat: rv && Array.isArray(rv.caveats) && rv.caveats.length ? clamp(rv.caveats[0], 200) : null,
+    buyer: rv && Array.isArray(rv.buyerTypes) && rv.buyerTypes.length ? rv.buyerTypes[0] : null,
     deepDiscount: row.price != null && row.price <= 99.0,
     headline: clamp(headline, LEN.headline),
-    rationale: clamp(rationale, rationaleMax || LEN.rationale),
+    rationale: why,
+    talkingPoint: tp,
     source,
   };
-}
-
-function backfillRationale(cand, audKey) {
-  const e = cand.econ && cand.econ[audKey];
-  const y = e && e.effYield != null ? fixed2(e.effYield) : fixed2(cand.ytw);
-  const basis = (e && e.basis) || 'yield';
-  return `Auto-selected: top ${basis} ${cand.assetClass || 'security'} for this audience` + (y ? ` at ${y}%.` : '.');
 }
 
 /** Single CUSIP gate for a model pick under one audience. Null = dropped. */
@@ -422,7 +522,7 @@ function groundPick(p, audKey, byCusip, eligible, flags) {
   const row = byCusip.get(cusip);
   if (!row) { flags.add('dropped-unknown-cusip'); return null; }
   if (!eligible[audKey] || !eligible[audKey].has(cusip)) { flags.add('dropped-audience-ineligible'); return null; }
-  return attachRow(row, audKey, p && p.headline, p && p.rationale, 'model');
+  return attachRow(row, audKey, p && p.headline, p && p.rationale, 'model', LEN.rationale, p && p.talkingPoint);
 }
 
 /** Assemble one audience: ground model picks, dedup, ≤3/class, backfill to ≥3. */
@@ -444,18 +544,19 @@ function groundAudiencePicks(rawPicks, audKey, candidateSet, byCusip, eligible, 
 
   if (out.length < MIN_PER_AUDIENCE) {
     const pool = candidateSet.byAudience[audKey] || [];
-    // Pass 1 — backfill respecting the per-class cap.
+    // Pass 1 — backfill respecting the per-class cap. Empty prose → the
+    // deterministic, RV-grounded why/talking-point fill in attachRow.
     for (const cand of pool) {
       if (out.length >= MIN_PER_AUDIENCE) break;
       if (seen.has(cand.cusip) || atCap(cand.assetClass || 'Other')) continue;
-      out.push(attachRow(cand, audKey, '', backfillRationale(cand, audKey), 'backfill'));
+      out.push(attachRow(cand, audKey, '', '', 'backfill'));
       seen.add(cand.cusip); bump(cand.assetClass || 'Other'); flags.add('backfilled');
     }
     // Pass 2 — floor-of-3 wins over the class cap (a present page beats a short one).
     for (const cand of pool) {
       if (out.length >= MIN_PER_AUDIENCE) break;
       if (seen.has(cand.cusip)) continue;
-      out.push(attachRow(cand, audKey, '', backfillRationale(cand, audKey), 'backfill'));
+      out.push(attachRow(cand, audKey, '', '', 'backfill'));
       seen.add(cand.cusip); flags.add('backfilled');
     }
   }
@@ -484,9 +585,12 @@ function pickBotdDeterministic(candidateSet, floorK) {
     if (/corp/.test(cls)) return 2;
     return 3; // agency / treasury / mbs / structured
   };
+  // Best RELATIVE VALUE first (the rv composite), then a credit/structure tilt,
+  // then effective yield as a final tie-break — quality over liquidity.
+  const rvBpsOf = c => (c.rv && c.rv.rvBps != null ? c.rv.rvBps : -Infinity);
   const ranked = pool
     .filter(c => c.cusip !== excludeCusip)
-    .sort((a, b) => tierOf(a) - tierOf(b) || bestEff(b) - bestEff(a) || (a.cusip < b.cusip ? -1 : 1));
+    .sort((a, b) => rvBpsOf(b) - rvBpsOf(a) || tierOf(a) - tierOf(b) || bestEff(b) - bestEff(a) || (a.cusip < b.cusip ? -1 : 1));
   if (ranked.length) return ranked[0];
   return pool.slice().sort((a, b) => bestEff(b) - bestEff(a))[0]; // degenerate: only the excluded block
 }
@@ -495,11 +599,11 @@ function groundBotd(rawBotd, candidateSet, byCusip, flags, floorK) {
   const cusip = cusipKey(rawBotd && rawBotd.cusip);
   const row = cusip ? byCusip.get(cusip) : null;
   const valid = row && (row.availabilityK == null || row.availabilityK >= floorK);
-  if (valid) return attachRow(row, null, rawBotd.headline, rawBotd.rationale, 'model', LEN.botdRationale);
+  if (valid) return attachRow(row, null, rawBotd.headline, rawBotd.rationale, 'model', LEN.botdRationale, rawBotd.talkingPoint);
   flags.add('botd-backfilled');
   const cand = pickBotdDeterministic(candidateSet, floorK);
   if (!cand) return null;
-  return attachRow(cand, null, '', `Auto-selected on credit and structure merit: ${cand.description || cand.assetClass}.`, 'backfill', LEN.botdRationale);
+  return attachRow(cand, null, '', `Best relative value on the run by the desk's risk-adjusted screen: ${cand.description || cand.assetClass}.`, 'backfill', LEN.botdRationale);
 }
 
 /** Deterministic strategy theme when the model's SoD is thin. */
@@ -641,9 +745,112 @@ function groundDashboard(raw, candidateSet, macroInput) {
   return { audiences: candidateSet.audiences, picks, connector, botd, sod, coverage, degraded, flags: flagList };
 }
 
+// ---------- relative-value assembly ----------
+
+/**
+ * Build the candidate-set shape groundDashboard expects from the RV analysis:
+ * enriched candidates (carrying .rv) and per-audience lists already ranked by
+ * the tax-aware relative-value spread that audience earns.
+ */
+function buildGroundingSet(candidateSet, rvAnalysis) {
+  const byCusip = rvAnalysis.byCusip;
+  const byAudience = {};
+  for (const k of AUDIENCE_KEYS) {
+    byAudience[k] = (rvAnalysis.byAudience[k] || []).map(cu => byCusip.get(cu)).filter(Boolean);
+  }
+  return {
+    candidates: rvAnalysis.candidates,
+    byAudience,
+    audiences: candidateSet.audiences,
+    floorK: candidateSet.floorK,
+    coverageOk: candidateSet.coverageOk,
+  };
+}
+
+/** Attach OUR numbers + deterministic RV prose to a section list (no model text). */
+function attachSection(list) { return (Array.isArray(list) ? list : []).map(c => attachRow(c, null, '', '', 'rv')); }
+
+/**
+ * The relative-value sections rendered on the dashboard — every entry grounded
+ * the same way as a pick (carries rv, benchmark, caveat, buyer, talkingPoint).
+ */
+function buildRvSections(rvAnalysis) {
+  const byBucket = {};
+  for (const [k, b] of Object.entries(rvAnalysis.byBucket || {})) {
+    byBucket[k] = { label: b.label, count: b.count, top: attachSection(b.top) };
+  }
+  const trendList = key => attachSection((rvAnalysis.trends[key] || []).map(cu => rvAnalysis.byCusip.get(cu)).filter(Boolean));
+  return {
+    benchmarks: rvAnalysis.benchmarks,
+    leaders: attachSection(rvAnalysis.leaders),
+    cheapToTreasury: attachSection(rvAnalysis.cheapToTreasury),
+    cdBoard: attachSection(rvAnalysis.cdBoard),
+    muniValue: attachSection(rvAnalysis.muniValue),
+    byBucket,
+    trends: {
+      new: trendList('new'),
+      wider: trendList('wider'),
+      improved: trendList('improved'),
+      repeated: trendList('repeated'),
+    },
+  };
+}
+
+/**
+ * The FREE, deterministic dashboard for the read-only GET: full relative-value
+ * sections + deterministic (RV-grounded) picks/connector/BOTD/SoD, with NO model
+ * call and NO disk write. Same record shape as a generated read, flagged
+ * aiGenerated:false. Throws only for zero candidates.
+ *
+ * opts: { rows, econ, meta, curve?, fred?, priorMap?, taxRates?, floorK? }
+ */
+function buildLiveDashboard(opts) {
+  const o = opts || {};
+  const meta = o.meta || {};
+  const packageDate = meta.date || (o.econ && o.econ.asOfDate) || null;
+  const candidateSet = dailyDashboard.buildCandidateSet(o.rows, { taxRates: o.taxRates || null, floorK: o.floorK });
+  if (!candidateSet.candidates.length) throw new Error('No audience-eligible offerings to build a dashboard from');
+  const rvAnalysis = rvEngine.buildRelativeValue({ candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null, asOf: packageDate, priorMap: o.priorMap || null });
+  const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);
+  const macroInput = dailySummary.buildSummaryInput(o.econ, meta);
+  const grounded = groundDashboard(emptySkeleton(), groundingSet, macroInput);
+  return {
+    packageDate,
+    picks: grounded.picks,
+    connector: grounded.connector,
+    botd: grounded.botd,
+    sod: grounded.sod,
+    coverage: grounded.coverage,
+    coverageOk: candidateSet.coverageOk,
+    audiences: candidateSet.audiences,
+    rv: buildRvSections(rvAnalysis),
+    benchmarks: rvAnalysis.benchmarks,
+    candidateCount: candidateSet.candidates.length,
+    floorK: candidateSet.floorK,
+    droppedBelowFloor: candidateSet.droppedBelowFloor,
+    model: null,
+    aiGenerated: false,
+    degraded: grounded.degraded,
+    flags: grounded.flags,
+  };
+}
+
 // ---------- cache (atomic, by package date) ----------
 
 function cachePath(marketDir) { return path.join(marketDir, CACHE_FILENAME); }
+
+/**
+ * The prior package's per-CUSIP snapshot for trend detection: the snapshot
+ * embedded in the cached read, returned only when it is for a DIFFERENT package
+ * date than today's (so same-day re-refreshes don't diff against themselves).
+ */
+function loadPriorSnapshot(marketDir, packageDate) {
+  const cached = getCachedDashboard(marketDir);
+  if (cached && cached.snapshot && cached.packageDate && cached.packageDate !== packageDate) {
+    return cached.snapshot;
+  }
+  return null;
+}
 
 function getCachedDashboard(marketDir) {
   try {
@@ -694,8 +901,15 @@ async function generateDashboard(opts) {
     throw new Error('No audience-eligible offerings to build a dashboard from');
   }
 
+  // Relative-value enrichment — the deterministic ranking core. The model ranks
+  // WITHIN this RV-ordered set; it never moves a benchmark.
+  const rvAnalysis = rvEngine.buildRelativeValue({
+    candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null, asOf: packageDate, priorMap: o.priorMap || null,
+  });
+  const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);
+
   const macroInput = dailySummary.buildSummaryInput(o.econ, meta);
-  const { system, messages } = buildDashboardPrompt(candidateSet, macroInput, meta);
+  const { system, messages } = buildDashboardPrompt(groundingSet, macroInput, meta);
 
   let raw = emptySkeleton();
   let model = null, usage = null, modelError = null;
@@ -716,7 +930,7 @@ async function generateDashboard(opts) {
     log('warn', `Dashboard model call failed (${modelError}); building deterministic dashboard`);
   }
 
-  const grounded = groundDashboard(raw, candidateSet, macroInput);
+  const grounded = groundDashboard(raw, groundingSet, macroInput);
 
   const record = {
     packageDate,
@@ -727,6 +941,10 @@ async function generateDashboard(opts) {
     coverage: grounded.coverage,
     coverageOk: candidateSet.coverageOk,
     audiences: candidateSet.audiences,
+    rv: buildRvSections(rvAnalysis),
+    benchmarks: rvAnalysis.benchmarks,
+    snapshot: rvAnalysis.snapshot,            // persisted for next-day trend diffing
+    aiGenerated: !!(model && !modelError),
     degraded: grounded.degraded,
     flags: grounded.flags,
     modelError,
@@ -763,6 +981,13 @@ module.exports = {
   groundPick,
   groundDashboard,
   pickBotdDeterministic,
+  buildGroundingSet,
+  buildRvSections,
+  buildLiveDashboard,
+  loadPriorSnapshot,
+  benchmarkLine,
+  whyScreensLine,
+  talkingPointLine,
   getCachedDashboard,
   generateDashboard,
   CACHE_FILENAME,

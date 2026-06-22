@@ -158,8 +158,14 @@ async function main() {
     const dashboard = await request(port, '/api/sales-dashboard');
     assert.strictEqual(dashboard.status, 200, dashboard.text);
     assert.ok(dashboard.json && dashboard.json.ok, 'sales dashboard envelope');
-    assert.ok(dashboard.json.candidatePreview, 'sales dashboard deterministic preview');
-    checks.push('sales dashboard preview');
+    // Free, live relative-value read — deterministic, no billable call. The RV
+    // sections (leaders / per-bucket bests) prove the engine ran.
+    const sd = dashboard.json.dashboard;
+    assert.ok(sd && sd.rv, 'sales dashboard live relative-value read');
+    assert.ok(Array.isArray(sd.rv.leaders), 'sales dashboard RV leaders board');
+    assert.ok(sd.rv.byBucket && typeof sd.rv.byBucket === 'object', 'sales dashboard maturity buckets');
+    assert.ok(sd.benchmarks && typeof sd.benchmarks.treasury === 'boolean', 'sales dashboard benchmarks block');
+    checks.push('sales dashboard relative-value read');
 
     for (const route of ['/api/daily-summary', '/api/offerings-pick', '/api/cd-rollover-wall?window=90', '/api/maturity-calendar?window=90']) {
       const res = await request(port, route);
