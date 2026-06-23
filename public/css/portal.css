@@ -15887,6 +15887,45 @@ body {
 
 .sd-board-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
 .sd-board-cell .sd-section { margin-bottom: 0; }
+.sd-sector { font-size: 10px; font-weight: 600; color: var(--text3); background: var(--surface-3); border-radius: 6px; padding: 0 5px; }
+
+/* Source checklist */
+.sd-source-box { background: var(--surface-2); border: 1px solid var(--border-light); border-radius: 8px; padding: 9px 12px; margin: 0 0 14px; }
+.sd-source-title { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 7px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text3); font-weight: 700; }
+.sd-source-title strong { color: var(--text); font-size: 11.5px; text-transform: none; letter-spacing: 0; }
+.sd-source-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.sd-source { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; border: 1px solid var(--border-light); background: var(--bg); border-radius: 8px; padding: 3px 7px; font-size: 11.5px; color: var(--text2); }
+.sd-source-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--text3); }
+.sd-source-ok .sd-source-dot { background: var(--success); }
+.sd-source-warn .sd-source-dot { background: #B9852A; }
+.sd-source-missing .sd-source-dot { background: var(--danger); }
+.sd-source-label { font-weight: 650; color: var(--text); white-space: nowrap; }
+.sd-source-count { font-size: 10.5px; color: var(--text3); background: var(--surface-3); border-radius: 7px; padding: 0 5px; }
+.sd-source-note { display: none; }
+
+/* Market catalysts */
+.sd-catalysts { margin: 0 0 14px; }
+.sd-catalysts-title { font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .05em; color: var(--racing-green); margin-bottom: 7px; }
+.sd-catalyst-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 9px; }
+.sd-catalyst { background: var(--surface-2); border: 1px solid var(--border-light); border-left: 3px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.sd-catalyst-curve { border-left-color: #4A7FC1; }
+.sd-catalyst-data { border-left-color: #8A6E35; }
+.sd-catalyst-inventory { border-left-color: var(--racing-green); }
+.sd-catalyst-news { border-left-color: #7A5CC2; }
+.sd-catalyst-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-size: 10.5px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; color: var(--text3); margin-bottom: 4px; }
+.sd-catalyst-source { font-size: 10px; font-weight: 600; color: var(--text3); text-transform: none; letter-spacing: 0; }
+.sd-catalyst p { margin: 0; font-size: 12px; line-height: 1.4; color: var(--text); }
+
+/* Inventory coverage strip */
+.sd-inventory-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.sd-inv-card { background: var(--surface-2); border: 1px solid var(--border-light); border-radius: 8px; padding: 9px 10px; min-width: 0; }
+.sd-inv-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 700; color: var(--racing-green); text-transform: uppercase; letter-spacing: .03em; }
+.sd-inv-count { font-size: 24px; font-weight: 750; color: var(--text); line-height: 1.1; margin-top: 4px; }
+.sd-inv-detail { font-size: 11px; color: var(--text3); margin-top: 2px; }
+.sd-inv-tops { display: flex; flex-direction: column; gap: 3px; margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--border-light); }
+.sd-inv-top { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 11.5px; }
+.sd-inv-top .sd-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sd-inv-rv { flex: 0 0 auto; font-size: 10px; color: var(--text3); background: var(--surface-3); border-radius: 7px; padding: 0 5px; }
 
 /* Best-by-bucket columns */
 .sd-buckets { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }

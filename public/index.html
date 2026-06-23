@@ -375,12 +375,12 @@
           </button>
         </header>
         <div class="home-tile-headline">
-          <span class="home-tile-headline-text">Strategies Requests</span>
+          <span class="home-tile-headline-text">Strategy Requests</span>
         </div>
         <p class="home-tile-foot" id="homeTileStrategiesFoot"></p>
         <div class="home-strategy-search" data-home-strategy-open>
-          <input type="search" id="homeStrategyBankSearch" placeholder="Search bank to open strategy form&hellip;" autocomplete="off">
-          <button type="button" class="small-btn" id="homeStrategyBankSearchBtn">Search</button>
+          <input type="search" id="homeStrategyBankSearch" placeholder="Search a bank to start a strategy request&hellip;" autocomplete="off">
+          <button type="button" class="small-btn" id="homeStrategyBankSearchBtn">Start</button>
         </div>
         <div class="home-strategy-results" id="homeStrategyBankResults"></div>
       </article>
@@ -1337,7 +1337,7 @@
           <h3>Brokered CD Bank Screen</h3>
           <p>Search a bank, compare the latest call report to prior quarter and peers, then blend that with today's CD curve and WIRP.</p>
         </div>
-        <label class="small-btn bank-upload-btn">
+        <label class="small-btn bank-upload-btn" id="wirpUploadLabel">
           Upload WIRP
           <input type="file" id="wirpWorkbookInput" accept=".xlsx,.xlsm,.xls,.csv" hidden>
         </label>
@@ -2208,7 +2208,7 @@
           <button type="button" class="small-btn" id="salesDashboardBtn">Generate</button>
         </div>
       </div>
-      <p class="daily-picks-note">Internal desk aid &mdash; every security is scored against the matched Treasury, FDIC CD benchmarks and same-sector/maturity/rating peers, then risk-adjusted. The relative-value read is computed live from the desk's own yields; Claude only ranks and writes the talking points. Taxable-equivalent yields <strong>exclude</strong> the TEFRA interest-expense haircut and the 20% C-Corp bank-qualified disallowance &mdash; clients should consult their own tax/portfolio advisors. Not investment advice. For Institutional Use Only.</p>
+      <p class="daily-picks-note">Internal desk aid &mdash; every security is scored against the matched Treasury, FDIC CD benchmarks and same-sector/maturity/rating peers, then risk-adjusted. The relative-value read is computed live from the desk's own yields; Claude only ranks and writes the talking points. Bank muni taxable-equivalent yields use the desk's BQ/TEFRA-correct net TEY when available; clients should consult their own tax/portfolio advisors. Not investment advice. For Institutional Use Only.</p>
       <div class="daily-picks-body" id="salesDashboardBody"></div>
     </section>
   </div>
@@ -2835,12 +2835,12 @@
   </section>
 
   <div class="container">
-    <div class="mbs-upload-panel">
+    <div class="mbs-upload-panel" id="mbsCmoUploadPanel">
       <div>
         <h3>Source Drop</h3>
         <p>Excel with Bloomberg values, CMO/MBS PDFs, .eml offer emails, and PNG/JPG screen snips are saved together here.</p>
       </div>
-      <label class="mbs-file-picker" for="mbsCmoUploadInput">
+      <label class="mbs-file-picker" id="mbsCmoUploadPicker" for="mbsCmoUploadInput">
         <span>Select source files</span>
         <small id="mbsCmoUploadName">No files selected</small>
       </label>

@@ -49,6 +49,8 @@ const ROWS = [
   { assetClass: 'Agency', type: 'agency', page: 'agencies', cusip: '3130RICH00', description: 'FHLB callable', sector: 'Callable', state: '', coupon: 4.65, yield: 3.90, ytm: 4.35, ytnc: 3.90, price: 99.65, maturity: '2032-05-19', callDate: '2027-05-19', availabilityK: 4370 },
   // BBB corp at a wide spread (credit comp) — RIA only.
   { assetClass: 'Corporate', type: 'corporate', page: 'corporates', cusip: '319626AA5', description: 'First Citizens', sector: 'Financial', state: '', coupon: 5.6, yield: 6.06, ytm: 6.06, ytnc: null, price: 96.0, maturity: '2035-02-01', callDate: null, availabilityK: 1500, sp: 'BBB+' },
+  // Structured note — RIA / yield enhancement.
+  { assetClass: 'Structured Note', type: 'structured-note', page: 'structured-notes', cusip: '48130KKH9', description: 'JPM 20Y/2Y structured', sector: 'Callable Fixed', state: '', coupon: 6.0, yield: 6.0, ytm: 6.0, ytnc: null, price: 99.85, maturity: '2046-06-11', callDate: '2028-06-11', availabilityK: null, sp: 'A' },
   // AG-insured muni — benchmarked against the insured MMD scale, not just AAA.
   { assetClass: 'Muni', type: 'muni', page: 'muni-explorer', cusip: 'INSURED001', description: 'AG-insured IA', sector: 'Municipals', state: 'IA', coupon: 3.0, yield: 2.93, price: 99.5, maturity: '2030-09-01', callDate: null, availabilityK: 500, sp: 'AA', creditEnhancement: 'AG' },
 ];
@@ -73,6 +75,9 @@ test('workoutTenor prices premium/low-YTNC callables to the call', () => {
   assert.ok(w.effYears < 1.2 && w.effYears > 0.7); // ~0.9y to the 2027-05 call
   const bullet = ROWS.find(r => r.cusip === '3130LONG30'); // no call
   assert.strictEqual(rv.workoutTenor(bullet, ASOF).basis, 'maturity');
+  const matured = rv.workoutTenor({ maturity: '2025-01-01', callDate: null }, ASOF);
+  assert.strictEqual(matured.effYears, null);
+  assert.strictEqual(matured.statedYears, null);
 });
 
 test('fdicCdRateForTerm interpolates between published terms', () => {
@@ -106,6 +111,7 @@ test('CD carries both Treasury and FDIC spreads + spread-per-month', () => {
   assert.ok(approx(cd.rv.ustSpreadBps, 55, 6));
   assert.ok(approx(cd.rv.fdicSpreadBps, 275, 6));
   assert.ok(cd.rv.spreadPerMonthBps > 4 && cd.rv.spreadPerMonthBps < 5);
+  assert.strictEqual(rv.cdTermMonths({ description: '' }, 0.01), null);
 });
 
 test('muni carries a muni/UST ratio and a bank TEY spread, not a raw-yield rank', () => {
@@ -143,6 +149,20 @@ test('best-by-bucket spreads ideas across the curve (long end cannot sweep)', ()
   const populated = Object.values(set.byBucket).filter(b => b.count > 0);
   assert.ok(populated.length >= 2);
   for (const b of populated) assert.ok(b.top.length >= 1 && b.top.length <= 3);
+});
+
+test('sales-dashboard coverage exposes inventory strip plus RIA and bank-capital boards', () => {
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF });
+  const labels = set.inventory.map(b => b.label);
+  assert.ok(labels.includes('Tax-exempt munis'));
+  assert.ok(labels.includes('Agencies'));
+  assert.ok(labels.includes('CD offerings'));
+  assert.ok(labels.includes('Corporates'));
+  assert.ok(labels.includes('Structured notes'));
+  assert.ok(set.inventory.find(b => b.key === 'muni-exempt').bqCount >= 1);
+  assert.ok(set.creditYield.some(c => c.cusip === '319626AA5'));
+  assert.ok(set.creditYield.some(c => c.cusip === '48130KKH9'));
+  assert.ok(set.bankCapital.every(c => /agency|treasur|mbs|cmo/i.test(c.assetClass || c.type || '')));
 });
 
 test('audience lists re-rank by the tax-aware spread that audience earns', () => {
@@ -247,7 +267,7 @@ test('outlier chips surface the strongest signals (≤3)', () => {
   assert.ok(muni.rv.chips.some(s => /MMD/.test(s)));
 });
 
-test('archive-fed movers strip the parallel curve move (excess-of-mean)', () => {
+test('archive-fed movers strip the parallel curve move (excess-of-median)', () => {
   // Prior package: everything 10bp lower than today EXCEPT the corp 30bp lower
   // (so the corp cheapened idiosyncratically), and the CD absent (new today).
   const PRIOR_ROWS = ROWS.filter(r => r.cusip !== '06251FET2' && r.yield != null).map(r => ({
@@ -260,10 +280,25 @@ test('archive-fed movers strip the parallel curve move (excess-of-mean)', () => 
   });
   assert.ok(set.movers);
   assert.strictEqual(set.movers.priorDate, '2026-06-12');
-  assert.ok(approx(set.movers.curveMoveBp, 14, 1)); // mean move ≈ +14bp
+  assert.ok(approx(set.movers.curveMoveBp, 10, 1)); // median move = +10bp
   assert.ok(set.movers.cheapened.some(c => c.cusip === '319626AA5')); // corp cheapened vs the curve
   assert.ok(set.movers.newToday.some(c => c.cusip === '06251FET2')); // CD is new today
   assert.strictEqual(set.benchmarks.priorPackage.daysAgo, 10);
+});
+
+test('archive-fed movers use a robust median baseline, not an outlier-skewed mean', () => {
+  const rows = [
+    { assetClass: 'Agency', cusip: 'AAA111111', description: 'A', yield: 4.00, ytm: 4.00, maturity: '2028-01-01' },
+    { assetClass: 'Agency', cusip: 'BBB222222', description: 'B', yield: 4.00, ytm: 4.00, maturity: '2028-01-01' },
+    { assetClass: 'Agency', cusip: 'CCC333333', description: 'C', yield: 4.00, ytm: 4.00, maturity: '2028-01-01' },
+    { assetClass: 'Corporate', cusip: 'DDD444444', description: 'Outlier', yield: 5.00, ytm: 5.00, maturity: '2028-01-01' },
+  ];
+  const priorRows = rows.map(r => ({ ...r, yield: r.cusip === 'DDD444444' ? r.yield - 1.00 : r.yield - 0.10 }));
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(rows), curve: CURVE, asOf: ASOF, priorRows });
+  assert.strictEqual(set.movers.curveMoveBp, 10);
+  const unchanged = set.candidates.filter(c => c.cusip !== 'DDD444444');
+  assert.ok(unchanged.every(c => c.rv.trend === 'repeat'), unchanged.map(c => `${c.cusip}:${c.rv.moverBp}`).join(','));
+  assert.ok(set.movers.cheapened.some(c => c.cusip === 'DDD444444'));
 });
 
 test('credit-enhancement re-scores against the insured MMD scale', () => {
@@ -271,6 +306,8 @@ test('credit-enhancement re-scores against the insured MMD scale', () => {
   assert.strictEqual(rv.classifyEnhancement('BAM').type, 'insured');
   assert.strictEqual(rv.classifyEnhancement('ST AID DIR DEP').type, 'state-aid');
   assert.strictEqual(rv.classifyEnhancement('ATY(35) = 3.37%'), null); // junk note → no enhancement
+  assert.strictEqual(rv.classifyEnhancement('AGENCY'), null);
+  assert.strictEqual(rv.classifyEnhancement('AGGREGATE'), null);
   const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF });
   const ins = find(set, 'INSURED001'); // YTW 2.93 vs insured MMD ~2.64 at ~4.2y
   assert.ok(ins.rv.enhanced && ins.rv.enhanced.type === 'insured');
@@ -287,6 +324,8 @@ test('strategist backdrop: OAS regime percentile + muni/credit KPIs', () => {
   const s = rv.buildStrategist(fred, CURVE, MMD);
   assert.strictEqual(s.oas.ig.bp, 92);
   assert.ok(s.oas.ig.pctile < 40 && s.oas.ig.tag === 'tight');
+  assert.strictEqual(rv.oasRead({ value: 145, history: Array.from({ length: 12 }, (_, i) => ({ v: 120 + i })) }).bp, 145);
+  assert.strictEqual(rv.oasRead({ value: 1.45, history: Array.from({ length: 12 }, (_, i) => ({ v: 1.2 + i / 100 })) }).bp, 145);
   assert.strictEqual(s.kpi.mmdAaa['10y'], 3.00);
   assert.strictEqual(s.kpi.ratios['10y'], 67);
   assert.strictEqual(s.kpi.twos10s.level, 40); // (4.20 − 3.80) × 100
@@ -319,6 +358,14 @@ test('asset-class regime shift diffs the desk RV table, parallel move netted', (
   const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF, rvTable: today, priorRvTable: prior, priorMeta: { priorDate: '2026-06-12', daysAgo: 10 } });
   assert.ok(set.strategist.regime && set.strategist.regime.classes.length === 4);
   assert.strictEqual(set.strategist.regime.priorDate, '2026-06-12');
+});
+
+test('regimeShift compares unrounded deltas to the threshold', () => {
+  const prior = { rows: [{ term: '1Y', cdSpread: 100 }, { term: '2Y', cdSpread: 100 }] };
+  const edge = { rows: [{ term: '1Y', cdSpread: 95.4 }, { term: '2Y', cdSpread: 95.4 }] };
+  const hit = { rows: [{ term: '1Y', cdSpread: 95 }, { term: '2Y', cdSpread: 95 }] };
+  assert.strictEqual(rv.regimeShift(edge, prior).find(r => r.key === 'cd').direction, 'flat');
+  assert.strictEqual(rv.regimeShift(hit, prior).find(r => r.key === 'cd').direction, 'richened');
 });
 
 (async () => {

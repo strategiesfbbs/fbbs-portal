@@ -96,6 +96,19 @@ function isCdClass(c) { return /cd|certificate/.test(classOf(c)); }
 function isTreasuryClass(c) { return /treasur|ust/.test(classOf(c)); }
 function isAgencyClass(c) { return /agency/.test(classOf(c)); }
 function isCorpClass(c) { return /corp/.test(classOf(c)); }
+function isStructuredClass(c) { return /structured|note/.test(classOf(c)); }
+function isMbsCmoClass(c) { return /mbs|cmo/.test(classOf(c)); }
+
+function inventoryBucket(c) {
+  if (isTreasuryClass(c)) return { key: 'treasury', label: 'Treasuries', page: 'treasury-explorer' };
+  if (isMuniClass(c)) return { key: c && c.exemptMuni ? 'muni-exempt' : 'muni-taxable', label: c && c.exemptMuni ? 'Tax-exempt munis' : 'Taxable munis', page: 'muni-offerings' };
+  if (isAgencyClass(c)) return { key: 'agency', label: 'Agencies', page: 'agencies' };
+  if (isCdClass(c)) return { key: 'cd', label: 'CD offerings', page: 'cd-offers' };
+  if (isCorpClass(c)) return { key: 'corporate', label: 'Corporates', page: 'corporates' };
+  if (isMbsCmoClass(c)) return { key: 'mbs-cmo', label: 'MBS / CMO', page: 'mbs-cmo' };
+  if (isStructuredClass(c)) return { key: 'structured', label: 'Structured notes', page: 'structured-notes' };
+  return { key: 'other', label: 'Other', page: 'all-offerings' };
+}
 
 /** Median of a numeric array (sorted copy). null on empty. */
 function median(arr) {
@@ -283,8 +296,8 @@ function bqFactorFor(audienceKey, isBq) {
 /**
  * The BQ/TEFRA-correct taxable-equivalent yield: (YTW − COF·t·q)/(1−t) via the
  * verified swap-math implementation. Returns { tey, naiveTey, tefraBp } in
- * percent / bp, or null. The naive TEY = YTW/(1−t) is what the page headline
- * shows; tefraBp is the haircut the desk's disclaimer admits but never quantified.
+ * percent / bp, or null. The Sales Dashboard displays/ranks on this net TEY;
+ * naiveTey is retained only to quantify the TEFRA haircut.
  */
 function bqCorrectTey(ytwPct, taxRatePct, bqFactor, cofPct) {
   if (ytwPct == null || !(taxRatePct > 0)) return null;
@@ -338,7 +351,7 @@ function interpolateTreasuryRatio(mmdCurve, years) {
  * capital gain. Returns { threshold, breach } or null. Pure.
  */
 function deMinimis(price, statedYears) {
-  if (price == null || statedYears == null || price >= 100) return null;
+  if (price == null || statedYears == null || statedYears <= 0 || price >= 100) return null;
   const threshold = 100 - 0.25 * statedYears;
   return { threshold: round(threshold, 2), breach: price <= threshold };
 }
@@ -376,15 +389,20 @@ function workoutTenor(c, asOf) {
     if (ytm != null && ytnc != null && ytnc <= ytm) basis = 'call';
     else if ((ytm == null || ytnc == null) && price != null && price > 100.5) basis = 'call'; // premium callable → priced to call
   }
-  const effYears = basis === 'call' ? toCall : (toMaturity != null ? toMaturity : toCall);
-  return { effYears, statedYears: toMaturity, basis, toCall, toMaturity };
+  const rawEffYears = basis === 'call' ? toCall : (toMaturity != null ? toMaturity : toCall);
+  const effYears = rawEffYears != null && rawEffYears > 0 ? rawEffYears : null;
+  const statedYears = toMaturity != null && toMaturity > 0 ? toMaturity : null;
+  return { effYears, statedYears, basis, toCall, toMaturity };
 }
 
 /** CD term in months — from the description ("12m"/"18 mo") else the workout tenor. */
 function cdTermMonths(c, effYears) {
   const m = String((c && c.description) || '').match(/(\d{1,3})\s*(?:m\b|mo\b|month)/i);
   if (m) { const v = Number(m[1]); if (Number.isFinite(v) && v > 0 && v <= 600) return v; }
-  if (effYears != null && effYears > 0) return Math.round(effYears * 12);
+  if (effYears != null && effYears > 0) {
+    const months = Math.round(effYears * 12);
+    return months > 0 ? months : null;
+  }
   return null;
 }
 
@@ -693,8 +711,8 @@ function computeMovers(enriched, priorRows, meta) {
     deltas.push(dY);
     matched.push({ c, dY });
   }
-  const meanD = deltas.length ? deltas.reduce((a, b) => a + b, 0) / deltas.length : 0;
-  for (const { c, dY } of matched) c.rv.moverBp = round((dY - meanD) * 100, 0); // + = cheapened vs the curve
+  const baselineD = deltas.length ? median(deltas) : 0;
+  for (const { c, dY } of matched) c.rv.moverBp = round((dY - baselineD) * 100, 0); // + = cheapened vs the curve
 
   const todayCusips = new Set(enriched.map(c => cusipKey(c.cusip)));
   const newToday = enriched.filter(c => !prior.has(cusipKey(c.cusip)));
@@ -725,7 +743,7 @@ function computeMovers(enriched, priorRows, meta) {
     priorDate: m.priorDate || null,
     daysAgo: m.daysAgo != null ? m.daysAgo : null,
     matched: matched.length,
-    curveMoveBp: round(meanD * 100, 0),
+    curveMoveBp: round(baselineD * 100, 0),
     cheapened, richened, newToday, rolledOff, supply,
   };
 }
@@ -764,9 +782,13 @@ function oasRead(series) {
   if (v == null) return null;
   const hist = Array.isArray(series.history) ? series.history.map(h => num(h.v)).filter(x => x != null) : [];
   let pctile = null;
-  if (hist.length >= 10) pctile = Math.round((hist.filter(x => x <= v).length / hist.length) * 100);
-  // FRED ICE BofA OAS series are quoted in percent; show as bp.
-  const bp = Math.round(v * 100);
+  // FRED ICE BofA OAS series are normally quoted in percent; if a source ever
+  // provides an already-bp value, do not multiply it again.
+  const toBp = x => x > 50 ? x : x * 100;
+  const scaled = toBp(v);
+  const histScaled = hist.map(toBp);
+  if (histScaled.length >= 10) pctile = Math.round((histScaled.filter(x => x <= scaled).length / histScaled.length) * 100);
+  const bp = Math.round(scaled);
   let tag = 'neutral';
   if (pctile != null) { if (pctile <= 33) tag = 'tight'; else if (pctile >= 67) tag = 'wide'; }
   return { bp, pctile, tag };
@@ -839,8 +861,9 @@ function regimeShift(todayTable, priorTable) {
       if (tv != null && pv != null) deltas.push(tv - pv);
     }
     if (!deltas.length) continue;
-    const mean = Math.round(deltas.reduce((a, b) => a + b, 0) / deltas.length);
-    const direction = mean >= REGIME_BPS ? 'cheapened' : (mean <= -REGIME_BPS ? 'richened' : 'flat');
+    const rawMean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+    const mean = Math.round(rawMean);
+    const direction = rawMean >= REGIME_BPS ? 'cheapened' : (rawMean <= -REGIME_BPS ? 'richened' : 'flat');
     out.push({ key: c.key, label: c.label, deltaBp: mean, direction, n: deltas.length });
   }
   if (!out.length) return null;
@@ -988,6 +1011,47 @@ function buildRelativeValue(opts) {
     if (standouts.length >= 5) break;
   }
 
+  // Inventory coverage — the old static dashboard had a daily inventory strip.
+  // Keep that same morning breadth read, but make it live from the parsed rows.
+  const invMap = new Map();
+  for (const c of enriched) {
+    const b = inventoryBucket(c);
+    const slot = invMap.get(b.key) || {
+      key: b.key,
+      label: b.label,
+      page: b.page,
+      count: 0,
+      eligibleCount: 0,
+      bqCount: 0,
+      deepDiscountCount: 0,
+      top: [],
+    };
+    slot.count += 1;
+    if (Array.isArray(c.audiences) && c.audiences.length) slot.eligibleCount += 1;
+    if (c.bq) slot.bqCount += 1;
+    if (num(c.price) != null && num(c.price) <= 99.0) slot.deepDiscountCount += 1;
+    slot.top.push(c);
+    invMap.set(b.key, slot);
+  }
+  const invOrder = ['treasury', 'muni-exempt', 'muni-taxable', 'agency', 'cd', 'corporate', 'mbs-cmo', 'structured', 'other'];
+  const inventory = invOrder
+    .map(k => invMap.get(k))
+    .filter(Boolean)
+    .map(b => Object.assign({}, b, { top: take(b.top.sort(byRvDesc), 3) }));
+
+  // Dedicated RIA / taxable-yield board. The legacy HTML made this a separate
+  // major tab; without it, structured notes and IG credit can disappear inside
+  // cross-asset leaderboards even when they are the day's actual RIA story.
+  const creditYield = enriched
+    .filter(c => (isCorpClass(c) || isStructuredClass(c)) && c.rv.rvBps != null)
+    .sort((a, b) => (b.rv.ustSpreadBps == null ? -Infinity : b.rv.ustSpreadBps) - (a.rv.ustSpreadBps == null ? -Infinity : a.rv.ustSpreadBps) || byRvDesc(a, b));
+
+  // Bank-capital shelf. Agencies, Treasuries and MBS/CMO often carry the old
+  // dashboard's RW20% / effective-bullet story; keep those names easy to scan.
+  const bankCapital = enriched
+    .filter(c => (isAgencyClass(c) || isTreasuryClass(c) || isMbsCmoClass(c)) && c.rv.rvBps != null)
+    .sort(byRvDesc);
+
   // Trend rollups (snapshot mode). The archive-fed `movers` section below is
   // richer and preferred by the UI when present.
   const trends = { new: [], wider: [], improved: [], repeated: [] };
@@ -1027,11 +1091,14 @@ function buildRelativeValue(opts) {
     },
     candidates: enriched,
     byAudience,
+    inventory,
     standouts: take(standouts, 5),
     leaders: take(leaders, leadersN),
     cheapToTreasury: take(cheapToTreasury, perBoardN),
     cdBoard: take(cdBoard, perBoardN),
     muniValue: take(muniValue, perBoardN),
+    creditYield: take(creditYield, perBoardN),
+    bankCapital: take(bankCapital, perBoardN),
     byBucket,
     trends,
     movers: movers ? {

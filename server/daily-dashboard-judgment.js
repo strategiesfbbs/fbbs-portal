@@ -6,15 +6,16 @@
  * worked out. This module makes ONE billable Claude call that RANKS within that
  * set and writes prose — audience-balanced picks, a macro→pick connector
  * sentence per audience, a Bond-of-the-Day, and a Strategy-of-the-Day — then
- * GROUNDS every word of the reply back against the candidate set.
+ * GROUNDS every displayed number back against the candidate set.
  *
  * Discipline (the whole point): the model produces JUDGMENT, never arithmetic.
  * It emits only CUSIP keys + prose; every number/economic field on the page is
- * re-attached server-side from OUR Phase-1 candidate. There is no code path that
- * copies a numeric field out of the model reply, so a wrong number is
- * structurally unreachable. Two walls drop any CUSIP the model shouldn't have
- * used: (1) not in the candidate set → hallucination; (2) not eligible for that
- * audience → the desk's tax-structure tagging, enforced server-side.
+ * re-attached server-side from OUR Phase-1 candidate. Numeric-looking model
+ * prose is discarded and replaced with deterministic desk wording, so a wrong
+ * number is structurally unreachable. Two walls drop any CUSIP the model
+ * shouldn't have used: (1) not in the candidate set → hallucination; (2) not
+ * eligible for that audience → the desk's tax-structure tagging, enforced
+ * server-side.
  *
  * Unbreakable by design: a model/API/no-key failure, a malformed reply, or thin
  * coverage never throws. groundDashboard(raw={}, …) deterministically backfills
@@ -104,8 +105,8 @@ const SYSTEM_PROMPT =
   'cheap to bills", "BQ munis screen well for S-corps", "agency bullets — clean spread, ' +
   'no call risk"), a short title plus a two-sentence narrative, with 2 to 4 CUSIPs that ' +
   'express it.\n' +
-  '- Effective yields EXCLUDE the TEFRA interest-expense haircut and the 20% C-corp ' +
-  'bank-qualified disallowance (both disclaimed separately). Do not net or mention them.\n' +
+  '- Bank muni effective yields are the desk-computed net TEY when available ' +
+  '(BQ/TEFRA-correct), not naive gross-up. Do not restate or recompute them.\n' +
   '- Use the words "deep discount" only for a candidate whose dollar price is at or ' +
   'below 99.00.\n\n' +
   'For Institutional Use Only. Respond with STRICT JSON only — no prose outside the ' +
@@ -134,6 +135,15 @@ function num(v) {
 function round2(n) { return n == null ? null : Math.round(n * 100) / 100; }
 function cusipKey(v) { return String(v || '').replace(/[^0-9a-z]/gi, '').toUpperCase(); }
 function clamp(v, n) { return String(v == null ? '' : v).slice(0, n); }
+// Claude may write persuasive prose, but it may not introduce quantified market
+// claims. Harmless phrases like "five-year ladder" or "2026 maturity" can stay;
+// bp/%/$/decimal yield-like claims fall back to deterministic desk wording.
+const MODEL_NUMERIC_CLAIM = /[$€£¥]|\b\d+(?:\.\d+)?\s*(?:bp|bps|basis\s+points?|%|percent|pct)\b|[+-]?\d+\.\d+/i;
+function modelProseHasNumber(v) { return MODEL_NUMERIC_CLAIM.test(String(v == null ? '' : v)); }
+function safeModelProse(v) {
+  const s = String(v == null ? '' : v).trim();
+  return s && !modelProseHasNumber(s) ? s : '';
+}
 function fixed2(n) { return typeof n === 'number' && Number.isFinite(n) ? n.toFixed(2) : null; }
 
 /** Best effective yield across audiences for a candidate (BOTD/SoD ranking). */
@@ -151,11 +161,13 @@ function bestEff(c) {
 /** Project a flat Phase-1 candidate to the minimum the model needs to rank. */
 function compactCandidate(c) {
   const eff = {};
+  const rv = c.rv || {};
   for (const k of AUDIENCE_KEYS) {
     const e = c.econ && c.econ[k];
-    if (e && e.effYield != null) eff[k] = { y: round2(e.effYield), b: e.basis };
+    const netTey = c.exemptMuni && rv.netTey && rv.netTey[k] != null ? rv.netTey[k] : null;
+    if (netTey != null) eff[k] = { y: round2(netTey), b: 'net TEY' };
+    else if (e && e.effYield != null) eff[k] = { y: round2(e.effYield), b: e.basis };
   }
-  const rv = c.rv || {};
   const defined = obj => { const o = {}; for (const k in obj) if (obj[k] != null) o[k] = obj[k]; return o; };
   return defined({
     cusip: c.cusip,
@@ -486,10 +498,16 @@ function talkingPointLine(row) {
  * the desk's own rv object — never the model. `audKey` null → attach the full
  * per-audience econ map (BOTD/SoD). deepDiscount is COMPUTED from our price.
  */
-function attachRow(row, audKey, headline, rationale, source, rationaleMax, talkingPoint) {
+function attachRow(row, audKey, headline, rationale, source, rationaleMax, talkingPoint, flags) {
   const rv = row.rv || null;
-  const why = (rationale && String(rationale).trim()) ? clamp(rationale, rationaleMax || LEN.rationale) : clamp(whyScreensLine(row), rationaleMax || LEN.rationale);
-  const tp = (talkingPoint && String(talkingPoint).trim()) ? clamp(talkingPoint, LEN.talkingPoint) : clamp(talkingPointLine(row), LEN.talkingPoint);
+  if (source === 'model' && flags && [headline, rationale, talkingPoint].some(modelProseHasNumber)) {
+    flags.add('model-prose-number-dropped');
+  }
+  const h = source === 'model' ? safeModelProse(headline) : headline;
+  const r = source === 'model' ? safeModelProse(rationale) : rationale;
+  const t = source === 'model' ? safeModelProse(talkingPoint) : talkingPoint;
+  const why = (r && String(r).trim()) ? clamp(r, rationaleMax || LEN.rationale) : clamp(whyScreensLine(row), rationaleMax || LEN.rationale);
+  const tp = (t && String(t).trim()) ? clamp(t, LEN.talkingPoint) : clamp(talkingPointLine(row), LEN.talkingPoint);
   return {
     cusip: row.cusip,
     assetClass: row.assetClass || 'Other',
@@ -511,7 +529,7 @@ function attachRow(row, audKey, headline, rationale, source, rationaleMax, talki
     caveat: rv && Array.isArray(rv.caveats) && rv.caveats.length ? clamp(rv.caveats[0], 200) : null,
     buyer: rv && Array.isArray(rv.buyerTypes) && rv.buyerTypes.length ? rv.buyerTypes[0] : null,
     deepDiscount: row.price != null && row.price <= 99.0,
-    headline: clamp(headline, LEN.headline),
+    headline: clamp(h, LEN.headline),
     rationale: why,
     talkingPoint: tp,
     source,
@@ -525,7 +543,7 @@ function groundPick(p, audKey, byCusip, eligible, flags) {
   const row = byCusip.get(cusip);
   if (!row) { flags.add('dropped-unknown-cusip'); return null; }
   if (!eligible[audKey] || !eligible[audKey].has(cusip)) { flags.add('dropped-audience-ineligible'); return null; }
-  return attachRow(row, audKey, p && p.headline, p && p.rationale, 'model', LEN.rationale, p && p.talkingPoint);
+  return attachRow(row, audKey, p && p.headline, p && p.rationale, 'model', LEN.rationale, p && p.talkingPoint, flags);
 }
 
 /** Assemble one audience: ground model picks, dedup, ≤3/class, backfill to ≥3. */
@@ -602,7 +620,7 @@ function groundBotd(rawBotd, candidateSet, byCusip, flags, floorK) {
   const cusip = cusipKey(rawBotd && rawBotd.cusip);
   const row = cusip ? byCusip.get(cusip) : null;
   const valid = row && (row.availabilityK == null || row.availabilityK >= floorK);
-  if (valid) return attachRow(row, null, rawBotd.headline, rawBotd.rationale, 'model', LEN.botdRationale, rawBotd.talkingPoint);
+  if (valid) return attachRow(row, null, rawBotd.headline, rawBotd.rationale, 'model', LEN.botdRationale, rawBotd.talkingPoint, flags);
   flags.add('botd-backfilled');
   const cand = pickBotdDeterministic(candidateSet, floorK);
   if (!cand) return null;
@@ -637,8 +655,11 @@ function deterministicSod(candidateSet) {
 }
 
 function groundSod(rawSod, candidateSet, byCusip, flags) {
-  let title = clamp(rawSod && rawSod.title, LEN.sodTitle);
-  let narrative = clamp(rawSod && rawSod.narrative, LEN.sodNarrative);
+  if ([rawSod && rawSod.title, rawSod && rawSod.narrative].some(modelProseHasNumber)) {
+    flags.add('model-prose-number-dropped');
+  }
+  let title = clamp(safeModelProse(rawSod && rawSod.title), LEN.sodTitle);
+  let narrative = clamp(safeModelProse(rawSod && rawSod.narrative), LEN.sodNarrative);
   const seen = new Set();
   const rows = [];
   for (const rc of (Array.isArray(rawSod && rawSod.cusips) ? rawSod.cusips : [])) {
@@ -650,7 +671,7 @@ function groundSod(rawSod, candidateSet, byCusip, flags) {
     seen.add(cusip); rows.push(row);
   }
   let source = 'model';
-  if (rows.length < SOD_MIN || !title) {
+  if (rows.length < SOD_MIN || !title || !narrative) {
     flags.add('sod-backfilled'); source = 'backfill';
     const det = deterministicSod(candidateSet);
     if (!title) title = clamp(det.title, LEN.sodTitle);
@@ -692,7 +713,8 @@ function groundConnectors(rawConn, picks, macroInput, audiences, flags) {
   for (const a of (audiences || [])) labelByKey[a.key] = a.label;
   const out = {};
   for (const k of AUDIENCE_KEYS) {
-    let s = clamp(normalizeArrows(rawConn && rawConn[k]).trim(), LEN.connector);
+    if (modelProseHasNumber(rawConn && rawConn[k])) flags.add('model-prose-number-dropped');
+    let s = clamp(normalizeArrows(safeModelProse(rawConn && rawConn[k])).trim(), LEN.connector);
     if (!s.includes(' -> ')) {
       flags.add('connector-synthesized');
       const top = (picks[k] || [])[0];
@@ -713,7 +735,7 @@ function groundConnectors(rawConn, picks, macroInput, audiences, flags) {
   return out;
 }
 
-const DEGRADE_FLAG = /backfill|synthes|coverage-short/;
+const DEGRADE_FLAG = /backfill|synthes|coverage-short|model-prose/;
 
 /**
  * Ground a (possibly empty/malformed) model reply against the Phase-1 candidate
@@ -797,14 +819,27 @@ function buildRvSections(rvAnalysis) {
     rolledOff: (mv.rolledOff || []).map(r => ({ cusip: r.cusip, description: r.description, assetClass: r.type, ytw: r.ytw })),
     supply: mv.supply || [],
   } : null;
+  const inventory = (Array.isArray(rvAnalysis.inventory) ? rvAnalysis.inventory : []).map(b => ({
+    key: b.key,
+    label: b.label,
+    page: b.page,
+    count: b.count || 0,
+    eligibleCount: b.eligibleCount || 0,
+    bqCount: b.bqCount || 0,
+    deepDiscountCount: b.deepDiscountCount || 0,
+    top: attachSection(b.top),
+  }));
   return {
     benchmarks: rvAnalysis.benchmarks,
     strategist: rvAnalysis.strategist || null,
+    inventory,
     standouts: attachSection(rvAnalysis.standouts),
     leaders: attachSection(rvAnalysis.leaders),
     cheapToTreasury: attachSection(rvAnalysis.cheapToTreasury),
     cdBoard: attachSection(rvAnalysis.cdBoard),
     muniValue: attachSection(rvAnalysis.muniValue),
+    creditYield: attachSection(rvAnalysis.creditYield),
+    bankCapital: attachSection(rvAnalysis.bankCapital),
     byBucket,
     movers,
     trends: {
@@ -903,6 +938,7 @@ function writeCache(marketDir, record) {
  * always a complete (possibly degraded) dashboard — never a 5xx.
  *
  * opts: { marketDir (required), rows, econ, meta, taxRates?, floorK?, force?,
+ *         noCache?,
  *         apiKey?, model?, createMessageImpl?, now?, log? }
  */
 async function generateDashboard(opts) {
@@ -983,13 +1019,16 @@ async function generateDashboard(opts) {
   };
   // A storage failure (disk full, read-only volume) must not throw away an
   // already-computed (and possibly already-billed) dashboard — return it
-  // uncached rather than 5xx'ing. Only missing-marketDir / zero-candidates throw.
+  // uncached rather than 5xx'ing. Custom tax lenses are one-off reads and do not
+  // replace the shared package-date cache. Only missing-marketDir / zero-candidates throw.
   let cacheError = null;
-  try {
-    writeCache(o.marketDir, record);
-  } catch (err) {
-    cacheError = err && err.message ? err.message : String(err);
-    log('warn', `Sales dashboard cache write failed (${cacheError}); returning uncached`);
+  if (!o.noCache) {
+    try {
+      writeCache(o.marketDir, record);
+    } catch (err) {
+      cacheError = err && err.message ? err.message : String(err);
+      log('warn', `Sales dashboard cache write failed (${cacheError}); returning uncached`);
+    }
   }
   log('info',
     `Sales dashboard generated for package ${packageDate || '(unknown)'} ` +

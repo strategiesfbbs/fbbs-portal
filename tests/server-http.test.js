@@ -220,6 +220,98 @@ test('iis upload fails closed when admin allowlist is empty', async () => {
   });
 });
 
+test('iis crm rollups collapse non-admin all/other-rep scope to self', async () => {
+  const coverageStore = require('../server/bank-coverage-store');
+  const statusStore = require('../server/bank-account-status-store');
+  await withServer({ FBBS_AUTH_MODE: 'iis', FBBS_ADMIN_USERS: 'adminuser' }, async ({ port, dataDir }) => {
+    const reportsDir = path.join(dataDir, 'bank-reports');
+    const jimBank = { id: 'AUTH-1', displayName: 'Jim Client', city: 'Austin', state: 'TX', certNumber: '101' };
+    const danBank = { id: 'AUTH-2', displayName: 'Dan Client', city: 'Springfield', state: 'MO', certNumber: '202' };
+    statusStore.upsertBankAccountStatus(reportsDir, jimBank, { status: 'Client', owner: 'Jim Lewis' });
+    statusStore.upsertBankAccountStatus(reportsDir, danBank, { status: 'Client', owner: 'Dan Hagemann' });
+    coverageStore.upsertSavedBank(reportsDir, jimBank, { status: 'Client', owner: 'Jim Lewis' });
+    coverageStore.upsertSavedBank(reportsDir, danBank, { status: 'Client', owner: 'Dan Hagemann' });
+    coverageStore.createBankOpportunity(reportsDir, {
+      bankId: 'AUTH-1',
+      product: 'Bond Swap',
+      estValue: 25000,
+      owner: 'jimlewis',
+      ownerDisplay: 'Jim Lewis'
+    });
+    coverageStore.createBankOpportunity(reportsDir, {
+      bankId: 'AUTH-2',
+      product: 'CD',
+      estValue: 50000,
+      owner: 'danhagemann',
+      ownerDisplay: 'Dan Hagemann'
+    });
+    coverageStore.recordManualActivity(reportsDir, {
+      bankId: 'AUTH-1',
+      kind: 'call',
+      subject: 'Jim call',
+      activityDate: '2026-06-01',
+      actorUsername: 'jimlewis',
+      actorDisplay: 'Jim Lewis'
+    });
+    coverageStore.recordManualActivity(reportsDir, {
+      bankId: 'AUTH-2',
+      kind: 'call',
+      subject: 'Dan call',
+      activityDate: '2026-06-01',
+      actorUsername: 'danhagemann',
+      actorDisplay: 'Dan Hagemann'
+    });
+
+    const jimHeaders = { 'x-iisnode-logon_user': 'FBBS\\jimlewis' };
+    const adminHeaders = { 'x-iisnode-logon_user': 'FBBS\\adminuser' };
+
+    const me = await request(port, { path: '/api/me', headers: { ...jimHeaders, cookie: 'fbbs_rep_override=Dan%20Hagemann%7Cdanhagemann' } });
+    assert.strictEqual(me.status, 200, me.text);
+    assert.strictEqual(me.json.rep.username, 'jimlewis');
+    assert.strictEqual(me.json.rep.source, 'iis');
+    assert.strictEqual(me.json.auth.allowRepOverride, false);
+    assert.strictEqual(me.json.auth.isAdmin, false);
+
+    const dashboard = await request(port, { path: '/api/crm/dashboard?rep=all', headers: jimHeaders });
+    assert.strictEqual(dashboard.status, 200, dashboard.text);
+    assert.strictEqual(dashboard.json.rep.username, 'jimlewis');
+    assert.strictEqual(dashboard.json.kpis.totalClients, 1);
+    assert.deepStrictEqual(dashboard.json.byState.map(r => r.state), ['TX']);
+
+    const bankView = await request(port, { path: '/api/bank-views/clients?rep=all', headers: jimHeaders });
+    assert.strictEqual(bankView.status, 200, bankView.text);
+    assert.strictEqual(bankView.json.meta.rep.username, 'jimlewis');
+    assert.deepStrictEqual(bankView.json.rows.map(r => r.bankId), ['AUTH-1']);
+
+    const pipeline = await request(port, { path: '/api/reports/pipeline?rep=all', headers: jimHeaders });
+    assert.strictEqual(pipeline.status, 200, pipeline.text);
+    assert.strictEqual(pipeline.json.rep.username, 'jimlewis');
+    assert.strictEqual(pipeline.json.pipeline.open.count, 1);
+    assert.strictEqual(pipeline.json.pipeline.open.value, 25000);
+
+    const activity = await request(port, { path: '/api/reports/activity-summary?from=2026-01-01&reps=danhagemann', headers: jimHeaders });
+    assert.strictEqual(activity.status, 200, activity.text);
+    assert.strictEqual(activity.json.rep.username, 'jimlewis');
+    assert.deepStrictEqual(activity.json.rows.map(r => r.rep), ['jimlewis']);
+
+    const touch = await request(port, { path: '/api/reports/account-touch?days=20&owner=Dan', headers: jimHeaders });
+    assert.strictEqual(touch.status, 200, touch.text);
+    assert.strictEqual(touch.json.rep.username, 'jimlewis');
+    assert.deepStrictEqual(touch.json.rows.map(r => r.bankId), ['AUTH-1']);
+
+    const adminDashboard = await request(port, { path: '/api/crm/dashboard?rep=all', headers: adminHeaders });
+    assert.strictEqual(adminDashboard.status, 200, adminDashboard.text);
+    assert.strictEqual(adminDashboard.json.rep, null);
+    assert.strictEqual(adminDashboard.json.kpis.totalClients, 2);
+
+    const auditPath = path.join(dataDir, 'audit.log');
+    const audit = fs.existsSync(auditPath) ? fs.readFileSync(auditPath, 'utf8') : '';
+    assert.ok(audit.includes('crm-dashboard-scope-collapsed'), audit);
+    assert.ok(audit.includes('bank-views-run-scope-collapsed'), audit);
+    assert.ok(audit.includes('pipeline-scope-collapsed'), audit);
+  });
+});
+
 test('cross-site mutating writes are blocked; same-origin and header-absent pass', async () => {
   await withServer({}, async ({ port }) => {
     const blocked = /Cross-site write request blocked/;
@@ -260,6 +352,71 @@ test('new go-live read APIs return JSON envelopes without seeded data', async ()
       assert.strictEqual(res.status, 200, `${route}: ${res.status} ${res.text}`);
       assert.ok(res.json && typeof res.json === 'object', `${route}: JSON envelope`);
     }
+  });
+});
+
+test('sales dashboard GET treats degraded and pre-RV caches as stale', async () => {
+  const seedPackage = dataDir => {
+    writeJson(path.join(dataDir, 'current', '_meta.json'), { date: '2026-06-22' });
+    writeJson(path.join(dataDir, 'current', '_agencies.json'), {
+      offerings: [
+        { cusip: '3130AAAA1', ticker: 'FHLB', structure: 'Bullet', coupon: '4.50', ytm: '4.70', askPrice: '99.50', maturity: '2029-06-15', availableSize: 1 },
+        { cusip: '3130BBBB2', ticker: 'FFCB', structure: 'Bullet', coupon: '4.75', ytm: '4.85', askPrice: '100.00', maturity: '2030-06-15', availableSize: 1 },
+        { cusip: '3130CCCC3', ticker: 'FHLMC', structure: 'Bullet', coupon: '5.00', ytm: '5.05', askPrice: '99.25', maturity: '2031-06-15', availableSize: 1 }
+      ]
+    });
+    writeJson(path.join(dataDir, 'market', 'market-color-feed.json'), {
+      fetchedAt: '2026-06-22T13:00:00.000Z',
+      feeds: {
+        'cnbc-markets': {
+          fetchedAt: '2026-06-22T13:00:00.000Z',
+          items: [{ title: 'Treasury yields rise as investors watch Fed data', url: 'https://example.com/markets', summary: '', publishedAt: '2026-06-22T12:55:00.000Z', tags: ['rates'] }]
+        }
+      }
+    });
+    writeJson(path.join(dataDir, 'market', 'market-wire-indicators.json'), {
+      fetchedAt: '2026-06-22T13:00:00.000Z',
+      indicators: {
+        cpiYoY: { value: 3.1, period: 'May 2026', source: 'BLS CPI-U' },
+        unemployment: { value: 4.0, period: 'May 2026', source: 'BLS' }
+      }
+    });
+  };
+
+  await withServer({ ANTHROPIC_API_KEY: '' }, async ({ port, dataDir }) => {
+    seedPackage(dataDir);
+    writeJson(path.join(dataDir, 'market', 'daily-dashboard.json'), {
+      packageDate: '2026-06-22',
+      picks: {},
+      connector: {},
+      rv: { leaders: [] },
+      degraded: true,
+      modelError: 'simulated failure'
+    });
+    const res = await request(port, { path: '/api/sales-dashboard' });
+    assert.strictEqual(res.status, 200, res.text);
+    assert.strictEqual(res.json.stale, true, res.text);
+    assert.strictEqual(res.json.cached, false, res.text);
+    assert.ok(res.json.dashboard && res.json.dashboard.aiGenerated === false, res.text);
+    assert.ok(Array.isArray(res.json.sources), 'sales dashboard sources present');
+    assert.ok(res.json.sources.some(s => s.key === 'agency' && s.ready && s.count === 3), 'agency source count present');
+    assert.ok(Array.isArray(res.json.catalysts), 'sales dashboard catalysts present');
+    assert.ok(res.json.catalysts.some(c => c.kind === 'news' && /Treasury yields/i.test(c.text)), 'market color catalyst present');
+    assert.ok(res.json.catalysts.some(c => c.kind === 'data' && /CPI YoY 3.1%/.test(c.text)), 'data catalyst present');
+  });
+
+  await withServer({ ANTHROPIC_API_KEY: '' }, async ({ port, dataDir }) => {
+    seedPackage(dataDir);
+    writeJson(path.join(dataDir, 'market', 'daily-dashboard.json'), {
+      packageDate: '2026-06-22',
+      picks: {},
+      connector: {}
+    });
+    const res = await request(port, { path: '/api/sales-dashboard' });
+    assert.strictEqual(res.status, 200, res.text);
+    assert.strictEqual(res.json.stale, true, res.text);
+    assert.strictEqual(res.json.cached, false, res.text);
+    assert.ok(res.json.dashboard && res.json.dashboard.rv, res.text);
   });
 });
 

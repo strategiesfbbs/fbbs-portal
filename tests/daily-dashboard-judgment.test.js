@@ -56,25 +56,25 @@ function goodReply() {
       ccorp: [
         { cusip: '111111AA1', headline: 'BQ muni top TEY', rationale: 'Highest C-Corp TEY on the run.' },
         { cusip: '222222AA1', headline: 'FHLB callable carry', rationale: 'Near-par agency income.' },
-        { cusip: '333333AA1', headline: 'FDIC 12mo CD', rationale: 'Clean front-end pickup.' },
+        { cusip: '333333AA1', headline: 'FDIC CD', rationale: 'Clean front-end pickup.' },
       ],
       scorp: [
         { cusip: '111111AA1', headline: 'BQ muni top TEY', rationale: 'Best S-Corp gross-up today.' },
         { cusip: '111111CC3', headline: 'Std muni intermediate', rationale: 'AAA tax-exempt ladder.' },
-        { cusip: '333333AA1', headline: 'FDIC 12mo CD', rationale: 'Front-end carry.' },
+        { cusip: '333333AA1', headline: 'FDIC CD', rationale: 'Front-end carry.' },
       ],
       ria: [
-        { cusip: '444444AA1', headline: 'Bank credit 10y', rationale: 'Highest taxable carry.' },
-        { cusip: '555555AA1', headline: 'Structured 20Y/2Y', rationale: 'High fixed coupon.' },
+        { cusip: '444444AA1', headline: 'Bank credit', rationale: 'Highest taxable carry.' },
+        { cusip: '555555AA1', headline: 'Structured note', rationale: 'High fixed coupon.' },
         { cusip: '222222BB2', headline: 'Deep-disc agency', rationale: 'Effective bullet at a discount.' },
       ],
     },
     connector: {
-      ccorp: '10Y at 4.21% -> C-Corp banks add BQ TEY before the belly flattens.',
-      scorp: '10Y at 4.21% -> S-Corp banks capture the richest gross-up today.',
-      ria: '10Y at 4.21% -> RIAs reach for taxable bank-credit carry.',
+      ccorp: 'Rates steady -> C-Corp banks add BQ TEY before the belly flattens.',
+      scorp: 'Rates steady -> S-Corp banks capture the richest gross-up today.',
+      ria: 'Rates steady -> RIAs reach for taxable bank-credit carry.',
     },
-    botd: { cusip: '111111AA1', headline: 'BQ muni bond of the day', rationale: 'Top bank-qualified TEY. Premium 5% callable structure.' },
+    botd: { cusip: '111111AA1', headline: 'BQ muni bond of the day', rationale: 'Top bank-qualified TEY with premium callable structure.' },
     sod: { title: 'Deep-discount agencies as effective bullets', narrative: 'Sub-market coupons priced below par. Discount accretes to par.', cusips: ['222222BB2', '222222CC3'] },
   });
 }
@@ -96,6 +96,15 @@ test('compactCandidate keeps cusip/cls/eff, pre-computes deep, drops undefined',
   assert.ok(cc.eff && typeof cc.eff === 'object');
   assert.ok('price' in cc); // always present
   assert.ok(!('callDate' in cc)); // undefined dropped (renamed to call)
+});
+
+test('compactCandidate prefers net TEY when RV supplied it', () => {
+  const set = dd.buildCandidateSet(makeRows());
+  const c = { ...set.candidates.find(x => x.cusip === '111111AA1') };
+  c.rv = { netTey: { ccorp: 4.73 } };
+  const cc = ddj.compactCandidate(c);
+  assert.strictEqual(cc.eff.ccorp.y, 4.73);
+  assert.strictEqual(cc.eff.ccorp.b, 'net TEY');
 });
 
 test('buildDashboardPrompt embeds rules, macro, byAudience, securities; no econ quad leak', () => {
@@ -148,6 +157,41 @@ test('happy path: CUSIPs valid, OUR numbers re-attached, model numbers ignored',
   assert.strictEqual(first.price, cand.price);
   assert.strictEqual(g.degraded, false);
   for (const k of ['ccorp', 'scorp', 'ria']) for (const p of g.picks[k]) assert.strictEqual(p.source, 'model');
+});
+
+test('model prose with numbers is replaced by deterministic grounded prose', () => {
+  const set = dd.buildCandidateSet(makeRows());
+  const reply = JSON.parse(goodReply());
+  reply.picks.ccorp[0].headline = 'Fake 9 percent winner';
+  reply.picks.ccorp[0].rationale = 'Invented +999bp pickup.';
+  reply.picks.ccorp[0].talkingPoint = 'Tell them it yields 12.34%.';
+  reply.connector.ccorp = 'Fake 9.99% macro -> invented 88bp pickup.';
+  reply.sod = { title: 'Fake 2x barbell', narrative: 'Use 99bp because Claude said so.', cusips: ['222222BB2', '222222CC3'] };
+
+  const g = ddj.groundDashboard(reply, set, MACRO);
+  const first = g.picks.ccorp[0];
+  assert.strictEqual(first.headline, '');
+  assert.ok(!first.rationale.includes('999'));
+  assert.ok(!first.talkingPoint.includes('12.34'));
+  assert.notStrictEqual(g.connector.ccorp, 'Fake 9.99% macro -> invented 88bp pickup.');
+  assert.strictEqual(g.sod.source, 'backfill');
+  assert.ok(!g.sod.narrative.includes('99bp'));
+  assert.ok(g.flags.includes('model-prose-number-dropped'));
+  assert.strictEqual(g.degraded, true);
+});
+
+test('model prose keeps harmless date/tenor words but drops quantified market claims', () => {
+  const set = dd.buildCandidateSet(makeRows());
+  const reply = JSON.parse(goodReply());
+  reply.picks.ccorp[0].headline = 'Five-year ladder fit';
+  reply.picks.ccorp[0].rationale = 'Works for a 2026 planning conversation.';
+  reply.picks.ccorp[0].talkingPoint = 'Use this for five-year ladder structure.';
+
+  const g = ddj.groundDashboard(reply, set, MACRO);
+  const first = g.picks.ccorp[0];
+  assert.strictEqual(first.headline, 'Five-year ladder fit');
+  assert.strictEqual(first.rationale, 'Works for a 2026 planning conversation.');
+  assert.strictEqual(first.talkingPoint, 'Use this for five-year ladder structure.');
 });
 
 test('hallucinated CUSIP dropped + backfilled to >=3', () => {
@@ -299,6 +343,14 @@ test('generateDashboard happy: writes cache, cached:false, model set', async () 
   assert.strictEqual(rec.model, 'fake-model');
   assert.ok(fs.existsSync(path.join(dir, 'daily-dashboard.json')));
   assert.ok(rec.picks.ccorp.length >= 3 && rec.picks.scorp.length >= 3 && rec.picks.ria.length >= 3);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('generateDashboard noCache returns a read without replacing the daily cache', async () => {
+  const dir = tmpDir();
+  const rec = await ddj.generateDashboard({ marketDir: dir, rows: makeRows(), econ: {}, meta: META, createMessageImpl: fakeMsg(goodReply()), force: true, noCache: true });
+  assert.strictEqual(rec.cached, false);
+  assert.strictEqual(fs.existsSync(path.join(dir, 'daily-dashboard.json')), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

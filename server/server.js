@@ -604,6 +604,62 @@ function authInfoForRequest(req) {
   };
 }
 
+function shouldEnforceRepScope(auth) {
+  return Boolean(auth && (auth.requireAuth || ADMIN_USERS.size > 0));
+}
+
+function publicRep(rep) {
+  return rep ? { username: rep.username, displayName: rep.displayName } : null;
+}
+
+function auditRepScopeCollapse(req, details = {}) {
+  appendAuditLog({
+    event: details.event || 'rep-scope-collapsed',
+    path: req && req.url ? String(req.url).split('?')[0] : '',
+    requestedScope: details.requestedScope || '',
+    effectiveRep: details.effectiveRep || '',
+    reason: details.reason || 'non-admin'
+  });
+}
+
+function repScopeFromQuery(req, query, options = {}) {
+  const { rep, auth } = authInfoForRequest(req);
+  const param = options.param || 'rep';
+  const requested = String(query.get(param) || '').trim();
+  const requestedLower = requested.toLowerCase();
+  const enforce = shouldEnforceRepScope(auth);
+  if (requestedLower === 'all') {
+    if (!enforce || auth.isAdmin) {
+      return { rep: null, auth, requested, collapsed: false };
+    }
+    if (rep) {
+      auditRepScopeCollapse(req, {
+        event: options.auditEvent,
+        requestedScope: 'all',
+        effectiveRep: rep.username
+      });
+    }
+    return { rep, auth, requested, collapsed: Boolean(rep) };
+  }
+  return { rep, auth, requested, collapsed: false };
+}
+
+function enforcedRollupRep(req, options = {}) {
+  const { rep, auth } = authInfoForRequest(req);
+  if (shouldEnforceRepScope(auth) && !auth.isAdmin) {
+    if (rep && options.requestedScope) {
+      auditRepScopeCollapse(req, {
+        event: options.auditEvent,
+        requestedScope: options.requestedScope,
+        effectiveRep: rep.username,
+        reason: options.reason || 'non-admin'
+      });
+    }
+    return { rep, auth, enforced: true };
+  }
+  return { rep: null, auth, enforced: false };
+}
+
 function auditActorForRequest(req) {
   const rep = resolveRequestRep(req);
   if (!rep) return null;
@@ -6281,13 +6337,22 @@ function handleActivitySummaryReport(req, res, query) {
     const kinds = parseCsvParam(query.get('kinds'));
     const view = query.get('view') === 'bank' ? 'bank' : 'rep';
     const repFilter = new Set(parseCsvParam(query.get('reps')).map(s => s.toLowerCase()));
+    const requestedReps = parseCsvParam(query.get('reps')).join(',');
+    const scope = enforcedRollupRep(req, {
+      auditEvent: 'activity-summary-scope-collapsed',
+      requestedScope: requestedReps || (query.get('rep') || ''),
+      reason: 'activity-summary'
+    });
+    const scopedRep = scope.enforced ? scope.rep : null;
 
     const empty = () => ({ call: 0, email: 0, meeting: 0, task: 0, note: 0, total: 0, lastDate: '' });
     const rows = new Map();
     if (view === 'rep') {
+      const scopedUsername = scopedRep ? String(scopedRep.username || '').toLowerCase() : '';
       activityCountsByRep(BANK_REPORTS_DIR, { from, to, kinds }).forEach(entry => {
         const key = (entry.actorUsername || '(unknown)').toLowerCase();
-        if (repFilter.size && !repFilter.has(key)) return;
+        if (scopedUsername && key !== scopedUsername) return;
+        if (!scopedUsername && repFilter.size && !repFilter.has(key)) return;
         const row = rows.get(key) || { rep: entry.actorUsername || '(unknown)', repDisplay: entry.actorDisplay || entry.actorUsername || '(unknown)', ...empty() };
         if (entry.actorDisplay) row.repDisplay = entry.actorDisplay;
         if (row[entry.kind] !== undefined) row[entry.kind] += entry.count;
@@ -6300,6 +6365,7 @@ function handleActivitySummaryReport(req, res, query) {
       const banks = new Map((listSavedBanks(BANK_REPORTS_DIR) || []).map(b => [b.bankId, b]));
       activityCountsByBank(BANK_REPORTS_DIR, { from, to, kinds }).forEach(entry => {
         const bank = banks.get(entry.bankId) || {};
+        if (scopedRep && !ownerStringContainsRep(bank.owner, scopedRep)) return;
         const row = rows.get(entry.bankId) || {
           bankId: entry.bankId,
           displayName: bank.displayName || entry.bankId,
@@ -6315,7 +6381,7 @@ function handleActivitySummaryReport(req, res, query) {
       });
     }
     const list = [...rows.values()].sort((a, b) => b.total - a.total);
-    return sendJSON(res, 200, { view, from, to, rows: list });
+    return sendJSON(res, 200, { view, from, to, rep: publicRep(scopedRep), rows: list });
   } catch (err) {
     log('error', 'Activity summary report failed:', err.message);
     return sendJSON(res, 500, { error: err.message || 'Could not build activity summary' });
@@ -6330,6 +6396,12 @@ function handleAccountTouchReport(req, res, query) {
     const statuses = new Set(parseCsvParam(query.get('statuses')));
     const states = new Set(parseCsvParam(query.get('states')).map(s => s.toUpperCase()));
     const owner = String(query.get('owner') || '').trim().toLowerCase();
+    const scope = enforcedRollupRep(req, {
+      auditEvent: 'account-touch-scope-collapsed',
+      requestedScope: owner,
+      reason: 'account-touch'
+    });
+    const scopedRep = scope.enforced ? scope.rep : null;
     const today = new Date().toISOString().slice(0, 10);
     const lastTouch = lastActivityByBank(BANK_REPORTS_DIR);
     const dayMs = 86400000;
@@ -6337,7 +6409,8 @@ function handleAccountTouchReport(req, res, query) {
       .filter(row => {
         if (statuses.size && !statuses.has(row.status || 'Open')) return false;
         if (states.size && !states.has(String(row.state || '').toUpperCase())) return false;
-        if (owner && !String(row.owner || '').toLowerCase().includes(owner)) return false;
+        if (scopedRep && !ownerStringContainsRep(row.owner, scopedRep)) return false;
+        if (!scopedRep && owner && !String(row.owner || '').toLowerCase().includes(owner)) return false;
         return true;
       })
       .map(row => {
@@ -6363,7 +6436,7 @@ function handleAccountTouchReport(req, res, query) {
         if ((a.daysSinceContact === null) !== (b.daysSinceContact === null)) return a.daysSinceContact === null ? -1 : 1;
         return (b.daysSinceContact || 0) - (a.daysSinceContact || 0);
       });
-    return sendJSON(res, 200, { thresholdDays, rows });
+    return sendJSON(res, 200, { thresholdDays, rep: publicRep(scopedRep), rows });
   } catch (err) {
     log('error', 'Account touch report failed:', err.message);
     return sendJSON(res, 500, { error: err.message || 'Could not build account touch report' });
@@ -7845,6 +7918,117 @@ function buildAllOfferingsRows() {
     }
   }
   return rows;
+}
+
+function buildSalesDashboardSourceStatus(rows) {
+  const pkg = getCurrentPackage() || {};
+  const counts = {};
+  for (const row of (Array.isArray(rows) ? rows : [])) {
+    const key = row && row.type ? String(row.type) : 'other';
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  const count = key => counts[key] || 0;
+  const source = (key, label, ready, opts = {}) => ({
+    key,
+    label,
+    ready: !!ready,
+    status: ready ? (opts.warning ? 'warn' : 'ok') : 'missing',
+    count: opts.count == null ? null : opts.count,
+    page: opts.page || null,
+    note: opts.note || '',
+    required: opts.required !== false,
+  });
+  const agenciesReady = !!(pkg.agenciesBullets || pkg.agenciesCallables || count('agency'));
+  const agencyWarning = agenciesReady && !(pkg.agenciesBullets && pkg.agenciesCallables);
+  const agencyNote = agencyWarning
+    ? `Only ${pkg.agenciesBullets ? 'bullets' : 'callables'} published; the other agency side is absent.`
+    : '';
+  return [
+    source('econ', 'Economic Update', !!pkg.econ, { page: 'econ', note: pkg.econ || 'Market context is missing.' }),
+    source('relativeValue', 'Relative Value sheet', !!(pkg.relativeValue || pkg.relativeValueRowsCount), { count: pkg.relativeValueRowsCount, page: 'relativeValue', note: pkg.relativeValue || '' }),
+    source('mmd', 'MMD curve', !!(pkg.mmd || pkg.mmdCurveCount), { count: pkg.mmdCurveCount, page: 'mmd', note: pkg.mmd || '' }),
+    source('treasury', 'Treasury offerings', !!(pkg.treasuryNotes || count('treasury')), { count: count('treasury') || pkg.treasuryNotesCount, page: 'treasury-explorer', note: pkg.treasuryNotes || '' }),
+    source('cd', 'CD offerings', !!(pkg.cdoffers || count('cd')), { count: count('cd') || pkg.offeringsCount, page: 'explorer', note: pkg.cdoffers || '' }),
+    source('muni', 'Muni offerings', !!(pkg.munioffers || count('muni')), { count: count('muni') || pkg.muniOfferingsCount, page: 'muni-explorer', note: pkg.munioffers || '' }),
+    source('agency', 'Agency offerings', agenciesReady, { count: count('agency') || pkg.agencyCount, page: 'agencies', warning: agencyWarning, note: agencyNote || pkg.agenciesBullets || pkg.agenciesCallables || '' }),
+    source('corporate', 'Corporate offerings', !!(pkg.corporates || count('corporate')), { count: count('corporate') || pkg.corporatesCount, page: 'corporates', note: pkg.corporates || '' }),
+    source('mbs', 'MBS / CMO inventory', count('mbs') > 0, { count: count('mbs'), page: 'mbs-cmo', required: false, note: count('mbs') ? 'Standing inventory joined into ideas.' : 'No MBS/CMO inventory loaded.' }),
+    source('structured-note', 'Structured notes', count('structured-note') > 0, { count: count('structured-note'), page: 'structured-notes', required: false, note: count('structured-note') ? 'Structured-note emails joined into RIA ideas.' : 'No structured-note emails ingested.' }),
+  ];
+}
+
+function readMarketCacheFile(filename) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(MARKET_DIR, filename), 'utf-8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function loadCachedMarketColorForDashboard() {
+  const cache = readMarketCacheFile('market-color-feed.json');
+  return cache ? marketColorFeed.buildResponse(cache, { stale: true }) : { items: [], sources: [], stale: true };
+}
+
+function loadCachedMarketWireForDashboard() {
+  const headlineCache = readMarketCacheFile('market-wire-headlines.json');
+  const indicatorCache = readMarketCacheFile('market-wire-indicators.json');
+  const headlines = [];
+  if (headlineCache && headlineCache.feeds) {
+    for (const feed of Object.values(headlineCache.feeds)) {
+      for (const item of (feed && Array.isArray(feed.items) ? feed.items : [])) headlines.push(item);
+    }
+    headlines.sort((a, b) => String(b.publishedAt || '').localeCompare(String(a.publishedAt || '')));
+  }
+  return {
+    headlines: headlines.slice(0, 12),
+    indicators: indicatorCache && indicatorCache.indicators ? indicatorCache.indicators : null,
+    stale: true,
+  };
+}
+
+function buildSalesDashboardCatalysts(dashboard, opts = {}) {
+  const rv = dashboard && dashboard.rv;
+  const out = [];
+  const add = (kind, label, text, extra = {}) => {
+    if (!text) return;
+    out.push({ kind, label, text: String(text).slice(0, 260), ...extra });
+  };
+  const fmtBp = v => (v == null || !Number.isFinite(Number(v))) ? null : `${Number(v) > 0 ? '+' : ''}${Number(v)}bp`;
+  const strategist = rv && rv.strategist;
+  const twos10s = strategist && strategist.kpi && strategist.kpi.twos10s;
+  if (twos10s && twos10s.level != null) {
+    add('curve', 'Treasury curve', `2s10s is ${twos10s.level}bp${twos10s.dayBp != null ? ` (${fmtBp(twos10s.dayBp)} today)` : ''}; use that as the rate backdrop before reading duration-sensitive ideas.`);
+  }
+  const regime = strategist && strategist.regime && strategist.regime.classes;
+  if (Array.isArray(regime) && regime.length) {
+    const moved = regime.filter(r => r.direction && r.direction !== 'flat').slice(0, 2).map(r => `${r.label} ${fmtBp(r.deltaBp)} ${r.direction}`);
+    if (moved.length) add('inventory', 'Inventory regime', `${moved.join(', ')} versus the prior package; the idea boards are tilted toward shelves that cheapened after the curve move.`);
+  }
+  const movers = rv && rv.movers;
+  if (movers) {
+    const bits = [];
+    if (Array.isArray(movers.cheapened) && movers.cheapened.length) bits.push(`${movers.cheapened.length} cheapened`);
+    if (Array.isArray(movers.newToday) && movers.newToday.length) bits.push(`${movers.newToday.length} new`);
+    if (Array.isArray(movers.richened) && movers.richened.length) bits.push(`${movers.richened.length} richened`);
+    if (bits.length) add('inventory', 'Offerings change', `${bits.join(', ')} versus ${movers.priorDate || 'the prior package'} after stripping the broad curve move.`);
+  }
+  const econ = opts.econ || {};
+  const econHeadline = Array.isArray(econ.headlines) ? econ.headlines.find(Boolean) : null;
+  if (econHeadline) add('data', 'Economic update', econHeadline);
+  const wire = opts.marketWire || {};
+  const ind = wire.indicators || {};
+  const dataBits = [];
+  if (ind.cpiYoY && ind.cpiYoY.value != null) dataBits.push(`CPI YoY ${ind.cpiYoY.value}%${ind.cpiYoY.period ? ` (${ind.cpiYoY.period})` : ''}`);
+  if (ind.unemployment && ind.unemployment.value != null) dataBits.push(`unemployment ${ind.unemployment.value}%${ind.unemployment.period ? ` (${ind.unemployment.period})` : ''}`);
+  if (dataBits.length) add('data', 'Live data cache', dataBits.join(' · '));
+  const colorItems = (opts.marketColor && Array.isArray(opts.marketColor.items)) ? opts.marketColor.items : [];
+  const taggedColor = colorItems.find(item => (item.tags || []).some(t => /rates|macro|credit|banks/i.test(t))) || colorItems[0];
+  if (taggedColor) add('news', 'Market color', taggedColor.title, { url: taggedColor.url, source: taggedColor.source });
+  const wireHeadlines = Array.isArray(wire.headlines) ? wire.headlines : [];
+  if (wireHeadlines[0]) add('news', 'Official wire', wireHeadlines[0].title, { url: wireHeadlines[0].url, source: wireHeadlines[0].source });
+  return out.slice(0, 6);
 }
 
 // Prior-package offering rows for the Sales Dashboard cross-day movers — a slim
@@ -10310,8 +10494,15 @@ const server = http.createServer(async (req, res) => {
       // richest answer. A custom tax-rate lens always recomputes live (free). A
       // pre-relative-value cache (no `rv` block) is treated as outdated so the
       // live RV read is shown until the next refresh re-caches in the new shape.
-      if (!taxRates && cached && cached.rv && cached.packageDate && cached.packageDate === packageDate) {
-        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: cached, cached: true, aiGenerated: !!cached.aiGenerated, stale: false });
+      const rows = buildAllOfferingsRows();
+      const sources = buildSalesDashboardSourceStatus(rows);
+      const marketColor = loadCachedMarketColorForDashboard();
+      const marketWireCached = loadCachedMarketWireForDashboard();
+      const econ = await loadCurrentEconomicUpdate().catch(() => null);
+      const cacheHasFreshAiRead = cached && cached.rv && cached.rv.inventory && cached.rv.creditYield && cached.rv.bankCapital && cached.packageDate && cached.packageDate === packageDate && !cached.degraded && !cached.modelError;
+      if (!taxRates && cacheHasFreshAiRead) {
+        const catalysts = buildSalesDashboardCatalysts(cached, { econ, marketColor, marketWire: marketWireCached });
+        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: cached, sources, catalysts, cached: true, aiGenerated: !!cached.aiGenerated, stale: false });
       }
       // Otherwise build the FREE, live relative-value dashboard for the current
       // package — deterministic, zero billable cost, never stale.
@@ -10322,16 +10513,16 @@ const server = http.createServer(async (req, res) => {
           loadCurrentMmdCurve().catch(() => null),
           loadCurrentRelativeValueSnapshot().catch(() => null),
         ]);
-        const econ = await loadCurrentEconomicUpdate().catch(() => null);
         const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
         const { priorRows, priorMeta } = dashboardPriorPackage(packageDate);
         const priorRvTable = (priorMeta && priorMeta.priorDate) ? await loadArchivedRelativeValueSnapshot(priorMeta.priorDate).catch(() => null) : null;
-        const live = dailyDashboardJudgment.buildLiveDashboard({ rows: buildAllOfferingsRows(), econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates });
-        const staleAi = !!(cached && cached.packageDate && cached.packageDate !== packageDate);
-        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: live, cached: false, aiGenerated: false, stale: staleAi, aiCachedDate: cached ? cached.packageDate : null, customTax: !!taxRates });
+        const live = dailyDashboardJudgment.buildLiveDashboard({ rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates });
+        const staleAi = !!(cached && (cached.packageDate !== packageDate || !cached.rv || !cached.rv.inventory || !cached.rv.creditYield || !cached.rv.bankCapital || cached.degraded || cached.modelError));
+        const catalysts = buildSalesDashboardCatalysts(live, { econ, marketColor, marketWire: marketWireCached });
+        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: live, sources, catalysts, cached: false, aiGenerated: false, stale: staleAi, aiCachedDate: cached ? cached.packageDate : null, customTax: !!taxRates });
       } catch (err) {
         log('warn', 'Sales dashboard live build failed:', err.message);
-        return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: null, cached: false });
+        return sendJSON(res, 200, { ok: false, configured, packageDate, dashboard: null, cached: false, error: 'Sales dashboard live build failed: ' + err.message });
       }
     }
 
@@ -10351,7 +10542,9 @@ const server = http.createServer(async (req, res) => {
         const { priorRows, priorMeta } = dashboardPriorPackage(packageDate);
         const priorRvTable = (priorMeta && priorMeta.priorDate) ? await loadArchivedRelativeValueSnapshot(priorMeta.priorDate).catch(() => null) : null;
         const rows = buildAllOfferingsRows();
-        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates, force: true, log });
+        const sources = buildSalesDashboardSourceStatus(rows);
+        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates, force: true, noCache: !!taxRates, log });
+        const catalysts = buildSalesDashboardCatalysts(record, { econ, marketColor: loadCachedMarketColorForDashboard(), marketWire: loadCachedMarketWireForDashboard() });
         appendAuditLog({
           event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
           degraded: record.degraded, coverage: record.coverage, flags: (record.flags || []).length,
@@ -10359,7 +10552,7 @@ const server = http.createServer(async (req, res) => {
           benchmarks: record.benchmarks ? { treasury: record.benchmarks.treasury, fdicCd: record.benchmarks.fdicCd, priorSnapshot: record.benchmarks.priorSnapshot } : null,
           cacheError: record.cacheError || null, modelError: record.modelError || null,
         });
-        return sendJSON(res, 200, { ok: true, configured: claudeClient.isConfigured(), dashboard: record, cached: record.cached });
+        return sendJSON(res, 200, { ok: true, configured: claudeClient.isConfigured(), dashboard: record, sources, catalysts, cached: record.cached, customTax: !!taxRates });
       } catch (err) {
         // Only the two legitimate hard throws reach here (missing marketDir,
         // zero candidates) — a model/API failure is already degraded inside
@@ -10451,8 +10644,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/crm/dashboard' && req.method === 'GET') {
-      const repParam = String(query.get('rep') || '').toLowerCase();
-      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      const { rep } = repScopeFromQuery(req, query, { auditEvent: 'crm-dashboard-scope-collapsed' });
       return sendJSON(res, 200, buildCrmDashboard(rep));
     }
 
@@ -10510,8 +10702,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/bank-views' && req.method === 'GET') {
-      const repParam = String(query.get('rep') || '').toLowerCase();
-      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      const { rep } = repScopeFromQuery(req, query, { auditEvent: 'bank-views-scope-collapsed' });
       return sendJSON(res, 200, {
         rep,
         views: listBankViewSummaries({ outputDir: BANK_REPORTS_DIR, rep })
@@ -10522,8 +10713,7 @@ const server = http.createServer(async (req, res) => {
     if (bankViewCsvMatch && req.method === 'GET') {
       const viewId = safeDecodeURIComponent(bankViewCsvMatch[1]);
       if (!viewId) return sendText(res, 400, 'Invalid view ID');
-      const repParam = String(query.get('rep') || '').toLowerCase();
-      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      const { rep } = repScopeFromQuery(req, query, { auditEvent: 'bank-views-csv-scope-collapsed' });
       const result = runBankView({ outputDir: BANK_REPORTS_DIR, viewId, rep });
       if (!result) return sendText(res, 404, 'Unknown view');
       const csv = rowsToCsv(viewToCsvRows(result));
@@ -10536,8 +10726,7 @@ const server = http.createServer(async (req, res) => {
     if (bankViewMatch && req.method === 'GET') {
       const viewId = safeDecodeURIComponent(bankViewMatch[1]);
       if (!viewId) return sendJSON(res, 400, { error: 'Invalid view ID' });
-      const repParam = String(query.get('rep') || '').toLowerCase();
-      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      const { rep } = repScopeFromQuery(req, query, { auditEvent: 'bank-views-run-scope-collapsed' });
       const result = runBankView({ outputDir: BANK_REPORTS_DIR, viewId, rep });
       if (!result) return sendJSON(res, 404, { error: 'Unknown view' });
       return sendJSON(res, 200, result);
@@ -11174,8 +11363,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/reports/pipeline' && req.method === 'GET') {
-      const repParam = String(query.get('rep') || '').toLowerCase();
-      const rep = repParam === 'all' ? null : resolveRequestRep(req);
+      const { rep } = repScopeFromQuery(req, query, { auditEvent: 'pipeline-scope-collapsed' });
       return sendJSON(res, 200, {
         rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
         pipeline: pipelineSummary(BANK_REPORTS_DIR, { username: rep ? rep.username : null })

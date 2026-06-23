@@ -552,10 +552,14 @@ function searchBankDatabase(outputDir, query, limit = 12) {
   const q = String(query || '').trim().toLowerCase();
   let sql;
   let params;
+  let countSql;
+  let countParams;
 
   if (!q) {
     sql = 'SELECT summary_json FROM banks ORDER BY display_name COLLATE NOCASE LIMIT ?;';
     params = [safeLimit];
+    countSql = 'SELECT COUNT(*) AS count FROM banks;';
+    countParams = [];
   } else {
     const tokens = q.split(/\s+/).filter(Boolean);
     const where = tokens
@@ -582,10 +586,14 @@ function searchBankDatabase(outputDir, query, limit = 12) {
       `%${qEsc}%`,
       safeLimit
     ];
+    countSql = `SELECT COUNT(*) AS count FROM banks WHERE ${where || '1 = 1'};`;
+    countParams = tokens.map(token => `%${escapeLikeWildcards(token)}%`);
   }
 
   const results = querySqliteJson(dbPath, sql, params).map(row => JSON.parse(row.summary_json));
-  return { metadata, results };
+  const countRow = querySqliteJson(dbPath, countSql, countParams)[0] || {};
+  const total = Number(countRow.count) || results.length;
+  return { metadata, results, total, limit: safeLimit, truncated: total > results.length };
 }
 
 function getBankFromDatabase(outputDir, id) {

@@ -1419,7 +1419,47 @@
 
   function isAdminUiAllowed() {
     if (!meState.auth || meState.auth.loadFailed) return false;
-    return !isProductionAuthMode() || Boolean(meState.auth && meState.auth.isAdmin);
+    if (isProductionAuthMode() || meState.auth.adminConfigured) {
+      return Boolean(meState.auth && meState.auth.isAdmin);
+    }
+    return true;
+  }
+
+  function applyAdminActionUi() {
+    const allowAdmin = isAdminUiAllowed();
+    [
+      'dailySummaryBtn',
+      'dailyPicksBtn',
+      'salesDashboardBtn',
+      'wirpUploadLabel',
+      'reportsAveragedSeriesImportBtn',
+      'reportsAveragedSeriesPicker',
+      'bondAccountingImportBtn',
+      'bondAccountingBankListPicker',
+      'bondAccountingPortfolioPicker',
+      'mbsCmoUploadPanel',
+      'mbsCmoUploadPicker',
+      'mbsCmoUploadBtn'
+    ].forEach(id => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      btn.hidden = !allowAdmin;
+      if ('disabled' in btn) btn.disabled = !allowAdmin;
+      btn.setAttribute('aria-hidden', allowAdmin ? 'false' : 'true');
+      if (!allowAdmin) btn.title = 'Admin permission is required for this action.';
+      else btn.removeAttribute('title');
+    });
+    ['wirpWorkbookInput', 'reportsAveragedSeriesWorkbookInput', 'bondAccountingBankListInput', 'bondAccountingPortfolioInput', 'mbsCmoUploadInput'].forEach(id => {
+      const input = document.getElementById(id);
+      if (input) input.disabled = !allowAdmin;
+    });
+  }
+
+  function requireAdminAction(message) {
+    if (isAdminUiAllowed()) return true;
+    showToast(message || 'Admin permission is required for this action.', true);
+    applyAdminActionUi();
+    return false;
   }
 
   function applyAuthUi() {
@@ -1428,6 +1468,7 @@
       el.hidden = !allowAdmin;
       el.setAttribute('aria-hidden', allowAdmin ? 'false' : 'true');
     });
+    applyAdminActionUi();
     const active = parseHashTarget(window.location.hash || '#home').page;
     if (!allowAdmin && (active === 'upload' || active === 'admin' || active === 'exec-summary')) {
       showToast('Admin permission is required for that page.', true);
@@ -3522,9 +3563,11 @@
       meta.textContent = '';
       if (btn) btn.textContent = 'Generate';
     }
+    applyAdminActionUi();
   }
 
   async function generateDailySummary() {
+    if (!requireAdminAction('Admin permission is required to refresh AI-generated content.')) return;
     const btn = document.getElementById('dailySummaryBtn');
     const body = document.getElementById('dailySummaryBody');
     if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
@@ -4285,7 +4328,9 @@
     if (!el) return;
     const data = wirpStatusData || {};
     if (!data.available) {
-      el.innerHTML = '<strong>WIRP not loaded.</strong> Upload a Bloomberg WIRP export to add forward-rate term guidance.';
+      el.innerHTML = isAdminUiAllowed()
+        ? '<strong>WIRP not loaded.</strong> Upload a Bloomberg WIRP export to add forward-rate term guidance.'
+        : '<strong>WIRP not loaded.</strong> Ask an admin to import the Bloomberg WIRP export for forward-rate term guidance.';
       return;
     }
     const summary = data.summary || {};
@@ -4297,6 +4342,7 @@
   }
 
   function uploadWirpWorkbook(file) {
+    if (!requireAdminAction('Admin permission is required to import WIRP.')) return;
     const status = document.getElementById('wirpStatus');
     const input = document.getElementById('wirpWorkbookInput');
     const formData = new FormData();
@@ -5421,6 +5467,7 @@
     if (!btn || btn.dataset.wired) return;
     btn.dataset.wired = '1';
     btn.addEventListener('click', async () => {
+      if (!requireAdminAction('Admin permission is required for the FDIC sync.')) return;
       btn.disabled = true;
       const setStatus = text => { if (status) status.textContent = text; };
       try {
@@ -8471,6 +8518,7 @@
   }
 
   function uploadReportsAveragedSeriesImport() {
+    if (!requireAdminAction('Admin permission is required to import peer averages.')) return;
     const input = document.getElementById('reportsAveragedSeriesWorkbookInput');
     const file = input && input.files ? input.files[0] : null;
     if (!file) return showToast('Choose the averaged-series workbook', true);
@@ -8492,6 +8540,7 @@
   }
 
   function uploadBondAccountingImport() {
+    if (!requireAdminAction('Admin permission is required to import bond accounting files.')) return;
     const bankListInput = document.getElementById('bondAccountingBankListInput');
     const portfolioInput = document.getElementById('bondAccountingPortfolioInput');
     const status = document.getElementById('bondAccountingImportStatus');
@@ -12864,6 +12913,7 @@
   }
 
   function uploadBankWorkbook(file) {
+    if (!requireAdminAction('Admin permission is required to import bank data.')) return;
     const status = document.getElementById('bankImportStatus');
     const input = document.getElementById('bankWorkbookInput');
     const formData = new FormData();
@@ -12885,6 +12935,7 @@
   }
 
   function uploadBankStatusWorkbook(file) {
+    if (!requireAdminAction('Admin permission is required to import account statuses.')) return;
     const status = document.getElementById('bankStatusImportStatus');
     const input = document.getElementById('bankStatusWorkbookInput');
     const formData = new FormData();
@@ -12919,6 +12970,7 @@
   }
 
   function uploadAveragedSeriesWorkbook(file, options = {}) {
+    if (!requireAdminAction('Admin permission is required to import peer averages.')) return;
     const status = document.getElementById(options.statusId || 'averagedSeriesImportStatus');
     const input = document.getElementById(options.inputId || 'averagedSeriesWorkbookInput');
     const formData = new FormData();
@@ -17235,9 +17287,11 @@
       meta.textContent = '';
       if (btn) btn.textContent = 'Generate';
     }
+    applyAdminActionUi();
   }
 
   async function generateDailyPicks() {
+    if (!requireAdminAction('Admin permission is required to refresh AI-generated content.')) return;
     const btn = document.getElementById('dailyPicksBtn');
     const body = document.getElementById('dailyPicksBody');
     if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
@@ -17336,6 +17390,76 @@
     return `<div class="sd-standouts">${cards}</div>`;
   }
 
+  function sdInventoryStrip(inv) {
+    if (!Array.isArray(inv) || !inv.length) return '';
+    const cards = inv.map(b => {
+      const top = (b.top || []).slice(0, 2).map(p => `
+        <span class="sd-inv-top">
+          <button type="button" class="sd-link" data-goto="${escapeHtml(p.page || b.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>${escapeHtml(p.description || p.cusip || '')}</button>
+          ${p.rv && p.rv.score != null ? `<span class="sd-inv-rv">RV ${p.rv.score}</span>` : ''}
+        </span>`).join('');
+      const details = [];
+      if (b.eligibleCount != null && b.eligibleCount !== b.count) details.push(`${formatNumber(b.eligibleCount)} eligible`);
+      if (b.bqCount) details.push(`${formatNumber(b.bqCount)} BQ`);
+      if (b.deepDiscountCount) details.push(`${formatNumber(b.deepDiscountCount)} deep discount`);
+      return `<div class="sd-inv-card">
+        <div class="sd-inv-head">
+          <span>${escapeHtml(b.label || b.key || 'Inventory')}</span>
+          <button type="button" class="sd-link" data-goto="${escapeHtml(b.page || 'all-offerings')}">open shelf</button>
+        </div>
+        <div class="sd-inv-count">${formatNumber(b.count || 0)}</div>
+        ${details.length ? `<div class="sd-inv-detail">${escapeHtml(details.join(' · '))}</div>` : ''}
+        ${top ? `<div class="sd-inv-tops">${top}</div>` : ''}
+      </div>`;
+    }).join('');
+    return `<div class="sd-inventory-strip">${cards}</div>`;
+  }
+
+  function sdSourceChecklist(sources) {
+    if (!Array.isArray(sources) || !sources.length) return '';
+    const rows = sources.map(s => {
+      const cls = s.status === 'ok' ? 'ok' : (s.status === 'warn' ? 'warn' : 'missing');
+      const count = s.count == null ? '' : `<span class="sd-source-count">${formatNumber(s.count)}</span>`;
+      const note = s.note ? `<span class="sd-source-note">${escapeHtml(s.note)}</span>` : '';
+      const open = s.page ? `<button type="button" class="sd-link" data-goto="${escapeHtml(s.page)}">open</button>` : '';
+      return `<span class="sd-source sd-source-${cls}"${s.note ? ` title="${escapeHtml(s.note)}"` : ''}>
+        <span class="sd-source-dot"></span>
+        <span class="sd-source-label">${escapeHtml(s.label || s.key || 'Source')}</span>
+        ${count}
+        ${open}
+        ${note}
+      </span>`;
+    }).join('');
+    const missing = sources.filter(s => s.required !== false && !s.ready).length;
+    const warn = sources.filter(s => s.status === 'warn').length;
+    const summary = missing
+      ? `${missing} required source${missing === 1 ? '' : 's'} missing`
+      : (warn ? `${warn} source warning${warn === 1 ? '' : 's'}` : 'All required idea sources present');
+    return `<div class="sd-source-box">
+      <div class="sd-source-title"><span>Source checklist</span><strong>${escapeHtml(summary)}</strong></div>
+      <div class="sd-source-list">${rows}</div>
+    </div>`;
+  }
+
+  function sdCatalysts(catalysts) {
+    if (!Array.isArray(catalysts) || !catalysts.length) return '';
+    const cards = catalysts.map(c => {
+      const cls = String(c.kind || 'market').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      const action = c.url
+        ? `<a class="sd-link" href="${escapeHtml(c.url)}" target="_blank" rel="noopener">source</a>`
+        : '';
+      const source = c.source ? `<span class="sd-catalyst-source">${escapeHtml(c.source)}</span>` : '';
+      return `<div class="sd-catalyst sd-catalyst-${escapeHtml(cls)}">
+        <div class="sd-catalyst-head"><span>${escapeHtml(c.label || 'Catalyst')}</span>${source}${action}</div>
+        <p>${escapeHtml(c.text || '')}</p>
+      </div>`;
+    }).join('');
+    return `<section class="sd-catalysts" aria-label="Market catalysts">
+      <div class="sd-catalysts-title">Market catalysts</div>
+      <div class="sd-catalyst-grid">${cards}</div>
+    </section>`;
+  }
+
   // "What changed" — archive-fed cross-day movers (cheapened / richened / new /
   // rolled-off + supply concentration), measured as the excess move vs the curve.
   function sdMovers(m) {
@@ -17384,14 +17508,14 @@
   // "Benchmark" column is the desk-computed comparison string already on the row.
   function sdBoardTable(rows, kind) {
     if (!rows || !rows.length) return '<p class="daily-summary-empty">Nothing screens here on today\'s run.</p>';
-    const benchHead = { leaders: 'Cheap to', treasury: 'Spread to Treasury', cd: 'Spread (UST / FDIC)', muni: 'Muni value' }[kind] || 'Benchmark';
+    const benchHead = { leaders: 'Cheap to', treasury: 'Spread to Treasury', cd: 'Spread (UST / FDIC)', muni: 'Muni value', credit: 'Taxable spread', capital: 'Bank shelf value' }[kind] || 'Benchmark';
     const head = `<tr><th>Security</th><th>Maturity</th><th class="sd-num">Yield</th><th>${escapeHtml(benchHead)}</th><th class="sd-num">RV</th><th></th></tr>`;
     const bodyRows = rows.map(p => {
       const cls = sdClassSlug(p.assetClass);
       const tey = (p.exemptMuni && p.rv && p.rv.audSpreadBps && p.rv.audSpreadBps.ccorp != null)
         ? ` <span class="sd-teylbl" title="C-Corp taxable-equivalent yield">TEY ${sdNum(sdEff(p, 'ccorp').val)}</span>` : '';
       return `<tr>
-        <td><span class="ao-class-pill ao-class-${cls}">${escapeHtml(p.assetClass || '')}</span> <span class="sd-secname">${escapeHtml(p.description || p.cusip || '')}</span>${p.state ? ` <span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}${p.rv && p.rv.ratingLabel && p.rv.ratingLabel !== 'NR' ? ` <span class="sd-rating">${escapeHtml(p.rv.ratingLabel)}</span>` : ''} ${sdTrendChip(p.rv)}<div class="sd-row-chips">${sdChips(p.rv)}</div></td>
+        <td><span class="ao-class-pill ao-class-${cls}">${escapeHtml(p.assetClass || '')}</span> <span class="sd-secname">${escapeHtml(p.description || p.cusip || '')}</span>${p.sector && (kind === 'credit' || cls === 'structured-note') ? ` <span class="sd-sector">${escapeHtml(p.sector)}</span>` : ''}${p.state ? ` <span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}${p.rv && p.rv.ratingLabel && p.rv.ratingLabel !== 'NR' ? ` <span class="sd-rating">${escapeHtml(p.rv.ratingLabel)}</span>` : ''} ${sdTrendChip(p.rv)}<div class="sd-row-chips">${sdChips(p.rv)}</div></td>
         <td class="sd-matcell">${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'} <span class="sd-bucket">${escapeHtml((p.rv && p.rv.bucketLabel) || '')}</span></td>
         <td class="sd-num"><strong>${sdNum(p.ytw)}</strong>%${tey}</td>
         <td class="sd-bench">${escapeHtml(p.benchmark || '—')}</td>
@@ -17572,7 +17696,9 @@
 
     if (!dash) {
       card.hidden = false;
-      body.innerHTML = '<p class="daily-summary-empty">No audience-eligible offerings in the current package yet — publish today\'s package to build the relative-value board.</p>';
+      body.innerHTML = data && data.error
+        ? `<p class="sd-banner warn">${escapeHtml(data.error)}</p>`
+        : '<p class="daily-summary-empty">No audience-eligible offerings in the current package yet — publish today\'s package to build the relative-value board.</p>';
       if (metaEl) metaEl.textContent = '';
       if (stat) stat.textContent = '—';
       if (btn) btn.textContent = 'Generate';
@@ -17607,6 +17733,12 @@
       sections.push(sdSection('Today\'s Standouts', 'The cheapest risk-adjusted names across every asset class — read these first', sdStandouts(rv.standouts)));
     }
 
+    // 0b — Inventory coverage. This replaces the old uploaded HTML's static
+    // inventory strip with a live read from the current daily package.
+    if (rv && rv.inventory && rv.inventory.length) {
+      sections.push(sdSection('Inventory coverage', 'What today\'s upload actually gives the desk, with the top live names in each shelf', sdInventoryStrip(rv.inventory)));
+    }
+
     // 1 — Relative Value Leaders (the headline; cheapest risk-adjusted, all classes).
     if (rv && rv.leaders) {
       sections.push(sdSection('Relative Value Leaders', 'Cheapest risk-adjusted on today\'s run — ranked by spread to benchmark, not raw yield', sdBoardTable(rv.leaders, 'leaders')));
@@ -17623,6 +17755,8 @@
         <div class="sd-board-cell">${sdSection('Cheap to Treasury', 'Biggest spread over the matched Treasury', sdBoardTable(rv.cheapToTreasury, 'treasury'))}</div>
         <div class="sd-board-cell">${sdSection('CD Value Board', 'Beats Treasury AND the FDIC national average — ranked by spread per month of term', sdBoardTable(rv.cdBoard, 'cd'))}</div>
         <div class="sd-board-cell">${sdSection('Munis — cheap to MMD & peers', 'Spread to the grade-matched MMD scale, the muni/Treasury ratio, and rating/maturity peers', sdBoardTable(rv.muniValue, 'muni'))}</div>
+        <div class="sd-board-cell">${sdSection('Bank capital shelf', 'Agencies, Treasuries and MBS/CMO names that screen for bank portfolios', sdBoardTable(rv.bankCapital, 'capital'))}</div>
+        <div class="sd-board-cell">${sdSection('RIA taxable credit / structured', 'Corporate and structured-note yield ideas kept separate from bank muni/CD screens', sdBoardTable(rv.creditYield, 'credit'))}</div>
       </div>`;
       sections.push(boards);
     }
@@ -17682,21 +17816,25 @@
 
     const deskReadHtml = rv ? sdDeskRead(rv) : '';
     const strategistHtml = (rv && rv.strategist) ? sdStrategist(rv.strategist) : '';
-    body.innerHTML = banners.join('') + deskReadHtml + legend + strategistHtml + sections.join('');
+    const sourceHtml = sdSourceChecklist(data.sources);
+    const catalystHtml = sdCatalysts(data.catalysts);
+    body.innerHTML = banners.join('') + sourceHtml + catalystHtml + deskReadHtml + legend + strategistHtml + sections.join('');
 
     if (stat) stat.textContent = (rv && rv.leaders) ? rv.leaders.length : audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
     if (metaEl) {
       const bits = [];
       if (data.aiGenerated || data.cached) {
-        if (dash.generatedAt) bits.push('AI read ' + new Date(dash.generatedAt).toLocaleString());
+        bits.push('AI-ranked idea engine');
+        if (dash.generatedAt) bits.push(new Date(dash.generatedAt).toLocaleString());
         bits.push(dash.model || 'deterministic');
       } else {
-        bits.push('Live relative-value read (free)');
+        bits.push('Live deterministic idea engine');
         bits.push(data.configured ? 'Generate for AI calls' : 'Add an Anthropic key for AI calls');
       }
       metaEl.textContent = bits.join(' · ');
     }
     if (btn) btn.textContent = (data.aiGenerated || data.cached) ? 'Refresh AI read' : 'Generate AI read';
+    applyAdminActionUi();
   }
 
   // The tax-rate lens → query params. Per-client (blank) = no override; a chosen
@@ -17716,11 +17854,12 @@
   }
 
   async function refreshSalesDashboard() {
+    if (!requireAdminAction('Admin permission is required to refresh AI-generated content.')) return;
     const btn = document.getElementById('salesDashboardBtn');
     const body = document.getElementById('salesDashboardBody');
     if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
     try {
-      const res = await fetch('/api/sales-dashboard/refresh', { method: 'POST' });
+      const res = await fetch('/api/sales-dashboard/refresh' + sdTaxParams(), { method: 'POST' });
       const data = await res.json();
       if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
       renderSalesDashboard(data);
@@ -17756,7 +17895,10 @@
       const res = await fetch('/api/sales-dashboard' + sdTaxParams(), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       renderSalesDashboard(await res.json());
-    } catch (_) { /* leave the prior render in place */ }
+    } catch (e) {
+      const body = document.getElementById('salesDashboardBody');
+      if (body) body.innerHTML = `<p class="sd-banner warn">Sales Dashboard could not load${e && e.message ? ': ' + escapeHtml(e.message) : '.'}</p>`;
+    }
   }
 
   function renderAllOfferingsClasses() {
@@ -20657,6 +20799,7 @@
   }
 
   async function uploadMbsCmoFiles() {
+    if (!requireAdminAction('Admin permission is required to upload MBS/CMO sources.')) return;
     const input = document.getElementById('mbsCmoUploadInput');
     const status = document.getElementById('mbsCmoUploadStatus');
     const button = document.getElementById('mbsCmoUploadBtn');

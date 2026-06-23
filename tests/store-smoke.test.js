@@ -262,9 +262,11 @@ try {
   const searchTricky = bankImporter.searchBankDatabase(reportsDir, "o'brien");
   ok('importer-search quote in LIKE', searchTricky.results.length === 1 && searchTricky.results[0].id === 'B-1', JSON.stringify(searchTricky.results.map(r => r.id)));
   const searchWild = bankImporter.searchBankDatabase(reportsDir, 'bank');
-  ok('importer-search token', searchWild.results.length >= 1);
+  ok('importer-search token', searchWild.results.length === 1 && searchWild.total === 1 && searchWild.truncated === false, JSON.stringify(searchWild));
+  const searchEmptyTop = bankImporter.searchBankDatabase(reportsDir, '', 1);
+  ok('importer-search total/truncated', searchEmptyTop.results.length === 1 && searchEmptyTop.total === 2 && searchEmptyTop.truncated === true, JSON.stringify(searchEmptyTop));
   const searchEmpty = bankImporter.searchBankDatabase(reportsDir, '');
-  ok('importer-search empty lists all', searchEmpty.results.length === 2);
+  ok('importer-search empty lists all', searchEmpty.results.length === 2 && searchEmpty.total === 2 && searchEmpty.truncated === false, JSON.stringify(searchEmpty));
 
   const oneBank = bankImporter.getBankFromDatabase(reportsDir, 'B-1');
   ok('importer-getBank', oneBank && oneBank.bank.id === 'B-1');

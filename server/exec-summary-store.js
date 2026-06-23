@@ -664,10 +664,10 @@ function computeExecSummary(src, ctx = {}) {
   // alongside an empty one (rep roster is firm-provided; desk TRADER_MAP is a
   // separate code space still pending the firm's desk labels).
   if (!summary.deskNamesMapped) {
-    warnings.push('desk trader codes not yet mapped — showing codes (fill TRADER_MAP in exec-summary-store.js with the firm desk labels)');
+    warnings.push('Some desk trader codes are not mapped yet; showing desk codes until the firm roster is updated.');
   }
   if (!summary.repNamesMapped) {
-    warnings.push('rep names not yet mapped — showing codes (fill the roster in rep-roster.js)');
+    warnings.push('Some salesperson codes are not mapped yet; showing rep codes until the firm roster is updated.');
   }
   summary.ceoBrief = buildCeoBrief(summary);
   summary.narrative = buildNarrative(summary);

@@ -14,9 +14,9 @@
  * the candidate set this module builds; it never produces a figure.
  *
  * Conventions ported verbatim from the desk's CLAUDE.md handoff:
- *   - TEY = YTW / (1 − tax_rate)  (§3.1). YTW, never YTM. The displayed TEY
- *     EXCLUDES the TEFRA interest-expense haircut and the 20% C-corp BQ
- *     disallowance — those are disclaimed on the page, not netted here.
+ *   - Phase 1 carries the naive TEY = YTW / (1 − tax_rate) for eligibility and
+ *     legacy comparison. The Sales Dashboard RV layer replaces the displayed
+ *     bank muni yield with the BQ/TEFRA-correct net TEY.
  *   - Corporate / agency YTW = min(YTM, YTNC) for callables, YTM otherwise (§3.5).
  *   - Availability floor: a featured pick must have ≥ $250K offered (§4.4).
  *     Sub-$250K stays in inventory only; unknown size never excludes.
