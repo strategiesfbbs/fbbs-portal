@@ -312,6 +312,20 @@ test('iis crm rollups collapse non-admin all/other-rep scope to self', async () 
   });
 });
 
+test('iis mode rejects api requests with no windows identity (anonymous lockout)', async () => {
+  await withServer({ FBBS_AUTH_MODE: 'iis', FBBS_ADMIN_USERS: 'adminuser' }, async ({ port }) => {
+    // /api/health is the only public path — still served without an identity.
+    const health = await request(port, { path: '/api/health' });
+    assert.strictEqual(health.status, 200, health.text);
+    // A protected route with no forwarded Windows login is refused, not served anonymously.
+    const denied = await request(port, { path: '/api/crm/dashboard' });
+    assert.strictEqual(denied.status, 401, denied.text);
+    // The same route resolves once IIS forwards the logon user.
+    const ok = await request(port, { path: '/api/crm/dashboard', headers: { 'x-iisnode-logon_user': 'FBBS\\adminuser' } });
+    assert.strictEqual(ok.status, 200, ok.text);
+  });
+});
+
 test('cross-site mutating writes are blocked; same-origin and header-absent pass', async () => {
   await withServer({}, async ({ port }) => {
     const blocked = /Cross-site write request blocked/;

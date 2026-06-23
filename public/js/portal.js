@@ -1469,6 +1469,20 @@
       el.setAttribute('aria-hidden', allowAdmin ? 'false' : 'true');
     });
     applyAdminActionUi();
+    // Firm-wide ("Everyone") view scope is an admin-only rollup. For a non-admin the
+    // server collapses ?rep=all back to self, so the toggle is a misleading dead-end
+    // (and every click audits a scope-collapse). Hide it and pin the scope to "me".
+    const viewsScopeToggle = document.querySelector('.views-scope-toggle');
+    if (viewsScopeToggle) {
+      viewsScopeToggle.hidden = !allowAdmin;
+      viewsScopeToggle.setAttribute('aria-hidden', allowAdmin ? 'false' : 'true');
+      if (!allowAdmin && savedViewsState.scope !== 'me') {
+        savedViewsState.scope = 'me';
+        viewsScopeToggle.querySelectorAll('[data-views-scope]').forEach(b => {
+          b.classList.toggle('is-active', b.getAttribute('data-views-scope') === 'me');
+        });
+      }
+    }
     const active = parseHashTarget(window.location.hash || '#home').page;
     if (!allowAdmin && (active === 'upload' || active === 'admin' || active === 'exec-summary')) {
       showToast('Admin permission is required for that page.', true);
