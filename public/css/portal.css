@@ -20,6 +20,17 @@
   --bg-lighter: #fbfdfc;
   --border: #dbe6df;
   --border-light: #e8f0eb;
+  /* Aliases — historically referenced via var(--line, …) / var(--accent, …) with
+     off-palette hex fallbacks. Defining them here routes every such use back to the
+     brand palette (fixes the slightly-wrong tab green and the bank-search border). */
+  --line: var(--border);
+  --accent: var(--racing-green);
+  /* Shared focus + radius scale so search inputs, buttons, and cards stay consistent. */
+  --focus-ring: 0 0 0 3px rgba(184, 206, 190, 0.45);
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
   --danger: #B94444;
   --success: #18735A;
   --maps-open: #7c3bc7;
