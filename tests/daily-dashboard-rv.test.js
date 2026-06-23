@@ -200,6 +200,66 @@ test('benchmarks block reports availability honestly (MMD optional)', () => {
   assert.ok(Array.isArray(bare.leaders));
 });
 
+test('bqCorrectTey reproduces the desk/catalog TEFRA math', () => {
+  const cc = rv.bqCorrectTey(3.15, 21, 0.20, 1.5); // BQ C-corp
+  assert.ok(approx(cc.tey, 3.91, 0.02));
+  assert.ok(approx(cc.tefraBp, 8, 1));
+  const nbq = rv.bqCorrectTey(3.15, 21, 1.00, 1.5); // non-BQ C-corp
+  assert.ok(approx(nbq.tey, 3.59, 0.02));
+  // BQ disallowance factor q by audience + BQ status.
+  assert.strictEqual(rv.bqFactorFor('ccorp', true), 0.20);
+  assert.strictEqual(rv.bqFactorFor('ccorp', false), 1.00);
+  assert.strictEqual(rv.bqFactorFor('scorp', true), 0);
+  assert.strictEqual(rv.bqFactorFor('scorp', false), 1.00);
+});
+
+test('muni picks rank on the BQ/TEFRA-correct net TEY, and BQ is worth ~32bp', () => {
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF });
+  const muni = find(set, '157399BW5'); // BQ Aa3, YTW 3.80, C-corp 21%
+  assert.ok(muni.rv.netTey.ccorp > 4.6 && muni.rv.netTey.ccorp < 4.8); // ≈4.73 (vs naive 4.81)
+  assert.ok(approx(muni.rv.tefraBp.ccorp, 8, 1));
+  assert.ok(approx(muni.rv.bqAdvantageBp, 32, 3)); // BQ worth ~32bp vs non-BQ
+  // The audience spread re-ranks on net TEY (so it's a touch below the naive figure).
+  assert.ok(muni.rv.audSpreadBps.ccorp > 80 && muni.rv.audSpreadBps.ccorp < 95);
+});
+
+test('"yields like a lower grade" notch + de-minimis flags', () => {
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF });
+  const muni = find(set, '157399BW5'); // YTW 3.80 sits above the Baa MMD scale at ~4.7y
+  assert.strictEqual(muni.rv.impliedGrade, 'Baa');
+  assert.ok(muni.rv.notchesCheap >= 1); // Aa3→AA, yields like Baa
+  // De-minimis on a discount muni.
+  const dm = rv.deMinimis(95.98, 16);
+  assert.ok(dm.breach && approx(dm.threshold, 96.0, 0.01));
+  assert.strictEqual(rv.deMinimis(101, 10), null); // premium → n/a
+});
+
+test('outlier chips surface the strongest signals (≤3)', () => {
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF });
+  for (const c of set.candidates) assert.ok(Array.isArray(c.rv.chips) && c.rv.chips.length <= 3);
+  const muni = find(set, '157399BW5');
+  assert.ok(muni.rv.chips.some(s => /MMD/.test(s)));
+});
+
+test('archive-fed movers strip the parallel curve move (excess-of-mean)', () => {
+  // Prior package: everything 10bp lower than today EXCEPT the corp 30bp lower
+  // (so the corp cheapened idiosyncratically), and the CD absent (new today).
+  const PRIOR_ROWS = ROWS.filter(r => r.cusip !== '06251FET2' && r.yield != null).map(r => ({
+    cusip: r.cusip, type: r.type, description: r.description, state: r.state, price: r.price,
+    yield: r.yield - (r.cusip === '319626AA5' ? 0.30 : 0.10),
+  }));
+  const set = rv.buildRelativeValue({
+    candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF,
+    priorRows: PRIOR_ROWS, priorMeta: { priorDate: '2026-06-12', daysAgo: 10 },
+  });
+  assert.ok(set.movers);
+  assert.strictEqual(set.movers.priorDate, '2026-06-12');
+  assert.ok(approx(set.movers.curveMoveBp, 14, 1)); // mean move ≈ +14bp
+  assert.ok(set.movers.cheapened.some(c => c.cusip === '319626AA5')); // corp cheapened vs the curve
+  assert.ok(set.movers.newToday.some(c => c.cusip === '06251FET2')); // CD is new today
+  assert.strictEqual(set.benchmarks.priorPackage.daysAgo, 10);
+});
+
 (async () => {
   for (const { name, fn } of tests) {
     try { await fn(); passed++; }

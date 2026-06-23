@@ -184,6 +184,8 @@ function compactCandidate(c) {
     ratioPct: rv.ratioPct,
     mmdSpreadBps: rv.mmdSpreadBps,
     mmdGrade: rv.mmdGrade,
+    impliedGrade: rv.notchesCheap >= 1 ? rv.impliedGrade : undefined,
+    moverBp: rv.moverBp,                              // cheapened/richened vs the prior run
     peerSpreadBps: rv.peerSpreadBps,
     audSpreadBps: rv.audSpreadBps && Object.keys(rv.audSpreadBps).length ? rv.audSpreadBps : undefined,
     trend: rv.trend,
@@ -780,13 +782,29 @@ function buildRvSections(rvAnalysis) {
     byBucket[k] = { label: b.label, count: b.count, top: attachSection(b.top) };
   }
   const trendList = key => attachSection((rvAnalysis.trends[key] || []).map(cu => rvAnalysis.byCusip.get(cu)).filter(Boolean));
+  const mv = rvAnalysis.movers;
+  const movers = mv ? {
+    priorDate: mv.priorDate,
+    daysAgo: mv.daysAgo,
+    curveMoveBp: mv.curveMoveBp,
+    matched: mv.matched,
+    cheapened: attachSection(mv.cheapened),
+    richened: attachSection(mv.richened),
+    newToday: attachSection(mv.newToday),
+    // rolled-off names came from the PRIOR package and aren't candidates today —
+    // carry just the identity so the rep isn't caught quoting dead inventory.
+    rolledOff: (mv.rolledOff || []).map(r => ({ cusip: r.cusip, description: r.description, assetClass: r.type, ytw: r.ytw })),
+    supply: mv.supply || [],
+  } : null;
   return {
     benchmarks: rvAnalysis.benchmarks,
+    standouts: attachSection(rvAnalysis.standouts),
     leaders: attachSection(rvAnalysis.leaders),
     cheapToTreasury: attachSection(rvAnalysis.cheapToTreasury),
     cdBoard: attachSection(rvAnalysis.cdBoard),
     muniValue: attachSection(rvAnalysis.muniValue),
     byBucket,
+    movers,
     trends: {
       new: trendList('new'),
       wider: trendList('wider'),
@@ -810,7 +828,11 @@ function buildLiveDashboard(opts) {
   const packageDate = meta.date || (o.econ && o.econ.asOfDate) || null;
   const candidateSet = dailyDashboard.buildCandidateSet(o.rows, { taxRates: o.taxRates || null, floorK: o.floorK });
   if (!candidateSet.candidates.length) throw new Error('No audience-eligible offerings to build a dashboard from');
-  const rvAnalysis = rvEngine.buildRelativeValue({ candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null, asOf: packageDate, priorMap: o.priorMap || null });
+  const rvAnalysis = rvEngine.buildRelativeValue({
+    candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null,
+    priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, cof: o.cof,
+    asOf: packageDate, priorMap: o.priorMap || null,
+  });
   const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);
   const macroInput = dailySummary.buildSummaryInput(o.econ, meta);
   const grounded = groundDashboard(emptySkeleton(), groundingSet, macroInput);
@@ -904,7 +926,9 @@ async function generateDashboard(opts) {
   // Relative-value enrichment — the deterministic ranking core. The model ranks
   // WITHIN this RV-ordered set; it never moves a benchmark.
   const rvAnalysis = rvEngine.buildRelativeValue({
-    candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null, asOf: packageDate, priorMap: o.priorMap || null,
+    candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null,
+    priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, cof: o.cof,
+    asOf: packageDate, priorMap: o.priorMap || null,
   });
   const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);
 

@@ -7847,6 +7847,55 @@ function buildAllOfferingsRows() {
   return rows;
 }
 
+// Prior-package offering rows for the Sales Dashboard cross-day movers — a slim
+// projection (cusip, type, description, yield, price, state) of the five
+// per-day-archived classes (CD / treasury / muni / agency / corporate). MBS and
+// structured notes are standing inventories, not per-day archived, so they're
+// skipped. Yield follows the same convention as the live registry (muni YTW,
+// agency/corp min(YTM,YTNC)). Returns [] on a missing/unreadable archive date.
+function buildArchivedOfferingsRows(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const read = (filename) => {
+    const p = path.join(ARCHIVE_DIR, date, filename);
+    if (!fs.existsSync(p)) return null;
+    try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch (e) { log('warn', `Could not read archived ${filename}:`, e.message); return null; }
+  };
+  const pctNum = v => { if (v == null) return null; const n = Number(String(v).replace(/%/g, '').trim()); return Number.isFinite(n) ? n : null; };
+  const minNonNull = (...vals) => { const ns = vals.filter(v => v != null && Number.isFinite(Number(v))).map(Number); return ns.length ? Math.min(...ns) : null; };
+  const rows = [];
+  const push = (cusip, type, description, yld, price, state) => { const c = String(cusip || '').trim(); if (c) rows.push({ cusip: c, type, description: description || '', yield: yld, price, state: state || '' }); };
+  for (const r of ((read(OFFERINGS_FILENAME) || {}).offerings || [])) push(r.cusip, 'cd', [r.name, r.term].filter(Boolean).join(' · '), pctNum(r.rate), null, r.issuerState);
+  for (const r of ((read(TREASURY_NOTES_FILENAME) || {}).notes || [])) push(r.cusip, 'treasury', r.description, pctNum(r.yield), pctNum(r.price), '');
+  for (const r of ((read(MUNI_OFFERINGS_FILENAME) || {}).offerings || [])) push(r.cusip, 'muni', r.issuerName, pctNum(r.ytw) ?? pctNum(r.ytm), pctNum(r.price), r.issuerState);
+  for (const r of ((read(AGENCIES_FILENAME) || {}).offerings || [])) push(r.cusip, 'agency', [r.ticker, r.structure].filter(Boolean).join(' · '), minNonNull(pctNum(r.ytm), pctNum(r.ytnc)) ?? pctNum(r.ytm), pctNum(r.askPrice), '');
+  for (const r of ((read(CORPORATES_FILENAME) || {}).offerings || [])) push(r.cusip, 'corporate', r.issuerName, minNonNull(pctNum(r.ytm), pctNum(r.ytnc)) ?? pctNum(r.ytm), pctNum(r.askPrice), '');
+  return rows;
+}
+
+// The most recent archived package date strictly before `excludeDate` (today's
+// package), for the cross-day mover diff. null when no prior package exists.
+function mostRecentPriorArchiveDate(excludeDate) {
+  if (!fs.existsSync(ARCHIVE_DIR)) return null;
+  const dirs = fs.readdirSync(ARCHIVE_DIR)
+    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && d !== excludeDate)
+    .sort();
+  return dirs.length ? dirs[dirs.length - 1] : null;
+}
+
+// Resolve the prior-package mover inputs for the Sales Dashboard. Returns
+// { priorRows, priorMeta } or { priorRows:null, priorMeta:null } with no prior.
+function dashboardPriorPackage(packageDate) {
+  const priorDate = mostRecentPriorArchiveDate(packageDate);
+  if (!priorDate) return { priorRows: null, priorMeta: null };
+  const priorRows = buildArchivedOfferingsRows(priorDate);
+  let daysAgo = null;
+  if (packageDate && /^\d{4}-\d{2}-\d{2}$/.test(packageDate)) {
+    const d = Math.round((Date.parse(packageDate) - Date.parse(priorDate)) / 86400000);
+    if (Number.isFinite(d)) daysAgo = Math.max(0, d);
+  }
+  return { priorRows, priorMeta: { priorDate, daysAgo } };
+}
+
 // Per-audience tax-rate overrides for the Sales Dashboard custom lens, parsed
 // from ?tax_ccorp=&tax_scorp=&tax_ria= query params. Out-of-band values are
 // clamped/ignored downstream (daily-dashboard.audienceByKey). null = no override.
@@ -10269,7 +10318,8 @@ const server = http.createServer(async (req, res) => {
         ]);
         const econ = await loadCurrentEconomicUpdate().catch(() => null);
         const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
-        const live = dailyDashboardJudgment.buildLiveDashboard({ rows: buildAllOfferingsRows(), econ, meta, curve, fred, mmd, priorMap, taxRates });
+        const { priorRows, priorMeta } = dashboardPriorPackage(packageDate);
+        const live = dailyDashboardJudgment.buildLiveDashboard({ rows: buildAllOfferingsRows(), econ, meta, curve, fred, mmd, priorMap, priorRows, priorMeta, taxRates });
         const staleAi = !!(cached && cached.packageDate && cached.packageDate !== packageDate);
         return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: live, cached: false, aiGenerated: false, stale: staleAi, aiCachedDate: cached ? cached.packageDate : null, customTax: !!taxRates });
       } catch (err) {
@@ -10290,8 +10340,9 @@ const server = http.createServer(async (req, res) => {
           loadCurrentMmdCurve().catch(() => null),
         ]);
         const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
+        const { priorRows, priorMeta } = dashboardPriorPackage(packageDate);
         const rows = buildAllOfferingsRows();
-        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, priorMap, taxRates, force: true, log });
+        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, priorMap, priorRows, priorMeta, taxRates, force: true, log });
         appendAuditLog({
           event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
           degraded: record.degraded, coverage: record.coverage, flags: (record.flags || []).length,

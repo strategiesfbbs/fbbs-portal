@@ -32,8 +32,23 @@
 'use strict';
 
 const ddTax = require('./daily-dashboard'); // AUDIENCE_KEYS, audienceEconomics, rowYtw
+const swapMath = require('./swap-math');     // municipalTeYield — verified BQ/TEFRA TEY
 
 const AUDIENCE_KEYS = ddTax.AUDIENCE_KEYS;
+
+// Cost-of-funds assumption for the BQ/TEFRA-correct muni TEY (the desk default,
+// matching swap-math / the portfolio engine). Overridable via buildRelativeValue.
+const DEFAULT_COF_PCT = 1.5;
+
+// MMD grade order (best → weakest) for the "yields like a lower grade" notch.
+const MMD_GRADE_ORDER = [
+  { key: 'aaa', label: 'AAA' }, { key: 'aa', label: 'AA' }, { key: 'a', label: 'A' }, { key: 'baa', label: 'Baa' },
+];
+
+// Cross-day mover thresholds (idiosyncratic move, after stripping the parallel
+// curve shift): a name is a "mover" when it cheapened/richened this much more
+// than the package-average yield change since the prior package.
+const MOVER_BPS = 4;
 
 // Maturity buckets — the spine of "best idea per bucket" so long bonds don't
 // dominate the board just by carrying more yield. maxY is the inclusive upper
@@ -120,6 +135,7 @@ function interpolateCurve(tenors, years) {
   for (let i = 1; i < pts.length; i++) {
     if (years <= pts[i].yrs) {
       const lo = pts[i - 1], hi = pts[i];
+      if (hi.yrs === lo.yrs) return hi.v; // guard duplicate tenors (no /0)
       const w = (years - lo.yrs) / (hi.yrs - lo.yrs);
       return lo.v + w * (hi.v - lo.v);
     }
@@ -166,6 +182,7 @@ function interpolateMmd(mmdCurve, gradeKey, years) {
   for (let i = 1; i < pts.length; i++) {
     if (years <= pts[i].yrs) {
       const lo = pts[i - 1], hi = pts[i];
+      if (hi.yrs === lo.yrs) return hi.v; // guard duplicate tenors (no /0)
       const w = (years - lo.yrs) / (hi.yrs - lo.yrs);
       return lo.v + w * (hi.v - lo.v);
     }
@@ -244,6 +261,82 @@ function ratingLabel(c) {
     }
   }
   return ratingBucket(c);
+}
+
+// ---------- muni tax / grade depth ----------
+
+/**
+ * BQ interest-expense disallowance factor `q` for the BQ/TEFRA-correct TEY,
+ * matching the swap engine: C-Corp BQ 0.20 / non-BQ 1.00; S-Corp BQ 0 / non-BQ
+ * 1.00. RIA/taxable buyers don't carry the disallowance. Pure.
+ */
+function bqFactorFor(audienceKey, isBq) {
+  if (audienceKey === 'scorp') return isBq ? 0 : 1.0;
+  if (audienceKey === 'ccorp') return isBq ? 0.2 : 1.0;
+  return 1.0; // ria — not used (no muni gross-up)
+}
+
+/**
+ * The BQ/TEFRA-correct taxable-equivalent yield: (YTW − COF·t·q)/(1−t) via the
+ * verified swap-math implementation. Returns { tey, naiveTey, tefraBp } in
+ * percent / bp, or null. The naive TEY = YTW/(1−t) is what the page headline
+ * shows; tefraBp is the haircut the desk's disclaimer admits but never quantified.
+ */
+function bqCorrectTey(ytwPct, taxRatePct, bqFactor, cofPct) {
+  if (ytwPct == null || !(taxRatePct > 0)) return null;
+  const tey = swapMath.municipalTeYield(ytwPct, { cofPct, taxRatePct, bqFactor });
+  if (tey == null) return null;
+  const naive = ytwPct / (1 - taxRatePct / 100);
+  return { tey: round(tey, 2), naiveTey: round(naive, 2), tefraBp: round((naive - tey) * 100, 0) };
+}
+
+/**
+ * "Yields like a lower grade": the WEAKEST MMD grade whose scale yield at this
+ * tenor is at or below the bond's YTW (i.e. the bond pays at least what that
+ * grade pays). notchesCheap = how many grades weaker that implied grade is than
+ * the bond's actual rating. Returns { impliedGrade, notchesCheap } or null. Pure.
+ */
+function impliedMmdGrade(mmdCurve, years, ytw, actualBucket) {
+  if (!mmdCurve || years == null || ytw == null) return null;
+  let implied = null, impliedIdx = -1;
+  for (let i = 0; i < MMD_GRADE_ORDER.length; i++) {
+    const g = MMD_GRADE_ORDER[i];
+    const y = interpolateMmd(mmdCurve, g.key, years);
+    if (y != null && ytw >= y) { implied = g.label; impliedIdx = i; }
+  }
+  if (implied == null) return null;
+  const actualIdx = MMD_GRADE_ORDER.findIndex(g => g.label.toUpperCase() === String(actualBucket || '').toUpperCase());
+  const notchesCheap = actualIdx >= 0 ? impliedIdx - actualIdx : null;
+  return { impliedGrade: implied, notchesCheap };
+}
+
+/** Interpolate the MMD AAA muni/UST ratio benchmark (treasuryRatios) at `years`. */
+function interpolateTreasuryRatio(mmdCurve, years) {
+  const rows = mmdCurve && Array.isArray(mmdCurve.treasuryRatios) ? mmdCurve.treasuryRatios : null;
+  if (!rows || !rows.length || years == null) return null;
+  const pts = rows.map(r => ({ yrs: num(r.term), v: num(r.ratioPct) })).filter(p => p.yrs != null && p.v != null).sort((a, b) => a.yrs - b.yrs);
+  if (!pts.length) return null;
+  if (years <= pts[0].yrs) return pts[0].v;
+  if (years >= pts[pts.length - 1].yrs) return pts[pts.length - 1].v;
+  for (let i = 1; i < pts.length; i++) {
+    if (years <= pts[i].yrs) {
+      const lo = pts[i - 1], hi = pts[i];
+      if (hi.yrs === lo.yrs) return hi.v; // guard duplicate tenors (no /0)
+      return lo.v + ((years - lo.yrs) / (hi.yrs - lo.yrs)) * (hi.v - lo.v);
+    }
+  }
+  return pts[pts.length - 1].v;
+}
+
+/**
+ * De-minimis test (06-11 math audit): threshold = 100 − 0.25·yearsToMaturity;
+ * a discount price AT or below the threshold accretes as ORDINARY income, not a
+ * capital gain. Returns { threshold, breach } or null. Pure.
+ */
+function deMinimis(price, statedYears) {
+  if (price == null || statedYears == null || price >= 100) return null;
+  const threshold = 100 - 0.25 * statedYears;
+  return { threshold: round(threshold, 2), breach: price <= threshold };
 }
 
 // ---------- workout tenor & term ----------
@@ -359,7 +452,7 @@ function caveatsFor(c, w, rv) {
  * Returns the `rv` object (see module header). Pure.
  */
 function rvForCandidate(c, ctx) {
-  const { curve, fdicMap, mmdCurve, asOf } = ctx;
+  const { curve, fdicMap, mmdCurve, asOf, cof } = ctx;
   const ytw = num(c.ytw);
   const w = workoutTenor(c, asOf);
   const bucket = bucketForYears(w.effYears);
@@ -391,21 +484,45 @@ function rvForCandidate(c, ctx) {
     peerSpreadBps: null,
     peerN: null,
     audSpreadBps: {},
+    // Muni tax/grade depth.
+    netTey: {},            // BQ/TEFRA-correct TEY per bank audience
+    tefraBp: {},           // the TEFRA haircut vs the naive YTW/(1−t)
+    bqAdvantageBp: null,   // how much BQ status is worth vs non-BQ (C-corp basis)
+    impliedGrade: null,    // "yields like a <impliedGrade>"
+    notchesCheap: null,    // grades weaker than its actual rating
+    aaaRatioPct: null,     // the AAA MMD muni/UST benchmark ratio at this tenor
+    ratioCheap: false,     // muni/UST ratio ≥ AAA benchmark + 8
+    deMinimis: null,       // { threshold, breach } for a discount muni
   };
 
-  // Muni: yield ratio to Treasury + spread to the MMD scale matching its grade.
+  // Muni: ratio to Treasury (+ vs AAA benchmark), spread to the grade-matched MMD
+  // scale, "yields like a lower grade" notch, and the de-minimis tax test.
   if (isMuniClass(c) && ytw != null) {
-    if (benchmarkYield != null && benchmarkYield > 0) rv.ratioPct = round((ytw / benchmarkYield) * 100, 0);
+    if (benchmarkYield != null && benchmarkYield > 0) {
+      rv.ratioPct = round((ytw / benchmarkYield) * 100, 0);
+      const aaaRatio = interpolateTreasuryRatio(mmdCurve, w.effYears);
+      if (aaaRatio != null) { rv.aaaRatioPct = round(aaaRatio, 0); rv.ratioCheap = rv.ratioPct >= aaaRatio + 8; }
+    }
     if (mmdCurve) {
-      const bucket = ratingBucket(c);
-      const gradeKey = MMD_GRADE_BY_BUCKET[bucket] || 'aaa';
+      const gradeKey = MMD_GRADE_BY_BUCKET[rv.ratingBucket] || 'aaa';
       const mmdY = interpolateMmd(mmdCurve, gradeKey, w.effYears);
       if (mmdY != null) {
         rv.mmdYield = round(mmdY, 2);
         rv.mmdSpreadBps = round((ytw - mmdY) * 100, 0); // + = cheap to its MMD grade
         rv.mmdGrade = MMD_GRADE_LABEL[gradeKey] || 'AAA';
-        rv.mmdAssumedGrade = (bucket === 'NR'); // no carried rating → compared to AAA
+        rv.mmdAssumedGrade = (rv.ratingBucket === 'NR'); // no carried rating → compared to AAA
       }
+      const grade = impliedMmdGrade(mmdCurve, w.effYears, ytw, rv.ratingBucket);
+      if (grade) { rv.impliedGrade = grade.impliedGrade; rv.notchesCheap = grade.notchesCheap; }
+    }
+    const dm = deMinimis(num(c.price), w.statedYears);
+    if (dm) rv.deMinimis = dm;
+    // What BQ status is worth: the net-TEY pickup of BQ vs non-BQ on a C-corp book.
+    if (c.exemptMuni && c.bq) {
+      const ccRate = (c.econ && c.econ.ccorp && c.econ.ccorp.taxRatePct) || 21;
+      const bqT = bqCorrectTey(ytw, ccRate, bqFactorFor('ccorp', true), cof);
+      const nbqT = bqCorrectTey(ytw, ccRate, bqFactorFor('ccorp', false), cof);
+      if (bqT && nbqT) rv.bqAdvantageBp = round((bqT.tey - nbqT.tey) * 100, 0);
     }
   }
 
@@ -421,11 +538,17 @@ function rvForCandidate(c, ctx) {
     if (ustSpreadBps != null && months) rv.spreadPerMonthBps = round(ustSpreadBps / months, 2);
   }
 
-  // Per-audience tax-aware spread to Treasury (the lens re-ranking key).
+  // Per-audience tax-aware spread to Treasury (the lens re-ranking key). For an
+  // exempt muni bought by a bank we rank on the BQ/TEFRA-CORRECT net TEY, not the
+  // naive YTW/(1−t) headline — so BQ paper screens ahead of non-BQ as it should.
   for (const k of AUDIENCE_KEYS) {
     if (!(c.audiences || []).includes(k)) continue;
     const econ = c.econ && c.econ[k];
-    const eff = econ && econ.effYield != null ? econ.effYield : ytw;
+    let eff = econ && econ.effYield != null ? econ.effYield : ytw;
+    if (isMuniClass(c) && c.exemptMuni && (k === 'ccorp' || k === 'scorp') && econ && econ.taxRatePct > 0) {
+      const corr = bqCorrectTey(ytw, econ.taxRatePct, bqFactorFor(k, c.bq), cof);
+      if (corr) { rv.netTey[k] = corr.tey; rv.tefraBp[k] = corr.tefraBp; eff = corr.tey; }
+    }
     if (eff != null && benchmarkYield != null) rv.audSpreadBps[k] = round((eff - benchmarkYield) * 100, 0);
   }
 
@@ -513,6 +636,99 @@ function applyTrends(enriched, priorMap) {
   }
 }
 
+// ---------- cross-day movers (archive-fed) ----------
+
+function cusipKey(v) { return String(v || '').replace(/[^0-9a-z]/gi, '').toUpperCase(); }
+
+/**
+ * Archive-fed cross-day movers. Measures each matched CUSIP's yield change vs the
+ * PRIOR package RELATIVE to the package-average change (the "excess move"), so it
+ * isolates names that actually cheapened/richened and strips the parallel curve
+ * shift — no second curve source needed (the catalog's "actual trends" ask).
+ * Mutates rv.moverBp / rv.trend in place; returns the rollup sections. Pure-ish
+ * (mutates the passed enriched candidates, like applyTrends).
+ */
+function computeMovers(enriched, priorRows, meta) {
+  const m = meta || {};
+  const prior = new Map();
+  for (const r of (Array.isArray(priorRows) ? priorRows : [])) {
+    const cu = cusipKey(r.cusip);
+    const y = num(r.yield != null ? r.yield : r.ytw);
+    if (cu && y != null) prior.set(cu, { ytw: y, price: num(r.price), desc: r.description, type: r.type || r.assetClass, state: r.state });
+  }
+  // Normalize the enriched side on every lookup too — candidates are normalized
+  // by toCandidate today, but the join must not depend on the caller pre-cleaning.
+  const matched = [];
+  const deltas = [];
+  for (const c of enriched) {
+    const p = prior.get(cusipKey(c.cusip));
+    const cy = num(c.ytw);
+    if (!p || cy == null) continue;
+    const dY = cy - p.ytw;
+    deltas.push(dY);
+    matched.push({ c, dY });
+  }
+  const meanD = deltas.length ? deltas.reduce((a, b) => a + b, 0) / deltas.length : 0;
+  for (const { c, dY } of matched) c.rv.moverBp = round((dY - meanD) * 100, 0); // + = cheapened vs the curve
+
+  const todayCusips = new Set(enriched.map(c => cusipKey(c.cusip)));
+  const newToday = enriched.filter(c => !prior.has(cusipKey(c.cusip)));
+  const rolledOff = [];
+  for (const [cu, p] of prior) if (!todayCusips.has(cu)) rolledOff.push({ cusip: cu, description: p.desc, type: p.type, ytw: p.ytw });
+
+  for (const c of enriched) {
+    if (!prior.has(cusipKey(c.cusip))) c.rv.trend = 'new';
+    else if (c.rv.moverBp != null && c.rv.moverBp >= MOVER_BPS) c.rv.trend = 'wider';
+    else if (c.rv.moverBp != null && c.rv.moverBp <= -MOVER_BPS) c.rv.trend = 'richer';
+    else c.rv.trend = 'repeat';
+  }
+  const moved = matched.map(x => x.c).filter(c => c.rv.moverBp != null);
+  const cheapened = moved.filter(c => c.rv.moverBp >= MOVER_BPS).sort((a, b) => b.rv.moverBp - a.rv.moverBp);
+  const richened = moved.filter(c => c.rv.moverBp <= -MOVER_BPS).sort((a, b) => a.rv.moverBp - b.rv.moverBp);
+
+  // Supply concentration among new-today (state for munis, asset class otherwise).
+  const buckets = new Map();
+  for (const c of newToday) {
+    const k = isMuniClass(c) ? (c.state || '—') : (c.assetClass || 'Other');
+    buckets.set(k, (buckets.get(k) || 0) + 1);
+  }
+  const supply = [];
+  for (const [k, n] of buckets) if (newToday.length >= 4 && n / newToday.length >= 0.30) supply.push({ bucket: k, count: n, pct: Math.round((n / newToday.length) * 100) });
+  supply.sort((a, b) => b.count - a.count);
+
+  return {
+    priorDate: m.priorDate || null,
+    daysAgo: m.daysAgo != null ? m.daysAgo : null,
+    matched: matched.length,
+    curveMoveBp: round(meanD * 100, 0),
+    cheapened, richened, newToday, rolledOff, supply,
+  };
+}
+
+/** A muni's mover chip text. */
+function moverChipText(rv) {
+  if (!rv || rv.moverBp == null) return null;
+  if (rv.moverBp >= MOVER_BPS) return `cheapened ${rv.moverBp}bp`;
+  if (rv.moverBp <= -MOVER_BPS) return `richened ${Math.abs(rv.moverBp)}bp`;
+  return null;
+}
+
+/** Up to 3 glanceable outlier chips per row — the score's strongest signals. */
+function chipsFor(c, rv) {
+  const chips = [];
+  if (isCdClass(c) && rv.fdicSpreadBps != null) chips.push(`${rv.fdicSpreadBps >= 0 ? '+' : ''}${rv.fdicSpreadBps}bp FDIC`);
+  else if (isMuniClass(c) && rv.mmdSpreadBps != null) chips.push(`${rv.mmdSpreadBps >= 0 ? '+' : ''}${rv.mmdSpreadBps}bp ${rv.mmdGrade} MMD`);
+  else if (rv.ustSpreadBps != null) chips.push(`${rv.ustSpreadBps >= 0 ? '+' : ''}${rv.ustSpreadBps}bp UST`);
+  if (isMuniClass(c) && rv.notchesCheap >= 1 && rv.impliedGrade) chips.push(`yields like ${rv.impliedGrade}`);
+  else if (isMuniClass(c) && rv.ratioCheap && rv.ratioPct != null) chips.push(`cheap ${rv.ratioPct}% ratio`);
+  else if (rv.peerSpreadBps != null && rv.peerSpreadBps >= 10) chips.push(`+${rv.peerSpreadBps}bp vs peers`);
+  const mv = moverChipText(rv);
+  if (mv) chips.push(mv);
+  if (chips.length < 3 && isMuniClass(c) && rv.bqAdvantageBp > 0) chips.push(`BQ +${rv.bqAdvantageBp}bp`);
+  if (chips.length < 3 && isMuniClass(c) && rv.deMinimis && rv.deMinimis.breach) chips.push('de-minimis: ord. inc.');
+  return chips.slice(0, 3);
+}
+
 // ---------- top-level assembly ----------
 
 function take(arr, n) { return arr.slice(0, n); }
@@ -544,11 +760,13 @@ function buildRelativeValue(opts) {
   const mmdCurve = (o.mmd && Array.isArray(o.mmd.curve) && o.mmd.curve.length) ? o.mmd : null;
   const asOf = o.asOf || null;
   const priorMap = o.priorMap || null;
+  const priorRows = Array.isArray(o.priorRows) && o.priorRows.length ? o.priorRows : null;
+  const cof = num(o.cof) != null ? num(o.cof) : DEFAULT_COF_PCT;
   const leadersN = num(o.leadersN) || 12;
   const perBoardN = num(o.perBoardN) || 8;
 
   const tenors = curve ? (curve.tenors || curve) : null;
-  const ctx = { curve: tenors ? { tenors } : null, fdicMap, mmdCurve, asOf };
+  const ctx = { curve: tenors ? { tenors } : null, fdicMap, mmdCurve, asOf, cof };
 
   // Pass 1 — per-candidate RV + workout, collected for peer grouping.
   const enriched = candidateSet.candidates.map(c => {
@@ -586,8 +804,14 @@ function buildRelativeValue(opts) {
     c.rv.buyerTypes = buyerTypesFor(c);
   }
 
-  // Pass 4 — trends vs the prior package.
-  applyTrends(enriched, priorMap);
+  // Pass 4 — cross-day movers. Prefer the archive-fed diff (real "actual trends",
+  // works the first time the page loads); fall back to the cached snapshot.
+  let movers = null;
+  if (priorRows) movers = computeMovers(enriched, priorRows, o.priorMeta || {});
+  else applyTrends(enriched, priorMap);
+
+  // Pass 5 — outlier chips (need the mover read).
+  for (const c of enriched) c.rv.chips = chipsFor(c, c.rv);
 
   const byCusip = new Map(enriched.map(c => [c.cusip, c]));
   const byRvDesc = (a, b) => (b.rv.rvBps == null ? -Infinity : b.rv.rvBps) - (a.rv.rvBps == null ? -Infinity : a.rv.rvBps);
@@ -630,7 +854,23 @@ function buildRelativeValue(opts) {
     byAudience[k] = pool.map(c => c.cusip);
   }
 
-  // Trend rollups.
+  // Today's Standouts — top by score across ALL classes, issuer-deduped, with a
+  // minimum-score gate so a flat day honestly shows fewer rather than manufacturing
+  // standouts. leaders is rvBps-desc and score is the rvBps percentile, so this
+  // walks from the cheapest down.
+  const standouts = [];
+  const seenIssuer = new Set();
+  for (const c of leaders) {
+    if (c.rv.score == null || c.rv.score < STANDOUT_SCORE) break;
+    const issuer = String(c.description || c.cusip).slice(0, 20).toLowerCase();
+    if (seenIssuer.has(issuer)) continue;
+    seenIssuer.add(issuer);
+    standouts.push(c);
+    if (standouts.length >= 5) break;
+  }
+
+  // Trend rollups (snapshot mode). The archive-fed `movers` section below is
+  // richer and preferred by the UI when present.
   const trends = { new: [], wider: [], improved: [], repeated: [] };
   for (const c of enriched) {
     const t = c.rv.trend;
@@ -648,17 +888,30 @@ function buildRelativeValue(opts) {
       fdicCd: Object.keys(fdicMap).length > 0,
       fdicTerms: fdicMap,
       priorSnapshot: !!(priorMap && Object.keys(priorMap || {}).length),
+      priorPackage: movers ? { date: movers.priorDate, daysAgo: movers.daysAgo, matched: movers.matched, curveMoveBp: movers.curveMoveBp } : null,
       mmd: !!mmdCurve, // the desk's daily MMD scale (the `mmd` package slot), by grade
       mmdAsOf: mmdCurve && mmdCurve.asOfDate ? mmdCurve.asOfDate : null,
     },
     candidates: enriched,
     byAudience,
+    standouts: take(standouts, 5),
     leaders: take(leaders, leadersN),
     cheapToTreasury: take(cheapToTreasury, perBoardN),
     cdBoard: take(cdBoard, perBoardN),
     muniValue: take(muniValue, perBoardN),
     byBucket,
     trends,
+    movers: movers ? {
+      priorDate: movers.priorDate,
+      daysAgo: movers.daysAgo,
+      curveMoveBp: movers.curveMoveBp,
+      matched: movers.matched,
+      cheapened: take(movers.cheapened, perBoardN),
+      richened: take(movers.richened, perBoardN),
+      newToday: take(movers.newToday, perBoardN),
+      rolledOff: take(movers.rolledOff, perBoardN),
+      supply: movers.supply,
+    } : null,
     snapshot: trendSnapshot(enriched),
     byCusip,
   };
@@ -673,6 +926,11 @@ module.exports = {
   fdicCdRateMap,
   fdicCdRateForTerm,
   interpolateMmd,
+  interpolateTreasuryRatio,
+  bqFactorFor,
+  bqCorrectTey,
+  impliedMmdGrade,
+  deMinimis,
   ratingNotch,
   ratingBucket,
   ratingLabel,
@@ -681,6 +939,8 @@ module.exports = {
   structurePenaltyBps,
   buyerTypesFor,
   caveatsFor,
+  chipsFor,
+  computeMovers,
   rvForCandidate,
   compositeRvBps,
   trendSnapshot,

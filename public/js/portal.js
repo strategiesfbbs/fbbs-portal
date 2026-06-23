@@ -1679,8 +1679,20 @@
     let cusipToken = 0;
     let globalDebounce = null;
     let globalToken = 0;
+    let searchRenderId = 0;
+    let pendingDataSearches = 0;
 
     const optionEls = () => Array.from(results.querySelectorAll('.jump-result'));
+    const finishDataSearch = (renderId) => {
+      if (renderId !== searchRenderId) return;
+      pendingDataSearches = Math.max(0, pendingDataSearches - 1);
+      if (pendingDataSearches > 0) return;
+      const hasResults = !!results.querySelector('.jump-result');
+      const emptyEl = results.querySelector('.jump-empty');
+      if (!hasResults && emptyEl) {
+        emptyEl.textContent = 'No matching pages, banks, contacts, or securities found';
+      }
+    };
 
     // One activation path for every result kind (page, security, bank, contact,
     // saved view, peer group, report) — used by both click and Enter.
@@ -1704,17 +1716,18 @@
     // Live omnisearch over the data domains (banks, contacts, saved views,
     // peer groups, reports) — appended below the page matches as grouped
     // sections. Best-effort and isolated like the CUSIP append.
-    const maybeAppendGlobalResults = (rawQuery) => {
+    const maybeAppendGlobalResults = (rawQuery, renderId) => {
       if (globalDebounce) clearTimeout(globalDebounce);
       const q = String(rawQuery || '').trim();
       if (q.length < 2) return;
+      pendingDataSearches += 1;
       const token = ++globalToken;
       globalDebounce = setTimeout(async () => {
         try {
           const res = await fetch('/api/search/global?q=' + encodeURIComponent(q), { cache: 'no-store' });
-          if (!res.ok) return;
+          if (!res.ok) return finishDataSearch(renderId);
           const data = await res.json();
-          if (token !== globalToken || !results.classList.contains('show')) return;
+          if (token !== globalToken || renderId !== searchRenderId || !results.classList.contains('show')) return;
           const row = (kind, jid, badge, title, sub) => `
             <button type="button" class="jump-result" data-jump-kind="${kind}" data-jump-id="${escapeHtml(jid)}">
               <span>${escapeHtml(badge)}</span>
@@ -1733,12 +1746,13 @@
             row('peer', g.id, 'Peer Group', g.name, g.description)).join(''));
           html += section('Reports', (data.reports || []).map(r =>
             row('report', r.id, 'Report', r.name, r.type)).join(''));
-          if (!html) return;
+          if (!html) return finishDataSearch(renderId);
           const emptyEl = results.querySelector('.jump-empty');
           if (emptyEl) emptyEl.remove();
           results.insertAdjacentHTML('beforeend', html);
           if (activeIndex === -1) setActive(0);
-        } catch (_) { /* data hits are best-effort */ }
+          finishDataSearch(renderId);
+        } catch (_) { finishDataSearch(renderId); }
       }, 180);
     };
 
@@ -1748,18 +1762,19 @@
     // matches. Clicking a hit deep-links to that explorer with the search
     // filter pre-seeded (same data-cusip plumbing the Daily Intelligence
     // picks use).
-    const maybeAppendCusipResults = (rawQuery) => {
+    const maybeAppendCusipResults = (rawQuery, renderId) => {
       if (cusipDebounce) clearTimeout(cusipDebounce);
       const compact = rawQuery.replace(/[^0-9a-z]/gi, '');
       if (compact.length < 4 || !/\d/.test(compact)) return;
+      pendingDataSearches += 1;
       const token = ++cusipToken;
       cusipDebounce = setTimeout(async () => {
         try {
           const res = await fetch('/api/search/cusip?q=' + encodeURIComponent(compact), { cache: 'no-store' });
-          if (!res.ok) return;
+          if (!res.ok) return finishDataSearch(renderId);
           const data = await res.json();
-          if (token !== cusipToken || !results.classList.contains('show')) return;
-          if (!data.results || !data.results.length) return;
+          if (token !== cusipToken || renderId !== searchRenderId || !results.classList.contains('show')) return;
+          if (!data.results || !data.results.length) return finishDataSearch(renderId);
           const emptyEl = results.querySelector('.jump-empty');
           if (emptyEl) emptyEl.remove();
           results.insertAdjacentHTML('beforeend', data.results.map(hit => `
@@ -1770,7 +1785,8 @@
             </button>
           `).join(''));
           if (activeIndex === -1) setActive(0);
-        } catch (_) { /* security hits are best-effort */ }
+          finishDataSearch(renderId);
+        } catch (_) { finishDataSearch(renderId); }
       }, 180);
     };
 
@@ -1783,6 +1799,8 @@
     };
 
     const render = () => {
+      const renderId = ++searchRenderId;
+      pendingDataSearches = 0;
       const query = input.value.trim().toLowerCase();
       if (!query) {
         results.classList.remove('show');
@@ -1803,12 +1821,16 @@
           <strong>${escapeHtml(item.label)}</strong>
           <em>${escapeHtml(item.description)}</em>
         </button>
-      `).join('') : '<div class="jump-empty">No matching pages found</div>';
+      `).join('') : '<div class="jump-empty">Searching pages, banks, contacts, and securities...</div>';
       // Highlight the first match so Enter has an obvious target.
       activeIndex = -1;
       if (matches.length) setActive(0);
-      maybeAppendCusipResults(input.value.trim());
-      maybeAppendGlobalResults(input.value.trim());
+      maybeAppendCusipResults(input.value.trim(), renderId);
+      maybeAppendGlobalResults(input.value.trim(), renderId);
+      if (!pendingDataSearches && !matches.length) {
+        const emptyEl = results.querySelector('.jump-empty');
+        if (emptyEl) emptyEl.textContent = 'No matching pages found';
+      }
     };
 
     results.addEventListener('click', e => {
@@ -5329,6 +5351,7 @@
 
   function openBankStrategyRequest(bankId) {
     if (!bankId) return;
+    bankTearSheetTab = 'sales';
     goTo('banks');
     loadBank(bankId, { collapseResults: true, openStrategyRequest: true });
   }
@@ -14395,9 +14418,11 @@
   }
 
   function openBankStrategyRequestPanel() {
+    setBankTearSheetTab('sales');
     const panel = document.getElementById('bankStrategyRequestPanel');
     if (!panel) return;
     panel.hidden = false;
+    panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
     focusBankStrategyRequestSummary();
   }
 
@@ -17087,6 +17112,11 @@
   // (per-audience map). The tax-rate LENS recomputes server-side (free GET), so
   // econ already reflects the chosen rate; no client-side gross-up is needed.
   function sdEff(p, audKey) {
+    // Exempt munis bought by a bank: show the BQ/TEFRA-correct net TEY (the figure
+    // the desk actually ranks on), not the naive YTW/(1−t).
+    if (audKey && p.exemptMuni && p.rv && p.rv.netTey && p.rv.netTey[audKey] != null) {
+      return { val: p.rv.netTey[audKey], basis: 'net TEY (TEFRA-adj)' };
+    }
     const econ = (p.eff && p.eff.effYield != null) ? p.eff
       : (p.eff && audKey && p.eff[audKey]) ? p.eff[audKey]
         : (p.econ && audKey && p.econ[audKey]) ? p.econ[audKey]
@@ -17094,6 +17124,52 @@
     const ytw = (p.ytw != null) ? Number(p.ytw) : null;
     if (econ && econ.effYield != null) return { val: econ.effYield, basis: econ.basis || 'eff' };
     return { val: ytw, basis: 'YTW' };
+  }
+
+  // Up to three glanceable outlier chips (the score's strongest signals).
+  function sdChips(rv) {
+    if (!rv || !Array.isArray(rv.chips) || !rv.chips.length) return '';
+    return '<span class="sd-chips">' + rv.chips.map(c => `<span class="sd-chip">${escapeHtml(c)}</span>`).join('') + '</span>';
+  }
+
+  // Today's Standouts hero — top by RV score across all classes, issuer-deduped.
+  function sdStandouts(list) {
+    if (!list || !list.length) return '';
+    const cards = list.map(p => `
+      <div class="sd-standout">
+        <div class="sd-standout-top">
+          <span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span>
+          ${sdScoreBadge(p.rv)} ${sdTrendChip(p.rv)}
+        </div>
+        <div class="sd-standout-name">${escapeHtml(p.description || p.cusip || '')}</div>
+        <div class="sd-standout-bench">${escapeHtml(p.benchmark || '')}</div>
+        ${p.rationale ? `<div class="sd-standout-why">${escapeHtml(p.rationale)}</div>` : ''}
+        <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
+      </div>`).join('');
+    return `<div class="sd-standouts">${cards}</div>`;
+  }
+
+  // "What changed" — archive-fed cross-day movers (cheapened / richened / new /
+  // rolled-off + supply concentration), measured as the excess move vs the curve.
+  function sdMovers(m) {
+    if (!m) return '';
+    const win = m.priorDate ? `vs ${escapeHtml(m.priorDate)}${m.daysAgo != null ? ` (${m.daysAgo}d ago)` : ''}` : '';
+    const curve = m.curveMoveBp != null ? ` · whole-curve move ${m.curveMoveBp > 0 ? '+' : ''}${m.curveMoveBp}bp (stripped out below)` : '';
+    const itemList = (rows, kind) => (rows && rows.length) ? rows.map(p => `
+      <span class="sd-mover-item">
+        <span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span>
+        <button type="button" class="sd-link" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>${escapeHtml(p.description || p.cusip || '')}</button>
+        ${p.rv && p.rv.moverBp != null ? `<span class="sd-mover-bp sd-mover-${kind}">${p.rv.moverBp > 0 ? '+' : ''}${p.rv.moverBp}bp</span>` : ''}
+      </span>`).join('') : '<span class="daily-summary-empty">—</span>';
+    const group = (label, cls, rows, kind) => `<div class="sd-mover-group"><div class="sd-mover-label ${cls}">${escapeHtml(label)} <span class="sd-bucket-count">${(rows || []).length}</span></div><div class="sd-mover-items">${itemList(rows, kind)}</div></div>`;
+    const rolled = (m.rolledOff && m.rolledOff.length) ? m.rolledOff.map(r => `<span class="sd-mover-item sd-rolled">${escapeHtml(r.description || r.cusip || '')}</span>`).join('') : '<span class="daily-summary-empty">—</span>';
+    const supply = (m.supply && m.supply.length) ? `<p class="sd-supply">Supply concentration: ${m.supply.map(s => `<strong>${escapeHtml(String(s.bucket))}</strong> ${s.pct}% of new (${s.count})`).join(' · ')}</p>` : '';
+    return `<p class="sd-section-sub sd-mover-window">${win}${curve}</p>${supply}<div class="sd-movers">`
+      + group('Cheapened', 'sd-trend-wider', m.cheapened, 'wider')
+      + group('Richened', 'sd-trend-richer', m.richened, 'richer')
+      + group('New today', 'sd-trend-new', m.newToday, 'new')
+      + `<div class="sd-mover-group"><div class="sd-mover-label">Rolled off <span class="sd-bucket-count">${(m.rolledOff || []).length}</span></div><div class="sd-mover-items">${rolled}</div></div>`
+      + '</div>';
   }
 
   // Risk-adjusted relative-value percentile (0–100) badge.
@@ -17128,7 +17204,7 @@
       const tey = (p.exemptMuni && p.rv && p.rv.audSpreadBps && p.rv.audSpreadBps.ccorp != null)
         ? ` <span class="sd-teylbl" title="C-Corp taxable-equivalent yield">TEY ${sdNum(sdEff(p, 'ccorp').val)}</span>` : '';
       return `<tr>
-        <td><span class="ao-class-pill ao-class-${cls}">${escapeHtml(p.assetClass || '')}</span> <span class="sd-secname">${escapeHtml(p.description || p.cusip || '')}</span>${p.state ? ` <span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}${p.rv && p.rv.ratingLabel && p.rv.ratingLabel !== 'NR' ? ` <span class="sd-rating">${escapeHtml(p.rv.ratingLabel)}</span>` : ''} ${sdTrendChip(p.rv)}</td>
+        <td><span class="ao-class-pill ao-class-${cls}">${escapeHtml(p.assetClass || '')}</span> <span class="sd-secname">${escapeHtml(p.description || p.cusip || '')}</span>${p.state ? ` <span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}${p.rv && p.rv.ratingLabel && p.rv.ratingLabel !== 'NR' ? ` <span class="sd-rating">${escapeHtml(p.rv.ratingLabel)}</span>` : ''} ${sdTrendChip(p.rv)}<div class="sd-row-chips">${sdChips(p.rv)}</div></td>
         <td class="sd-matcell">${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'} <span class="sd-bucket">${escapeHtml((p.rv && p.rv.bucketLabel) || '')}</span></td>
         <td class="sd-num"><strong>${sdNum(p.ytw)}</strong>%${tey}</td>
         <td class="sd-bench">${escapeHtml(p.benchmark || '—')}</td>
@@ -17161,8 +17237,10 @@
           </div>
           <div class="sd-pick-headline">${escapeHtml(p.headline || p.description || '')}</div>
           ${p.rationale ? `<div class="sd-pick-rationale">${escapeHtml(p.rationale)}</div>` : ''}
+          ${sdChips(p.rv)}
           <dl class="sd-facts">
             ${p.benchmark ? `<div><dt>Benchmark</dt><dd>${escapeHtml(p.benchmark)}</dd></div>` : ''}
+            ${(p.exemptMuni && p.rv && p.rv.netTey && p.rv.netTey[audKey] != null) ? `<div><dt>Net TEY</dt><dd>${sdNum(p.rv.netTey[audKey])}% after the TEFRA carry cost${p.rv.tefraBp && p.rv.tefraBp[audKey] != null ? ` (−${p.rv.tefraBp[audKey]}bp)` : ''}${p.bq && p.rv.bqAdvantageBp > 0 ? ` · BQ worth +${p.rv.bqAdvantageBp}bp vs non-BQ` : ''}</dd></div>` : ''}
             ${p.caveat ? `<div><dt>Watch</dt><dd>${escapeHtml(p.caveat)}</dd></div>` : ''}
             ${p.buyer ? `<div><dt>Buyer</dt><dd>${escapeHtml(p.buyer)}</dd></div>` : ''}
             ${p.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(p.talkingPoint)}</dd></div>` : ''}
@@ -17273,6 +17351,11 @@
 
     const sections = [];
 
+    // 0 — Today's Standouts hero (read first; top RV across all classes).
+    if (rv && rv.standouts && rv.standouts.length) {
+      sections.push(sdSection('Today\'s Standouts', 'The cheapest risk-adjusted names across every asset class — read these first', sdStandouts(rv.standouts)));
+    }
+
     // 1 — Relative Value Leaders (the headline; cheapest risk-adjusted, all classes).
     if (rv && rv.leaders) {
       sections.push(sdSection('Relative Value Leaders', 'Cheapest risk-adjusted on today\'s run — ranked by spread to benchmark, not raw yield', sdBoardTable(rv.leaders, 'leaders')));
@@ -17335,9 +17418,10 @@
       </div>` : '';
     if (botdHtml || sodHtml) sections.push(`<div class="sd-feature">${botdHtml}${sodHtml}</div>`);
 
-    // 5 — What changed (trends).
-    if (rv && rv.trends) {
-      sections.push(sdSection('What changed vs the prior package', 'New, cheaper, better-entry and repeated-standout names', sdTrends(rv.trends)));
+    // 5 — What changed (archive-fed cross-day movers; snapshot trends fallback).
+    if (rv && (rv.movers || rv.trends)) {
+      const inner = rv.movers ? sdMovers(rv.movers) : sdTrends(rv.trends);
+      sections.push(sdSection('What changed vs the prior package', 'New, cheapened (after stripping the parallel curve move), richened, and rolled-off names', inner));
     }
 
     // 6 — Audience fit (re-ranked by the tax-aware spread each client earns).
@@ -20840,7 +20924,7 @@
     const act = d.activity || {}, eff = d.capitalEfficiency || {}, exc = d.exceptions || {};
     const cf = act.customerFlow || {};
 
-    const nameWarn = (d.warnings || []).find(w => /names not yet mapped/.test(w));
+    const nameWarn = (d.warnings || []).find(w => /codes are not mapped/.test(w));
     const banner = nameWarn ? `<div class="exec-banner">⚠ ${esc(nameWarn)}</div>` : '';
 
     const brief = d.ceoBrief || {};

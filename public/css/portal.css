@@ -15906,3 +15906,32 @@ body {
 .sd-botd .sd-talk { display: flex; gap: 6px; font-size: 12px; margin-top: 6px; }
 .sd-botd .sd-talk dt { flex: 0 0 auto; color: var(--text3); font-weight: 600; text-transform: uppercase; font-size: 10px; padding-top: 2px; }
 .sd-botd .sd-talk dd { margin: 0; color: var(--text); font-style: italic; }
+
+/* Outlier chips */
+.sd-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.sd-row-chips { margin-top: 3px; }
+.sd-pick-main > .sd-chips { margin: 4px 0; }
+.sd-chip { font-size: 10px; font-weight: 600; color: var(--hookers-green); background: var(--surface-3); border: 1px solid var(--border-light); border-radius: 7px; padding: 0 6px; white-space: nowrap; }
+
+/* Today's Standouts hero */
+.sd-standouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.sd-standout { background: var(--surface-2); border: 1px solid var(--border-light); border-top: 3px solid var(--racing-green); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.sd-standout-top { display: flex; align-items: center; gap: 6px; }
+.sd-standout-name { font-size: 13px; font-weight: 650; color: var(--text); line-height: 1.25; }
+.sd-standout-bench { font-size: 12px; color: var(--racing-green); font-weight: 600; }
+.sd-standout-why { font-size: 11.5px; color: var(--text2); line-height: 1.4; flex: 1 1 auto; }
+.sd-standout .small-btn { align-self: flex-start; margin-top: 2px; }
+
+/* What changed — movers */
+.sd-mover-window { margin: 0 0 8px; }
+.sd-supply { font-size: 12px; color: var(--text2); margin: 0 0 10px; }
+.sd-movers { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.sd-mover-group { min-width: 0; }
+.sd-mover-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px; }
+.sd-mover-items { display: flex; flex-direction: column; gap: 5px; }
+.sd-mover-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.sd-mover-item.sd-rolled { color: var(--text3); text-decoration: line-through; }
+.sd-mover-bp { font-size: 10px; font-weight: 700; border-radius: 7px; padding: 0 5px; }
+.sd-mover-bp.sd-mover-wider { background: rgba(24,115,90,0.14); color: var(--success); }
+.sd-mover-bp.sd-mover-richer { background: rgba(185,68,68,0.12); color: var(--danger); }
+.sd-mover-bp.sd-mover-new { background: rgba(37,99,235,0.12); color: #2563eb; }
