@@ -7791,7 +7791,7 @@ function cusipSearchSources() {
       type: 'muni', typeLabel: 'Muni', page: 'muni-explorer',
       rows: slot(MUNI_OFFERINGS_FILENAME, 'muni offerings').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity, fmtPct(r.ytw) && `${fmtPct(r.ytw)} YTW`]),
-      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni', availabilityK: numOf(r.quantity), callDate: r.callDate || null, moody: r.moodysRating || null, sp: r.spRating || null }),
+      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni', availabilityK: numOf(r.quantity), callDate: r.callDate || null, moody: r.moodysRating || null, sp: r.spRating || null, creditEnhancement: r.creditEnhancement || null }),
     },
     {
       type: 'agency', typeLabel: 'Agency', page: 'agencies',

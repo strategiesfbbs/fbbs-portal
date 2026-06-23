@@ -17241,6 +17241,7 @@
           <dl class="sd-facts">
             ${p.benchmark ? `<div><dt>Benchmark</dt><dd>${escapeHtml(p.benchmark)}</dd></div>` : ''}
             ${(p.exemptMuni && p.rv && p.rv.netTey && p.rv.netTey[audKey] != null) ? `<div><dt>Net TEY</dt><dd>${sdNum(p.rv.netTey[audKey])}% after the TEFRA carry cost${p.rv.tefraBp && p.rv.tefraBp[audKey] != null ? ` (−${p.rv.tefraBp[audKey]}bp)` : ''}${p.bq && p.rv.bqAdvantageBp > 0 ? ` · BQ worth +${p.rv.bqAdvantageBp}bp vs non-BQ` : ''}</dd></div>` : ''}
+            ${(p.rv && p.rv.enhanced) ? `<div><dt>Enhanced</dt><dd>${escapeHtml(p.rv.enhanced.label)} — ${p.rv.enhanced.spreadBps >= 0 ? '+' : ''}${p.rv.enhanced.spreadBps}bp vs the ${p.rv.enhanced.type === 'insured' ? 'insured' : 'AA'} MMD scale</dd></div>` : ''}
             ${p.caveat ? `<div><dt>Watch</dt><dd>${escapeHtml(p.caveat)}</dd></div>` : ''}
             ${p.buyer ? `<div><dt>Buyer</dt><dd>${escapeHtml(p.buyer)}</dd></div>` : ''}
             ${p.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(p.talkingPoint)}</dd></div>` : ''}
@@ -17307,6 +17308,30 @@
 
   function sdSection(title, sub, inner) {
     return `<section class="sd-section"><div class="sd-section-head"><h4>${escapeHtml(title)}</h4>${sub ? `<span class="sd-section-sub">${escapeHtml(sub)}</span>` : ''}</div>${inner}</section>`;
+  }
+
+  // Strategist backdrop strip — OAS regime + muni/credit KPIs that frame WHY
+  // today's standouts are cheap (or why they aren't broadly).
+  function sdStrategist(s) {
+    if (!s) return '';
+    const oasTile = (o, label) => o ? `<span class="sd-kpi"><span class="sd-kpi-label">${label} OAS</span><span class="sd-kpi-val">${o.bp}bp${o.pctile != null ? ` <span class="sd-oas-tag sd-oas-${escapeHtml(o.tag)}">${o.pctile}%ile ${escapeHtml(o.tag)}</span>` : ''}</span></span>` : '';
+    const tile = (label, val) => (val != null && val !== '') ? `<span class="sd-kpi"><span class="sd-kpi-label">${escapeHtml(label)}</span><span class="sd-kpi-val">${escapeHtml(String(val))}</span></span>` : '';
+    const k = s.kpi || {}, mmd = k.mmdAaa || {}, r = k.ratios || {};
+    const quad = obj => ['2y', '5y', '10y', '30y'].map(t => obj[t] == null ? '—' : obj[t]);
+    const parts = [];
+    if (s.oas) { parts.push(oasTile(s.oas.ig, 'IG')); parts.push(oasTile(s.oas.hy, 'HY')); }
+    if (mmd['2y'] != null || mmd['10y'] != null) parts.push(tile('MMD AAA 2/5/10/30', quad(mmd).map(v => v === '—' ? v : Number(v).toFixed(2)).join(' / ')));
+    if (r['2y'] != null || r['10y'] != null) parts.push(tile('Muni/UST 2/5/10/30', quad(r).map(v => v === '—' ? v : v + '%').join(' / ')));
+    if (k.twos10s) parts.push(tile('2s10s', k.twos10s.level + 'bp' + (k.twos10s.dayBp != null ? ` (${k.twos10s.dayBp > 0 ? '+' : ''}${k.twos10s.dayBp}bp)` : '')));
+    const tiles = parts.filter(Boolean);
+    if (!tiles.length) return '';
+    let read = '';
+    if (s.oas && s.oas.ig && s.oas.ig.pctile != null) {
+      read = s.oas.ig.tag === 'tight' ? 'IG spreads sit tight vs their range — the cohort isn\'t broadly cheap, so the outliers below are where the value is.'
+        : s.oas.ig.tag === 'wide' ? 'IG spreads are wide vs their range — credit is broadly cheap today.'
+          : 'IG spreads are mid-range vs recent history.';
+    }
+    return `<div class="sd-kpi-strip">${tiles.join('')}</div>${read ? `<p class="sd-kpi-read">${escapeHtml(read)}</p>` : ''}`;
   }
 
   function renderSalesDashboard(data) {
@@ -17428,7 +17453,8 @@
     sections.push(sdSection('Audience fit — ranked by relative value', 'Each client\'s picks ordered by the spread THAT buyer earns over Treasury after tax',
       `<div class="sd-matrix exec-three-col">${sdAudienceColumns(audiences, dash.picks, dash.connector)}</div>`));
 
-    body.innerHTML = banners.join('') + legend + sections.join('');
+    const strategistHtml = (rv && rv.strategist) ? sdStrategist(rv.strategist) : '';
+    body.innerHTML = banners.join('') + legend + strategistHtml + sections.join('');
 
     if (stat) stat.textContent = (rv && rv.leaders) ? rv.leaders.length : audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
     if (metaEl) {

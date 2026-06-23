@@ -339,6 +339,20 @@ function deMinimis(price, statedYears) {
   return { threshold: round(threshold, 2), breach: price <= threshold };
 }
 
+/**
+ * Classify a muni's credit enhancement so it can be benchmarked at its ENHANCED
+ * grade: bond insurers (BAM/AGM/Assured/AMBAC…) → the MMD `insured` scale;
+ * state-aid / intercept / PSF programs → an AA floor. Junk notes (e.g. an
+ * after-tax-yield annotation) return null. Pure.
+ */
+function classifyEnhancement(s) {
+  const u = String(s || '').toUpperCase().trim();
+  if (!u) return null;
+  if (/\b(BAM|AGM|AGC|ASSURED|AMBAC|BHAC|NPFG|MBIA|FGIC|FSA|BUILD\s*AMERICA)\b|^AG$|^AG\b/.test(u)) return { type: 'insured', label: u };
+  if (/ST\s*AID|STATE\s*AID|INTERCEPT|WITHHLD|WITHHOLD|DIR\s*DEP|\bPSF\b|Q-?SBLF|SCHOOL\s*BOND\s*GUAR/.test(u)) return { type: 'state-aid', label: u };
+  return null;
+}
+
 // ---------- workout tenor & term ----------
 
 /**
@@ -493,6 +507,7 @@ function rvForCandidate(c, ctx) {
     aaaRatioPct: null,     // the AAA MMD muni/UST benchmark ratio at this tenor
     ratioCheap: false,     // muni/UST ratio ≥ AAA benchmark + 8
     deMinimis: null,       // { threshold, breach } for a discount muni
+    enhanced: null,        // { type, label, scaleYield, spreadBps } vs the enhanced scale
   };
 
   // Muni: ratio to Treasury (+ vs AAA benchmark), spread to the grade-matched MMD
@@ -514,6 +529,12 @@ function rvForCandidate(c, ctx) {
       }
       const grade = impliedMmdGrade(mmdCurve, w.effYears, ytw, rv.ratingBucket);
       if (grade) { rv.impliedGrade = grade.impliedGrade; rv.notchesCheap = grade.notchesCheap; }
+      // Credit enhancement: re-benchmark insured/state-aid paper at its enhanced grade.
+      const enh = classifyEnhancement(c.creditEnhancement);
+      if (enh) {
+        const scaleY = enh.type === 'insured' ? interpolateMmd(mmdCurve, 'insured', w.effYears) : interpolateMmd(mmdCurve, 'aa', w.effYears);
+        if (scaleY != null) rv.enhanced = { type: enh.type, label: enh.label, scaleYield: round(scaleY, 2), spreadBps: round((ytw - scaleY) * 100, 0) };
+      }
     }
     const dm = deMinimis(num(c.price), w.statedYears);
     if (dm) rv.deMinimis = dm;
@@ -724,9 +745,67 @@ function chipsFor(c, rv) {
   else if (rv.peerSpreadBps != null && rv.peerSpreadBps >= 10) chips.push(`+${rv.peerSpreadBps}bp vs peers`);
   const mv = moverChipText(rv);
   if (mv) chips.push(mv);
+  if (chips.length < 3 && isMuniClass(c) && rv.enhanced) chips.push(`${rv.enhanced.type === 'insured' ? 'insured' : 'state-aid'} ${rv.enhanced.spreadBps >= 0 ? '+' : ''}${rv.enhanced.spreadBps}bp`);
   if (chips.length < 3 && isMuniClass(c) && rv.bqAdvantageBp > 0) chips.push(`BQ +${rv.bqAdvantageBp}bp`);
   if (chips.length < 3 && isMuniClass(c) && rv.deMinimis && rv.deMinimis.breach) chips.push('de-minimis: ord. inc.');
   return chips.slice(0, 3);
+}
+
+// ---------- strategist backdrop (OAS regime + muni/credit KPIs) ----------
+
+/** OAS regime read: latest spread (bp) + its percentile within ~90d history + tag. */
+function oasRead(series) {
+  if (!series) return null;
+  const v = num(series.value);
+  if (v == null) return null;
+  const hist = Array.isArray(series.history) ? series.history.map(h => num(h.v)).filter(x => x != null) : [];
+  let pctile = null;
+  if (hist.length >= 10) pctile = Math.round((hist.filter(x => x <= v).length / hist.length) * 100);
+  // FRED ICE BofA OAS series are quoted in percent; show as bp.
+  const bp = Math.round(v * 100);
+  let tag = 'neutral';
+  if (pctile != null) { if (pctile <= 33) tag = 'tight'; else if (pctile >= 67) tag = 'wide'; }
+  return { bp, pctile, tag };
+}
+
+/**
+ * The strategist backdrop that frames WHY today's standouts are cheap: the IG/HY
+ * OAS regime (rich/cheap vs its own range) and a muni/credit KPI row (MMD AAA at
+ * 2/5/10/30, muni/UST ratios, 2s10s level + daily move). Pure; null pieces when a
+ * source is absent.
+ */
+function buildStrategist(fred, curve, mmdCurve) {
+  const oas = (fred && (fred.igOas || fred.hyOas))
+    ? { ig: oasRead(fred.igOas), hy: oasRead(fred.hyOas) }
+    : null;
+
+  const mmdAaa = {};
+  const ratios = {};
+  if (mmdCurve) {
+    for (const [k, y] of [['2y', 2], ['5y', 5], ['10y', 10], ['30y', 30]]) {
+      const a = interpolateMmd(mmdCurve, 'aaa', y);
+      if (a != null) mmdAaa[k] = round(a, 2);
+      const r = interpolateTreasuryRatio(mmdCurve, y);
+      if (r != null) ratios[k] = round(r, 0);
+    }
+  }
+
+  let twos10s = null;
+  const tenors = curve ? (curve.tenors || curve) : null;
+  const changes = (curve && curve.changes) || null;
+  if (tenors) {
+    const t2 = num(tenors['2Y']), t10 = num(tenors['10Y']);
+    const level = (t2 != null && t10 != null) ? round((t10 - t2) * 100, 0) : null;
+    let dayBp = null;
+    if (changes) {
+      const c2 = num(changes['2Y']), c10 = num(changes['10Y']);
+      if (c2 != null && c10 != null) dayBp = round((c10 - c2) * 100, 0);
+    }
+    if (level != null) twos10s = { level, dayBp };
+  }
+
+  if (!oas && !Object.keys(mmdAaa).length && !twos10s) return null;
+  return { oas, kpi: { mmdAaa, ratios, twos10s } };
 }
 
 // ---------- top-level assembly ----------
@@ -880,8 +959,12 @@ function buildRelativeValue(opts) {
     if (c.rv.repeatStandout) trends.repeated.push(c.cusip);
   }
 
+  // Strategist backdrop — frames why today's standouts are cheap (OAS regime + KPIs).
+  const strategist = buildStrategist(o.fred || null, curve, mmdCurve);
+
   return {
     asOf,
+    strategist,
     benchmarks: {
       treasury: !!tenors,
       treasuryAsOf: curve && curve.asOfDate ? curve.asOfDate : null,
@@ -931,6 +1014,9 @@ module.exports = {
   bqCorrectTey,
   impliedMmdGrade,
   deMinimis,
+  classifyEnhancement,
+  oasRead,
+  buildStrategist,
   ratingNotch,
   ratingBucket,
   ratingLabel,

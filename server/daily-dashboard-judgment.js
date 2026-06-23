@@ -431,6 +431,7 @@ function benchmarkLine(rv, cls) {
     if (rv.spreadPerMonthBps != null) parts.push(`${rv.spreadPerMonthBps}bp/mo`);
   } else if (/muni/.test(c)) {
     if (rv.mmdSpreadBps != null) parts.push(`${fmtBps(rv.mmdSpreadBps)} vs ${rv.mmdGrade || 'AAA'} MMD${rv.mmdAssumedGrade ? '*' : ''}`);
+    if (rv.enhanced) parts.push(`${fmtBps(rv.enhanced.spreadBps)} vs ${rv.enhanced.type === 'insured' ? 'insured' : 'AA'} MMD`);
     if (rv.audSpreadBps && rv.audSpreadBps.ccorp != null) parts.push(`TEY ${fmtBps(rv.audSpreadBps.ccorp)} vs UST (C-corp)`);
     if (rv.ratioPct != null) parts.push(`${rv.ratioPct}% muni/UST`);
     if (rv.peerSpreadBps != null) parts.push(`${fmtBps(rv.peerSpreadBps)} vs ${rv.ratingBucket || ''} peers`);
@@ -798,6 +799,7 @@ function buildRvSections(rvAnalysis) {
   } : null;
   return {
     benchmarks: rvAnalysis.benchmarks,
+    strategist: rvAnalysis.strategist || null,
     standouts: attachSection(rvAnalysis.standouts),
     leaders: attachSection(rvAnalysis.leaders),
     cheapToTreasury: attachSection(rvAnalysis.cheapToTreasury),

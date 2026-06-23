@@ -20,15 +20,19 @@ const FRED = {
   ndr24m: { value: 1.50 }, ndr36m: { value: 1.45 }, ndr60m: { value: 1.40 },
 };
 
-// MMD AAA/AA/A/Baa scale (mmd-parser shape) for the muni cheap-to-MMD screen.
+// MMD AAA/AA/A/Baa(/insured) scale (mmd-parser shape) for the muni screens, plus
+// the AAA muni/UST ratio benchmarks (treasuryRatios) used by the strategist KPIs.
 const MMD = {
   asOfDate: '2026-06-18',
   curve: [
-    { term: 1, aaa: 2.32, aa: 2.35, a: 2.37, baa: 2.72 },
-    { term: 3, aaa: 2.46, aa: 2.50, a: 2.58, baa: 2.90 },
-    { term: 5, aaa: 2.61, aa: 2.65, a: 2.79, baa: 3.16 },
-    { term: 10, aaa: 3.00, aa: 3.10, a: 3.25, baa: 3.70 },
-    { term: 30, aaa: 4.27, aa: 4.52, a: 4.47, baa: 5.09 },
+    { term: 1, aaa: 2.32, aa: 2.35, a: 2.37, baa: 2.72, insured: 2.40 },
+    { term: 3, aaa: 2.46, aa: 2.50, a: 2.58, baa: 2.90, insured: 2.55 },
+    { term: 5, aaa: 2.61, aa: 2.65, a: 2.79, baa: 3.16, insured: 2.70 },
+    { term: 10, aaa: 3.00, aa: 3.10, a: 3.25, baa: 3.70, insured: 3.15 },
+    { term: 30, aaa: 4.27, aa: 4.52, a: 4.47, baa: 5.09, insured: 4.61 },
+  ],
+  treasuryRatios: [
+    { term: 2, ratioPct: 57 }, { term: 5, ratioPct: 62 }, { term: 10, ratioPct: 67 }, { term: 30, ratioPct: 87 },
   ],
 };
 
@@ -45,6 +49,8 @@ const ROWS = [
   { assetClass: 'Agency', type: 'agency', page: 'agencies', cusip: '3130RICH00', description: 'FHLB callable', sector: 'Callable', state: '', coupon: 4.65, yield: 3.90, ytm: 4.35, ytnc: 3.90, price: 99.65, maturity: '2032-05-19', callDate: '2027-05-19', availabilityK: 4370 },
   // BBB corp at a wide spread (credit comp) — RIA only.
   { assetClass: 'Corporate', type: 'corporate', page: 'corporates', cusip: '319626AA5', description: 'First Citizens', sector: 'Financial', state: '', coupon: 5.6, yield: 6.06, ytm: 6.06, ytnc: null, price: 96.0, maturity: '2035-02-01', callDate: null, availabilityK: 1500, sp: 'BBB+' },
+  // AG-insured muni — benchmarked against the insured MMD scale, not just AAA.
+  { assetClass: 'Muni', type: 'muni', page: 'muni-explorer', cusip: 'INSURED001', description: 'AG-insured IA', sector: 'Municipals', state: 'IA', coupon: 3.0, yield: 2.93, price: 99.5, maturity: '2030-09-01', callDate: null, availabilityK: 500, sp: 'AA', creditEnhancement: 'AG' },
 ];
 
 let passed = 0;
@@ -258,6 +264,35 @@ test('archive-fed movers strip the parallel curve move (excess-of-mean)', () => 
   assert.ok(set.movers.cheapened.some(c => c.cusip === '319626AA5')); // corp cheapened vs the curve
   assert.ok(set.movers.newToday.some(c => c.cusip === '06251FET2')); // CD is new today
   assert.strictEqual(set.benchmarks.priorPackage.daysAgo, 10);
+});
+
+test('credit-enhancement re-scores against the insured MMD scale', () => {
+  assert.strictEqual(rv.classifyEnhancement('AG').type, 'insured');
+  assert.strictEqual(rv.classifyEnhancement('BAM').type, 'insured');
+  assert.strictEqual(rv.classifyEnhancement('ST AID DIR DEP').type, 'state-aid');
+  assert.strictEqual(rv.classifyEnhancement('ATY(35) = 3.37%'), null); // junk note → no enhancement
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF });
+  const ins = find(set, 'INSURED001'); // YTW 2.93 vs insured MMD ~2.64 at ~4.2y
+  assert.ok(ins.rv.enhanced && ins.rv.enhanced.type === 'insured');
+  assert.ok(ins.rv.enhanced.spreadBps > 15 && ins.rv.enhanced.spreadBps < 45); // ≈+29bp cheap to insured
+  assert.ok(ins.rv.chips.some(s => /insured/.test(s)));
+});
+
+test('strategist backdrop: OAS regime percentile + muni/credit KPIs', () => {
+  // 90 obs rising 0.80→~1.245; latest 0.92 sits low in the range → tight.
+  const fred = {
+    igOas: { value: 0.92, history: Array.from({ length: 90 }, (_, i) => ({ d: 'x', v: 0.80 + i * 0.005 })) },
+    hyOas: { value: 3.20, history: Array.from({ length: 90 }, (_, i) => ({ d: 'x', v: 3.0 + i * 0.02 })) },
+  };
+  const s = rv.buildStrategist(fred, CURVE, MMD);
+  assert.strictEqual(s.oas.ig.bp, 92);
+  assert.ok(s.oas.ig.pctile < 40 && s.oas.ig.tag === 'tight');
+  assert.strictEqual(s.kpi.mmdAaa['10y'], 3.00);
+  assert.strictEqual(s.kpi.ratios['10y'], 67);
+  assert.strictEqual(s.kpi.twos10s.level, 40); // (4.20 − 3.80) × 100
+  // Rides on the analysis output too.
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred, mmd: MMD, asOf: ASOF });
+  assert.ok(set.strategist && set.strategist.oas.ig.tag === 'tight');
 });
 
 (async () => {

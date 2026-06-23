@@ -181,6 +181,8 @@ function toCandidate(row) {
     // the relative-value engine for rating-peer grouping and caveats. Null otherwise.
     moody: row.moody || null,
     sp: row.sp || null,
+    creditEnhancement: row.creditEnhancement || null, // muni insurer / state-aid → enhanced MMD scale
+
     audiences: audiencesForRow(row),
   };
 }
