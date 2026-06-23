@@ -16024,3 +16024,64 @@ body {
 .sd-mover-bp.sd-mover-wider { background: rgba(24,115,90,0.14); color: var(--success); }
 .sd-mover-bp.sd-mover-richer { background: rgba(185,68,68,0.12); color: var(--danger); }
 .sd-mover-bp.sd-mover-new { background: rgba(37,99,235,0.12); color: #2563eb; }
+
+/* ===================================================================
+   Sales Dashboard facelift (2026-06-23) — additive refinement layer.
+   Pulls the page toward the home screen's editorial vocabulary:
+   tabular figures, softly-lifted cards, stadium-pill chips, unified
+   focus. Overrides only (same selectors, later in the cascade), so the
+   structural .sd-* rules above are untouched and this is easy to revert.
+   Scoped to the Sales Dashboard + the shared snapshot figures.
+   =================================================================== */
+
+/* 1 — Tabular figures so every column of numbers lines up — the single
+       biggest "real desk tool" cue. Snapshot values are a shared
+       component, so they line up everywhere they render. */
+.snap-value, .snap-live { font-variant-numeric: tabular-nums; }
+#salesDashboardBody { font-variant-numeric: tabular-nums; }
+
+/* 2 — Card family: a whisper of shadow gives the home-page lift; the
+       hero tiers (feature + standouts) go white and rise on hover. */
+.sd-botd, .sd-sod, .sd-standout, .sd-catalyst, .sd-inv-card,
+.sd-kpi, .sd-bucket-col, .sd-source-box, .sd-deskread {
+  box-shadow: 0 1px 2px rgba(16, 23, 21, 0.04);
+}
+.sd-standout { background: var(--surface); border-radius: var(--radius-lg); }
+.sd-botd, .sd-sod, .sd-standout {
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+}
+.sd-botd:hover, .sd-sod:hover, .sd-standout:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(16, 23, 21, 0.09);
+}
+
+/* 3 — RV Leaders board: a tinted header rule the eye can track across,
+       and room in the name column so its chips stop stacking. */
+.sd-board-table th {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.sd-board-table td:first-child { min-width: 230px; }
+.sd-board-table tr:hover td { background: var(--surface-3); }
+
+/* 4 — The little status chips become consistent stadium pills (the home
+       button language) so the board reads as designed, not as a stack. */
+.sd-score, .sd-trend, .sd-rating, .sd-sector, .sd-chip,
+.sd-regime-chip, .sd-mover-bp, .sd-source-count, .sd-inv-rv, .sd-bucket-count {
+  border-radius: var(--radius-pill);
+}
+
+/* 5 — Tax-lens controls pick up the shared focus ring + hover, matching
+       the refreshed input treatment. */
+.sd-tax-toggle select, .sd-tax-custom {
+  border-radius: var(--radius);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.sd-tax-toggle select:hover, .sd-tax-custom:hover { border-color: var(--accent); }
+.sd-tax-toggle select:focus, .sd-tax-custom:focus {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+  outline: none;
+}
