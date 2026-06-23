@@ -15920,6 +15920,12 @@ body {
 .sd-botd .sd-talk dt { flex: 0 0 auto; color: var(--text3); font-weight: 600; text-transform: uppercase; font-size: 10px; padding-top: 2px; }
 .sd-botd .sd-talk dd { margin: 0; color: var(--text); font-style: italic; }
 
+/* Desk read — the morning brief */
+.sd-deskread { background: var(--surface-2); border: 1px solid var(--border-light); border-left: 3px solid var(--racing-green); border-radius: 8px; padding: 10px 14px; margin: 0 0 14px; }
+.sd-deskread-tag { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--hookers-green); margin-bottom: 5px; }
+.sd-deskread-list { margin: 0; padding-left: 18px; }
+.sd-deskread-list li { font-size: 12.5px; color: var(--text); line-height: 1.5; margin-bottom: 2px; }
+
 /* Strategist KPI strip (OAS regime + muni/credit backdrop) */
 .sd-kpi-strip { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 6px; }
 .sd-kpi { display: inline-flex; flex-direction: column; gap: 1px; background: var(--surface-2); border: 1px solid var(--border-light); border-radius: 8px; padding: 5px 10px; }

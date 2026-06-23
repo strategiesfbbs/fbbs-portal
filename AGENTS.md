@@ -138,6 +138,8 @@ The dashboard now ranks by **relative value, not raw yield** — a morning desk-
 
 **Asset-class regime shift (2026-06-23):** `regimeShift(todayTable, priorTable)` diffs the desk's OWN per-tenor `_relative_value.json` spread columns (cd/agency/muni/corp Spread) vs the prior package — each is already net of UST, so the spread delta is the idiosyncratic class move (parallel curve shift cancels). Surfaces in `strategist.regime` and at the top of "What changed" (`sdRegime`), e.g. "Munis −12bp richened · CDs −8bp richened". Routes load `rvTable`/`priorRvTable` via `loadCurrentRelativeValueSnapshot`/`loadArchivedRelativeValueSnapshot`. Test in `tests/daily-dashboard-rv.test.js` (23).
 
+**Desk read (2026-06-23):** `sdDeskRead` (portal.js) renders a deterministic 10-second morning brief at the top of the page — regime (IG OAS + the top asset-class moves) + top RV value + biggest cheapened mover + new-supply concentration — composed from the already-grounded `rv` data, each bullet deep-linking to its security. No engine change (pure synthesis of tested fields).
+
 **Deliberately deferred (Wave-5+, noted in `docs/sales-dashboard-ideas-2026-06-22.md`):** the custom buyer-state RIA panel (40.8%) + in-state double-exempt, spread-per-year-of-duration, curve-kink/carry-roll; a client-facing print/share view; and **fully retiring the uploaded-HTML "Published Dashboard" slot** (owner decision #2 — scoped as its own Codex-coordinated change touching the package-slot machinery, NOT bundled here).
 
 ## Data layout

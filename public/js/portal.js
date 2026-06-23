@@ -17497,6 +17497,33 @@
     return `<section class="sd-section"><div class="sd-section-head"><h4>${escapeHtml(title)}</h4>${sub ? `<span class="sd-section-sub">${escapeHtml(sub)}</span>` : ''}</div>${inner}</section>`;
   }
 
+  // Desk read — the 10-second morning brief synthesizing the day's signals
+  // (regime + top value + biggest mover + new supply) from the already-grounded
+  // rv data. Deterministic; every bullet links to its security where relevant.
+  function sdDeskRead(rv) {
+    if (!rv) return '';
+    const bullets = [];
+    const s = rv.strategist;
+    if (s) {
+      const bits = [];
+      if (s.oas && s.oas.ig && s.oas.ig.pctile != null) bits.push(`IG OAS ${s.oas.ig.bp}bp (${s.oas.ig.pctile}%ile, ${s.oas.ig.tag})`);
+      if (s.regime && s.regime.classes) {
+        const moves = s.regime.classes.filter(c => c.direction !== 'flat').slice(0, 2).map(c => `${c.label} ${c.deltaBp > 0 ? '+' : ''}${c.deltaBp}bp ${c.direction}`);
+        if (moves.length) bits.push(moves.join(', '));
+      }
+      if (bits.length) bullets.push({ text: `Regime: ${bits.join('; ')}.` });
+    }
+    const top = (rv.standouts || [])[0];
+    if (top) bullets.push({ text: `Top value: ${top.description || top.cusip} — ${top.benchmark || ''}${top.rv && top.rv.score != null ? ` (RV ${top.rv.score})` : ''}.`, cusip: top.cusip, page: top.page });
+    const mv = rv.movers && rv.movers.cheapened && rv.movers.cheapened[0];
+    if (mv) bullets.push({ text: `Cheapened most: ${mv.description || mv.cusip}${mv.rv && mv.rv.moverBp != null ? ` +${mv.rv.moverBp}bp vs the curve` : ''}.`, cusip: mv.cusip, page: mv.page });
+    const sup = rv.movers && rv.movers.supply && rv.movers.supply[0];
+    if (sup) bullets.push({ text: `New supply: ${sup.bucket} is ${sup.pct}% of new paper.` });
+    if (!bullets.length) return '';
+    const li = bullets.map(b => `<li>${escapeHtml(b.text)}${b.cusip ? ` <button type="button" class="sd-link" data-goto="${escapeHtml(b.page || 'all-offerings')}" data-cusip="${escapeHtml(b.cusip)}">open</button>` : ''}</li>`).join('');
+    return `<div class="sd-deskread"><div class="sd-deskread-tag">Desk read</div><ul class="sd-deskread-list">${li}</ul></div>`;
+  }
+
   // Asset-class regime shift — the desk's own RV table moved at the class level.
   function sdRegime(reg) {
     if (!reg || !reg.classes || !reg.classes.length) return '';
@@ -17653,8 +17680,9 @@
     sections.push(sdSection('Audience fit — ranked by relative value', 'Each client\'s picks ordered by the spread THAT buyer earns over Treasury after tax',
       `<div class="sd-matrix exec-three-col">${sdAudienceColumns(audiences, dash.picks, dash.connector)}</div>`));
 
+    const deskReadHtml = rv ? sdDeskRead(rv) : '';
     const strategistHtml = (rv && rv.strategist) ? sdStrategist(rv.strategist) : '';
-    body.innerHTML = banners.join('') + legend + strategistHtml + sections.join('');
+    body.innerHTML = banners.join('') + deskReadHtml + legend + strategistHtml + sections.join('');
 
     if (stat) stat.textContent = (rv && rv.leaders) ? rv.leaders.length : audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
     if (metaEl) {
