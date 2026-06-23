@@ -832,7 +832,7 @@ function buildLiveDashboard(opts) {
   if (!candidateSet.candidates.length) throw new Error('No audience-eligible offerings to build a dashboard from');
   const rvAnalysis = rvEngine.buildRelativeValue({
     candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null,
-    priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, cof: o.cof,
+    priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, rvTable: o.rvTable || null, priorRvTable: o.priorRvTable || null, cof: o.cof,
     asOf: packageDate, priorMap: o.priorMap || null,
   });
   const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);
@@ -929,7 +929,7 @@ async function generateDashboard(opts) {
   // WITHIN this RV-ordered set; it never moves a benchmark.
   const rvAnalysis = rvEngine.buildRelativeValue({
     candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null,
-    priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, cof: o.cof,
+    priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, rvTable: o.rvTable || null, priorRvTable: o.priorRvTable || null, cof: o.cof,
     asOf: packageDate, priorMap: o.priorMap || null,
   });
   const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);

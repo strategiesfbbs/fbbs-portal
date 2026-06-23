@@ -295,6 +295,32 @@ test('strategist backdrop: OAS regime percentile + muni/credit KPIs', () => {
   assert.ok(set.strategist && set.strategist.oas.ig.tag === 'tight');
 });
 
+test('asset-class regime shift diffs the desk RV table, parallel move netted', () => {
+  // Spreads are vs UST, so a parallel curve move cancels — only the class spread
+  // delta survives. Today: CDs tighter ~10bp, munis wider ~12bp vs prior.
+  const today = { rows: [
+    { term: '2 Yr', cdSpread: 5, agencySpread: 8, muniSpread: -130, corpSpread: 60 },
+    { term: '5 Yr', cdSpread: 8, agencySpread: 9, muniSpread: -120, corpSpread: 64 },
+  ] };
+  const prior = { rows: [
+    { term: '2 Yr', cdSpread: 16, agencySpread: 8, muniSpread: -142, corpSpread: 61 },
+    { term: '5 Yr', cdSpread: 18, agencySpread: 9, muniSpread: -132, corpSpread: 63 },
+  ] };
+  const reg = rv.regimeShift(today, prior);
+  const cd = reg.find(r => r.key === 'cd');
+  const muni = reg.find(r => r.key === 'muni');
+  assert.strictEqual(cd.deltaBp, -10); assert.strictEqual(cd.direction, 'richened'); // CD spreads compressed (mean of −11,−10)
+  assert.strictEqual(muni.deltaBp, 12); assert.strictEqual(muni.direction, 'cheapened'); // munis cheapened
+  assert.strictEqual(reg.find(r => r.key === 'agency').direction, 'flat');
+  // Sorted by |delta|; null when a table is missing.
+  assert.ok(Math.abs(reg[0].deltaBp) >= Math.abs(reg[reg.length - 1].deltaBp));
+  assert.strictEqual(rv.regimeShift(today, null), null);
+  // Rides on the analysis output via strategist.regime.
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, mmd: MMD, asOf: ASOF, rvTable: today, priorRvTable: prior, priorMeta: { priorDate: '2026-06-12', daysAgo: 10 } });
+  assert.ok(set.strategist.regime && set.strategist.regime.classes.length === 4);
+  assert.strictEqual(set.strategist.regime.priorDate, '2026-06-12');
+});
+
 (async () => {
   for (const { name, fn } of tests) {
     try { await fn(); passed++; }

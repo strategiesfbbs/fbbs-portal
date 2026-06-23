@@ -32,6 +32,7 @@
   let cdRecapData = null;
   let bankDataStatus = null;
   let selectedBank = null;
+  let bankSearchActiveIndex = -1;
   let savedBanks = [];
   let selectedBankAccountStatus = null;
   let selectedTearSheetCoverage = null;
@@ -1366,6 +1367,25 @@
     if (window.location.hash !== nextHash) history.replaceState(null, '', nextHash);
   }
 
+  function navigateToHash(hash, fallback) {
+    const nextHash = String(hash || '#home');
+    if (window.location.hash === nextHash) {
+      if (typeof fallback === 'function') fallback();
+    } else {
+      window.location.hash = nextHash;
+    }
+  }
+
+  function bankDeepLinkHash(bankId, options = {}) {
+    const params = new URLSearchParams();
+    params.set('bank', String(bankId || ''));
+    if (options.openStrategyRequest) params.set('strategy', '1');
+    if (options.cusip) params.set('cusip', String(options.cusip));
+    if (options.security) params.set('security', String(options.security));
+    if (options.source) params.set('source', String(options.source));
+    return '#banks?' + params.toString();
+  }
+
   function hashParamSet(params, key) {
     const value = params.get(key);
     return new Set(value ? value.split(',').map(item => item.trim()).filter(Boolean) : []);
@@ -1445,7 +1465,12 @@
     }
 
     if (pageName === 'home') renderHomeRecents();
-    if (pageName === 'views') loadSavedViewSummaries();
+    if (pageName === 'views') {
+      const viewId = hashParamsForPage('views').get('view');
+      loadSavedViewSummaries().then(() => {
+        if (viewId) openSavedView(viewId);
+      });
+    }
     if (pageName === 'pulse') loadCrmPulse();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
     if (pageName === 'relativeValue') {
@@ -1472,6 +1497,7 @@
     if (pageName === 'banks') {
       loadBankStatus();
       loadSavedBanks();
+      loadBankFromHashRoute();
       // Quietly populate the cohort picker for tear-sheet "compare against".
       // Failure is non-fatal — the picker just won't render.
       fetch('/api/peer-groups', { cache: 'no-store' })
@@ -1504,7 +1530,14 @@
       loadStrategies();
     }
     if (pageName === 'bond-swap') enterBondSwapPage();
-    if (pageName === 'peer-groups') loadPeerGroups();
+    if (pageName === 'peer-groups') {
+      const peerId = hashParamsForPage('peer-groups').get('peer');
+      if (peerId) {
+        peerGroupsState.selectedId = peerId;
+        peerGroupsState.isCreating = false;
+      }
+      loadPeerGroups();
+    }
     if (pageName === 'maturity-calendar') enterMaturityCalendarPage();
     if (pageName === 'cd-rollover') enterCdRolloverPage();
     if (pageName === 'upload') loadBankStatus();
@@ -1683,6 +1716,10 @@
     let pendingDataSearches = 0;
 
     const optionEls = () => Array.from(results.querySelectorAll('.jump-result'));
+    const preferredEnterResult = (fallback) => {
+      const dataHit = results.querySelector('.jump-result-cusip, .jump-result[data-jump-kind="bank"], .jump-result[data-jump-kind="contact"]');
+      return dataHit || fallback;
+    };
     const finishDataSearch = (renderId) => {
       if (renderId !== searchRenderId) return;
       pendingDataSearches = Math.max(0, pendingDataSearches - 1);
@@ -1707,10 +1744,22 @@
         else if (el.dataset.goto) goTo(el.dataset.goto);
         return;
       }
-      if (kind === 'bank' || kind === 'contact') { goTo('banks'); if (typeof loadBank === 'function') loadBank(id, { collapseResults: true }); }
-      else if (kind === 'view') { goTo('views'); if (typeof openSavedView === 'function') openSavedView(id); }
-      else if (kind === 'peer') goTo('peer-groups');
-      else if (kind === 'report') goTo('reports');
+      if (kind === 'bank' || kind === 'contact') {
+        navigateToHash(bankDeepLinkHash(id), loadBankFromHashRoute);
+      }
+      else if (kind === 'view') {
+        navigateToHash('#views?view=' + encodeURIComponent(id), () => openSavedView(id));
+      }
+      else if (kind === 'peer') {
+        navigateToHash('#peer-groups?peer=' + encodeURIComponent(id), () => {
+          peerGroupsState.selectedId = id;
+          peerGroupsState.isCreating = false;
+          loadPeerGroups();
+        });
+      }
+      else if (kind === 'report') {
+        window.location.hash = reportBuildHash(el.dataset.jumpType || 'custom-bank', id, { autorun: '1' });
+      }
     };
 
     // Live omnisearch over the data domains (banks, contacts, saved views,
@@ -1728,8 +1777,8 @@
           if (!res.ok) return finishDataSearch(renderId);
           const data = await res.json();
           if (token !== globalToken || renderId !== searchRenderId || !results.classList.contains('show')) return;
-          const row = (kind, jid, badge, title, sub) => `
-            <button type="button" class="jump-result" data-jump-kind="${kind}" data-jump-id="${escapeHtml(jid)}">
+          const row = (kind, jid, badge, title, sub, attrs = '') => `
+            <button type="button" class="jump-result" data-jump-kind="${kind}" data-jump-id="${escapeHtml(jid)}"${attrs}>
               <span>${escapeHtml(badge)}</span>
               <strong>${escapeHtml(title)}</strong>
               <em>${escapeHtml(sub)}</em>
@@ -1745,7 +1794,7 @@
           html += section('Peer Groups', (data.peerGroups || []).map(g =>
             row('peer', g.id, 'Peer Group', g.name, g.description)).join(''));
           html += section('Reports', (data.reports || []).map(r =>
-            row('report', r.id, 'Report', r.name, r.type)).join(''));
+            row('report', r.id, 'Report', r.name, r.type, ` data-jump-type="${escapeHtml(r.type || 'custom-bank')}"`)).join(''));
           if (!html) return finishDataSearch(renderId);
           const emptyEl = results.querySelector('.jump-empty');
           if (emptyEl) emptyEl.remove();
@@ -1843,7 +1892,7 @@
 
     input.addEventListener('input', render);
     input.addEventListener('focus', render);
-    input.addEventListener('keydown', e => {
+    input.addEventListener('keydown', async e => {
       if (e.key === 'Escape') {
         closeNavSearch();
         input.blur();
@@ -1855,9 +1904,17 @@
         setActive(activeIndex - 1);
       } else if (e.key === 'Enter') {
         const opts = optionEls();
-        const target = opts[activeIndex] || opts[0];
+        let target = opts[activeIndex] || opts[0];
         if (target) {
           e.preventDefault();
+          if (pendingDataSearches > 0 && !target.dataset.jumpKind && !target.dataset.cusip) {
+            const renderId = searchRenderId;
+            await new Promise(resolve => setTimeout(resolve, 240));
+            if (renderId !== searchRenderId) return;
+            target = preferredEnterResult(target);
+          } else {
+            target = preferredEnterResult(target);
+          }
           activateJumpResult(target);
         }
       }
@@ -2357,8 +2414,7 @@
         return;
       }
       if (bankId) {
-        goTo('banks');
-        if (typeof loadBank === 'function') loadBank(bankId, { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
       }
     });
   }
@@ -2441,6 +2497,9 @@
   function closeSavedView() {
     savedViewsState.selectedId = '';
     savedViewsState.selectedResult = null;
+    if (parseHashTarget(window.location.hash || '#home').page === 'views') {
+      replaceHashParams('views', {});
+    }
     renderSavedViewDetail();
   }
 
@@ -2485,7 +2544,10 @@
     grid.innerHTML = presetSection + customSection;
 
     grid.querySelectorAll('[data-views-card]').forEach(btn => {
-      btn.addEventListener('click', () => openSavedView(btn.getAttribute('data-views-card')));
+      btn.addEventListener('click', () => {
+        const viewId = btn.getAttribute('data-views-card');
+        navigateToHash('#views?view=' + encodeURIComponent(viewId), () => openSavedView(viewId));
+      });
     });
     grid.querySelectorAll('[data-custom-view]').forEach(btn => {
       btn.addEventListener('click', () => { window.location.hash = reportBuildHash('custom-bank', btn.getAttribute('data-custom-view'), { autorun: '1' }); });
@@ -2559,8 +2621,7 @@
         tr.addEventListener('click', () => {
           const bankId = tr.getAttribute('data-views-row-bank');
           if (!bankId) return;
-          goTo('banks');
-          if (typeof loadBank === 'function') loadBank(bankId, { collapseResults: true });
+          navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
         });
       });
     }
@@ -2814,8 +2875,7 @@
     `;
     mount.querySelectorAll('[data-pulse-bank]').forEach(btn => {
       btn.addEventListener('click', () => {
-        goTo('banks');
-        if (typeof loadBank === 'function') loadBank(btn.getAttribute('data-pulse-bank'), { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(btn.getAttribute('data-pulse-bank')), loadBankFromHashRoute);
       });
     });
   }
@@ -3027,8 +3087,7 @@
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-home-recent-id');
         if (!id) return;
-        goTo('banks');
-        loadBank(id, { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(id), loadBankFromHashRoute);
       });
     });
   }
@@ -5128,8 +5187,7 @@
     results.querySelectorAll('[data-opp-open]').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = btn.getAttribute('data-opp-open');
-        goTo('banks');
-        if (typeof loadBank === 'function') loadBank(id, { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(id), loadBankFromHashRoute);
       });
     });
   }
@@ -5192,8 +5250,7 @@
   function openPeerAnalysisTearSheet(openStrategyRequest = false) {
     const bank = peerAnalysisState.bankData && peerAnalysisState.bankData.bank;
     if (!bank || !bank.id) return;
-    goTo('banks');
-    loadBank(bank.id, { collapseResults: true, openStrategyRequest });
+    navigateToHash(bankDeepLinkHash(bank.id, { openStrategyRequest }), loadBankFromHashRoute);
   }
 
   function renderPeerAnalysis() {
@@ -5352,8 +5409,7 @@
   function openBankStrategyRequest(bankId) {
     if (!bankId) return;
     bankTearSheetTab = 'sales';
-    goTo('banks');
-    loadBank(bankId, { collapseResults: true, openStrategyRequest: true });
+    navigateToHash(bankDeepLinkHash(bankId, { openStrategyRequest: true }), loadBankFromHashRoute);
   }
 
   // FDIC quarterly sync (Upload page): dry-run first to show what would
@@ -5456,10 +5512,18 @@
         t = setTimeout(() => searchBanks(input.value), 180);
       });
       input.addEventListener('keydown', e => {
-        if (e.key === 'Enter') {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setActiveBankSearchResult(bankSearchActiveIndex + 1);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setActiveBankSearchResult(bankSearchActiveIndex - 1);
+        } else if (e.key === 'Enter') {
           e.preventDefault();
           hideBankRecentDropdown();
-          searchBanks(input.value);
+          const active = document.querySelector('#bankSearchResults .bank-result.is-active');
+          if (active) navigateToHash(bankDeepLinkHash(active.dataset.bankId), loadBankFromHashRoute);
+          else searchBanks(input.value);
         } else if (e.key === 'Escape') {
           hideBankRecentDropdown();
           clearBankSearchResults();
@@ -5869,7 +5933,44 @@
     wired: false
   };
 
+  function hydrateCdRolloverFromHash() {
+    const params = hashParamsForPage('cd-rollover');
+    const win = Number(params.get('window'));
+    if ([30, 60, 90, 180, 365].includes(win)) cdRolloverState.window = win;
+    if (params.has('covered')) cdRolloverState.scope = params.get('covered') === '1' ? 'covered' : 'all';
+    if (params.has('owner')) {
+      const ownerParam = params.get('owner') || '';
+      cdRolloverState.owner = ownerParam === 'all' ? '' : ownerParam;
+      cdRolloverState.ownerTouched = true;
+    } else {
+      cdRolloverState.ownerTouched = false;
+    }
+    syncCdRolloverControls();
+  }
+
+  function syncCdRolloverControls() {
+    const windowBar = document.getElementById('cdRolloverWindow');
+    if (windowBar) {
+      windowBar.querySelectorAll('button[data-window]').forEach(btn => {
+        btn.classList.toggle('active', Number(btn.dataset.window) === cdRolloverState.window);
+      });
+    }
+    const scopeSel = document.getElementById('cdRolloverScope');
+    if (scopeSel) scopeSel.value = cdRolloverState.scope;
+    const ownerSel = document.getElementById('cdRolloverOwner');
+    if (ownerSel) ownerSel.value = cdRolloverState.owner || '';
+  }
+
+  function updateCdRolloverHash() {
+    replaceHashParams('cd-rollover', {
+      window: cdRolloverState.window !== 90 ? cdRolloverState.window : '',
+      covered: cdRolloverState.scope === 'covered' ? '1' : '0',
+      owner: cdRolloverState.owner || (cdRolloverState.ownerTouched ? 'all' : '')
+    });
+  }
+
   function enterCdRolloverPage() {
+    hydrateCdRolloverFromHash();
     if (!cdRolloverState.wired) {
       cdRolloverState.wired = true;
       const windowBar = document.getElementById('cdRolloverWindow');
@@ -5880,19 +5981,22 @@
           const win = Number(btn.dataset.window) || 90;
           if (win === cdRolloverState.window) return;
           cdRolloverState.window = win;
-          windowBar.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+          syncCdRolloverControls();
+          updateCdRolloverHash();
           loadCdRolloverWall();
         });
       }
       const scopeSel = document.getElementById('cdRolloverScope');
       if (scopeSel) scopeSel.addEventListener('change', () => {
         cdRolloverState.scope = scopeSel.value;
+        updateCdRolloverHash();
         loadCdRolloverWall();
       });
       const ownerSel = document.getElementById('cdRolloverOwner');
       if (ownerSel) ownerSel.addEventListener('change', () => {
         cdRolloverState.owner = ownerSel.value;
         cdRolloverState.ownerTouched = true;
+        updateCdRolloverHash();
         loadCdRolloverWall();
       });
       const exportBtn = document.getElementById('cdRolloverExport');
@@ -5904,7 +6008,7 @@
   async function loadCdRolloverWall() {
     const app = document.getElementById('cdRolloverApp');
     if (!app) return;
-    app.innerHTML = '<p class="muted-note">Loading rollover wall…</p>';
+    app.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading rollover wall&hellip;</span></div>';
     try {
       const params = new URLSearchParams({ window: String(cdRolloverState.window) });
       if (cdRolloverState.scope === 'covered') params.set('covered', '1');
@@ -5920,6 +6024,7 @@
         if (match) {
           cdRolloverState.owner = match;
           cdRolloverState.ownerTouched = true;
+          updateCdRolloverHash();
           return loadCdRolloverWall();
         }
         cdRolloverState.ownerTouched = true;
@@ -5992,8 +6097,7 @@
       </div>`;
     app.querySelectorAll('[data-rollover-bank-id]').forEach(btn => {
       btn.addEventListener('click', () => {
-        goTo('banks');
-        setTimeout(() => loadBank(btn.dataset.rolloverBankId), 200);
+        navigateToHash(bankDeepLinkHash(btn.dataset.rolloverBankId), loadBankFromHashRoute);
       });
     });
   }
@@ -7956,6 +8060,9 @@
         renderPeerGroupsList();
         const found = peerGroupsState.cohorts.find(c => c.id === peerGroupsState.selectedId);
         if (found) renderPeerGroupBuilder(found);
+        if (found && parseHashTarget(window.location.hash || '#home').page === 'peer-groups') {
+          replaceHashParams('peer-groups', { peer: found.id });
+        }
       });
     });
   }
@@ -11465,8 +11572,7 @@
       }
       const customOpen = clickTarget.closest('[data-custom-bank-open]');
       if (customOpen) {
-        goTo('banks');
-        loadBank(customOpen.dataset.customBankOpen, { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(customOpen.dataset.customBankOpen), loadBankFromHashRoute);
         return;
       }
       const reportOpen = clickTarget.closest('[data-report-open]');
@@ -11564,15 +11670,13 @@
       const billingOpen = clickTarget.closest('[data-billing-open-bank]');
       if (billingOpen) {
         event.preventDefault();
-        goTo('banks');
-        loadBank(billingOpen.dataset.billingOpenBank, { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(billingOpen.dataset.billingOpenBank), loadBankFromHashRoute);
         return;
       }
       const coverageOpen = clickTarget.closest('[data-coverage-open]');
       if (coverageOpen) {
         event.preventDefault();
-        goTo('banks');
-        loadBank(coverageOpen.dataset.coverageOpen, { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(coverageOpen.dataset.coverageOpen), loadBankFromHashRoute);
         return;
       }
       const portfolioBank = clickTarget.closest('[data-portfolio-bank]');
@@ -11815,8 +11919,7 @@
       btn.addEventListener('click', () => {
         const bankId = btn.dataset.strategyBank;
         if (!bankId) return;
-        goTo('banks');
-        loadBank(bankId, { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
       });
     });
   }
@@ -12228,20 +12331,61 @@
     try {
       const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=10`, { cache: 'no-store' });
       const data = await readBankJson(res);
-      renderBankResults(data.results || []);
+      renderBankResults(data);
     } catch (e) {
       results.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
     }
   }
 
-  function renderBankResults(rows) {
-    const results = document.getElementById('bankSearchResults');
-    if (!results) return;
-    if (!rows.length) {
-      results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
+  function bankResultButtons() {
+    return Array.from(document.querySelectorAll('#bankSearchResults .bank-result'));
+  }
+
+  function setActiveBankSearchResult(index) {
+    const buttons = bankResultButtons();
+    if (!buttons.length) {
+      bankSearchActiveIndex = -1;
       return;
     }
-    results.innerHTML = rows.map(row => {
+    bankSearchActiveIndex = (index + buttons.length) % buttons.length;
+    buttons.forEach((btn, i) => {
+      const active = i === bankSearchActiveIndex;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', String(active));
+    });
+    buttons[bankSearchActiveIndex].scrollIntoView({ block: 'nearest' });
+  }
+
+  function renderBankResults(dataOrRows) {
+    const results = document.getElementById('bankSearchResults');
+    if (!results) return;
+    const rows = Array.isArray(dataOrRows) ? dataOrRows : (dataOrRows && dataOrRows.results) || [];
+    const total = Array.isArray(dataOrRows) ? rows.length : Number(dataOrRows && dataOrRows.total) || rows.length;
+    const truncated = Boolean(!Array.isArray(dataOrRows) && dataOrRows && dataOrRows.truncated);
+    bankSearchActiveIndex = -1;
+    if (!rows.length) {
+      results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
+      selectedBank = null;
+      selectedBankAccountStatus = null;
+      selectedBankContacts = [];
+      selectedBankActivities = [];
+      selectedBankTasks = [];
+      selectedBankOpps = [];
+      selectedBankProductFit = [];
+      selectedBankStrategyHistory = [];
+      if (parseHashTarget(window.location.hash || '#home').page === 'banks') {
+        replaceHashParams('banks', {});
+      }
+      const profile = document.getElementById('bankProfile');
+      if (profile) {
+        profile.innerHTML = '<div class="bank-empty-state"><h2>No matching banks found</h2><p>Try a different bank name, city, state, FDIC cert, or parent company.</p></div>';
+      }
+      return;
+    }
+    const countText = truncated
+      ? `Showing ${formatNumber(rows.length)} of ${formatNumber(total)} matching banks`
+      : `${formatNumber(total)} matching bank${total === 1 ? '' : 's'}`;
+    results.innerHTML = `<div class="bank-search-count">${escapeHtml(countText)}</div>` + rows.map(row => {
       const status = statusForBankRow(row);
       const coverage = [
         status.owner ? `Owner: ${status.owner}` : '',
@@ -12250,7 +12394,7 @@
         status.bankersBankServices ? `${serviceCount(status.bankersBankServices)} Bankers Bank services` : ''
       ].filter(Boolean).join(' · ');
       return `
-      <button type="button" class="bank-result" data-bank-id="${escapeHtml(row.id)}">
+      <button type="button" class="bank-result" data-bank-id="${escapeHtml(row.id)}" role="option" aria-selected="false">
         <div>
           <strong>${escapeHtml(bankDisplayName(row))}</strong>
           ${coverage ? `<small>${escapeHtml(coverage)}</small>` : ''}
@@ -12264,13 +12408,15 @@
       `;
     }).join('');
     results.querySelectorAll('[data-bank-id]').forEach(btn => {
-      btn.addEventListener('click', () => loadBank(btn.dataset.bankId, { collapseResults: true }));
+      btn.addEventListener('click', () => navigateToHash(bankDeepLinkHash(btn.dataset.bankId), loadBankFromHashRoute));
     });
+    setActiveBankSearchResult(0);
   }
 
   function clearBankSearchResults() {
     const results = document.getElementById('bankSearchResults');
     if (results) results.innerHTML = '';
+    bankSearchActiveIndex = -1;
   }
 
   function bankAccountStatusLabel(value) {
@@ -12369,7 +12515,7 @@
     list.value = '';
     list.onchange = () => {
       if (!list.value) return;
-      loadBank(list.value, { collapseResults: true });
+      navigateToHash(bankDeepLinkHash(list.value), loadBankFromHashRoute);
       list.value = '';
       hideBankRecentDropdown();
     };
@@ -12661,6 +12807,18 @@
 
   function selectedBankId() {
     return selectedBank && selectedBank.bank ? selectedBank.bank.id : null;
+  }
+
+  function loadBankFromHashRoute() {
+    const params = hashParamsForPage('banks');
+    const bankId = params.get('bank');
+    if (!bankId) return;
+    const openStrategyRequest = params.get('strategy') === '1';
+    if (String(selectedBankId() || '') === String(bankId)) {
+      if (openStrategyRequest) openBankStrategyRequestPanel();
+      return;
+    }
+    loadBank(bankId, { collapseResults: true, openStrategyRequest });
   }
 
   function bankProfileSkeletonHtml() {
@@ -14037,8 +14195,14 @@
       a.addEventListener('click', evt => {
         evt.preventDefault();
         document.getElementById('buyersDrawerBackdrop').hidden = true;
-        goTo('banks');
-        setTimeout(() => loadBank(a.dataset.buyersBankId), 200);
+        if (buyersFocusRelease) { buyersFocusRelease(); buyersFocusRelease = null; }
+        const offering = buyersDrawerCtx.offering || {};
+        navigateToHash(bankDeepLinkHash(a.dataset.buyersBankId, {
+          openStrategyRequest: true,
+          cusip: offering.cusip || '',
+          security: offering.description || offering.label || '',
+          source: buyersDrawerCtx.productType || offering.assetClass || ''
+        }), loadBankFromHashRoute);
       });
     });
   }
@@ -14422,8 +14586,33 @@
     const panel = document.getElementById('bankStrategyRequestPanel');
     if (!panel) return;
     panel.hidden = false;
+    prefillStrategyRequestFromHash();
     panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
     focusBankStrategyRequestSummary();
+  }
+
+  function prefillStrategyRequestFromHash() {
+    const params = hashParamsForPage('banks');
+    if (params.get('strategy') !== '1') return;
+    const cusip = params.get('cusip') || '';
+    const security = params.get('security') || '';
+    const source = params.get('source') || '';
+    if (!cusip && !security) return;
+    const summary = document.getElementById('bankStrategySummary');
+    const comments = document.getElementById('bankStrategyComments');
+    const type = document.getElementById('bankStrategyType');
+    const title = [cusip, security].filter(Boolean).join(' · ');
+    if (summary && !summary.value.trim()) summary.value = `Review ${title}`;
+    if (comments && !comments.value.trim()) {
+      comments.value = [
+        'Originating security from inventory fit workflow:',
+        cusip ? `CUSIP: ${cusip}` : '',
+        security ? `Security: ${security}` : '',
+        source ? `Source: ${source}` : ''
+      ].filter(Boolean).join('\n');
+    }
+    if (type && source && /muni/i.test(source)) type.value = 'Muni BCIS';
+    else if (type && !type.value) type.value = 'Miscellaneous';
   }
 
   function focusBankStrategyRequestSummary() {
@@ -16908,8 +17097,7 @@
     });
     document.querySelectorAll('#p-watchlist [data-watch-bank]').forEach(btn => {
       btn.addEventListener('click', () => {
-        goTo('banks');
-        if (typeof loadBank === 'function') loadBank(btn.getAttribute('data-watch-bank'), { collapseResults: true });
+        navigateToHash(bankDeepLinkHash(btn.getAttribute('data-watch-bank')), loadBankFromHashRoute);
       });
     });
   }
@@ -16945,8 +17133,7 @@
         </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text3)">No contacts yet. Add them from a bank tear sheet — or import your Salesforce contact export on the Upload page.</td></tr>';
       body.querySelectorAll('[data-contact-bank]').forEach(btn => {
         btn.addEventListener('click', () => {
-          goTo('banks');
-          if (typeof loadBank === 'function') loadBank(btn.getAttribute('data-contact-bank'), { collapseResults: true });
+          navigateToHash(bankDeepLinkHash(btn.getAttribute('data-contact-bank')), loadBankFromHashRoute);
         });
       });
     } catch (e) {
@@ -17310,6 +17497,18 @@
     return `<section class="sd-section"><div class="sd-section-head"><h4>${escapeHtml(title)}</h4>${sub ? `<span class="sd-section-sub">${escapeHtml(sub)}</span>` : ''}</div>${inner}</section>`;
   }
 
+  // Asset-class regime shift — the desk's own RV table moved at the class level.
+  function sdRegime(reg) {
+    if (!reg || !reg.classes || !reg.classes.length) return '';
+    const chips = reg.classes.map(c => {
+      const cls = c.direction === 'cheapened' ? 'wider' : (c.direction === 'richened' ? 'richer' : 'flat');
+      const sign = c.deltaBp > 0 ? '+' : '';
+      return `<span class="sd-regime-chip sd-regime-${cls}">${escapeHtml(c.label)} ${sign}${c.deltaBp}bp${c.direction !== 'flat' ? ' ' + escapeHtml(c.direction) : ''}</span>`;
+    }).join('');
+    const win = reg.priorDate ? ` vs ${escapeHtml(reg.priorDate)}${reg.daysAgo != null ? ` (${reg.daysAgo}d)` : ''}` : '';
+    return `<div class="sd-regime"><span class="sd-regime-label">Asset-class regime${win} — desk RV table, spread vs UST (parallel move netted out)</span><div class="sd-regime-chips">${chips}</div></div>`;
+  }
+
   // Strategist backdrop strip — OAS regime + muni/credit KPIs that frame WHY
   // today's standouts are cheap (or why they aren't broadly).
   function sdStrategist(s) {
@@ -17445,7 +17644,8 @@
 
     // 5 — What changed (archive-fed cross-day movers; snapshot trends fallback).
     if (rv && (rv.movers || rv.trends)) {
-      const inner = rv.movers ? sdMovers(rv.movers) : sdTrends(rv.trends);
+      const regimeHtml = (rv.strategist && rv.strategist.regime) ? sdRegime(rv.strategist.regime) : '';
+      const inner = regimeHtml + (rv.movers ? sdMovers(rv.movers) : sdTrends(rv.trends));
       sections.push(sdSection('What changed vs the prior package', 'New, cheapened (after stripping the parallel curve move), richened, and rolled-off names', inner));
     }
 
@@ -17591,7 +17791,17 @@
       `${(allOfferingsData.rows || []).length.toLocaleString()} securities across ${new Set((allOfferingsData.rows || []).map(r => r.assetClass)).size} asset classes`;
 
     const num = (v, digits = 2) => (v == null ? '—' : Number(v).toFixed(digits));
-    body.innerHTML = filtered.slice(0, 1000).map(r => `
+    const buyerProductFor = row => {
+      const type = String(row.type || row.assetClass || '').toLowerCase();
+      if (type.includes('treas')) return 'treasury';
+      if (type.includes('cd')) return 'cd';
+      if (type.includes('muni')) return 'muni';
+      if (type.includes('agency')) return 'agency';
+      if (type.includes('corp')) return 'corporate';
+      if (type.includes('mbs') || type.includes('cmo')) return 'mbs';
+      return '';
+    };
+    body.innerHTML = filtered.slice(0, 1000).map((r, idx) => `
       <tr>
         <td><span class="ao-class-pill ao-class-${escapeHtml(r.type)}">${escapeHtml(r.assetClass)}</span></td>
         <td class="issuer-cell">${escapeHtml(r.description)}</td>
@@ -17602,7 +17812,7 @@
         <td style="text-align:right">${num(r.price, 3)}</td>
         <td>${escapeHtml(r.state || '—')}</td>
         <td>${escapeHtml(r.sector || '—')}</td>
-        <td><span class="ao-row-actions">${r.cusip ? `<button type="button" class="text-btn ao-watch-btn" data-ao-watch="${escapeHtml(r.cusip)}" data-ao-watch-label="${escapeHtml(r.description)}" data-ao-watch-class="${escapeHtml(r.assetClass)}" data-ao-watch-page="${escapeHtml(r.page)}" title="Add to my watchlist">&#9734;</button>` : ''}<button type="button" class="small-btn" data-goto="${escapeHtml(r.page)}"${r.cusip ? ` data-cusip="${escapeHtml(r.cusip)}"` : ''}>Open</button></span></td>
+        <td><span class="ao-row-actions">${r.cusip ? `<button type="button" class="text-btn ao-watch-btn" data-ao-watch="${escapeHtml(r.cusip)}" data-ao-watch-label="${escapeHtml(r.description)}" data-ao-watch-class="${escapeHtml(r.assetClass)}" data-ao-watch-page="${escapeHtml(r.page)}" title="Add to my watchlist">&#9734;</button>` : ''}${buyerProductFor(r) ? `<button type="button" class="small-btn buyers-btn" data-buyers-product="${escapeHtml(buyerProductFor(r))}" data-buyers-idx="${idx}">Find buyers</button>` : ''}<button type="button" class="small-btn" data-goto="${escapeHtml(r.page)}"${r.cusip ? ` data-cusip="${escapeHtml(r.cusip)}"` : ''}>Open</button></span></td>
       </tr>`).join('') || `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text3)">Nothing matches these filters.</td></tr>`;
     body.querySelectorAll('[data-ao-watch]').forEach(btn => {
       btn.addEventListener('click', () => addToWatchlist({
@@ -17613,6 +17823,7 @@
         page: btn.getAttribute('data-ao-watch-page')
       }, btn));
     });
+    wireBuyersButtons(body, filtered);
   }
 
   async function addToWatchlist(item, btn) {
@@ -23441,8 +23652,7 @@
     if (next) next.addEventListener('click', () => cycle(1));
     const open = document.getElementById('mapsOpenTearSheet');
     if (open) open.addEventListener('click', () => {
-      goTo('banks');
-      if (typeof loadBank === 'function') loadBank(bank.id, { collapseResults: true });
+      navigateToHash(bankDeepLinkHash(bank.id), loadBankFromHashRoute);
     });
   }
 
@@ -23509,8 +23719,7 @@
     const open = document.getElementById('mapsFullOpenTearSheet');
     if (open) open.addEventListener('click', () => {
       closeMapsFullView();
-      goTo('banks');
-      if (typeof loadBank === 'function') loadBank(bank.id, { collapseResults: true });
+      navigateToHash(bankDeepLinkHash(bank.id), loadBankFromHashRoute);
     });
   }
 

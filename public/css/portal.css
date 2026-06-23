@@ -6076,6 +6076,14 @@ body {
   margin-top: 0;
 }
 
+.bank-search-count {
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .bank-recent-dropdown {
   align-items: end;
   background: #fff;
@@ -6270,9 +6278,14 @@ body {
   text-align: left;
 }
 
-.bank-result:hover {
+.bank-result:hover,
+.bank-result.is-active {
   border-color: var(--green);
   box-shadow: 0 8px 24px rgba(18, 66, 43, 0.08);
+}
+
+.bank-result.is-active {
+  background: #f7fbf8;
 }
 
 .bank-result strong {
@@ -15932,6 +15945,15 @@ body {
 .sd-standout-bench { font-size: 12px; color: var(--racing-green); font-weight: 600; }
 .sd-standout-why { font-size: 11.5px; color: var(--text2); line-height: 1.4; flex: 1 1 auto; }
 .sd-standout .small-btn { align-self: flex-start; margin-top: 2px; }
+
+/* What changed — asset-class regime shift */
+.sd-regime { margin: 0 0 12px; }
+.sd-regime-label { display: block; font-size: 11px; color: var(--text3); margin-bottom: 5px; }
+.sd-regime-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sd-regime-chip { font-size: 11.5px; font-weight: 600; border-radius: 8px; padding: 2px 8px; border: 1px solid var(--border-light); }
+.sd-regime-chip.sd-regime-wider { background: rgba(24,115,90,0.12); color: var(--success); }
+.sd-regime-chip.sd-regime-richer { background: rgba(185,68,68,0.10); color: var(--danger); }
+.sd-regime-chip.sd-regime-flat { background: var(--surface-3); color: var(--text2); }
 
 /* What changed — movers */
 .sd-mover-window { margin: 0 0 8px; }

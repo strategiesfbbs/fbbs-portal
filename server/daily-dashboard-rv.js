@@ -50,6 +50,10 @@ const MMD_GRADE_ORDER = [
 // than the package-average yield change since the prior package.
 const MOVER_BPS = 4;
 
+// Asset-class regime shift: the desk's own per-tenor RV-table spread moved this
+// many bp (averaged across tenors) for it to count as cheapening/richening.
+const REGIME_BPS = 5;
+
 // Maturity buckets — the spine of "best idea per bucket" so long bonds don't
 // dominate the board just by carrying more yield. maxY is the inclusive upper
 // edge in years; the last bucket is open-ended.
@@ -808,6 +812,42 @@ function buildStrategist(fred, curve, mmdCurve) {
   return { oas, kpi: { mmdAaa, ratios, twos10s } };
 }
 
+/**
+ * Asset-class regime shift — diff the desk's OWN per-tenor RV table (the
+ * `_relative_value.json` spread columns) vs the prior package. Each class spread
+ * is already net of UST, so the spread delta is the idiosyncratic class move
+ * (the parallel curve shift is cancelled). Positive = cheapened (wider). Returns
+ * a list sorted by |delta|, or null. Pure.
+ */
+function regimeShift(todayTable, priorTable) {
+  const tRows = todayTable && Array.isArray(todayTable.rows) ? todayTable.rows : null;
+  const pRows = priorTable && Array.isArray(priorTable.rows) ? priorTable.rows : null;
+  if (!tRows || !pRows) return null;
+  const pByTerm = new Map(pRows.map(r => [r.term, r]));
+  const CLASSES = [
+    { key: 'cd', spread: 'cdSpread', label: 'CDs' },
+    { key: 'agency', spread: 'agencySpread', label: 'Agencies' },
+    { key: 'muni', spread: 'muniSpread', label: 'Munis' },
+    { key: 'corp', spread: 'corpSpread', label: 'Corporates' },
+  ];
+  const out = [];
+  for (const c of CLASSES) {
+    const deltas = [];
+    for (const tr of tRows) {
+      const pr = pByTerm.get(tr.term);
+      const tv = num(tr[c.spread]), pv = pr ? num(pr[c.spread]) : null;
+      if (tv != null && pv != null) deltas.push(tv - pv);
+    }
+    if (!deltas.length) continue;
+    const mean = Math.round(deltas.reduce((a, b) => a + b, 0) / deltas.length);
+    const direction = mean >= REGIME_BPS ? 'cheapened' : (mean <= -REGIME_BPS ? 'richened' : 'flat');
+    out.push({ key: c.key, label: c.label, deltaBp: mean, direction, n: deltas.length });
+  }
+  if (!out.length) return null;
+  out.sort((a, b) => Math.abs(b.deltaBp) - Math.abs(a.deltaBp));
+  return out;
+}
+
 // ---------- top-level assembly ----------
 
 function take(arr, n) { return arr.slice(0, n); }
@@ -959,8 +999,18 @@ function buildRelativeValue(opts) {
     if (c.rv.repeatStandout) trends.repeated.push(c.cusip);
   }
 
-  // Strategist backdrop — frames why today's standouts are cheap (OAS regime + KPIs).
-  const strategist = buildStrategist(o.fred || null, curve, mmdCurve);
+  // Strategist backdrop — frames why today's standouts are cheap (OAS regime +
+  // KPIs + the desk's own asset-class regime shift vs the prior package).
+  let strategist = buildStrategist(o.fred || null, curve, mmdCurve);
+  const regimeClasses = regimeShift(o.rvTable || null, o.priorRvTable || null);
+  if (regimeClasses) {
+    strategist = strategist || { oas: null, kpi: {} };
+    strategist.regime = {
+      priorDate: (o.priorMeta && o.priorMeta.priorDate) || null,
+      daysAgo: (o.priorMeta && o.priorMeta.daysAgo != null) ? o.priorMeta.daysAgo : null,
+      classes: regimeClasses,
+    };
+  }
 
   return {
     asOf,
@@ -1017,6 +1067,7 @@ module.exports = {
   classifyEnhancement,
   oasRead,
   buildStrategist,
+  regimeShift,
   ratingNotch,
   ratingBucket,
   ratingLabel,

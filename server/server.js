@@ -9788,9 +9788,14 @@ function buildGlobalSearch(rawQuery) {
   const q = String(rawQuery || '').trim();
   const empty = { query: q, banks: [], contacts: [], savedViews: [], peerGroups: [], reports: [] };
   if (q.length < 2) return empty;
-  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const normalizeSearchText = value => String(value || '')
+    .toLowerCase()
+    .replace(/[^0-9a-z]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const terms = normalizeSearchText(q).split(/\s+/).filter(Boolean);
   const matchAll = text => {
-    const hay = String(text || '').toLowerCase();
+    const hay = normalizeSearchText(text);
     return terms.every(t => hay.includes(t));
   };
   const out = { ...empty };
@@ -10311,15 +10316,17 @@ const server = http.createServer(async (req, res) => {
       // Otherwise build the FREE, live relative-value dashboard for the current
       // package — deterministic, zero billable cost, never stale.
       try {
-        const [curve, fred, mmd] = await Promise.all([
+        const [curve, fred, mmd, rvTable] = await Promise.all([
           marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
           fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }).catch(() => null),
           loadCurrentMmdCurve().catch(() => null),
+          loadCurrentRelativeValueSnapshot().catch(() => null),
         ]);
         const econ = await loadCurrentEconomicUpdate().catch(() => null);
         const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
         const { priorRows, priorMeta } = dashboardPriorPackage(packageDate);
-        const live = dailyDashboardJudgment.buildLiveDashboard({ rows: buildAllOfferingsRows(), econ, meta, curve, fred, mmd, priorMap, priorRows, priorMeta, taxRates });
+        const priorRvTable = (priorMeta && priorMeta.priorDate) ? await loadArchivedRelativeValueSnapshot(priorMeta.priorDate).catch(() => null) : null;
+        const live = dailyDashboardJudgment.buildLiveDashboard({ rows: buildAllOfferingsRows(), econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates });
         const staleAi = !!(cached && cached.packageDate && cached.packageDate !== packageDate);
         return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: live, cached: false, aiGenerated: false, stale: staleAi, aiCachedDate: cached ? cached.packageDate : null, customTax: !!taxRates });
       } catch (err) {
@@ -10334,15 +10341,17 @@ const server = http.createServer(async (req, res) => {
       const packageDate = meta.date || null;
       const taxRates = parseDashboardTaxRates(query);
       try {
-        const [curve, fred, mmd] = await Promise.all([
+        const [curve, fred, mmd, rvTable] = await Promise.all([
           marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
           fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }).catch(() => null),
           loadCurrentMmdCurve().catch(() => null),
+          loadCurrentRelativeValueSnapshot().catch(() => null),
         ]);
         const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
         const { priorRows, priorMeta } = dashboardPriorPackage(packageDate);
+        const priorRvTable = (priorMeta && priorMeta.priorDate) ? await loadArchivedRelativeValueSnapshot(priorMeta.priorDate).catch(() => null) : null;
         const rows = buildAllOfferingsRows();
-        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, priorMap, priorRows, priorMeta, taxRates, force: true, log });
+        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates, force: true, log });
         appendAuditLog({
           event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
           degraded: record.degraded, coverage: record.coverage, flags: (record.flags || []).length,
