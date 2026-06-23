@@ -124,16 +124,15 @@
     sort: { key: 'totalAssets', dir: 'desc' }
   };
   let selectedFiles = {
-    dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null, bairdSyndicate: null,
+    econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null, bairdSyndicate: null,
     agenciesBullets: null, agenciesCallables: null, corporates: null
   };
 
   const SLOTS = ['econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'agenciesBullets', 'agenciesCallables', 'corporates'];
   const TOTAL_SLOTS = SLOTS.length;
-  const UPLOAD_SLOTS = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+  const UPLOAD_SLOTS = ['econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'cdoffersCost', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 
   const DOC_TYPES = {
-    dashboard:         { label: 'FBBS Sales Dashboard', ext: 'HTML', viewer: 'dashboard' },
     econ:              { label: 'Economic Update', ext: 'PDF',  viewer: 'econ' },
     relativeValue:     { label: 'Relative Value', ext: 'PDF', viewer: 'relativeValue' },
     mmd:               { label: 'MMD Curve', ext: 'PDF', viewer: 'mmd' },
@@ -148,7 +147,7 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
@@ -158,7 +157,7 @@
     { page: 'pulse', group: 'FBBS', label: 'CRM Pulse', description: 'Live CRM dashboard — clients, prospects, follow-ups, logged activity', aliases: 'crm pulse dashboard kpi clients prospects by state strategies activity follow-ups' },
     { page: 'exec-summary', group: 'Operations', label: 'Exec Summary', description: 'Management-only daily capital, risk, P&L, and desk-activity dashboard', aliases: 'executive summary ceo capital net cap excess requirement buffer risk dv01 pnl revenue desk rep counterparty haircut management board' },
     { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
-    { page: 'dashboard', group: 'FBBS', label: 'Published Dashboard', description: 'Open the uploaded HTML dashboard artifact (the static morning dashboard)', aliases: 'sales html full view fbbs published static uploaded' },
+    { page: 'sales-dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Curated daily picks by client tax structure (C-Corp / S-Corp / RIA), with the macro→pick call, Bond of the Day, and Strategy of the Day', aliases: 'sales dashboard audience fit picks ccorp scorp ria client tax structure taxable equivalent tey bond of the day botd strategy of the day sod curated morning' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
     { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
     { page: 'market-color', group: 'FBBS', label: 'Market Color', description: 'News hub: market wire, official headlines, and desk color', aliases: 'morning iq market color email news s&p macro headlines wire hub' },
@@ -166,7 +165,6 @@
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
     { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
-    { page: 'sales-dashboard', group: 'Offerings', label: 'Sales Dashboard', description: 'Curated daily picks by client tax structure (C-Corp / S-Corp / RIA), with the macro→pick call, Bond of the Day, and Strategy of the Day', aliases: 'sales dashboard audience fit picks ccorp scorp ria client tax structure taxable equivalent tey bond of the day botd strategy of the day sod curated morning' },
     { page: 'all-offerings', group: 'Offerings', label: 'All Offerings', description: 'Every security in today\'s inventory across all asset classes — one screen', aliases: 'all offerings cross asset unified everything inventory cd muni agency corporate treasury mbs structured screen blotter' },
     { page: 'watchlist', group: 'Offerings', label: 'My Watchlist', description: 'Securities and banks you starred, re-joined to today\'s inventory', aliases: 'watchlist watch starred favorites my list follow' },
     { page: 'treasury-explorer', group: 'Offerings', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
@@ -194,14 +192,13 @@
 
   const NAV_GROUP_BY_PAGE = {
     'daily-intelligence': 'fbbs',
-    dashboard: 'fbbs',
     econ: 'fbbs',
     relativeValue: 'fbbs',
     'market-color': 'fbbs',
     mmd: 'fbbs',
     cd: 'cds',
     'cd-recap': 'cds',
-    'sales-dashboard': 'offerings',
+    'sales-dashboard': 'fbbs',
     'all-offerings': 'offerings',
     watchlist: 'offerings',
     'treasury-explorer': 'offerings',
@@ -1297,7 +1294,6 @@
   function classifyFile(filename) {
     if (!filename) return null;
     const lower = filename.toLowerCase();
-    if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'dashboard';
     if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
       if ((lower.includes('treasury') || lower.includes('tsy')) &&
           (lower.includes('note') || lower.includes('notes'))) return 'treasuryNotes';
@@ -2021,7 +2017,6 @@
     updateUploadStat();
     await loadEconomicUpdate();
     renderHome();
-    renderViewer('dashboard');
     renderViewer('econ');
     renderViewer('relativeValue');
     renderViewer('treasuryNotes');
@@ -3156,9 +3151,9 @@
   // ============ Document viewers ============
 
   function renderViewer(slot) {
-    const frame = document.getElementById(slot === 'dashboard' ? 'dashFrame' : slot + 'Frame');
-    const sub = document.getElementById(slot === 'dashboard' ? 'dashSub' : slot + 'Sub');
-    const btn = document.getElementById(slot === 'dashboard' ? 'dashOpenBtn' : slot + 'DownloadBtn');
+    const frame = document.getElementById(slot + 'Frame');
+    const sub = document.getElementById(slot + 'Sub');
+    const btn = document.getElementById(slot + 'DownloadBtn');
     const file = currentPackage && currentPackage[slot];
     const meta = DOC_TYPES[slot];
 
@@ -3167,11 +3162,6 @@
     if (file) {
       const src = '/current/' + encodeURIComponent(file);
       const isExcel = /\.(xlsx|xlsm|xls)$/i.test(file);
-      // The Sales Dashboard is user-uploaded HTML. Sandbox it with
-      // allow-scripts only (no allow-same-origin) so its JavaScript can still
-      // run (Chart.js, inline handlers) but the iframe gets an opaque origin
-      // and cannot read parent state or call our same-origin APIs.
-      const sandboxAttr = slot === 'dashboard' ? ' sandbox="allow-scripts"' : '';
       if (isExcel) {
         const explorerPage = slot === 'cdoffers' ? 'explorer' : (meta.viewer || 'explorer');
         const excelCopy = slot === 'cdoffers'
@@ -3194,7 +3184,7 @@
             <div class="loading-spinner" aria-hidden="true"></div>
             <span>Loading ${escapeHtml(meta.label)}&hellip;</span>
           </div>
-          <iframe src="${src}" title="${meta.label}"${sandboxAttr}></iframe>`;
+          <iframe src="${src}" title="${meta.label}"></iframe>`;
         const iframe = frame.querySelector('iframe');
         const loading = document.getElementById(loadingId);
         if (iframe && loading) {
@@ -3204,12 +3194,8 @@
         }
       }
       sub.textContent = `${file} · Published ${formatTime(currentPackage.publishedAt)}`;
-      if (slot === 'dashboard') {
-        btn.onclick = () => window.open(src, '_blank', 'noopener');
-      } else {
-        btn.onclick = () => { window.location.href = src + '?download=1'; };
-      }
-      if (slot !== 'dashboard') btn.textContent = isExcel ? 'Download Excel ↓' : 'Download PDF ↓';
+      btn.onclick = () => { window.location.href = src + '?download=1'; };
+      btn.textContent = isExcel ? 'Download Excel ↓' : 'Download PDF ↓';
       btn.style.display = '';
     } else {
       frame.innerHTML = `
@@ -4579,7 +4565,7 @@
       ? `${escapeHtml(day.publishedBy || 'Portal User')} · ${formatTime(day.publishedAt)}`
       : '—';
 
-    const viewFirst = day.dashboard || day.econ || day.relativeValue || day.mmd || day.treasuryNotes || day.cd || day.cdoffers || day.cdoffersCost || day.munioffers;
+    const viewFirst = day.econ || day.relativeValue || day.mmd || day.treasuryNotes || day.cd || day.cdoffers || day.cdoffersCost || day.munioffers;
     const viewLink = viewFirst ? `${basePath}${encodeURIComponent(viewFirst)}` : '#';
     const rowClass = isCurrent ? 'current-row' : '';
     const cdOfferIsWorkbook = day.cdoffers && /\.(xlsx|xlsm|xls)$/i.test(day.cdoffers);
@@ -4592,7 +4578,6 @@
           ${formatShortDate(date)}${isCurrent ? ' <span class="current-badge">Current</span>' : ''}
         </td>
         <td>
-          ${chip(day.dashboard, 'Dashboard.html')}
           ${chip(day.econ, 'Econ_Update.pdf')}
           ${chip(day.relativeValue, 'Relative_Value.pdf')}
           ${chip(day.mmd, 'MMD.pdf')}
@@ -16362,7 +16347,6 @@
   }
 
   function slotAcceptExtensions(slot) {
-    if (slot === 'dashboard') return ['.html', '.htm'];
     if (slot === 'treasuryNotes') return ['.xlsx', '.xlsm', '.xls'];
     if (slot === 'cdoffers') return ['.pdf'];
     if (slot === 'cdoffersCost') return ['.xlsx', '.xlsm', '.xls'];
@@ -16592,7 +16576,7 @@
 
   function resetSelectedUploadFiles() {
     selectedFiles = {
-      dashboard: null, econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null, bairdSyndicate: null,
+      econ: null, relativeValue: null, mmd: null, treasuryNotes: null, cd: null, cdoffers: null, cdoffersCost: null, munioffers: null, bairdSyndicate: null,
       agenciesBullets: null, agenciesCallables: null, corporates: null
     };
     UPLOAD_SLOTS.forEach(resetDropZone);
@@ -17388,16 +17372,130 @@
   }
 
   // Today's Standouts hero — top by RV score across all classes, issuer-deduped.
+  function sdOrd(n) {
+    const s = ['th', 'st', 'nd', 'rd'], v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  }
+
+  // SVG relative-value score ring (0–100) — the premium replacement for the
+  // flat score badge. Same hi/mid/lo banding as sdScoreBadge.
+  function sdScoreRing(rv) {
+    if (!rv || rv.score == null) return '';
+    const s = Math.max(0, Math.min(100, Math.round(rv.score)));
+    const C = 100.5; // 2·π·16
+    const dash = (s / 100 * C).toFixed(1);
+    const cls = s >= 70 ? 'hi' : (s >= 40 ? 'mid' : 'lo');
+    return `<span class="sd-ring sd-ring-${cls}" title="Risk-adjusted relative-value score (0–100) — docks long maturity, call risk, deep premiums and tiny blocks">
+        <svg viewBox="0 0 40 40" aria-hidden="true"><circle class="sd-ring-trk" cx="20" cy="20" r="16"/><circle class="sd-ring-val" cx="20" cy="20" r="16" stroke-dasharray="${dash} ${C}"/></svg>
+        <span class="sd-ring-num mono">${s}</span>
+      </span>`;
+  }
+
+  // Horizontal RV fill bar (score as a proportion), same banding.
+  function sdRvBar(rv) {
+    if (!rv || rv.score == null) return '';
+    const s = Math.max(0, Math.min(100, Math.round(rv.score)));
+    const cls = s >= 70 ? 'hi' : (s >= 40 ? 'mid' : 'lo');
+    return `<div class="sd-rvbar" aria-hidden="true"><span class="sd-rvbar-fill sd-rvbar-${cls}" style="width:${Math.max(4, s)}%"></span></div>`;
+  }
+
+  // Premium "morning brief" hero — the research-note cover. Deterministic:
+  // a regime-derived headline + a grounded read line + the day's three
+  // signals (top value / cheapened most / new supply) as deep-linked stats.
+  function sdBriefHeadline(rv) {
+    const ig = rv.strategist && rv.strategist.oas && rv.strategist.oas.ig;
+    let move = null;
+    const cls = rv.strategist && rv.strategist.regime && rv.strategist.regime.classes;
+    if (cls) move = cls.filter(c => c.direction !== 'flat').sort((a, b) => Math.abs(b.deltaBp) - Math.abs(a.deltaBp))[0];
+    if (ig && ig.tag === 'tight') return 'Credit is tight. Today’s value is in the outliers.';
+    if (ig && ig.tag === 'wide') return 'Credit is cheap. The whole cohort is on sale.';
+    if (move && move.direction === 'cheapened') return `${move.label} cheapened — that’s where the desk is leaning.`;
+    return 'Where the desk is finding value today.';
+  }
+  function sdMorningBrief(rv, dash) {
+    if (!rv) return '';
+    const s = rv.strategist || {};
+    const ig = s.oas && s.oas.ig;
+    const readBits = [];
+    if (ig && ig.pctile != null) readBits.push(`IG OAS <b>${ig.bp}bp</b> — the <b>${sdOrd(ig.pctile)} percentile</b> of its year`);
+    if (s.regime && s.regime.classes) {
+      const moves = s.regime.classes.filter(c => c.direction !== 'flat').slice(0, 2)
+        .map(c => `<b>${escapeHtml(c.label)} ${c.deltaBp > 0 ? '+' : ''}${c.deltaBp}bp</b> ${escapeHtml(c.direction)}`);
+      if (moves.length) readBits.push(moves.join(', '));
+    }
+    const read = readBits.length ? readBits.join('. ') + '.' : '';
+    const top = (rv.standouts || [])[0];
+    const mv = rv.movers && rv.movers.cheapened && rv.movers.cheapened[0];
+    const sup = rv.movers && rv.movers.supply && rv.movers.supply[0];
+    const linkStat = (kicker, p, sub) => p ? `<button type="button" class="sd-brief-stat" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>
+        <span class="sd-brief-stat-k">${escapeHtml(kicker)}</span>
+        <span class="sd-brief-stat-name">${escapeHtml(p.description || p.cusip || '')}</span>
+        <span class="sd-brief-stat-sub mono">${escapeHtml(sub)}</span>
+      </button>` : '';
+    const stats = [];
+    if (top) stats.push(linkStat('Top value', top, (top.benchmark || '') + (top.rv && top.rv.score != null ? ` · RV ${top.rv.score}` : '')));
+    if (mv) stats.push(linkStat('Cheapened most', mv, mv.rv && mv.rv.moverBp != null ? `+${mv.rv.moverBp}bp vs the curve` : 'cheapened'));
+    if (sup) stats.push(`<div class="sd-brief-stat sd-brief-stat-static">
+        <span class="sd-brief-stat-k">New supply</span>
+        <span class="sd-brief-stat-name">${escapeHtml(String(sup.bucket))}</span>
+        <span class="sd-brief-stat-sub mono">${sup.pct}% of new paper</span>
+      </div>`);
+    return `<section class="sd-brief" aria-label="Desk morning brief">
+      <div class="sd-brief-kicker">The desk read${dash && dash.packageDate ? ` · ${escapeHtml(dash.packageDate)}` : ''}</div>
+      <h3 class="sd-brief-headline">${escapeHtml(sdBriefHeadline(rv))}</h3>
+      ${read ? `<p class="sd-brief-read">${read}</p>` : ''}
+      ${stats.length ? `<div class="sd-brief-stats">${stats.join('')}</div>` : ''}
+    </section>`;
+  }
+
+  // Premium credit/muni KPI strip — OAS tiles carry a percentile bar (real,
+  // from the trailing-year history), the rest are value + sub tiles.
+  function sdKpiStrip(s) {
+    if (!s) return '';
+    const oasTile = (o, label) => {
+      if (!o) return '';
+      const pct = o.pctile != null ? Math.max(2, Math.min(100, o.pctile)) : null;
+      return `<div class="sd-ktile">
+          <div class="sd-ktile-label">${label} OAS</div>
+          <div class="sd-ktile-val mono">${o.bp}<span class="sd-ktile-unit">bp</span></div>
+          ${pct != null ? `<div class="sd-pctbar" title="${sdOrd(o.pctile)} percentile of the trailing year"><span class="sd-pctbar-fill" style="width:${pct}%"></span></div>
+          <div class="sd-ktile-sub"><span class="sd-oas-tag sd-oas-${escapeHtml(o.tag)}">${sdOrd(o.pctile)} pct · ${escapeHtml(o.tag)}</span></div>` : ''}
+        </div>`;
+    };
+    const valTile = (label, val, sub) => (val != null && val !== '') ? `<div class="sd-ktile">
+        <div class="sd-ktile-label">${escapeHtml(label)}</div>
+        <div class="sd-ktile-val mono">${escapeHtml(String(val))}</div>
+        ${sub ? `<div class="sd-ktile-sub">${escapeHtml(sub)}</div>` : ''}
+      </div>` : '';
+    const k = s.kpi || {}, mmd = k.mmdAaa || {}, r = k.ratios || {};
+    const tiles = [];
+    if (s.oas) { tiles.push(oasTile(s.oas.ig, 'IG')); tiles.push(oasTile(s.oas.hy, 'HY')); }
+    if (k.twos10s) tiles.push(valTile('2s / 10s', (k.twos10s.level > 0 ? '+' : '') + k.twos10s.level + 'bp', k.twos10s.dayBp != null ? `${k.twos10s.dayBp > 0 ? '+' : ''}${k.twos10s.dayBp}bp today` : ''));
+    if (mmd['10y'] != null) tiles.push(valTile('MMD AAA 10y', Number(mmd['10y']).toFixed(2) + '%', r['10y'] != null ? `muni/UST ${r['10y']}%` : ''));
+    if (mmd['30y'] != null) tiles.push(valTile('MMD AAA 30y', Number(mmd['30y']).toFixed(2) + '%', r['30y'] != null ? `ratio ${r['30y']}%` : ''));
+    const t = tiles.filter(Boolean);
+    if (!t.length) return '';
+    let read = '';
+    if (s.oas && s.oas.ig && s.oas.ig.pctile != null) {
+      read = s.oas.ig.tag === 'tight' ? 'IG spreads sit tight vs their range — the cohort isn\'t broadly cheap, so the outliers below are where the value is.'
+        : s.oas.ig.tag === 'wide' ? 'IG spreads are wide vs their range — credit is broadly cheap today.'
+          : 'IG spreads are mid-range vs recent history.';
+    }
+    return `<div class="sd-kstrip">${t.join('')}</div>${read ? `<p class="sd-kpi-read">${escapeHtml(read)}</p>` : ''}`;
+  }
+
   function sdStandouts(list) {
     if (!list || !list.length) return '';
     const cards = list.map(p => `
       <div class="sd-standout">
         <div class="sd-standout-top">
           <span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span>
-          ${sdScoreBadge(p.rv)} ${sdTrendChip(p.rv)}
+          ${sdTrendChip(p.rv)}
+          ${sdScoreRing(p.rv)}
         </div>
         <div class="sd-standout-name">${escapeHtml(p.description || p.cusip || '')}</div>
         <div class="sd-standout-bench">${escapeHtml(p.benchmark || '')}</div>
+        ${sdRvBar(p.rv)}
         ${p.rationale ? `<div class="sd-standout-why">${escapeHtml(p.rationale)}</div>` : ''}
         <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
       </div>`).join('');
@@ -17635,33 +17733,6 @@
     return `<section class="sd-section"><div class="sd-section-head"><h4>${escapeHtml(title)}</h4>${sub ? `<span class="sd-section-sub">${escapeHtml(sub)}</span>` : ''}</div>${inner}</section>`;
   }
 
-  // Desk read — the 10-second morning brief synthesizing the day's signals
-  // (regime + top value + biggest mover + new supply) from the already-grounded
-  // rv data. Deterministic; every bullet links to its security where relevant.
-  function sdDeskRead(rv) {
-    if (!rv) return '';
-    const bullets = [];
-    const s = rv.strategist;
-    if (s) {
-      const bits = [];
-      if (s.oas && s.oas.ig && s.oas.ig.pctile != null) bits.push(`IG OAS ${s.oas.ig.bp}bp (${s.oas.ig.pctile}%ile, ${s.oas.ig.tag})`);
-      if (s.regime && s.regime.classes) {
-        const moves = s.regime.classes.filter(c => c.direction !== 'flat').slice(0, 2).map(c => `${c.label} ${c.deltaBp > 0 ? '+' : ''}${c.deltaBp}bp ${c.direction}`);
-        if (moves.length) bits.push(moves.join(', '));
-      }
-      if (bits.length) bullets.push({ text: `Regime: ${bits.join('; ')}.` });
-    }
-    const top = (rv.standouts || [])[0];
-    if (top) bullets.push({ text: `Top value: ${top.description || top.cusip} — ${top.benchmark || ''}${top.rv && top.rv.score != null ? ` (RV ${top.rv.score})` : ''}.`, cusip: top.cusip, page: top.page });
-    const mv = rv.movers && rv.movers.cheapened && rv.movers.cheapened[0];
-    if (mv) bullets.push({ text: `Cheapened most: ${mv.description || mv.cusip}${mv.rv && mv.rv.moverBp != null ? ` +${mv.rv.moverBp}bp vs the curve` : ''}.`, cusip: mv.cusip, page: mv.page });
-    const sup = rv.movers && rv.movers.supply && rv.movers.supply[0];
-    if (sup) bullets.push({ text: `New supply: ${sup.bucket} is ${sup.pct}% of new paper.` });
-    if (!bullets.length) return '';
-    const li = bullets.map(b => `<li>${escapeHtml(b.text)}${b.cusip ? ` <button type="button" class="sd-link" data-goto="${escapeHtml(b.page || 'all-offerings')}" data-cusip="${escapeHtml(b.cusip)}">open</button>` : ''}</li>`).join('');
-    return `<div class="sd-deskread"><div class="sd-deskread-tag">Desk read</div><ul class="sd-deskread-list">${li}</ul></div>`;
-  }
-
   // Asset-class regime shift — the desk's own RV table moved at the class level.
   function sdRegime(reg) {
     if (!reg || !reg.classes || !reg.classes.length) return '';
@@ -17672,30 +17743,6 @@
     }).join('');
     const win = reg.priorDate ? ` vs ${escapeHtml(reg.priorDate)}${reg.daysAgo != null ? ` (${reg.daysAgo}d)` : ''}` : '';
     return `<div class="sd-regime"><span class="sd-regime-label">Asset-class regime${win} — desk RV table, spread vs UST (parallel move netted out)</span><div class="sd-regime-chips">${chips}</div></div>`;
-  }
-
-  // Strategist backdrop strip — OAS regime + muni/credit KPIs that frame WHY
-  // today's standouts are cheap (or why they aren't broadly).
-  function sdStrategist(s) {
-    if (!s) return '';
-    const oasTile = (o, label) => o ? `<span class="sd-kpi"><span class="sd-kpi-label">${label} OAS</span><span class="sd-kpi-val">${o.bp}bp${o.pctile != null ? ` <span class="sd-oas-tag sd-oas-${escapeHtml(o.tag)}">${o.pctile}%ile ${escapeHtml(o.tag)}</span>` : ''}</span></span>` : '';
-    const tile = (label, val) => (val != null && val !== '') ? `<span class="sd-kpi"><span class="sd-kpi-label">${escapeHtml(label)}</span><span class="sd-kpi-val">${escapeHtml(String(val))}</span></span>` : '';
-    const k = s.kpi || {}, mmd = k.mmdAaa || {}, r = k.ratios || {};
-    const quad = obj => ['2y', '5y', '10y', '30y'].map(t => obj[t] == null ? '—' : obj[t]);
-    const parts = [];
-    if (s.oas) { parts.push(oasTile(s.oas.ig, 'IG')); parts.push(oasTile(s.oas.hy, 'HY')); }
-    if (mmd['2y'] != null || mmd['10y'] != null) parts.push(tile('MMD AAA 2/5/10/30', quad(mmd).map(v => v === '—' ? v : Number(v).toFixed(2)).join(' / ')));
-    if (r['2y'] != null || r['10y'] != null) parts.push(tile('Muni/UST 2/5/10/30', quad(r).map(v => v === '—' ? v : v + '%').join(' / ')));
-    if (k.twos10s) parts.push(tile('2s10s', k.twos10s.level + 'bp' + (k.twos10s.dayBp != null ? ` (${k.twos10s.dayBp > 0 ? '+' : ''}${k.twos10s.dayBp}bp)` : '')));
-    const tiles = parts.filter(Boolean);
-    if (!tiles.length) return '';
-    let read = '';
-    if (s.oas && s.oas.ig && s.oas.ig.pctile != null) {
-      read = s.oas.ig.tag === 'tight' ? 'IG spreads sit tight vs their range — the cohort isn\'t broadly cheap, so the outliers below are where the value is.'
-        : s.oas.ig.tag === 'wide' ? 'IG spreads are wide vs their range — credit is broadly cheap today.'
-          : 'IG spreads are mid-range vs recent history.';
-    }
-    return `<div class="sd-kpi-strip">${tiles.join('')}</div>${read ? `<p class="sd-kpi-read">${escapeHtml(read)}</p>` : ''}`;
   }
 
   function renderSalesDashboard(data) {
@@ -17828,11 +17875,11 @@
     sections.push(sdSection('Audience fit — ranked by relative value', 'Each client\'s picks ordered by the spread THAT buyer earns over Treasury after tax',
       `<div class="sd-matrix exec-three-col">${sdAudienceColumns(audiences, dash.picks, dash.connector)}</div>`));
 
-    const deskReadHtml = rv ? sdDeskRead(rv) : '';
-    const strategistHtml = (rv && rv.strategist) ? sdStrategist(rv.strategist) : '';
+    const briefHtml = rv ? sdMorningBrief(rv, dash) : '';
+    const kpiHtml = (rv && rv.strategist) ? sdKpiStrip(rv.strategist) : '';
     const sourceHtml = sdSourceChecklist(data.sources);
     const catalystHtml = sdCatalysts(data.catalysts);
-    body.innerHTML = banners.join('') + sourceHtml + catalystHtml + deskReadHtml + legend + strategistHtml + sections.join('');
+    body.innerHTML = banners.join('') + briefHtml + kpiHtml + catalystHtml + legend + sections.join('') + sourceHtml;
 
     if (stat) stat.textContent = (rv && rv.leaders) ? rv.leaders.length : audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
     if (metaEl) {
@@ -20897,7 +20944,6 @@
   // stale package). Derived entirely from the published metadata (/api/current);
   // server-side validation rules can layer on later.
   const PACKAGE_QA_SLOTS = [
-    { key: 'dashboard', optional: true },
     { key: 'econ' },
     { key: 'cd', dateField: 'brokeredCdAsOfDate', count: p => (p.brokeredCdTerms || []).length, countLabel: 'terms' },
     { key: 'cdoffers', count: p => p.offeringsCount, countLabel: 'offerings' },
@@ -21180,7 +21226,7 @@
             </tr>`).join('')}
         </tbody>
       </table>
-      <div class="legend-box"><strong>Note:</strong> Read-only review derived from the published package metadata (<code>/api/current</code>). Counts come from each slot's parsed JSON; optional slots (dashboard, Baird Syndicate) don't count against completeness.</div>
+      <div class="legend-box"><strong>Note:</strong> Read-only review derived from the published package metadata (<code>/api/current</code>). Counts come from each slot's parsed JSON; optional Baird Syndicate doesn't count against completeness.</div>
     `;
   }
 

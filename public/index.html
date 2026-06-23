@@ -45,8 +45,8 @@
         <a class="nav-link nav-minor" data-page="pulse" href="#pulse">
           <span class="nav-label">CRM Pulse</span>
         </a>
-        <a class="nav-link nav-minor" data-page="dashboard" href="#dashboard">
-          <span class="nav-label">Published Dashboard</span>
+        <a class="nav-link nav-minor" data-page="sales-dashboard" href="#sales-dashboard">
+          <span class="nav-label">Sales Dashboard</span>
         </a>
         <a class="nav-link nav-minor" data-page="econ" href="#econ">
           <span class="nav-label">Economic Update</span>
@@ -70,9 +70,6 @@
         <span class="nav-caret">&#8250;</span>
       </button>
       <div class="nav-sub" id="nav-sub-offerings">
-        <a class="nav-link nav-minor" data-page="sales-dashboard" href="#sales-dashboard">
-          <span class="nav-label">Sales Dashboard</span>
-        </a>
         <a class="nav-link nav-minor" data-page="all-offerings" href="#all-offerings">
           <span class="nav-label">All Offerings</span>
         </a>
@@ -352,7 +349,7 @@
       <article class="home-tile" data-tile="daily" data-reveal>
         <header class="home-tile-head">
           <p class="home-tile-kicker">Daily Sheets</p>
-          <button type="button" class="home-tile-jump" data-goto="dashboard" aria-label="Open Published Dashboard">
+          <button type="button" class="home-tile-jump" data-goto="sales-dashboard" aria-label="Open Sales Dashboard">
             Open <span aria-hidden="true">&rarr;</span>
           </button>
         </header>
@@ -360,7 +357,7 @@
           <span class="home-tile-package-date" id="homeTileDailyDate">&mdash;</span>
         </div>
         <div class="home-tile-chips">
-          <button type="button" data-goto="dashboard">Sales</button>
+          <button type="button" data-goto="sales-dashboard">Sales</button>
           <button type="button" data-goto="econ">Economic</button>
           <button type="button" data-goto="relativeValue">Relative Value</button>
           <button type="button" data-goto="cd">CD Rates</button>
@@ -945,31 +942,6 @@
   </div>
 </div>
 
-<!-- ========== DASHBOARD PAGE ========== -->
-<div class="page" id="p-dashboard">
-  <section class="page-hero">
-    <div class="page-hero-inner">
-      <div>
-        <h2>FBBS Sales <strong>Dashboard</strong></h2>
-        <p class="hero-sub" id="dashSub">Loading&hellip;</p>
-      </div>
-      <button class="publish-btn" id="dashOpenBtn">Open Full View &uarr;</button>
-    </div>
-  </section>
-  <div class="container">
-    <div class="viewer-wrap dashboard-only-view">
-      <div class="viewer-frame" id="dashFrame">
-        <div class="viewer-empty">
-          <div class="ff-kicker">No Document Loaded</div>
-          <h2>No dashboard has been uploaded yet</h2>
-          <p>Go to the Upload page to publish today's FBBS Sales Dashboard HTML.</p>
-          <button class="doc-btn" data-goto="upload">Go to Upload</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- ========== DAILY INTELLIGENCE PAGE ========== -->
 <div class="page" id="p-daily-intelligence">
   <section class="page-hero">
@@ -1518,31 +1490,9 @@
             <h4>Manual Upload Fallback</h4>
             <p>Use this when one package slot needs a quick replacement.</p>
           </div>
-          <span>HTML + PDFs</span>
+          <span>PDFs + Workbooks</span>
         </div>
         <div class="upload-grid">
-
-        <div class="upload-card">
-          <div class="upload-card-head">
-            <span>FBBS Sales Dashboard</span>
-            <span class="ft">.HTML</span>
-          </div>
-          <label class="drop-zone" data-slot="dashboard">
-            <input type="file" accept=".html,.htm" hidden>
-            <div class="drop-icon-sm">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="#B8CEBE" stroke-width="2">
-                <path d="M9 12V3M5 7l4-4 4 4"/>
-                <path d="M3 12v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
-              </svg>
-            </div>
-            <h5 data-default="Drop HTML File">Drop HTML File</h5>
-            <p data-default="or click to browse">or click to browse</p>
-          </label>
-          <div class="upload-status" id="status-dashboard">
-            <span>Accepts: .html</span>
-            <span class="pending">Awaiting</span>
-          </div>
-        </div>
 
         <div class="upload-card">
           <div class="upload-card-head">

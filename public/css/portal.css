@@ -1479,7 +1479,6 @@ summary:focus-visible,
   min-height: 700px;
   position: relative;
 }
-.dashboard-only-view .viewer-frame,
 .document-only-view .viewer-frame {
   border-top: 1px solid var(--border);
   border-radius: 8px;
@@ -15995,7 +15994,7 @@ body {
 
 /* Today's Standouts hero */
 .sd-standouts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
-.sd-standout { background: var(--surface-2); border: 1px solid var(--border-light); border-top: 3px solid var(--racing-green); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.sd-standout { background: var(--surface-2); border: 1px solid var(--border-light); border-top: 3px solid var(--racing-green); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .sd-standout-top { display: flex; align-items: center; gap: 6px; }
 .sd-standout-name { font-size: 13px; font-weight: 650; color: var(--text); line-height: 1.25; }
 .sd-standout-bench { font-size: 12px; color: var(--racing-green); font-weight: 600; }
@@ -16046,7 +16045,7 @@ body {
 .sd-kpi, .sd-bucket-col, .sd-source-box, .sd-deskread {
   box-shadow: 0 1px 2px rgba(16, 23, 21, 0.04);
 }
-.sd-standout { background: var(--surface); border-radius: var(--radius-lg); }
+.sd-standout { background: var(--surface); border-radius: var(--radius); }
 .sd-botd, .sd-sod, .sd-standout {
   transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
@@ -16084,4 +16083,180 @@ body {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
   outline: none;
+}
+
+/* ===================================================================
+   Sales Dashboard — premium redesign (2026-06-23, Wave 2).
+   Vendored Geist (grotesk headlines) + Geist Mono (tabular figures),
+   a dark "morning brief" hero, percentile-bar KPI tiles, and SVG
+   relative-value score rings. Self-hosted fonts (CSP: default-src 'self').
+   Scoped to #p-sales-dashboard so the rest of the app is untouched.
+   =================================================================== */
+@font-face {
+  font-family: 'Geist';
+  src: url('/vendor/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/vendor/fonts/GeistMono-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+#p-sales-dashboard {
+  font-family: 'Geist', 'Lato', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+#p-sales-dashboard h2,
+#p-sales-dashboard h3,
+#p-sales-dashboard h4 { letter-spacing: 0; }
+/* Every figure on the page renders in the vendored mono, tabular. */
+#p-sales-dashboard .mono,
+#p-sales-dashboard .snap-value,
+#p-sales-dashboard .sd-kpi-val,
+#p-sales-dashboard .sd-ktile-val,
+#p-sales-dashboard .sd-eff,
+#p-sales-dashboard .sd-standout-bench,
+#p-sales-dashboard .sd-num,
+#p-sales-dashboard .sd-bench,
+#p-sales-dashboard .sd-board-table,
+#p-sales-dashboard .sd-inv-count,
+#p-sales-dashboard .sd-ring-num,
+#p-sales-dashboard .sd-mover-bp,
+#p-sales-dashboard .sd-brief-stat-sub {
+  font-family: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----- The morning-brief hero (research-note cover) ----- */
+.sd-brief {
+  background: linear-gradient(135deg, var(--racing-green) 0%, var(--racing-green-dark) 100%);
+  color: #eaf3ee;
+  border-radius: var(--radius);
+  padding: 24px 26px 22px;
+  margin: 0 0 16px;
+}
+.sd-brief-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  color: var(--tea-green);
+  margin-bottom: 11px;
+}
+.sd-brief-headline {
+  font-weight: 600;
+  font-size: 30px;
+  line-height: 1.15;
+  color: #ffffff;
+  margin: 0;
+  max-width: 34ch;
+}
+.sd-brief-read {
+  margin: 12px 0 17px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #c6d8cd;
+  max-width: 66ch;
+}
+.sd-brief-read b { color: #ffffff; font-weight: 600; }
+.sd-brief-stats { display: flex; flex-wrap: wrap; gap: 10px; }
+.sd-brief-stat {
+  flex: 1 1 158px;
+  min-width: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: var(--radius);
+  padding: 10px 13px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+}
+.sd-brief-stat:hover {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: rgba(255, 255, 255, 0.26);
+  transform: translateY(-1px);
+}
+.sd-brief-stat-static { cursor: default; }
+.sd-brief-stat-static:hover { transform: none; background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.13); }
+.sd-brief-stat-k {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  color: var(--tea-green);
+}
+.sd-brief-stat-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #ffffff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sd-brief-stat-sub {
+  font-size: 11.5px;
+  color: var(--tea-green);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ----- Premium credit/muni KPI strip ----- */
+.sd-kstrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  gap: 11px;
+  margin: 0 0 8px;
+}
+.sd-ktile {
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 11px 13px;
+  box-shadow: 0 1px 2px rgba(16, 23, 21, 0.04);
+}
+.sd-ktile-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+.sd-ktile-val { font-size: 22px; font-weight: 600; line-height: 1.1; margin: 4px 0 4px; color: var(--text); }
+.sd-ktile-unit { font-size: 12px; color: var(--text3); font-weight: 500; }
+.sd-pctbar { height: 5px; background: var(--surface-3); border-radius: var(--radius-pill); overflow: hidden; margin: 3px 0 6px; }
+.sd-pctbar-fill { display: block; height: 100%; background: var(--hookers-green); border-radius: var(--radius-pill); }
+.sd-ktile-sub { font-size: 11px; color: var(--text2); }
+
+/* ----- Standout score ring + RV bar ----- */
+.sd-ring { position: relative; width: 42px; height: 42px; margin-left: auto; flex: 0 0 auto; }
+.sd-ring svg { width: 42px; height: 42px; transform: rotate(-90deg); }
+.sd-ring-trk { fill: none; stroke: var(--surface-3); stroke-width: 4; }
+.sd-ring-val { fill: none; stroke-width: 4; stroke-linecap: round; }
+.sd-ring-hi .sd-ring-val { stroke: var(--success); }
+.sd-ring-mid .sd-ring-val { stroke: #9A6A00; }
+.sd-ring-lo .sd-ring-val { stroke: var(--text3); }
+.sd-ring-num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 600; }
+.sd-ring-hi .sd-ring-num { color: var(--success); }
+.sd-ring-mid .sd-ring-num { color: #9A6A00; }
+.sd-ring-lo .sd-ring-num { color: var(--text3); }
+.sd-rvbar { height: 5px; background: var(--surface-3); border-radius: var(--radius-pill); overflow: hidden; margin: 8px 0 2px; }
+.sd-rvbar-fill { display: block; height: 100%; border-radius: var(--radius-pill); }
+.sd-rvbar-hi { background: var(--success); }
+.sd-rvbar-mid { background: #9A6A00; }
+.sd-rvbar-lo { background: var(--text3); }
+.sd-standout-top { align-items: center; }
+
+@media (max-width: 720px) {
+  .sd-brief { padding: 20px; }
+  .sd-brief-headline { font-size: 24px; }
 }

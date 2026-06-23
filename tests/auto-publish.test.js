@@ -24,8 +24,8 @@ const DROP_DIR = path.join(DATA_DIR, 'dropbox', todayStamp());
 const CURRENT_DIR = path.join(DATA_DIR, 'current');
 const AUDIT_PATH = path.join(DATA_DIR, 'audit.log');
 
-function dashboardHtml(marker) {
-  return `<!DOCTYPE html><html><body><h1>Dashboard ${marker}</h1></body></html>`;
+function packagePdf(marker) {
+  return Buffer.from(`%PDF-1.4\n% ${marker}\n`);
 }
 
 function auditEvents() {
@@ -36,9 +36,9 @@ function auditEvents() {
   }
 }
 
-function currentDashboard() {
+function currentPackagePdf() {
   if (!fs.existsSync(CURRENT_DIR)) return null;
-  const file = fs.readdirSync(CURRENT_DIR).find(f => f.toLowerCase().endsWith('.html'));
+  const file = fs.readdirSync(CURRENT_DIR).find(f => f.toLowerCase().endsWith('.pdf'));
   return file ? fs.readFileSync(path.join(CURRENT_DIR, file), 'utf-8') : null;
 }
 
@@ -59,20 +59,20 @@ async function main() {
   await check('an empty drop folder does nothing', async () => {
     await autoPublishTick();
     await autoPublishTick();
-    assert.strictEqual(currentDashboard(), null);
+    assert.strictEqual(currentPackagePdf(), null);
     assert.strictEqual(auditEvents().length, 0);
   });
 
   await check('a new file publishes only after the folder is stable for one tick', async () => {
     fs.mkdirSync(DROP_DIR, { recursive: true });
-    fs.writeFileSync(path.join(DROP_DIR, 'Sales Dashboard.html'), dashboardHtml('v1'));
+    fs.writeFileSync(path.join(DROP_DIR, 'Economic Update.pdf'), packagePdf('v1'));
 
     await autoPublishTick(); // first sighting — must NOT publish yet
-    assert.strictEqual(currentDashboard(), null, 'published before the stability window');
+    assert.strictEqual(currentPackagePdf(), null, 'published before the stability window');
 
     await autoPublishTick(); // unchanged since last tick — publish
-    const published = currentDashboard();
-    assert.ok(published && published.includes('Dashboard v1'), 'dashboard not published');
+    const published = currentPackagePdf();
+    assert.ok(published && published.includes('v1'), 'package PDF not published');
 
     const meta = JSON.parse(fs.readFileSync(path.join(CURRENT_DIR, '_meta.json'), 'utf-8'));
     assert.strictEqual(meta.publishedBy, 'Folder Drop (auto)');
@@ -89,24 +89,24 @@ async function main() {
   });
 
   await check('a slot collision holds the publish and audits the skip once', async () => {
-    fs.writeFileSync(path.join(DROP_DIR, 'Second Dashboard.html'), dashboardHtml('intruder'));
+    fs.writeFileSync(path.join(DROP_DIR, 'Second Economic Update.pdf'), packagePdf('intruder'));
     await autoPublishTick(); // new fingerprint — pending
     await autoPublishTick(); // stable — collision detected, held
     await autoPublishTick(); // still held, no duplicate audit row
 
-    const published = currentDashboard();
-    assert.ok(published.includes('Dashboard v1'), 'collision overwrote the live dashboard');
+    const published = currentPackagePdf();
+    assert.ok(published.includes('v1'), 'collision overwrote the live package PDF');
     const skips = auditEvents().filter(e => e.event === 'folder-auto-publish-skipped' && e.reason === 'slot-collision');
     assert.strictEqual(skips.length, 1, `expected exactly one skip audit row, got ${skips.length}`);
   });
 
   await check('resolving the collision publishes the updated file', async () => {
-    fs.rmSync(path.join(DROP_DIR, 'Second Dashboard.html'));
-    fs.writeFileSync(path.join(DROP_DIR, 'Sales Dashboard.html'), dashboardHtml('v2'));
+    fs.rmSync(path.join(DROP_DIR, 'Second Economic Update.pdf'));
+    fs.writeFileSync(path.join(DROP_DIR, 'Economic Update.pdf'), packagePdf('v2'));
     await autoPublishTick(); // changed — pending
     await autoPublishTick(); // stable — publish
-    const published = currentDashboard();
-    assert.ok(published && published.includes('Dashboard v2'), 'updated dashboard not published');
+    const published = currentPackagePdf();
+    assert.ok(published && published.includes('v2'), 'updated package PDF not published');
   });
 
   fs.rmSync(DATA_DIR, { recursive: true, force: true });

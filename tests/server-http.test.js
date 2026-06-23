@@ -68,6 +68,10 @@ function multipartFile(fieldName, filename, content) {
   };
 }
 
+function testPdf(marker) {
+  return Buffer.from(`%PDF-1.4\n% ${marker}\n`);
+}
+
 function writeJson(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(value));
@@ -122,7 +126,7 @@ async function withServer(extraEnv, fn) {
 
 test('same-day corrupt replacement preserves existing current slot', async () => {
   await withServer({}, async ({ port, dataDir }) => {
-    const first = multipartFile('dashboard', 'dashboard.html', '<!doctype html><html><body>old dashboard</body></html>');
+    const first = multipartFile('econ', 'economic-update.pdf', testPdf('old econ'));
     const published = await request(port, {
       method: 'POST',
       path: '/api/upload',
@@ -130,10 +134,10 @@ test('same-day corrupt replacement preserves existing current slot', async () =>
       body: first.body
     });
     assert.strictEqual(published.status, 200, published.text);
-    const dashboardPath = path.join(dataDir, 'current', 'dashboard.html');
-    assert.ok(fs.readFileSync(dashboardPath, 'utf8').includes('old dashboard'));
+    const econPath = path.join(dataDir, 'current', 'economic-update.pdf');
+    assert.ok(fs.readFileSync(econPath, 'utf8').includes('old econ'));
 
-    const corrupt = multipartFile('dashboard', 'dashboard.html', 'not really html');
+    const corrupt = multipartFile('econ', 'economic-update.pdf', 'not really pdf');
     const rejected = await request(port, {
       method: 'POST',
       path: '/api/upload',
@@ -141,19 +145,19 @@ test('same-day corrupt replacement preserves existing current slot', async () =>
       body: corrupt.body
     });
     assert.strictEqual(rejected.status, 400, rejected.text);
-    assert.ok(fs.readFileSync(dashboardPath, 'utf8').includes('old dashboard'));
+    assert.ok(fs.readFileSync(econPath, 'utf8').includes('old econ'));
   });
 });
 
 test('dateless current package archives using existing file date', async () => {
   await withServer({}, async ({ port, dataDir }) => {
     const currentDir = path.join(dataDir, 'current');
-    const oldPath = path.join(currentDir, 'FBBS_Dashboard_20260501.html');
-    fs.writeFileSync(oldPath, '<!doctype html><html><body>old dateless dashboard</body></html>');
+    const oldPath = path.join(currentDir, '20260501.pdf');
+    fs.writeFileSync(oldPath, testPdf('old dateless econ'));
     const oldDate = new Date('2026-05-01T12:00:00');
     fs.utimesSync(oldPath, oldDate, oldDate);
 
-    const next = multipartFile('dashboard', 'dashboard.html', '<!doctype html><html><body>new dashboard</body></html>');
+    const next = multipartFile('econ', 'economic-update.pdf', testPdf('new econ'));
     const published = await request(port, {
       method: 'POST',
       path: '/api/upload',
@@ -161,8 +165,8 @@ test('dateless current package archives using existing file date', async () => {
       body: next.body
     });
     assert.strictEqual(published.status, 200, published.text);
-    assert.ok(fs.existsSync(path.join(dataDir, 'archive', '2026-05-01', 'FBBS_Dashboard_20260501.html')));
-    assert.ok(fs.readFileSync(path.join(currentDir, 'dashboard.html'), 'utf8').includes('new dashboard'));
+    assert.ok(fs.existsSync(path.join(dataDir, 'archive', '2026-05-01', '20260501.pdf')));
+    assert.ok(fs.readFileSync(path.join(currentDir, 'economic-update.pdf'), 'utf8').includes('new econ'));
     assert.strictEqual(fs.existsSync(oldPath), false);
   });
 });

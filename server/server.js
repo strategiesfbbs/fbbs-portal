@@ -315,6 +315,7 @@ const MIME_TYPES = {
   '.css':  'text/css; charset=utf-8',
   '.js':   'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2',
   '.pdf':  'application/pdf',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12',
@@ -331,9 +332,8 @@ const MIME_TYPES = {
   '.txt':  'text/plain; charset=utf-8'
 };
 
-const SLOT_NAMES = ['dashboard', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
+const SLOT_NAMES = ['econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers', 'bairdSyndicate', 'agenciesBullets', 'agenciesCallables', 'corporates'];
 const DOC_TYPES_LABELS = {
-  dashboard: 'FBBS Sales Dashboard',
   econ: 'Economic Update',
   relativeValue: 'Relative Value',
   mmd: 'MMD Curve',
@@ -432,7 +432,7 @@ function sendPrintableHtml(res, html) {
   res.end(html);
 }
 
-function sendFile(res, filePath, { download = false, sandboxHtml = false, filename = '', req = null } = {}) {
+function sendFile(res, filePath, { download = false, filename = '', req = null } = {}) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
       return sendText(res, 404, 'Not found');
@@ -498,9 +498,6 @@ function sendFile(res, filePath, { download = false, sandboxHtml = false, filena
       const downloadName = path.basename(filename || filePath).replace(/["\r\n]/g, '');
       headers['Content-Disposition'] =
         `attachment; filename="${downloadName}"`;
-    }
-    if (sandboxHtml && /\.html?$/i.test(filePath)) {
-      headers['Content-Security-Policy'] = 'sandbox allow-scripts';
     }
     res.writeHead(200, headers);
     if (req && req.method === 'HEAD') {
@@ -712,8 +709,6 @@ function classifyFile(filename, explicitSlot) {
   if (!filename) return null;
   const lower = filename.toLowerCase();
 
-  if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'dashboard';
-
   // Excel workbook slots. Route by filename keyword.
   if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
     if ((lower.includes('treasury') || lower.includes('tsy')) &&
@@ -906,12 +901,6 @@ function looksLikePlainText(buffer) {
   return Buffer.isBuffer(buffer) && buffer.slice(0, 2048).indexOf(0) === -1;
 }
 
-function looksLikeHtml(buffer) {
-  if (!Buffer.isBuffer(buffer)) return false;
-  const head = buffer.slice(0, 512).toString('utf-8').trimStart().toLowerCase();
-  return head.startsWith('<!doctype html') || head.startsWith('<html') || head.includes('<html');
-}
-
 function looksLikePng(buffer) {
   return Buffer.isBuffer(buffer) && hasBytes(buffer, [0x89, 0x50, 0x4e, 0x47]);
 }
@@ -967,9 +956,6 @@ function validateStrategyFileSignature(file) {
 
 function validateUploadSignature(file, slot) {
   if (!file || !file.data) return 'Upload is missing file data.';
-  if (slot === 'dashboard') {
-    return looksLikeHtml(file.data) ? null : `${file.filename} does not look like an HTML dashboard file.`;
-  }
   if (slot === 'cdoffers') {
     const ext = path.extname(file.filename || '').toLowerCase();
     if (['.xlsx', '.xlsm', '.xls'].includes(ext)) {
@@ -1146,7 +1132,7 @@ function parseMultipart(req, boundary, limit) {
             } else if (SLOT_NAMES.includes(fieldName)) {
               explicitSlot = fieldName;
             } else {
-              const m = fieldName.match(/(?:file[_-]?)?(dashboard|econ|relativeValue|treasuryNotes|cdoffers|munioffers|bairdSyndicate|agenciesBullets|agenciesCallables|corporates|cd)/i);
+              const m = fieldName.match(/(?:file[_-]?)?(econ|relativeValue|treasuryNotes|cdoffers|munioffers|bairdSyndicate|agenciesBullets|agenciesCallables|corporates|cd)/i);
               if (m) {
                 const token = m[1];
                 // Normalize the canonical form (case-sensitive slot names)
@@ -1463,7 +1449,6 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
   const meta = readMetaFile(dirPath);
   const pkg = {
     date: dateIfMissingMeta,
-    dashboard: null,
     econ: null,
     relativeValue: null,
     mmd: null,
@@ -2624,7 +2609,7 @@ const INTERNAL_GO_LIVE_REQUIRED_SLOTS = [
   'agenciesCallables',
   'corporates'
 ];
-const INTERNAL_GO_LIVE_OPTIONAL_SLOTS = ['dashboard', 'bairdSyndicate'];
+const INTERNAL_GO_LIVE_OPTIONAL_SLOTS = ['bairdSyndicate'];
 
 function isDataDirExternal() {
   return path.resolve(DATA_DIR) !== path.resolve(path.join(ROOT, 'data'));
@@ -10279,10 +10264,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   // Defense-in-depth: restrict where the SPA shell can load resources from.
   // We deliberately do NOT apply this strict CSP to user-uploaded files served
-  // from /current/ or /archive/ — those (esp. dashboard HTML) legitimately
-  // load CDN libraries like Chart.js. The dashboard iframe is sandboxed
-  // client-side instead, which puts it in an opaque origin so it cannot
-  // make same-origin fetches against this app's APIs.
+  // from /current/ or /archive/ because these are user-uploaded package files.
   const isUserContent =
     pathname.startsWith('/current/') || pathname.startsWith('/archive/');
   if (!isUserContent) {
@@ -11639,10 +11621,11 @@ const server = http.createServer(async (req, res) => {
       const filename = safeDecodeURIComponent(pathname.slice('/current/'.length));
       if (filename == null) return sendText(res, 400, 'Invalid path');
       if (hasPrivatePathSegment(filename)) return sendText(res, 404, 'Not found');
+      if (/\.html?$/i.test(filename)) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(CURRENT_DIR, filename);
       if (!filePath) return sendText(res, 400, 'Invalid path');
       const download = query.get('download') === '1';
-      return sendFile(res, filePath, { download, sandboxHtml: true });
+      return sendFile(res, filePath, { download });
     }
 
     // --- File serving: archive ---
@@ -11656,10 +11639,11 @@ const server = http.createServer(async (req, res) => {
       if (filename == null) return sendText(res, 400, 'Invalid path');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return sendText(res, 400, 'Invalid date');
       if (hasPrivatePathSegment(filename)) return sendText(res, 404, 'Not found');
+      if (/\.html?$/i.test(filename)) return sendText(res, 404, 'Not found');
       const filePath = safeJoin(ARCHIVE_DIR, date, filename);
       if (!filePath) return sendText(res, 400, 'Invalid path');
       const download = query.get('download') === '1';
-      return sendFile(res, filePath, { download, sandboxHtml: true });
+      return sendFile(res, filePath, { download });
     }
 
     // --- Static assets ---
