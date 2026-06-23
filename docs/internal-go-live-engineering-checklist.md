@@ -5,9 +5,35 @@ Windows Authentication, trusted network/VPN access, and no client-facing traffic
 
 ## Production Identity
 
-- Enable Windows Authentication in IIS and disable anonymous access.
-- Set `FBBS_AUTH_MODE=iis` on the App Pool.
-- Confirm `/api/me` resolves the signed-in Windows user with `source: "iis"`.
+- Confirm the physical access pattern before relying on per-rep boundaries:
+  each rep should reach the portal from their own machine/session with their own
+  Windows login. If several reps share one workstation logged in as one Windows
+  account, IIS forwards the same `LOGON_USER` for all of them and the portal
+  cannot distinguish the reps.
+- Set `FBBS_AUTH_MODE=iis` on the App Pool. This turns on required auth for
+  non-public APIs, disables the `fbbs_rep_override` cookie, and refuses the
+  local `FBBS_DEFAULT_REP` fallback.
+- Set `FBBS_ADMIN_USERS` on the App Pool to the usernames allowed to
+  publish/import data, refresh billable AI reads, open management views, and see
+  firm-wide CRM rollups. Usernames are normalized by stripping domain/email
+  suffixes and lowercasing, so `FBBS\Jane Smith`, `jsmith@fbbs.com`, and
+  `jsmith` should be represented by the normalized admin username.
+- Enable Windows Authentication in IIS and disable anonymous access. The app's
+  `web.config` declares:
+  - `<windowsAuthentication enabled="true" />`
+  - `<anonymousAuthentication enabled="false" />`
+  - `promoteServerVars="LOGON_USER,AUTH_USER"`
+  iisnode forwards those server variables to Node as
+  `x-iisnode-logon_user` / `x-iisnode-auth_user`, which
+  `server/rep-identity.js` reads.
+- Add the portal host to the Local Intranet zone on rep machines, preferably by
+  GPO. Without that browser/GPO setting, Integrated Windows Auth may not
+  auto-send credentials; users may see a native login prompt or fall through to
+  anonymous if IIS is misconfigured.
+- From a rep's own machine, confirm `/api/me` resolves the signed-in Windows
+  user with `source: "iis"` and `auth.isAdmin: false`.
+- From an admin's own machine, confirm `/api/me` resolves the signed-in Windows
+  user with `source: "iis"` and `auth.isAdmin: true`.
 - Confirm the header shows `Signed in` and the manual rep picker does not open.
 - Confirm old `fbbs_rep_override` cookies are ignored in production mode.
 - Confirm each sales rep's Windows username matches the owner names used in the
@@ -15,7 +41,6 @@ Windows Authentication, trusted network/VPN access, and no client-facing traffic
 
 ## Admin Allowlist
 
-- Set `FBBS_ADMIN_USERS` to the usernames allowed to publish/import data.
 - Confirm an admin can publish the daily package.
 - Confirm a non-admin cannot call these production data-write endpoints:
   - `POST /api/upload`
@@ -26,6 +51,15 @@ Windows Authentication, trusted network/VPN access, and no client-facing traffic
   - `POST /api/banks/averaged-series/upload`
   - `POST /api/banks/bond-accounting/upload`
   - `POST /api/brokered-cd/wirp/upload`
+- Confirm a non-admin `GET /api/crm/dashboard?rep=all` returns 200 but is
+  scoped to that rep. Check `audit.log` for `crm-dashboard-scope-collapsed`.
+- Confirm an admin `GET /api/crm/dashboard?rep=all` returns the firm-wide
+  dashboard.
+- Confirm an anonymous/no-identity request to a protected `/api/*` route returns
+  401. `/api/health` should remain 200; it is the only public API path.
+- Confirm non-admins do not see the Upload/Admin/Exec Summary nav entries,
+  billable AI refresh buttons, or the Views page Everyone/Just-me firm-wide
+  toggle.
 
 ## Daily Package Smoke Test
 

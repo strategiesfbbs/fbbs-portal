@@ -176,11 +176,15 @@ data/
 - Security headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: SAMEORIGIN`, and `Content-Security-Policy` (scoped — strict CSP is applied to the SPA shell + APIs; uploaded dashboard HTML served from `/current/*` or `/archive/*` gets a sandbox CSP so direct opens stay isolated while still allowing scripts).
 - Dashboard iframe carries `sandbox="allow-scripts"` (no `allow-same-origin`) — its JS still runs but it gets an opaque origin and can't call our APIs.
 - Mutating `/api/*` requests are blocked when browser same-origin signals indicate a cross-site write.
-- Admin-only write routes (`isAdminOnlyApiWrite` in server.js) — the upload/import routes **plus the three billable AI refreshes** (`/api/{daily-summary,offerings-pick,sales-dashboard}/refresh`) require an admin actor. The gate engages only when admin auth is configured (IIS Windows auth or a non-empty `FBBS_ADMIN_USERS`); in the bare trusted-LAN/dev posture it is a no-op. (Note: the AI refresh *buttons* are not yet UI-gated, so a non-admin in an auth-configured deployment sees the button and gets a 403 toast on click — a known prod-only polish.)
+- IIS Windows Auth is the production identity source. In `FBBS_AUTH_MODE=iis|windows|production`, `server/rep-identity.js` trusts only iisnode's Windows-user headers (`x-iisnode-logon_user` / `x-iisnode-auth_user`), disables the `fbbs_rep_override` cookie, and refuses the local default rep fallback. Do not add an app login, password store, users table, or roles table without changing the deployment model.
+- Roles are only **Admin** and **Rep**. Admins are the normalized usernames in `FBBS_ADMIN_USERS`; reps are everyone else with a resolved Windows identity. `FBBS_ADMIN_USERS` controls admin writes, management-only reads, and firm-wide CRM rollup access.
+- Access control is now enforced, not opt-in, whenever auth is configured: `shouldEnforceRepScope()` engages when required auth is on (`FBBS_AUTH_MODE`/`FBBS_REQUIRE_AUTH`) or `FBBS_ADMIN_USERS` is non-empty. Non-admin `?rep=all` or other-rep rollup attempts collapse to the signed-in rep and are audited (`*-scope-collapsed`) instead of returning firm-wide data.
+- Boundary is **Soft A**: the daily market package, offerings/explorers, bank search/tear sheets, maps, peer reports, bond accounting, and per-bank CRM detail (activities/tasks/opportunities/contacts) stay firm-wide/shared for the desk. Firm-wide CRM rollups (`Pulse ?rep=all`, bank views, pipeline, activity/account-touch reports) and admin actions are gated; non-admin UI hides Upload/Admin/Exec Summary, billable AI refresh buttons, import/upload controls, and the Views Everyone toggle.
+- Shared-workstation caveat: IIS identifies the Windows session, not the person at the keyboard. If several reps share one workstation logged in as one Windows account, the portal sees one `LOGON_USER` and per-rep boundaries collapse to that account. Use per-rep Windows logins/machines before relying on rep-scoped production behavior.
 - Streaming file responses (`fs.createReadStream` + pipe).
 - Graceful shutdown on SIGINT/SIGTERM.
 
-What's intentionally *not* there: app-level auth, CSRF tokens, rate limiting, log rotation. All deferred to the LAN/IIS posture.
+What's intentionally *not* there: app-level login/passwords, a users/roles table, CSRF tokens, or rate limiting. All deferred to the LAN/IIS posture.
 
 ## Bond Swap proposal builder (Strategies → Bond Swap tab)
 
