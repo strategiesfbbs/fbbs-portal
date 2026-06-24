@@ -32,6 +32,9 @@ Three kinds of agent: **layer specialists** (own a horizontal layer), **feature 
 | `bond-swap-dev` | `swap-math/store/render`, Portfolio Idea Engine, `#bond-swap` | swap economics/rules, idea engine, proposals, solver, TEY math, the builder UI |
 | `bank-tear-sheet-dev` | `bank-data-importer`, `bank-coverage-store`, the `#banks` tear sheet + CRM | call-report/portfolio view, activities/tasks/opps/contacts, signals, Today's Fits, `BANK_FIELDS` |
 | `sales-dashboard-dev` | `daily-dashboard{,-rv,-judgment}`, `#sales-dashboard` | RV scoring/benchmarks/movers/strategist, audience picks, BQ/TEFRA TEY, tax lens, the dashboard UI |
+| `reports-analytics-dev` | `report-store`, `report-logic`, `bank-views`, `#reports`/`#pulse`/`#views` | the custom-bank report builder, CRM Pulse, saved views, My Work, activity/pipeline rollups |
+| `offerings-explorer-dev` | `cusipSearchSources` registry, the explorers, `#all-offerings`, CUSIP/global search | the offering normalize() contract, adding an asset class, an explorer page, search/deep-links |
+| `market-hub-dev` | Market Color/Wire/MMD + the market-snapshot band | presenting market data, the canonical-vs-live snapshot policy, wiring a feed into a surface |
 
 ### Meta / autonomy
 | Agent | Owns | Use when |
