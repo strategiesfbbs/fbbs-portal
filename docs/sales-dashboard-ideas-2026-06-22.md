@@ -4,7 +4,7 @@
 
 > **Owner decisions (2026-06-22):**
 > 1. **Status: brainstorm only.** Hold all building until the owner has reacted to this catalog and synced with Codex. Nothing here is approved to implement yet.
-> 2. **Retire the uploaded-HTML dashboard entirely.** The native `#sales-dashboard` becomes the one and only "Sales Dashboard" everywhere; remove the legacy uploaded-HTML `dashboard` page/slot completely (not just relabel it). This is more invasive than a nav tweak — it touches the daily-package slot machinery (`SLOT_NAMES`/`DOC_TYPES`/`UPLOAD_SLOTS` in server.js + portal.js, the home tile, upload + Package QA, `classifyFile()`, the sandboxed iframe viewer). Plan it as its own scoped change and coordinate with Codex, since the package layout is shared.
+> 2. **Uploaded-HTML dashboard retired.** The native `#sales-dashboard` is now the one and only "Sales Dashboard" everywhere; the old optional uploaded `dashboard` page/slot has been removed from active package navigation and upload flow.
 > 3. *(Open)* The dedicated tax-modeling lens (§4) errored mid-run; re-run available on request for deeper custom-rate / state / BQ / Sub-S depth.
 
 ---
@@ -103,7 +103,7 @@ Everything else hangs off the score:
 - **"Why this scores" expandable** — per pick, the cohort, the median, this bond's spread, the MMD tier, the curve pickup — every number re-attached from data (same discipline as the swap engine). Makes the score defensible on a client call.
 - **Per-audience narrative** — Claude names the dislocation *and* the trade logic for that tax structure; keep the single `→` connector invariant, numbers re-attached server-side.
 
-**Nav cleanup** (S, UX): make the native `#sales-dashboard` *be* "Sales Dashboard"; demote the legacy uploaded-HTML "Published Dashboard" (the optional `#dashboard` slot) to Operations → Package QA. Single-source the brand. Slot stays optional in the package; only its prominent nav entry moves.
+**Nav cleanup** (done): the native `#sales-dashboard` is the Sales Dashboard. The old uploaded-HTML dashboard slot is retired from active navigation/upload flow, so there is no separate "Published Dashboard" surface to demote.
 
 ---
 

@@ -8334,6 +8334,113 @@ body {
   gap: 14px;
 }
 
+.custom-report-quickstart {
+  align-items: end;
+  background: #f7fbf8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 220px) auto minmax(260px, 1.2fr);
+  padding: 12px;
+}
+
+.custom-report-quickstart > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.custom-report-quickstart span {
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.custom-report-quickstart strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.custom-report-quickstart label {
+  color: var(--text2);
+  display: grid;
+  font-size: 12px;
+  font-weight: 800;
+  gap: 6px;
+}
+
+.custom-report-quickstart input {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.custom-report-quickchips {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.custom-report-quickchips button {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.custom-report-quickchips button.active {
+  background: #e9f3ed;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.custom-report-recipes {
+  align-items: center;
+  border-top: 1px dashed #d5e2d9;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 1 / -1;
+  padding-top: 10px;
+}
+
+.custom-report-recipes span {
+  color: var(--text3);
+  flex-basis: 100%;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.custom-report-recipes button {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.custom-report-recipes button.active {
+  background: #183b2f;
+  border-color: #183b2f;
+  color: #fff;
+}
+
 .custom-report-grid {
   display: grid;
   gap: 12px;
@@ -14249,6 +14356,7 @@ body {
 }
 
 @media (max-width: 760px) {
+  .custom-report-quickstart,
   .custom-report-grid,
   .custom-report-columns > div {
     grid-template-columns: 1fr;
@@ -14669,6 +14777,7 @@ body {
   .maps-split,
   .maps-drilldown,
   .maps-full-body,
+  .custom-report-quickstart,
   .custom-report-grid,
   .portfolio-review-two-col,
   .portfolio-decision-grid,

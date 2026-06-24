@@ -25,7 +25,8 @@ const {
   mapSwapHoldingPosition,
   readPackageDir,
   collectAgencyPackageFiles,
-  sniffAgencyWorkbookSlot
+  sniffAgencyWorkbookSlot,
+  uploadSlotFromFieldName
 } = require('../server/server');
 const { saveCdHistorySnapshot, summarizeWeeklyCdHistory } = require('../server/cd-history');
 const { importWeeklyCdWorksheet } = require('../server/cd-history-importer');
@@ -147,6 +148,17 @@ function assertClassification() {
   assert.strictEqual(classifyFolderDropFile('20260512_MASTER.xls'), null);
   assert.strictEqual(classifyFolderDropFile('grid1_nnepvdfk.xlsx'), null);
   assert.strictEqual(classifyFolderDropFile('random spreadsheet.xlsx'), null);
+}
+
+function assertUploadSlotFieldNames() {
+  assert.strictEqual(uploadSlotFromFieldName('econ'), 'econ');
+  assert.strictEqual(uploadSlotFromFieldName('file-mmd'), 'mmd');
+  assert.strictEqual(uploadSlotFromFieldName('file_relativeValue'), 'relativeValue');
+  assert.strictEqual(uploadSlotFromFieldName('file-RelativeValue'), 'relativeValue');
+  assert.strictEqual(uploadSlotFromFieldName('cdoffersCost'), null);
+  assert.strictEqual(uploadSlotFromFieldName('file-cdCost'), null);
+  assert.strictEqual(uploadSlotFromFieldName('file-cd-extra'), null);
+  assert.strictEqual(uploadSlotFromFieldName('unknown'), null);
 }
 
 function assertSecurityHelpers() {
@@ -1620,6 +1632,7 @@ function assertStructuredNotesColumnAlignment() {
 (async function run() {
   assertDateSniffing();
   assertClassification();
+  assertUploadSlotFieldNames();
   assertSecurityHelpers();
   await assertCdParser();
   assertCdWorkbookParser();

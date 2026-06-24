@@ -2,7 +2,6 @@
  * FBBS Market Intelligence Portal — Internal Web App
  *
  * Serves the portal UI and accepts daily document uploads:
- *   • Market Intelligence Dashboard (HTML)
  *   • Economic Update (PDF)
  *   • Relative Value (PDF)
  *   • Treasury Notes (Excel)             ← also parsed into structured Notes
@@ -1053,6 +1052,14 @@ function isValidYmd(y, mm, dd) {
 
 // ---------- Multipart parser ----------
 
+function uploadSlotFromFieldName(fieldName) {
+  if (!fieldName) return null;
+  if (SLOT_NAMES.includes(fieldName)) return fieldName;
+
+  const normalized = String(fieldName).trim().replace(/^file[_-]/i, '');
+  return SLOT_NAMES.find(slot => slot.toLowerCase() === normalized.toLowerCase()) || null;
+}
+
 function parseMultipart(req, boundary, limit) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -1129,16 +1136,8 @@ function parseMultipart(req, boundary, limit) {
             if (CD_COST_FIELD_NAMES.has(fieldName)) {
               explicitSlot = 'cdoffers';
               companionRole = 'cdCostWorkbook';
-            } else if (SLOT_NAMES.includes(fieldName)) {
-              explicitSlot = fieldName;
             } else {
-              const m = fieldName.match(/(?:file[_-]?)?(econ|relativeValue|treasuryNotes|cdoffers|munioffers|bairdSyndicate|agenciesBullets|agenciesCallables|corporates|cd)/i);
-              if (m) {
-                const token = m[1];
-                // Normalize the canonical form (case-sensitive slot names)
-                const canonical = SLOT_NAMES.find(s => s.toLowerCase() === token.toLowerCase());
-                explicitSlot = canonical || null;
-              }
+              explicitSlot = uploadSlotFromFieldName(fieldName);
             }
             files.push({
               fieldName,
@@ -11795,6 +11794,7 @@ if (require.main === module) {
 module.exports = {
   classifyFile,
   classifyFolderDropFile,
+  uploadSlotFromFieldName,
   hasPrivatePathSegment,
   isSameOriginWrite,
   sniffDateFromFilename,

@@ -159,7 +159,7 @@
     { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
     { page: 'sales-dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Curated daily picks by client tax structure (C-Corp / S-Corp / RIA), with the macro→pick call, Bond of the Day, and Strategy of the Day', aliases: 'sales dashboard audience fit picks ccorp scorp ria client tax structure taxable equivalent tey bond of the day botd strategy of the day sod curated morning' },
     { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
-    { page: 'relativeValue', group: 'FBBS', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
+    { page: 'relativeValue', group: 'CDs', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
     { page: 'market-color', group: 'FBBS', label: 'Market Color', description: 'News hub: market wire, official headlines, and desk color', aliases: 'morning iq market color email news s&p macro headlines wire hub' },
     { page: 'mmd', group: 'FBBS', label: 'MMD Curve', description: 'View the Bloomberg FTAX MMD curve, Treasury ratios, and sales talking points', aliases: 'mmd curve ftax bloomberg muni municipal market data aaa ratios' },
     { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
@@ -193,7 +193,7 @@
   const NAV_GROUP_BY_PAGE = {
     'daily-intelligence': 'fbbs',
     econ: 'fbbs',
-    relativeValue: 'fbbs',
+    relativeValue: 'cds',
     'market-color': 'fbbs',
     mmd: 'fbbs',
     cd: 'cds',
@@ -398,16 +398,31 @@
     { key: 'totalAssets', label: 'Assets', type: 'money', section: 'Balance Sheet' },
     { key: 'totalDeposits', label: 'Deposits', type: 'money', section: 'Balance Sheet' },
     { key: 'totalEquityCapital', label: 'Equity Capital', type: 'money', section: 'Balance Sheet' },
+    { key: 'totalBorrowings', label: 'Borrowings', type: 'money', section: 'Balance Sheet' },
     { key: 'afsTotal', label: 'AFS Securities', type: 'money', section: 'Securities' },
     { key: 'htmTotal', label: 'HTM Securities', type: 'money', section: 'Securities' },
+    { key: 'afsMunis', label: 'AFS Munis', type: 'money', section: 'Securities' },
+    { key: 'htmMunis', label: 'HTM Munis', type: 'money', section: 'Securities' },
     { key: 'securitiesToAssets', label: 'Securities / Assets', type: 'percent', section: 'Securities' },
     { key: 'loansToAssets', label: 'Loans / Assets', type: 'percent', section: 'Loans' },
     { key: 'loansToDeposits', label: 'Loans / Deposits', type: 'percent', section: 'Liquidity' },
+    { key: 'brokeredDepositsToDeposits', label: 'Brokered Deposits / Deposits', type: 'percent', section: 'Liquidity' },
+    { key: 'wholesaleFundingReliance', label: 'Wholesale Funding Reliance', type: 'percent', section: 'Liquidity' },
+    { key: 'netNonCoreFundingDependence', label: 'Net Non-Core Funding', type: 'percent', section: 'Liquidity' },
+    { key: 'liquidAssetsToAssets', label: 'Liquid Assets / Assets', type: 'percent', section: 'Liquidity' },
+    { key: 'longTermAssetsToAssets', label: 'Long-Term Assets / Assets', type: 'percent', section: 'Liquidity' },
     { key: 'yieldOnSecurities', label: 'Yield on Securities', type: 'percent', section: 'Profitability' },
     { key: 'netInterestMargin', label: 'NIM', type: 'percent', section: 'Profitability' },
     { key: 'costOfFunds', label: 'Cost of Funds', type: 'percent', section: 'Profitability' },
+    { key: 'roa', label: 'ROA', type: 'percent', section: 'Profitability' },
+    { key: 'roe', label: 'ROE', type: 'percent', section: 'Profitability' },
+    { key: 'efficiencyRatio', label: 'Efficiency Ratio', type: 'percent', section: 'Profitability' },
     { key: 'tier1RiskBasedRatio', label: 'Tier 1 RBC', type: 'percent', section: 'Capital' },
     { key: 'texasRatio', label: 'Texas Ratio', type: 'percent', section: 'Credit' },
+    { key: 'subchapterS', label: 'Subchapter S', type: 'text', section: 'Details' },
+    { key: 'numberOfOffices', label: 'Offices', type: 'number', section: 'Details' },
+    { key: 'website', label: 'Website', type: 'text', section: 'Details' },
+    { key: 'phone', label: 'Phone', type: 'text', section: 'Details' },
     { key: 'peerDelta_securitiesToAssets', label: 'Securities Gap', type: 'percent', section: 'Peer Gaps' },
     { key: 'peerDelta_yieldOnSecurities', label: 'Securities Yield Gap', type: 'percent', section: 'Peer Gaps' },
     { key: 'peerDelta_netInterestMargin', label: 'NIM Gap', type: 'percent', section: 'Peer Gaps' },
@@ -434,6 +449,21 @@
   // the conditions and save their own copy.
   const STARTER_TEMPLATES = [
     {
+      id: 'tpl-open-banks-by-state',
+      name: 'Open banks by state',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Start with untriaged Open banks in one or more states, then refine by securities mix, assets, owner, or any call-report field.',
+      template: true,
+      filters: {
+        statuses: 'Open',
+        states: '',
+        conditions: [],
+        groupBy: { field: 'state', thenBy: '', aggs: { totalAssets: 'sum' } }
+      },
+      columns: ['displayName', 'city', 'state', 'certNumber', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'totalDeposits', 'securitiesToAssets', 'afsTotal', 'htmTotal', 'yieldOnSecurities']
+    },
+    {
       id: 'tpl-tx-clients-securities',
       name: 'Clients in TX with securities > $10MM',
       type: 'custom-bank',
@@ -449,6 +479,75 @@
         groupBy: { field: '', thenBy: '', aggs: {} }
       },
       columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'afsTotal', 'htmTotal', 'securitiesToAssets', 'yieldOnSecurities']
+    },
+    {
+      id: 'tpl-open-securities-prospects',
+      name: 'Open banks with securities',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Untriaged Open banks that report a securities book, grouped by state for a quick calling list.',
+      template: true,
+      filters: {
+        statuses: 'Open',
+        states: '',
+        conditions: [
+          { field: 'securitiesToAssets', op: 'gt', value: '0' }
+        ],
+        groupBy: { field: 'state', thenBy: '', aggs: { totalAssets: 'sum', securitiesToAssets: 'avg' } }
+      },
+      columns: ['displayName', 'city', 'state', 'certNumber', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'securitiesToAssets', 'afsTotal', 'htmTotal', 'yieldOnSecurities', 'phone', 'website']
+    },
+    {
+      id: 'tpl-open-large-banks',
+      name: 'Open banks over $500MM',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Larger Open banks, useful for triage and ownership cleanup before a coverage push.',
+      template: true,
+      filters: {
+        statuses: 'Open',
+        states: '',
+        minAssets: '500',
+        conditions: [],
+        groupBy: { field: 'state', thenBy: '', aggs: { totalAssets: 'sum', totalDeposits: 'sum' } }
+      },
+      columns: ['displayName', 'city', 'state', 'certNumber', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'totalDeposits', 'securitiesToAssets', 'loansToDeposits', 'phone', 'website']
+    },
+    {
+      id: 'tpl-funding-pressure',
+      name: 'Funding pressure watch',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Banks with elevated loan/deposit ratios and non-core funding reliance — a starter list for funding or CD conversations.',
+      template: true,
+      filters: {
+        statuses: 'Open,Prospect,Client,Watchlist',
+        states: '',
+        conditions: [
+          { field: 'loansToDeposits', op: 'gt', value: '85' },
+          { field: 'netNonCoreFundingDependence', op: 'gt', value: '10' }
+        ],
+        groupBy: { field: 'accountStatusLabel', thenBy: 'state', aggs: { totalAssets: 'sum', totalBorrowings: 'sum' } }
+      },
+      columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'totalDeposits', 'loansToDeposits', 'netNonCoreFundingDependence', 'wholesaleFundingReliance', 'brokeredDepositsToDeposits', 'totalBorrowings']
+    },
+    {
+      id: 'tpl-afs-muni-book',
+      name: 'AFS muni book candidates',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Banks with visible AFS muni holdings and a meaningful securities book, a starting point for tax-exempt and swap ideas.',
+      template: true,
+      filters: {
+        statuses: 'Open,Prospect,Client,Watchlist',
+        states: '',
+        conditions: [
+          { field: 'afsMunis', op: 'gt', value: '0' },
+          { field: 'securitiesToAssets', op: 'gt', value: '10' }
+        ],
+        groupBy: { field: 'state', thenBy: 'accountStatusLabel', aggs: { afsMunis: 'sum', totalAssets: 'sum' } }
+      },
+      columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'securitiesToAssets', 'afsMunis', 'htmMunis', 'yieldOnSecurities', 'subchapterS']
     },
     {
       id: 'tpl-loan-buyers',
@@ -481,6 +580,23 @@
         groupBy: { field: '', thenBy: '', aggs: {} }
       },
       columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'coverageOwner', 'totalAssets', 'securitiesToAssets', 'yieldOnSecurities', 'peerDelta_yieldOnSecurities']
+    },
+    {
+      id: 'tpl-portfolio-peer-gaps',
+      name: 'Portfolio files with peer gaps',
+      type: 'custom-bank',
+      folder: 'Templates',
+      description: 'Banks with matched portfolio files and peer-watch gaps, built for follow-up portfolio review calls.',
+      template: true,
+      filters: {
+        statuses: 'Open,Prospect,Client,Watchlist',
+        states: '',
+        portfolioOnly: true,
+        peerWatchOnly: true,
+        conditions: [],
+        groupBy: { field: 'accountStatusLabel', thenBy: 'state', aggs: { totalAssets: 'sum' } }
+      },
+      columns: ['displayName', 'city', 'state', 'accountStatusLabel', 'coverageOwner', 'portfolioAvailable', 'totalAssets', 'securitiesToAssets', 'yieldOnSecurities', 'peerDelta_yieldOnSecurities', 'peerDelta_securitiesToAssets', 'peerDelta_netInterestMargin']
     }
   ];
   const COMMISSION_PRODUCT_LABELS = {
@@ -9330,6 +9446,56 @@
     return '';
   }
 
+  function customBankHasCondition(field, op, value) {
+    const conditions = Array.isArray(customBankReportState.filters.conditions)
+      ? customBankReportState.filters.conditions
+      : [];
+    return conditions.some(cond => cond && cond.field === field && cond.op === op && String(cond.value || '') === String(value || ''));
+  }
+
+  function customBankQuickStateValue() {
+    const input = document.getElementById('customBankQuickStateInput');
+    return String(input ? input.value : customBankReportState.filters.states || '').toUpperCase();
+  }
+
+  function customBankTemplateActive(templateId) {
+    const def = starterTemplateById(templateId);
+    return Boolean(def && customBankReportState.name === def.name);
+  }
+
+  function customBankQuickStartHtml() {
+    const filters = customBankReportState.filters;
+    const recipe = (id, label) => `
+      <button type="button" class="${customBankTemplateActive(id) ? 'active' : ''}" data-custom-quick="${escapeHtml(id)}">${escapeHtml(label)}</button>
+    `;
+    return `
+      <section class="custom-report-quickstart" aria-label="Open bank list shortcuts">
+        <div>
+          <span>Quick Reports</span>
+          <strong>Pick a starter screen, then tighten the filters or save it as your own view.</strong>
+        </div>
+        <label>State
+          <input type="text" id="customBankQuickStateInput" placeholder="MO, IL, AR..." value="${escapeHtml(filters.states || '')}">
+        </label>
+        <button type="button" class="small-btn primary" data-custom-quick="open-state">Show open banks</button>
+        <div class="custom-report-quickchips" aria-label="Common refinements">
+          <button type="button" class="${customBankHasCondition('securitiesToAssets', 'gt', '0') ? 'active' : ''}" data-custom-quick="securities-positive">Securities % &gt; 0</button>
+          <button type="button" class="${String(filters.minAssets || '') === '500' ? 'active' : ''}" data-custom-quick="assets-over-500">Assets &gt; $500MM</button>
+          <button type="button" class="${String(filters.maxAssets || '') === '500' ? 'active' : ''}" data-custom-quick="assets-under-500">Assets &lt; $500MM</button>
+          <button type="button" data-custom-quick="clear-open-list">Clear</button>
+        </div>
+        <div class="custom-report-recipes" aria-label="Ready report screens">
+          <span>Ready screens</span>
+          ${recipe('tpl-open-securities-prospects', 'Open + securities')}
+          ${recipe('tpl-open-large-banks', 'Open > $500MM')}
+          ${recipe('tpl-funding-pressure', 'Funding pressure')}
+          ${recipe('tpl-afs-muni-book', 'AFS muni book')}
+          ${recipe('tpl-portfolio-peer-gaps', 'Portfolio gaps')}
+        </div>
+      </section>
+    `;
+  }
+
   function customBankReportColumnPickerHtml() {
     const selected = new Set(customBankReportState.selectedColumns || []);
     const groups = {};
@@ -9452,6 +9618,7 @@
     const selectedColumns = customBankReportState.selectedColumns || [];
     return `
       <div class="custom-report-builder">
+        ${customBankQuickStartHtml()}
         <div class="custom-report-grid">
           <label>Search
             <input type="search" id="customBankSearchInput" placeholder="Bank, city, cert, owner..." value="${escapeHtml(filters.search || '')}">
@@ -9656,6 +9823,95 @@
       renderReportsWorkspace();
     } catch (e) {
       showToast('Could not save report view', true);
+    }
+  }
+
+  function addOrUpdateCustomBankCondition(field, op, value) {
+    const conditions = customBankReportState.filters.conditions = Array.isArray(customBankReportState.filters.conditions)
+      ? customBankReportState.filters.conditions
+      : [];
+    const existing = conditions.find(cond => cond && cond.field === field);
+    if (existing) {
+      existing.op = op;
+      existing.value = value;
+      delete existing.value2;
+    } else {
+      conditions.push({ field, op, value });
+    }
+  }
+
+  function clearCustomBankOpenListFilters() {
+    customBankReportState.filters = {
+      ...customBankReportState.filters,
+      search: '',
+      states: '',
+      statuses: '',
+      minAssets: '',
+      maxAssets: '',
+      peerWatchOnly: false,
+      savedOnly: false,
+      portfolioOnly: false,
+      conditions: [],
+      groupBy: { field: '', thenBy: '', aggs: {} }
+    };
+    customBankReportState.name = '';
+    customBankReportState.definitionId = '';
+  }
+
+  function rerunCustomBankQuickFilter() {
+    if (customBankReportState.dataset) {
+      renderCustomBankReportMount();
+    } else {
+      runCustomBankReport();
+    }
+  }
+
+  function applyCustomBankStarterTemplate(templateId) {
+    const def = starterTemplateById(templateId);
+    if (!def) return false;
+    const states = customBankQuickStateValue();
+    resetCustomBankReportFromDefinition({ ...def, id: '' });
+    customBankReportState.definitionId = '';
+    if (states) customBankReportState.filters.states = states;
+    customBankReportState.sort = def.sort || { key: 'totalAssets', dir: 'desc' };
+    return true;
+  }
+
+  function applyCustomBankQuickFilter(action) {
+    if (action === 'clear-open-list') {
+      clearCustomBankOpenListFilters();
+      renderCustomBankReportMount();
+      return;
+    }
+    if (action === 'open-state') {
+      const states = customBankQuickStateValue();
+      customBankReportState.name = 'Open banks by state';
+      customBankReportState.definitionId = '';
+      customBankReportState.filters.statuses = 'Open';
+      customBankReportState.filters.states = states;
+      customBankReportState.filters.groupBy = { field: 'state', thenBy: '', aggs: { totalAssets: 'sum' } };
+      rerunCustomBankQuickFilter();
+      return;
+    }
+    if (action === 'securities-positive') {
+      addOrUpdateCustomBankCondition('securitiesToAssets', 'gt', '0');
+      rerunCustomBankQuickFilter();
+      return;
+    }
+    if (action === 'assets-over-500') {
+      customBankReportState.filters.minAssets = '500';
+      customBankReportState.filters.maxAssets = '';
+      rerunCustomBankQuickFilter();
+      return;
+    }
+    if (action === 'assets-under-500') {
+      customBankReportState.filters.maxAssets = '500';
+      customBankReportState.filters.minAssets = '';
+      rerunCustomBankQuickFilter();
+      return;
+    }
+    if (action.startsWith('tpl-') && applyCustomBankStarterTemplate(action)) {
+      rerunCustomBankQuickFilter();
     }
   }
 
@@ -11372,12 +11628,13 @@
           nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
         }
       }
-      if (['customBankSearchInput', 'customBankStatesInput', 'customBankMinAssetsInput', 'customBankMaxAssetsInput'].includes(target.id)) {
+      if (['customBankSearchInput', 'customBankStatesInput', 'customBankMinAssetsInput', 'customBankMaxAssetsInput', 'customBankQuickStateInput'].includes(target.id)) {
         const keyById = {
           customBankSearchInput: 'search',
           customBankStatesInput: 'states',
           customBankMinAssetsInput: 'minAssets',
-          customBankMaxAssetsInput: 'maxAssets'
+          customBankMaxAssetsInput: 'maxAssets',
+          customBankQuickStateInput: 'states'
         };
         customBankReportState.filters[keyById[target.id]] = target.value || '';
         renderCustomBankReportMount();
@@ -11610,6 +11867,11 @@
         const idx = Number(condRemove.dataset.condRemove);
         (customBankReportState.filters.conditions || []).splice(idx, 1);
         renderCustomBankReportMount();
+        return;
+      }
+      const quick = clickTarget.closest('[data-custom-quick]');
+      if (quick) {
+        applyCustomBankQuickFilter(quick.dataset.customQuick || '');
         return;
       }
       const groupToggle = clickTarget.closest('[data-custom-group-toggle]');
