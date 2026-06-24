@@ -646,7 +646,11 @@ const MAP_FIELD_KEYS = [
   'roa', 'roe', 'netInterestMargin', 'yieldOnSecurities', 'yieldOnLoans',
   'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio', 'leverageRatio',
   'nonInterestBearingDeposits', 'wholesaleFundingReliance',
-  'liquidAssetsToAssets', 'tier1RiskBasedRatio', 'texasRatio', 'nplsToLoans', 'longTermAssetsToAssets'
+  'liquidAssetsToAssets', 'tier1RiskBasedRatio', 'texasRatio', 'nplsToLoans', 'longTermAssetsToAssets',
+  // Signal Inbox: the AFS muni book (muni-afs-book signal) + Sub-S election
+  // (BQ context). Additive per CLAUDE.md "Adding a metric to the map" — projected
+  // here so the cached map dataset carries them; no other change needed.
+  'afsMunis', 'subchapterS'
 ];
 
 function zip5(value) {

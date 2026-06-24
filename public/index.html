@@ -45,6 +45,9 @@
         <a class="nav-link nav-minor" data-page="pulse" href="#pulse">
           <span class="nav-label">CRM Pulse</span>
         </a>
+        <a class="nav-link nav-minor" data-page="signals" href="#signals">
+          <span class="nav-label">Signal Inbox</span>
+        </a>
         <a class="nav-link nav-minor" data-page="sales-dashboard" href="#sales-dashboard">
           <span class="nav-label">Sales Dashboard</span>
         </a>
@@ -798,6 +801,50 @@
     <p class="maturity-cal-meta" id="cdRolloverMeta"></p>
     <div class="cd-national-strip" id="cdRolloverNational" hidden></div>
     <section id="cdRolloverApp" aria-label="Brokered-CD rollover wall"></section>
+  </div>
+</div>
+
+<!-- ========== SIGNAL INBOX PAGE ========== -->
+<div class="page" id="p-signals">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Signal <strong>Inbox</strong></h2>
+        <p class="hero-sub" id="signalsSub">One screen of the highest-leverage reasons to act &mdash; cold accounts, funding pressure, offerings that fit your banks, and data going stale.</p>
+      </div>
+      <div class="hero-stat">
+        <span id="signalsHeroStat">&mdash;</span>
+        <small>Live signals</small>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="sig-controls" id="signalsControls">
+      <div class="sig-control sig-control-scope" id="signalsScopeControl" hidden>
+        <label for="signalsScope">Scope</label>
+        <select id="signalsScope">
+          <option value="me">My banks</option>
+          <option value="all">Firm-wide</option>
+        </select>
+      </div>
+      <div class="sig-control">
+        <label for="signalsState">State</label>
+        <select id="signalsState"><option value="">All states</option></select>
+      </div>
+      <div class="sig-control sig-control-search">
+        <label for="signalsSearch">Search</label>
+        <input type="search" id="signalsSearch" placeholder="Filter by bank name&hellip;" autocomplete="off">
+      </div>
+      <div class="sig-control sig-control-actions">
+        <button type="button" class="small-btn secondary" id="signalsRefresh">Refresh</button>
+        <button type="button" class="small-btn" id="signalsExport">Export CSV</button>
+      </div>
+    </div>
+    <div class="sig-chiprow" id="signalsCategoryChips" role="group" aria-label="Filter by category"></div>
+    <p class="sig-meta" id="signalsMeta"></p>
+    <div class="sig-warnings" id="signalsWarnings" hidden></div>
+    <section id="signalsBody" aria-label="Signal inbox"></section>
   </div>
 </div>
 

@@ -192,6 +192,7 @@ const dailyDashboard = require('./daily-dashboard');                 // Phase 1:
 const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2: grounded Claude judgment layer
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
+const bankSignals = require('./bank-signals'); // PURE Signal Inbox engine (no I/O)
 
 // ---------- Config ----------
 
@@ -9942,6 +9943,175 @@ function listKnownReps() {
   }
 }
 
+// ---- Signal Inbox (#signals) ----
+// Gathers every input the PURE bank-signals engine needs, then hands it ONE
+// resolved object. Discipline (perf + scope):
+//   - The full-set numeric signals (large-no-owner, muni-afs pre-filter) read
+//     ONLY the cached map projection (getMapBankData), never a per-bank parse.
+//   - The per-bank reads (funding score, CD-rollover slice, offering fits, FDIC
+//     freshness) loop ONLY over the rep's OWNED saved-bank set (hundreds max),
+//     so a page load never fans out across the ~4,400-bank table.
+//   - coverage-large-no-owner is firm-set (unowned rows shown to all reps); every
+//     other signal is rep-scoped here by ownerStringContainsRep before the engine.
+// scopedRep === null means firm-wide (admin ?rep=all).
+function gatherSignalInputs(scopedRep, options = {}) {
+  const today = todayStamp();
+  const mapData = getMapBankData();
+  if (!mapData || !Array.isArray(mapData.banks)) {
+    const err = new Error('Bank dataset not loaded');
+    err.statusCode = 503;
+    throw err;
+  }
+  const pkg = getCurrentPackage() || {};
+  const packageDate = pkg.date || null;
+  const stateFilter = String(options.state || '').trim().toUpperCase();
+
+  const thresholds = {
+    coldDays: COLD_ACCOUNT_DAYS,
+    rolloverWindowDays: options.rolloverWindowDays,
+    assetFloorK: options.assetFloorK,
+    fitMinScore: options.fitMinScore,
+  };
+
+  // --- Coverage / CRM inputs ---
+  const allSavedBanks = (listSavedBanks(BANK_REPORTS_DIR) || []);
+  // Rep-scope the owned set the per-bank signals run over.
+  let ownedBanks = scopedRep
+    ? allSavedBanks.filter(b => ownerStringContainsRep(b.owner, scopedRep))
+    : allSavedBanks.filter(b => String(b.owner || '').trim()); // firm-wide: any owned bank
+  if (stateFilter) {
+    ownedBanks = ownedBanks.filter(b => String(b.state || '').toUpperCase() === stateFilter);
+  }
+  const ownedIds = ownedBanks.map(b => b.bankId);
+
+  let lastTouchByBank = {};
+  try { lastTouchByBank = lastActivityByBank(BANK_REPORTS_DIR) || {}; } catch (_) { /* survive a coverage hiccup */ }
+
+  const overdueTasks = listOverdueOpenTasks(BANK_REPORTS_DIR, {
+    username: scopedRep ? scopedRep.username : null,
+    today,
+  }) || [];
+  // Coverage records for the union of owned banks + overdue-task banks (status filter).
+  const coverageIds = [...new Set([...ownedIds, ...overdueTasks.map(t => t.bankId)])];
+  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, coverageIds) || new Map();
+
+  // --- Firm-set numeric signals from the cached map projection only ---
+  // Coverage owner for every map bank above the floor (large-no-owner). Read the
+  // owner from coverage; the map projection itself doesn't carry owner.
+  const assetFloorK = Number.isFinite(Number(options.assetFloorK)) ? Number(options.assetFloorK) : bankSignals.DEFAULTS.assetFloorK;
+  let mapBanksForLarge = mapData.banks.filter(b => {
+    const a = Number(b.totalAssets);
+    return Number.isFinite(a) && a >= assetFloorK;
+  });
+  if (stateFilter) {
+    mapBanksForLarge = mapBanksForLarge.filter(b => String(b.state || '').toUpperCase() === stateFilter);
+  }
+  const largeIds = mapBanksForLarge.map(b => b.id);
+  const largeCoverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, largeIds) || new Map();
+  // Merge the two coverage maps so the engine can resolve owners for both sets.
+  const mergedCoverage = new Map(coverageMap);
+  for (const [k, v] of largeCoverageMap) mergedCoverage.set(k, v);
+
+  // The mapBanks the engine sees: union of (large-no-owner candidates) + (owned
+  // banks' map rows, for muni-afs). Keyed by id so we don't double-feed.
+  const mapById = new Map(mapData.banks.map(b => [String(b.id), b]));
+  const mapBanksOut = new Map();
+  for (const b of mapBanksForLarge) mapBanksOut.set(String(b.id), b);
+  for (const id of ownedIds) { const b = mapById.get(String(id)); if (b) mapBanksOut.set(String(id), b); }
+
+  // --- Per-bank reads, OWNED set only ---
+  const fundingScoreByBank = {};
+  const cdRolloverByBank = {};
+  const fitsByBank = {};
+  const fdicFlagsByBank = {};
+
+  const cdUniverse = (() => { try { return buildCdRolloverUniverse(); } catch (_) { return []; } })();
+  const rolloverWindowDays = Number.isFinite(Number(options.rolloverWindowDays)) ? Number(options.rolloverWindowDays) : bankSignals.DEFAULTS.rolloverWindowDays;
+  const todayMs = Math.floor(Date.now() / 86400000) * 86400000;
+  const horizonMs = todayMs + rolloverWindowDays * 86400000;
+  const fitLimit = Number.isFinite(Number(options.fitMinScore)) ? 4 : 4;
+  const hasPackage = Boolean(pkg && pkg.date);
+
+  for (const bank of ownedBanks) {
+    const bankId = bank.bankId;
+    const mb = mapById.get(String(bankId));
+
+    // Funding score (per-bank parse — owned set only).
+    try {
+      const bankData = getBankById(bankId);
+      if (bankData && bankData.bank) {
+        const analysis = buildBrokeredCdOpportunity(bankData);
+        if (analysis) fundingScoreByBank[bankId] = { score: analysis.score, recommendation: analysis.recommendation, need: analysis.need };
+      }
+    } catch (_) { /* one bank's funding read never sinks the page */ }
+
+    // CD rollover slice (same logic as /api/banks/:id/cd-rollover).
+    try {
+      const cert = mb ? String(mb.certNumber || '').trim() : '';
+      const nameKey = normalizeBankNameForMatch(bank.displayName || '');
+      const cds = cdUniverse
+        .filter(cd => {
+          const matMs = Date.parse(cd.maturity);
+          if (!Number.isFinite(matMs) || matMs < todayMs || matMs > horizonMs) return false;
+          return (cert && cd.cert === cert) || (nameKey && normalizeBankNameForMatch(cd.name) === nameKey);
+        })
+        .sort((a, b) => String(a.maturity).localeCompare(String(b.maturity)))
+        .map(cd => ({
+          cusip: cd.cusip, maturity: cd.maturity,
+          daysOut: Math.round((Date.parse(cd.maturity) - todayMs) / 86400000),
+          rate: cd.rate, term: cd.term,
+        }));
+      if (cds.length) cdRolloverByBank[bankId] = cds;
+    } catch (_) { /* skip */ }
+
+    // Offering fits (skip entirely when no package is loaded).
+    if (hasPackage) {
+      try {
+        const fits = findOfferingFitsForBank(bankId, fitLimit);
+        if (fits && Array.isArray(fits.classes) && fits.classes.length) {
+          fitsByBank[bankId] = { classes: fits.classes };
+        }
+      } catch (_) { /* a single bank's fit read never throws the page */ }
+    }
+
+    // FDIC freshness (async, 24h-cached). cert required.
+    try {
+      const cert = mb ? String(mb.certNumber || '').trim() : '';
+      if (cert) {
+        // fire below; collected via Promise.all to avoid serial awaits in the loop
+        fdicFlagsByBank[bankId] = { __pendingCert: cert, __workbookPeriod: mb ? String(mb.period || '') : '' };
+      }
+    } catch (_) { /* skip */ }
+  }
+
+  return {
+    today, packageDate, thresholds, stateFilter,
+    ownedBanks, mapBanksOut, mergedCoverage, lastTouchByBank, overdueTasks,
+    fundingScoreByBank, cdRolloverByBank, fitsByBank, fdicFlagsByBank,
+  };
+}
+
+// Resolve the FDIC freshness flags (async, 24h-cached). Done outside the main
+// gather loop so the per-bank getFdicSnapshot calls run concurrently and a
+// network hiccup degrades to "no freshness signal" instead of throwing.
+async function resolveFdicFlags(fdicFlagsByBank) {
+  const out = {};
+  const entries = Object.entries(fdicFlagsByBank || {});
+  await Promise.all(entries.map(async ([bankId, pending]) => {
+    const cert = pending && pending.__pendingCert;
+    const workbookPeriod = (pending && pending.__workbookPeriod) || '';
+    if (!cert) return;
+    try {
+      const snapshot = await fdicBankfind.getFdicSnapshot(cert, { cacheDir: path.join(MARKET_DIR, 'fdic'), log });
+      if (!snapshot || !snapshot.latest) return;
+      const fdicPeriod = String(snapshot.latest.period || '');
+      const newerAvailable = Boolean(workbookPeriod && /^\d{4}Q\d$/.test(workbookPeriod) && fdicPeriod > workbookPeriod);
+      out[bankId] = { newerAvailable, fdicPeriod, workbookPeriod };
+    } catch (_) { /* a bank's FDIC read failing just drops its freshness signal */ }
+  }));
+  return out;
+}
+
 // ---- Live CRM dashboard (#pulse) ----
 // One payload for the whole page: KPI tiles, by-state and by-type breakdowns,
 // recent manual activity, and upcoming follow-ups. Rep-scoped when an acting
@@ -10627,6 +10797,102 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/crm/dashboard' && req.method === 'GET') {
       const { rep } = repScopeFromQuery(req, query, { auditEvent: 'crm-dashboard-scope-collapsed' });
       return sendJSON(res, 200, buildCrmDashboard(rep));
+    }
+
+    // Signal Inbox (#signals): rep-scoped morning desk signals across Coverage /
+    // Funding / Securities / Muni / Portfolio / Data-Freshness. Read-only GET.
+    if (pathname === '/api/bank-signals' && req.method === 'GET') {
+      const { rep } = repScopeFromQuery(req, query, { auditEvent: 'bank-signals-scope-collapsed' });
+      const scopedRep = rep; // null = firm-wide (admin ?rep=all)
+      const scope = scopedRep ? 'rep' : 'firm';
+      const options = {
+        state: query.get('state') || '',
+        rolloverWindowDays: query.get('window') != null
+          ? Math.max(1, Math.min(365, Math.round(Number(query.get('window')) || 180))) : undefined,
+        assetFloorK: query.get('assetFloor') != null && query.get('assetFloor') !== ''
+          ? Math.max(0, Number(query.get('assetFloor'))) : undefined,
+        fitMinScore: query.get('fitMin') != null && query.get('fitMin') !== ''
+          ? Math.max(0, Number(query.get('fitMin'))) : undefined,
+      };
+      let gathered;
+      try {
+        gathered = gatherSignalInputs(scopedRep, options);
+      } catch (err) {
+        log('warn', 'bank-signals gather failed:', err.message);
+        return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not build signals' });
+      }
+      const fdicFlagsByBank = await resolveFdicFlags(gathered.fdicFlagsByBank);
+      const result = bankSignals.buildBankSignals({
+        rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
+        scope,
+        today: gathered.today,
+        packageDate: gathered.packageDate,
+        thresholds: gathered.thresholds,
+        dismissed: [], // dismissals are applied client-side (localStorage); see CLAUDE.md
+        savedBanks: gathered.ownedBanks,
+        coverageByBank: gathered.mergedCoverage,
+        lastTouchByBank: gathered.lastTouchByBank,
+        overdueTasks: gathered.overdueTasks,
+        mapBanks: Array.from(gathered.mapBanksOut.values()),
+        cdRolloverByBank: gathered.cdRolloverByBank,
+        fundingScoreByBank: gathered.fundingScoreByBank,
+        fitsByBank: gathered.fitsByBank,
+        fdicFlagsByBank,
+      });
+      const filtered = options.state
+        ? result.categories.map(c => ({
+            ...c,
+            signals: c.signals.filter(s => String(s.state || '').toUpperCase() === String(options.state).toUpperCase()),
+          })).map(c => ({ ...c, count: c.signals.length }))
+        : result.categories;
+      // optional ?category= narrows to one category (count stays per-category)
+      const wantCategory = String(query.get('category') || '').trim();
+      const categories = wantCategory
+        ? filtered.filter(c => c.category === wantCategory)
+        : filtered;
+      return sendJSON(res, 200, {
+        rep: result.rep,
+        scope: result.scope,
+        packageDate: gathered.packageDate,
+        generatedAt: result.generatedAt,
+        thresholds: gathered.thresholds,
+        categories,
+        totals: {
+          signals: categories.reduce((sum, c) => sum + c.count, 0),
+          rows: result.totals.rows,
+        },
+        warnings: result.warnings,
+      });
+    }
+
+    // Dismiss a signal — audit-trail only (v1 stores nothing server-side; the
+    // client hides the row via localStorage). Built now so v2 can back it with a
+    // table without changing the contract. POST /api/bank-signals/:key/dismiss
+    const signalDismissMatch = pathname.match(/^\/api\/bank-signals\/([^/]+)\/dismiss$/);
+    if (signalDismissMatch && req.method === 'POST') {
+      const key = safeDecodeURIComponent(signalDismissMatch[1]);
+      if (!key || !bankSignals.SIGNAL_DEFS[key]) {
+        return sendJSON(res, 400, { error: 'Unknown signal key' });
+      }
+      let body;
+      try { body = await readJsonBody(req); } catch (err) {
+        return sendJSON(res, err.statusCode || 400, { error: err.message || 'Invalid body' });
+      }
+      const bankId = String(body.bankId || '').trim();
+      if (!bankId) return sendJSON(res, 400, { error: 'A bankId is required' });
+      const today = todayStamp();
+      const def = bankSignals.SIGNAL_DEFS[key];
+      const pkgDate = body.packageDate ? String(body.packageDate).trim() : (getCurrentPackage() || {}).date || '';
+      const dismissId = bankSignals.dismissIdFor(key, bankId, today, def.packageScoped ? pkgDate : '');
+      const rep = resolveRequestRep(req);
+      appendAuditLog({
+        event: 'bank-signals-dismiss',
+        signalKey: key,
+        bankId,
+        dismissId,
+        rep: rep ? rep.username : '',
+      });
+      return sendJSON(res, 200, { ok: true, dismissId });
     }
 
     // Pull the newest FDIC-filed quarter into bank-data.sqlite (stopgap until

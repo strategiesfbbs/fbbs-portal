@@ -147,7 +147,7 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'signals', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
@@ -155,6 +155,7 @@
   const NAV_ITEMS = [
     { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
     { page: 'pulse', group: 'FBBS', label: 'CRM Pulse', description: 'Live CRM dashboard — clients, prospects, follow-ups, logged activity', aliases: 'crm pulse dashboard kpi clients prospects by state strategies activity follow-ups' },
+    { page: 'signals', group: 'FBBS', label: 'Signal Inbox', description: 'Highest-leverage reasons to act — cold owned accounts, overdue prospect tasks, large unclaimed banks, funding pressure, CD rollover, offering fits, AFS muni books, and FDIC data freshness', aliases: 'signal inbox signals alerts triage cold accounts funding pressure cd rolling offering fit muni afs fdic newer overdue task whitespace reasons to call action queue' },
     { page: 'exec-summary', group: 'Operations', label: 'Exec Summary', description: 'Management-only daily capital, risk, P&L, and desk-activity dashboard', aliases: 'executive summary ceo capital net cap excess requirement buffer risk dv01 pnl revenue desk rep counterparty haircut management board' },
     { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
     { page: 'sales-dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Curated daily picks by client tax structure (C-Corp / S-Corp / RIA), with the macro→pick call, Bond of the Day, and Strategy of the Day', aliases: 'sales dashboard audience fit picks ccorp scorp ria client tax structure taxable equivalent tey bond of the day botd strategy of the day sod curated morning' },
@@ -192,6 +193,7 @@
 
   const NAV_GROUP_BY_PAGE = {
     'daily-intelligence': 'fbbs',
+    signals: 'fbbs',
     econ: 'fbbs',
     relativeValue: 'cds',
     'market-color': 'fbbs',
@@ -1639,6 +1641,7 @@
       });
     }
     if (pageName === 'pulse') loadCrmPulse();
+    if (pageName === 'signals') enterSignalInbox();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
     if (pageName === 'relativeValue') {
       loadRelativeValueSnapshot();
@@ -6280,6 +6283,583 @@
     }
     const stamp = new Date().toISOString().slice(0, 10);
     downloadCsv('fbbs_cd_rollover_wall_' + cdRolloverState.window + 'd_' + stamp + '.csv', rows);
+  }
+
+  // =========================================================================
+  // Signal Inbox (#signals) — the highest-leverage "reasons to act" feed.
+  // Renders GET /api/bank-signals grouped by category, with per-row actions
+  // (Open tear sheet / Create Task / Create Opportunity / Log Call / Dismiss)
+  // wired to the existing per-bank routes. Dismissals are client-side
+  // localStorage (per the v1 contract) PLUS a POST for the audit trail.
+  // =========================================================================
+  const SIGNALS_FILTER_KEY = 'fbbs.signalInboxFilters.v1';
+  const SIGNALS_CATEGORY_ORDER = ['Coverage', 'Funding', 'Securities', 'Muni', 'Portfolio', 'Data-Freshness'];
+  const SIGNAL_ACTION_LABELS = {
+    open: 'Open Tear Sheet',
+    createTask: 'Create Task',
+    createOpportunity: 'Create Opportunity',
+    logCall: 'Log Call',
+    saveReport: 'Save as Report',
+    dismiss: 'Dismiss'
+  };
+  let signalInboxState = {
+    wired: false,
+    loading: false,
+    data: null,
+    scope: 'me',          // 'me' | 'all' (admin only)
+    state: '',
+    category: '',         // '' = all categories
+    search: '',
+    collapsed: {}         // category -> bool (collapsed state)
+  };
+
+  function signalDismissKey() {
+    const rep = meState.rep && (meState.rep.username || meState.rep.displayName) ? (meState.rep.username || meState.rep.displayName) : 'anon';
+    return 'fbbs.signalsDismissed.' + String(rep).toLowerCase();
+  }
+
+  function loadDismissedSignalIds() {
+    try {
+      const raw = localStorage.getItem(signalDismissKey());
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr.map(String) : []);
+    } catch (_) { return new Set(); }
+  }
+
+  function rememberDismissedSignal(dismissId) {
+    if (!dismissId) return;
+    try {
+      const set = loadDismissedSignalIds();
+      set.add(String(dismissId));
+      localStorage.setItem(signalDismissKey(), JSON.stringify(Array.from(set)));
+    } catch (_) { /* localStorage may be unavailable — dismissal degrades to session-only */ }
+  }
+
+  function persistSignalFilters() {
+    try {
+      sessionStorage.setItem(SIGNALS_FILTER_KEY, JSON.stringify({
+        scope: signalInboxState.scope,
+        state: signalInboxState.state,
+        category: signalInboxState.category,
+        search: signalInboxState.search
+      }));
+    } catch (_) { /* non-fatal */ }
+  }
+
+  function restoreSignalFilters() {
+    try {
+      const raw = sessionStorage.getItem(SIGNALS_FILTER_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) || {};
+      if (saved.scope === 'me' || saved.scope === 'all') signalInboxState.scope = saved.scope;
+      if (typeof saved.state === 'string') signalInboxState.state = saved.state;
+      if (typeof saved.category === 'string') signalInboxState.category = saved.category;
+      if (typeof saved.search === 'string') signalInboxState.search = saved.search;
+    } catch (_) { /* non-fatal */ }
+  }
+
+  function enterSignalInbox() {
+    restoreSignalFilters();
+    if (!signalInboxState.wired) {
+      signalInboxState.wired = true;
+      const scopeCtl = document.getElementById('signalsScopeControl');
+      const scopeSel = document.getElementById('signalsScope');
+      // The firm-wide scope toggle is admin-only (non-admin ?rep=all collapses
+      // server-side, so showing it would be a misleading dead-end).
+      if (scopeCtl) scopeCtl.hidden = !isAdminUiAllowed();
+      if (scopeSel) {
+        scopeSel.value = signalInboxState.scope;
+        scopeSel.addEventListener('change', () => {
+          signalInboxState.scope = scopeSel.value === 'all' ? 'all' : 'me';
+          persistSignalFilters();
+          loadSignalInbox();
+        });
+      }
+      const stateSel = document.getElementById('signalsState');
+      if (stateSel) stateSel.addEventListener('change', () => {
+        signalInboxState.state = stateSel.value || '';
+        persistSignalFilters();
+        loadSignalInbox();
+      });
+      const searchEl = document.getElementById('signalsSearch');
+      if (searchEl) {
+        searchEl.value = signalInboxState.search || '';
+        let t;
+        searchEl.addEventListener('input', () => {
+          clearTimeout(t);
+          t = setTimeout(() => {
+            signalInboxState.search = searchEl.value || '';
+            persistSignalFilters();
+            renderSignalInbox(); // client-side search — no re-fetch
+          }, 200);
+        });
+      }
+      const refreshBtn = document.getElementById('signalsRefresh');
+      if (refreshBtn) refreshBtn.addEventListener('click', () => loadSignalInbox(true));
+      const exportBtn = document.getElementById('signalsExport');
+      if (exportBtn) exportBtn.addEventListener('click', exportSignalsCsv);
+
+      // Category chip + per-row action delegation (one listener for the page body).
+      const chips = document.getElementById('signalsCategoryChips');
+      if (chips) chips.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-sig-cat]');
+        if (!btn) return;
+        const cat = btn.getAttribute('data-sig-cat') || '';
+        signalInboxState.category = cat;
+        persistSignalFilters();
+        renderSignalInbox();
+      });
+      const body = document.getElementById('signalsBody');
+      if (body) body.addEventListener('click', onSignalBodyClick);
+    } else {
+      const scopeCtl = document.getElementById('signalsScopeControl');
+      if (scopeCtl) scopeCtl.hidden = !isAdminUiAllowed();
+    }
+    loadSignalInbox();
+  }
+
+  async function loadSignalInbox(force) {
+    if (signalInboxState.loading) return;
+    const body = document.getElementById('signalsBody');
+    if (!body) return;
+    if (!force && signalInboxState.data) { renderSignalInbox(); return; }
+    signalInboxState.loading = true;
+    body.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Scanning your banks for signals&hellip;</span></div>';
+    try {
+      const params = new URLSearchParams();
+      if (signalInboxState.scope === 'all' && isAdminUiAllowed()) params.set('rep', 'all');
+      if (signalInboxState.state) params.set('state', signalInboxState.state);
+      const res = await fetch('/api/bank-signals' + (params.toString() ? '?' + params.toString() : ''), { cache: 'no-store' });
+      if (res.status === 503) {
+        signalInboxState.data = null;
+        body.innerHTML = '<p class="muted-note">The bank dataset is not loaded yet. Import the call-report workbook from the Upload page, then refresh.</p>';
+        return;
+      }
+      if (!res.ok) throw new Error('Request failed (' + res.status + ')');
+      signalInboxState.data = await res.json();
+      renderSignalInbox();
+    } catch (err) {
+      signalInboxState.data = null;
+      body.innerHTML = '<p class="error-note">Could not load Signal Inbox: ' + escapeHtml(err.message) + '</p>';
+    } finally {
+      signalInboxState.loading = false;
+    }
+  }
+
+  // Apply client-side filters (dismissed localStorage rows, state, category,
+  // name search) to the server's already-ranked categories. Returns the same
+  // shape with filtered signals + recomputed counts.
+  function visibleSignalCategories() {
+    const data = signalInboxState.data;
+    if (!data || !Array.isArray(data.categories)) return [];
+    const dismissed = loadDismissedSignalIds();
+    const q = (signalInboxState.search || '').trim().toLowerCase();
+    const stateFilter = (signalInboxState.state || '').toUpperCase();
+    return data.categories.map(cat => {
+      const signals = (cat.signals || []).filter(sig => {
+        if (sig.dismissId && dismissed.has(String(sig.dismissId))) return false;
+        if (stateFilter && String(sig.state || '').toUpperCase() !== stateFilter) return false;
+        if (q) {
+          const hay = `${sig.displayName || ''} ${sig.city || ''} ${sig.state || ''} ${sig.headline || ''}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+      return { category: cat.category, label: cat.label, count: signals.length, signals };
+    });
+  }
+
+  function renderSignalInbox() {
+    const data = signalInboxState.data;
+    const body = document.getElementById('signalsBody');
+    if (!body) return;
+
+    // Scope / rep label + meta.
+    const repLabel = data && data.rep ? (data.rep.displayName || data.rep.username) : (data && data.scope === 'firm' ? 'Firm-wide' : '');
+    const sub = document.getElementById('signalsSub');
+    if (sub && data) {
+      sub.textContent = (data.scope === 'firm')
+        ? 'Firm-wide signals across every covered bank — cold accounts, funding pressure, offering fits, and data freshness.'
+        : `Your action queue${repLabel ? ', ' + repLabel : ''} — cold owned accounts, overdue prospect tasks, funding pressure, offering fits, and data freshness.`;
+    }
+
+    // Populate the state dropdown from the loaded rows (once we know the data).
+    populateSignalStateOptions();
+
+    const cats = visibleSignalCategories();
+    const totalVisible = cats.reduce((sum, c) => sum + c.count, 0);
+    setText('signalsHeroStat', formatNumber(totalVisible));
+
+    // Category chips (counts reflect post-dismiss, pre-state/search filtering so
+    // they stay a stable map of where signals live). We recompute against the
+    // dismissed set but ignore the state/search filter for the chip badges.
+    renderSignalCategoryChips();
+
+    // Meta line.
+    const meta = document.getElementById('signalsMeta');
+    if (meta && data) {
+      const rowsTotal = data.totals ? data.totals.rows : 0;
+      const refreshed = data.generatedAt ? formatRelativeAt(data.generatedAt) : '';
+      meta.textContent = `${formatNumber(totalVisible)} signal${totalVisible === 1 ? '' : 's'} shown · ${formatNumber(rowsTotal)} computed this package` +
+        (data.packageDate ? ` (package ${data.packageDate})` : '') + (refreshed ? ` · refreshed ${refreshed}` : '');
+    }
+
+    // Warnings (e.g. afsMunis not projected).
+    const warnBox = document.getElementById('signalsWarnings');
+    if (warnBox) {
+      const warnings = (data && Array.isArray(data.warnings)) ? data.warnings : [];
+      if (warnings.length) {
+        warnBox.hidden = false;
+        warnBox.innerHTML = warnings.map(w => `<p class="sig-warning">${escapeHtml(w)}</p>`).join('');
+      } else {
+        warnBox.hidden = true;
+        warnBox.innerHTML = '';
+      }
+    }
+
+    // Body: one collapsible section per category in fixed order. If a single
+    // category filter is active, only that one renders.
+    const activeCat = signalInboxState.category;
+    const shown = activeCat ? cats.filter(c => c.category === activeCat) : cats;
+    const sections = shown.map(renderSignalCategorySection).join('');
+    if (!totalVisible) {
+      body.innerHTML = '<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">&#10003;</div><h3>Inbox zero</h3><p>No live signals for the current filters. New signals surface as accounts go cold, offerings land, and data ages.</p></div>';
+      return;
+    }
+    body.innerHTML = sections;
+  }
+
+  function populateSignalStateOptions() {
+    const sel = document.getElementById('signalsState');
+    const data = signalInboxState.data;
+    if (!sel || !data || !Array.isArray(data.categories)) return;
+    const states = new Set();
+    data.categories.forEach(cat => (cat.signals || []).forEach(sig => {
+      const st = String(sig.state || '').toUpperCase();
+      if (st && st.length === 2) states.add(st);
+    }));
+    const ordered = Array.from(states).sort();
+    const current = signalInboxState.state || '';
+    sel.innerHTML = '<option value="">All states</option>' +
+      ordered.map(st => `<option value="${escapeHtml(st)}"${st === current ? ' selected' : ''}>${escapeHtml(st)}</option>`).join('');
+  }
+
+  function renderSignalCategoryChips() {
+    const wrap = document.getElementById('signalsCategoryChips');
+    const data = signalInboxState.data;
+    if (!wrap || !data || !Array.isArray(data.categories)) return;
+    const dismissed = loadDismissedSignalIds();
+    const counts = {};
+    let total = 0;
+    data.categories.forEach(cat => {
+      const live = (cat.signals || []).filter(s => !(s.dismissId && dismissed.has(String(s.dismissId)))).length;
+      counts[cat.category] = { label: cat.label, count: live };
+      total += live;
+    });
+    const active = signalInboxState.category;
+    const chips = [`<button type="button" class="sig-chip${!active ? ' active' : ''}" data-sig-cat="">All <span class="sig-chip-count">${formatNumber(total)}</span></button>`];
+    SIGNALS_CATEGORY_ORDER.forEach(catKey => {
+      const info = counts[catKey];
+      if (!info) return;
+      chips.push(`<button type="button" class="sig-chip${active === catKey ? ' active' : ''}" data-sig-cat="${escapeHtml(catKey)}">${escapeHtml(info.label)} <span class="sig-chip-count">${formatNumber(info.count)}</span></button>`);
+    });
+    wrap.innerHTML = chips.join('');
+  }
+
+  function renderSignalCategorySection(cat) {
+    if (!cat.signals.length) return '';
+    const collapsed = !!signalInboxState.collapsed[cat.category];
+    const rows = collapsed ? '' : cat.signals.map(renderSignalRow).join('');
+    return `
+      <section class="sig-category${collapsed ? ' is-collapsed' : ''}" data-sig-section="${escapeHtml(cat.category)}">
+        <button type="button" class="sig-category-head" data-sig-collapse="${escapeHtml(cat.category)}" aria-expanded="${collapsed ? 'false' : 'true'}">
+          <span class="sig-category-caret" aria-hidden="true">${collapsed ? '&#9656;' : '&#9662;'}</span>
+          <span class="sig-category-name">${escapeHtml(cat.label)}</span>
+          <span class="sig-category-count">${formatNumber(cat.count)}</span>
+        </button>
+        <div class="sig-rows">${rows}</div>
+      </section>`;
+  }
+
+  function renderSignalRow(sig) {
+    const sev = ['high', 'med', 'low'].includes(sig.severity) ? sig.severity : 'med';
+    const loc = [sig.city, sig.state].filter(Boolean).join(', ');
+    const metric = sig.metric && (sig.metric.value !== null && sig.metric.value !== undefined && sig.metric.value !== '')
+      ? `<span class="sig-metric"><span class="sig-metric-val">${escapeHtml(formatSignalMetricValue(sig.metric))}</span><span class="sig-metric-lbl">${escapeHtml(sig.metric.label || '')}</span></span>`
+      : '';
+    const chips = signalReasonChips(sig).map(c => `<span class="sig-tag">${escapeHtml(c)}</span>`).join('');
+    const actions = (Array.isArray(sig.actions) ? sig.actions : []).map(key => signalActionButton(key, sig)).filter(Boolean).join('');
+    const statusBadge = sig.status ? `<span class="sig-status">${escapeHtml(sig.status)}</span>` : '';
+    const priorityBadge = sig.priority ? `<span class="sig-priority sig-priority-${escapeHtml(String(sig.priority).toLowerCase())}">${escapeHtml(sig.priority)}</span>` : '';
+    return `
+      <article class="sig-row sig-sev-${sev}" data-sig-key="${escapeHtml(sig.signalKey)}" data-sig-bank="${escapeHtml(sig.bankId)}" data-sig-dismiss="${escapeHtml(sig.dismissId || '')}">
+        <span class="sig-dot sig-dot-${sev}" title="${sev === 'high' ? 'High' : sev === 'low' ? 'Low' : 'Medium'} priority" aria-hidden="true"></span>
+        <div class="sig-main">
+          <div class="sig-headline-row">
+            <span class="sig-headline">${escapeHtml(sig.headline || '')}</span>
+            ${metric}
+          </div>
+          <div class="sig-bank-line">
+            <span class="sig-bank-name">${escapeHtml(sig.displayName || sig.bankId)}</span>
+            ${loc ? `<span class="sig-bank-loc">${escapeHtml(loc)}</span>` : ''}
+            ${statusBadge}${priorityBadge}
+          </div>
+          ${sig.detail ? `<p class="sig-detail">${escapeHtml(sig.detail)}</p>` : ''}
+          ${chips ? `<div class="sig-tags">${chips}</div>` : ''}
+        </div>
+        <div class="sig-actions">${actions}</div>
+      </article>`;
+  }
+
+  function formatSignalMetricValue(metric) {
+    if (!metric) return '';
+    const v = metric.value;
+    const unit = metric.unit || '';
+    if (v === null || v === undefined || v === '') return '';
+    if (unit === '$000') return moneyKLabel(v);
+    if (typeof v === 'number') {
+      const n = Number.isInteger(v) ? formatNumber(v) : v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+      return unit && unit !== '' ? `${n}${unit.startsWith('/') ? unit : ' ' + unit}` : n;
+    }
+    return String(v) + (unit && !unit.startsWith('/') && unit !== '' ? ' ' + unit : (unit || ''));
+  }
+
+  function moneyKLabel(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return String(value);
+    if (n >= 1000) return '$' + (n / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 }) + 'MM';
+    return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 }) + 'K';
+  }
+
+  // Short "reason it screens" chips derived from the signal's extra payload.
+  function signalReasonChips(sig) {
+    const extra = sig.extra || {};
+    const chips = [];
+    switch (sig.signalKey) {
+      case 'coverage-cold-owned':
+        if (extra.lastTouch) chips.push('Last touch ' + extra.lastTouch);
+        else chips.push('No touch on record');
+        if (extra.thresholdDays) chips.push('> ' + extra.thresholdDays + 'd cold');
+        break;
+      case 'coverage-prospect-overdue-task':
+        if (extra.dueDate) chips.push('Due ' + extra.dueDate);
+        if (extra.overdueDays) chips.push(extra.overdueDays + 'd overdue');
+        break;
+      case 'coverage-large-no-owner':
+        chips.push('Unclaimed');
+        if (extra.certNumber) chips.push('Cert ' + extra.certNumber);
+        break;
+      case 'funding-pressure':
+        if (extra.recommendation) chips.push(extra.recommendation);
+        if (extra.score != null) chips.push('Score ' + extra.score + '/15');
+        break;
+      case 'funding-cd-rolling':
+        if (extra.count != null) chips.push(extra.count + ' CD' + (extra.count === 1 ? '' : 's') + ' ≤' + (extra.windowDays || '') + 'd');
+        if (extra.nearestMaturity) chips.push('Nearest ' + extra.nearestMaturity);
+        if (extra.nearestCusip) chips.push(extra.nearestCusip);
+        break;
+      case 'securities-offering-fit':
+        if (extra.bestLabel) chips.push(extra.bestLabel);
+        if (extra.inStateMuni) chips.push('In-state');
+        if (extra.pick && extra.pick.cusip) chips.push(extra.pick.cusip);
+        if (extra.pick && extra.pick.yield != null) chips.push(Number(extra.pick.yield).toFixed(2) + '%');
+        break;
+      case 'muni-afs-book':
+        if (extra.afsMunis != null) chips.push('AFS ' + moneyKLabel(extra.afsMunis));
+        if (extra.isSubS) chips.push('Sub-S');
+        else if (extra.subchapterS) chips.push('C-corp · BQ ~32bp');
+        break;
+      case 'freshness-fdic-newer':
+        if (extra.fdicPeriod) chips.push('FDIC ' + extra.fdicPeriod);
+        if (extra.workbookPeriod) chips.push('Workbook ' + extra.workbookPeriod);
+        break;
+      default:
+        break;
+    }
+    return chips;
+  }
+
+  function signalActionButton(key, sig) {
+    const label = SIGNAL_ACTION_LABELS[key];
+    if (!label) return '';
+    if (key === 'open') {
+      // Reuse the global data-goto bank deep-link plumbing.
+      return `<button type="button" class="small-btn" data-sig-open="${escapeHtml(sig.bankId)}">${escapeHtml(label)}</button>`;
+    }
+    if (key === 'dismiss') {
+      return `<button type="button" class="text-btn sig-dismiss-btn" data-sig-action="dismiss">${escapeHtml(label)}</button>`;
+    }
+    return `<button type="button" class="text-btn" data-sig-action="${escapeHtml(key)}">${escapeHtml(label)}</button>`;
+  }
+
+  function onSignalBodyClick(e) {
+    const collapseBtn = e.target.closest('[data-sig-collapse]');
+    if (collapseBtn) {
+      const cat = collapseBtn.getAttribute('data-sig-collapse');
+      signalInboxState.collapsed[cat] = !signalInboxState.collapsed[cat];
+      renderSignalInbox();
+      return;
+    }
+    const openBtn = e.target.closest('[data-sig-open]');
+    if (openBtn) {
+      const bankId = openBtn.getAttribute('data-sig-open');
+      navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
+      return;
+    }
+    const actionBtn = e.target.closest('[data-sig-action]');
+    if (!actionBtn) return;
+    const rowEl = actionBtn.closest('[data-sig-bank]');
+    if (!rowEl) return;
+    const action = actionBtn.getAttribute('data-sig-action');
+    const sig = findSignalRow(rowEl.getAttribute('data-sig-key'), rowEl.getAttribute('data-sig-bank'), rowEl.getAttribute('data-sig-dismiss'));
+    if (!sig) return;
+    if (action === 'dismiss') return dismissSignal(sig, rowEl, actionBtn);
+    if (action === 'createTask') return signalCreateTask(sig, actionBtn);
+    if (action === 'createOpportunity') return signalCreateOpportunity(sig, actionBtn);
+    if (action === 'logCall') return signalLogCall(sig, actionBtn);
+  }
+
+  function findSignalRow(signalKey, bankId, dismissId) {
+    const data = signalInboxState.data;
+    if (!data || !Array.isArray(data.categories)) return null;
+    for (const cat of data.categories) {
+      for (const sig of (cat.signals || [])) {
+        if (sig.signalKey === signalKey && String(sig.bankId) === String(bankId) &&
+            (!dismissId || String(sig.dismissId || '') === String(dismissId))) {
+          return sig;
+        }
+      }
+    }
+    return null;
+  }
+
+  async function dismissSignal(sig, rowEl, btn) {
+    // Client-side hide is the source of truth in v1; the POST is audit-only.
+    rememberDismissedSignal(sig.dismissId);
+    if (rowEl) rowEl.remove();
+    // Update chips/counts/meta to reflect the hidden row.
+    renderSignalCategoryChips();
+    const cats = visibleSignalCategories();
+    const totalVisible = cats.reduce((sum, c) => sum + c.count, 0);
+    setText('signalsHeroStat', formatNumber(totalVisible));
+    showToast('Signal dismissed');
+    try {
+      await fetch('/api/bank-signals/' + encodeURIComponent(sig.signalKey) + '/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bankId: sig.bankId, packageDate: signalInboxState.data && signalInboxState.data.packageDate ? signalInboxState.data.packageDate : undefined })
+      });
+    } catch (_) { /* audit-only — a failed POST never un-dismisses the row */ }
+  }
+
+  async function signalCreateTask(sig, btn) {
+    const title = window.prompt('New task for ' + (sig.displayName || sig.bankId) + ':', signalDefaultTaskTitle(sig));
+    if (title === null) return;
+    if (!title.trim()) return showToast('Give the task a title', true);
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/banks/' + encodeURIComponent(sig.bankId) + '/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim(), priority: 'Normal' })
+      });
+      const out = await readBankJson(res);
+      if (!res.ok) throw new Error(out.error || ('HTTP ' + res.status));
+      if (btn) btn.textContent = 'Task ✓';
+      showToast('Task created for ' + (sig.displayName || sig.bankId));
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      showToast(e.message || 'Could not create task', true);
+    }
+  }
+
+  function signalDefaultTaskTitle(sig) {
+    switch (sig.signalKey) {
+      case 'coverage-cold-owned': return 'Reach out — account going cold';
+      case 'coverage-prospect-overdue-task': return 'Follow up on overdue task';
+      case 'coverage-large-no-owner': return 'Qualify unclaimed prospect';
+      case 'funding-pressure': return 'Discuss brokered-CD funding';
+      case 'funding-cd-rolling': return 'Call re: CD re-raise';
+      case 'securities-offering-fit': return 'Pitch ' + ((sig.extra && sig.extra.pick && sig.extra.pick.description) || (sig.extra && sig.extra.bestLabel) || 'offering');
+      case 'muni-afs-book': return 'Show muni offerings — AFS book';
+      default: return 'Follow up';
+    }
+  }
+
+  async function signalCreateOpportunity(sig, btn) {
+    if (btn) btn.disabled = true;
+    const description = signalOpportunityDescription(sig);
+    const product = signalOpportunityProduct(sig);
+    try {
+      const res = await fetch('/api/banks/' + encodeURIComponent(sig.bankId) + '/opportunities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product, description })
+      });
+      const out = await readBankJson(res);
+      if (!res.ok) throw new Error(out.error || ('HTTP ' + res.status));
+      if (btn) btn.textContent = 'Opp ✓';
+      showToast('Opportunity created for ' + (sig.displayName || sig.bankId));
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      showToast(e.message || 'Could not create opportunity', true);
+    }
+  }
+
+  function signalOpportunityProduct(sig) {
+    if (sig.signalKey === 'funding-pressure' || sig.signalKey === 'funding-cd-rolling') return 'Brokered CDs';
+    if (sig.signalKey === 'securities-offering-fit' || sig.signalKey === 'muni-afs-book') return 'Securities Purchase';
+    return 'Securities Purchase';
+  }
+
+  function signalOpportunityDescription(sig) {
+    const pick = sig.extra && sig.extra.pick;
+    if (sig.signalKey === 'securities-offering-fit' && pick) {
+      return `${pick.description || pick.cusip || ''}${pick.cusip ? ' (' + pick.cusip + ')' : ''}${pick.yield != null ? ', ' + Number(pick.yield).toFixed(2) + '%' : ''} — from Signal Inbox offering fit.`;
+    }
+    return (sig.headline || '') + ' — created from Signal Inbox.';
+  }
+
+  async function signalLogCall(sig, btn) {
+    const note = window.prompt('Log a call note for ' + (sig.displayName || sig.bankId) + ':', '');
+    if (note === null) return;
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch('/api/banks/' + encodeURIComponent(sig.bankId) + '/activity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'call',
+          subject: sig.headline || 'Call',
+          body: note.trim() || (sig.detail || ''),
+          activityDate: new Date().toISOString().slice(0, 10)
+        })
+      });
+      const out = await readBankJson(res);
+      if (!res.ok) throw new Error(out.error || ('HTTP ' + res.status));
+      if (btn) btn.textContent = 'Logged ✓';
+      showToast('Call logged for ' + (sig.displayName || sig.bankId));
+    } catch (e) {
+      if (btn) btn.disabled = false;
+      showToast(e.message || 'Could not log call', true);
+    }
+  }
+
+  function exportSignalsCsv() {
+    const cats = visibleSignalCategories();
+    const rows = [['Category', 'Signal', 'Bank ID', 'Bank', 'City', 'State', 'Status', 'Owner', 'Severity', 'Headline', 'Metric', 'Detail']];
+    let any = false;
+    cats.forEach(cat => (cat.signals || []).forEach(sig => {
+      any = true;
+      const metricStr = sig.metric ? `${sig.metric.label || ''}: ${formatSignalMetricValue(sig.metric)}` : '';
+      rows.push([
+        cat.label, sig.signalKey, sig.bankId, sig.displayName || '', sig.city || '', sig.state || '',
+        sig.status || '', sig.owner || '', sig.severity || '', sig.headline || '', metricStr, sig.detail || ''
+      ]);
+    }));
+    if (!any) return showToast('Nothing to export for the current filters.', true);
+    const pkg = (signalInboxState.data && signalInboxState.data.packageDate) || new Date().toISOString().slice(0, 10);
+    downloadCsv('fbbs_signal_inbox_' + pkg + '.csv', rows);
   }
 
   // Entry point fired by goTo() when the Bond Swap page activates. Reads the
@@ -22282,6 +22862,7 @@
   // package without a manual browser refresh. Inactive pages reload anyway
   // the next time goTo() opens them.
   const PACKAGE_PAGE_LOADERS = {
+    'signals': () => loadSignalInbox(true),
     'sales-dashboard': () => loadSalesDashboard(),
     'all-offerings': () => loadAllOfferings(),
     'watchlist': () => loadWatchlistPage(),
