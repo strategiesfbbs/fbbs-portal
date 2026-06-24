@@ -64,4 +64,4 @@ function extractPdfText(buffer) {
   return pdfParse(buffer, { pagerender: renderPage });
 }
 
-module.exports = { extractPdfText };
+module.exports = { extractPdfText, _renderPageForTest: renderPage };

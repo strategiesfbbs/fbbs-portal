@@ -257,7 +257,18 @@ test('"yields like a lower grade" notch + de-minimis flags', () => {
   // De-minimis on a discount muni.
   const dm = rv.deMinimis(95.98, 16);
   assert.ok(dm.breach && approx(dm.threshold, 96.0, 0.01));
+  const equality = rv.deMinimis(97.50, 10);
+  assert.strictEqual(equality.breach, true);
+  assert.strictEqual(equality.threshold, 97.50);
   assert.strictEqual(rv.deMinimis(101, 10), null); // premium → n/a
+});
+
+test('BQ q-factor and implied-MMD notch direction edge cases', () => {
+  assert.strictEqual(rv.bqFactorFor('scorp', true), 0);
+  const implied = rv.impliedMmdGrade(MMD, 5, 3.20, 'AA');
+  assert.deepStrictEqual(implied, { impliedGrade: 'Baa', notchesCheap: 2 });
+  const rich = rv.impliedMmdGrade(MMD, 5, 2.61, 'AA');
+  assert.deepStrictEqual(rich, { impliedGrade: 'AAA', notchesCheap: -1 });
 });
 
 test('outlier chips surface the strongest signals (≤3)', () => {

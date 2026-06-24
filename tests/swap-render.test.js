@@ -99,6 +99,10 @@ test('a sent proposal renders from the snapshot, not the live legs', () => {
   assert.ok(html.includes('source: snapshot'), 'snapshot source label');
   assert.ok(html.includes('badge frozen'), 'frozen badge (not draft)');
   assert.ok(!html.includes('class="watermark"'), 'no DRAFT watermark on a sent proposal');
+  assert.ok(html.includes('Breakeven'), 'printed breakeven field');
+  assert.ok(html.includes('TE book yield'), 'printed TE book-yield field');
+  assert.ok(html.includes('Avg life'), 'printed average-life field');
+  assert.ok(html.includes('Mod duration'), 'printed duration field');
 });
 
 test('an executed proposal still renders from the snapshot, not drifted live legs', () => {

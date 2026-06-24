@@ -421,6 +421,20 @@ function parseWorkbookAnalytics(wb) {
   };
 }
 
+function parWeightedAverage(holdings, key) {
+  let weighted = 0;
+  let weight = 0;
+  for (const h of holdings || []) {
+    const value = toNumber(h && h[key]);
+    const par = toNumber(h && h.par);
+    if (value != null && par) {
+      weighted += value * par;
+      weight += par;
+    }
+  }
+  return weight ? weighted / weight : null;
+}
+
 function parsePortfolioWorkbook(filePath) {
   const XLSX = require('./xlsx');
   const wb = XLSX.readFile(filePath);
@@ -463,7 +477,9 @@ function parsePortfolioWorkbook(filePath) {
       par: sumPar,
       bookValue: sumBookValue,
       marketValue: sumMarketValue,
-      gainLoss: sumGainLoss
+      gainLoss: sumGainLoss,
+      averageLife: parWeightedAverage(allHoldings, 'averageLife'),
+      effectiveDuration: parWeightedAverage(allHoldings, 'effectiveDuration')
     },
     analytics,
     cashflow: cashflow || null,
@@ -512,6 +528,8 @@ function loadParsedPortfolio(portfolioXlsmPath, options = {}) {
 
 module.exports = {
   SECTOR_SHEETS,
+  _parseCashflowDataForTest: parseCashflowData,
+  _parWeightedAverageForTest: parWeightedAverage,
   parsePortfolioWorkbook,
   parseWorkbookAnalytics,
   loadParsedPortfolio,
