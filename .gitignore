@@ -37,7 +37,10 @@ Thumbs.db
 # launch.json, etc., and any duplicate package-lock files macOS creates when
 # two processes write to the same path). Both agents leave artifacts here
 # that aren't meant to ship.
-.claude/
+# Exception: .claude/agents/ (the shared project subagent roster) IS tracked so
+# both agents + teammates get the same roster; machine-specific files stay ignored.
+.claude/*
+!.claude/agents/
 .agents/
 .codex/
 package-lock[ ]*.json
