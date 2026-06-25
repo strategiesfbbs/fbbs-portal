@@ -54,7 +54,9 @@
   let bankOppSaving = false;
   let bankOppAdding = false;
   let selectedBankPershing = null;    // Pershing brokerage-account footprint
+  let selectedBankPershingTrades = null;
   let bankPershingBankId = null;
+  let bankPershingTradesBankId = null;
   let bankLoadRequestId = 0;
   let tearSheetCoverageRequestId = 0;
   let selectedBankProductFit = [];
@@ -3316,6 +3318,31 @@
     }[c]));
   }
 
+  function phoneToTelHref(phone) {
+    const raw = String(phone || '').trim();
+    if (!raw) return '';
+    const extMatch = raw.match(/(?:ext\.?|extension|x)\s*([0-9]+)\s*$/i);
+    const withoutExt = extMatch ? raw.slice(0, extMatch.index).trim() : raw;
+    const digits = withoutExt.replace(/\D/g, '');
+    if (!digits) return '';
+    const base = withoutExt.startsWith('+')
+      ? `+${digits}`
+      : (digits.length === 10 ? `+1${digits}` : (digits.length === 11 && digits.startsWith('1') ? `+${digits}` : `+${digits}`));
+    return extMatch ? `${base};ext=${extMatch[1]}` : base;
+  }
+
+  function phoneLinkHtml(phone, options = {}) {
+    const text = String(phone || '').trim();
+    if (!text) return '';
+    if (options.disabled) {
+      const reason = options.reason || 'Do not call';
+      return `${escapeHtml(text)} <span class="bank-contact-badge bank-contact-badge-warning">${escapeHtml(reason)}</span>`;
+    }
+    const href = phoneToTelHref(text);
+    if (!href) return escapeHtml(text);
+    return `<a class="bank-contact-link" href="tel:${escapeHtml(href)}" title="Call ${escapeHtml(text)}">${escapeHtml(text)}</a>`;
+  }
+
   // ============ Document viewers ============
 
   function renderViewer(slot) {
@@ -5647,9 +5674,9 @@
     navigateToHash(bankDeepLinkHash(bankId, { openStrategyRequest: true }), loadBankFromHashRoute);
   }
 
-  // FDIC quarterly sync (Upload page): dry-run first to show what would
+  // FDIC call-report sync (Upload page): dry-run first to show what would
   // change, then confirm before writing. Adds the newest FDIC-filed quarter
-  // to every matching bank; never overwrites a period the workbook imported.
+  // to every matching bank; never overwrites a period already in the portal.
   function setupFdicSyncButton() {
     const btn = document.getElementById('fdicSyncBtn');
     const status = document.getElementById('fdicSyncStatus');
@@ -5660,21 +5687,29 @@
       btn.disabled = true;
       const setStatus = text => { if (status) status.textContent = text; };
       try {
-        setStatus('Checking the FDIC for the latest filed quarter…');
+        setStatus('Checking the FDIC for the latest public filed quarter...');
         const dryRes = await fetch('/api/admin/fdic-sync?dryRun=1', { method: 'POST' });
         const dry = await dryRes.json();
         if (!dryRes.ok) throw new Error(dry.error || `HTTP ${dryRes.status}`);
+        const coverage = dry.fieldCoverage || {};
+        const coverageText = coverage.mappedCount
+          ? `${coverage.mappedCount.toLocaleString()} mapped fields, ${coverage.carriedIdentityCount.toLocaleString()} carried identity fields, ${coverage.remainingCount.toLocaleString()} still workbook/FFIEC-only`
+          : 'field coverage unavailable';
         if (!dry.updated) {
-          setStatus(`FDIC latest is ${dry.period} — every matched bank already has it (${dry.matched.toLocaleString()} matched). Nothing to sync.`);
+          setStatus(`FDIC latest is ${dry.period} - every matched bank already has it (${dry.matched.toLocaleString()} matched). Coverage: ${coverageText}.`);
           return;
         }
-        const go = window.confirm(`FDIC has ${dry.period} for ${dry.updated.toLocaleString()} of your banks that don't have it yet (${dry.matched.toLocaleString()} matched overall).\n\nAdd ${dry.period} to those tear sheets now? The full workbook import later replaces these stopgap rows.`);
+        const go = window.confirm(`FDIC has ${dry.period} for ${dry.updated.toLocaleString()} of your banks that don't have it yet (${dry.matched.toLocaleString()} matched overall).\n\nField coverage: ${coverageText}.\n\nAdd ${dry.period} to those tear sheets now? Existing periods will not be overwritten.`);
         if (!go) { setStatus('FDIC sync cancelled.'); return; }
-        setStatus(`Syncing ${dry.period} from the FDIC…`);
+        setStatus(`Syncing ${dry.period} from the FDIC...`);
         const res = await fetch('/api/admin/fdic-sync', { method: 'POST' });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        setStatus(`FDIC sync complete: ${data.period} added to ${data.updated.toLocaleString()} banks (${data.skippedExisting.toLocaleString()} already had it).`);
+        const writtenCoverage = data.fieldCoverage || coverage;
+        const writtenCoverageText = writtenCoverage.mappedCount
+          ? ` · ${writtenCoverage.mappedCount.toLocaleString()} mapped fields`
+          : '';
+        setStatus(`FDIC sync complete: ${data.period} added to ${data.updated.toLocaleString()} banks (${data.skippedExisting.toLocaleString()} already had it)${writtenCoverageText}.`);
         showToast(`FDIC ${data.period} synced to ${data.updated.toLocaleString()} banks`);
       } catch (e) {
         setStatus(`FDIC sync failed: ${e.message}`);
@@ -7620,6 +7655,15 @@
     return null;
   }
 
+  function boundedSwapLegNumber(value, min, max) {
+    if (value == null || value === '') return null;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return null;
+    if (min != null && n < min) return null;
+    if (max != null && n > max) return null;
+    return n;
+  }
+
   function sellLegPayloadFromCandidate(candidate, sellRow, sourceDate) {
     const held = candidate.held || {};
     return {
@@ -7633,12 +7677,12 @@
       par: sellRow.par || held.par,
       bookPrice: sellRow.bookPrice || held.bookPrice,
       marketPrice: sellRow.marketPrice || held.marketPrice,
-      bookYieldYtm: sellRow.bookYieldYtm ?? held.bookYield,
-      bookYieldYtw: sellRow.bookYieldYtw ?? held.bookYield,
-      marketYieldYtm: sellRow.marketYieldYtm,
-      marketYieldYtw: sellRow.marketYieldYtw,
-      modifiedDuration: sellRow.modifiedDuration ?? held.effDuration,
-      averageLife: sellRow.averageLife ?? held.wal,
+      bookYieldYtm: boundedSwapLegNumber(sellRow.bookYieldYtm ?? held.bookYield, -10, 50),
+      bookYieldYtw: boundedSwapLegNumber(sellRow.bookYieldYtw ?? held.bookYield, -10, 50),
+      marketYieldYtm: boundedSwapLegNumber(sellRow.marketYieldYtm ?? held.marketYield, -10, 50),
+      marketYieldYtw: boundedSwapLegNumber(sellRow.marketYieldYtw ?? held.marketYield, -10, 50),
+      modifiedDuration: boundedSwapLegNumber(sellRow.modifiedDuration ?? held.effDuration, 0, 100),
+      averageLife: boundedSwapLegNumber(sellRow.averageLife ?? held.wal, 0, 100),
       sourceKind: 'holdings',
       sourceRef: 'bond-accounting',
       sourceDate: sourceDate || ''
@@ -9185,7 +9229,7 @@
     if (bankListInput) {
       bankListInput.addEventListener('change', () => {
         const file = bankListInput.files && bankListInput.files[0];
-        setText('bondAccountingBankListName', file ? file.name : 'No workbook selected');
+        setText('bondAccountingBankListName', file ? file.name : 'Using saved BankList map');
       });
     }
     if (portfolioInput) {
@@ -9334,18 +9378,20 @@
     const portfolioFiles = portfolioInput && portfolioInput.files
       ? [...portfolioInput.files].filter(file => /\.(xlsm|xlsx|xls)$/i.test(file.name))
       : [];
-    if (!bankListFile) return showToast('Choose the bond-accounting bank list workbook', true);
     if (!portfolioFiles.length) return showToast('Choose the portfolio folder', true);
     const formData = new FormData();
-    formData.append('bondBankList', bankListFile, bankListFile.name);
+    if (bankListFile) formData.append('bondBankList', bankListFile, bankListFile.name);
     portfolioFiles.forEach(file => formData.append('bondPortfolioFiles', file, file.name));
-    if (status) status.textContent = `Importing ${formatNumber(portfolioFiles.length)} portfolio workbook${portfolioFiles.length === 1 ? '' : 's'}...`;
+    if (status) {
+      status.textContent = `Importing ${formatNumber(portfolioFiles.length)} portfolio workbook${portfolioFiles.length === 1 ? '' : 's'} with ${bankListFile ? bankListFile.name : 'the saved BankList map'}...`;
+    }
     fetch('/api/banks/bond-accounting/upload', { method: 'POST', body: formData })
       .then(async res => {
         const data = await readBankJson(res);
         bondAccountingManifest = data.manifest || null;
         const manifest = bondAccountingManifest || {};
-        showToast(`Matched ${formatNumber(manifest.matchedCount || 0)} portfolio files`);
+        const bankListMode = manifest.bankListMode === 'saved' ? 'saved BankList map' : 'uploaded BankList';
+        showToast(`Matched ${formatNumber(manifest.matchedCount || 0)} portfolio files using ${bankListMode}`);
         renderBondAccountingMatches();
         return loadBankStatus();
       })
@@ -9356,7 +9402,7 @@
       .finally(() => {
         if (bankListInput) bankListInput.value = '';
         if (portfolioInput) portfolioInput.value = '';
-        setText('bondAccountingBankListName', 'No workbook selected');
+        setText('bondAccountingBankListName', 'Using saved BankList map');
         setText('bondAccountingPortfolioName', 'No folder selected');
       });
   }
@@ -11831,7 +11877,7 @@
         <div class="coverage-book-detail-grid">
           <section>
             <h5>Contacts (${contacts.length})</h5>
-            ${contacts.length ? contacts.map(c => `<div class="cb-line"><strong>${escapeHtml(c.name)}</strong>${c.role ? ' · ' + escapeHtml(c.role) : ''}${c.phone ? ' · ' + escapeHtml(c.phone) : ''}${c.email ? ' · ' + escapeHtml(c.email) : ''}${c.isPrimary ? ' <span class="cb-tag">primary</span>' : ''}</div>`).join('') : '<p class="cb-muted">No contacts.</p>'}
+            ${contacts.length ? contacts.map(c => `<div class="cb-line"><strong>${escapeHtml(c.name)}</strong>${c.role ? ' · ' + escapeHtml(c.role) : ''}${c.phone ? ' · ' + phoneLinkHtml(c.phone, { disabled: c.doNotCall }) : ''}${c.email ? ' · ' + escapeHtml(c.email) : ''}${c.isPrimary ? ' <span class="cb-tag">primary</span>' : ''}</div>`).join('') : '<p class="cb-muted">No contacts.</p>'}
           </section>
           <section>
             <h5>Product Fit (${fit.length})</h5>
@@ -13936,7 +13982,9 @@
     selectedBankProductFit = [];
     selectedBankStrategyHistory = [];
     selectedBankPershing = null;
+    selectedBankPershingTrades = null;
     bankPershingBankId = null;
+    bankPershingTradesBankId = null;
     bankAssistantLastResponse = null;
     bankIntelligenceRequestId += 1;
     bankIntelligenceLoading = false;
@@ -14085,7 +14133,7 @@
     const address = [values.address, [values.city, values.state, values.zip].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
     const cells = [
       ['Account Team Members', status.owner],
-      ['Phone', values.phone],
+      ['Phone', values.phone ? { html: phoneLinkHtml(values.phone) } : ''],
       ['Address 1', address],
       ['Affiliate', status.affiliate],
       ['Affiliate Status', status.affiliateStatus],
@@ -14104,7 +14152,7 @@
           ${cells.map(([label, value]) => `
             <div>
               <span>${escapeHtml(label)}</span>
-              <strong>${escapeHtml(value || '—')}</strong>
+              <strong>${value && typeof value === 'object' && value.html ? value.html : escapeHtml(value || '—')}</strong>
             </div>
           `).join('')}
         </div>
@@ -14311,7 +14359,7 @@
     const countyLabel = String(values.county || '').replace(/,.*$/, '').replace(/\s+county$/i, '').trim();
     const details = [
       ['Account Name', values.name || bank.summary.name],
-      ['Phone', values.phone],
+      ['Phone', values.phone ? { html: phoneLinkHtml(values.phone) } : ''],
       ['Website', bankWebsiteLink(values.website)],
       ['Location', locationLine],
       ['County', countyLabel],
@@ -14370,6 +14418,7 @@
         ${renderBankOpportunitiesPanel()}
         ${renderBankContactsPanel()}
         ${renderBankPershingPanel()}
+        ${renderBankPershingTradesPanel()}
         ${renderBankAssistantPanel()}
         ${renderBankProductFitPanel()}
         <div class="bank-services-pair">
@@ -14448,6 +14497,7 @@
     loadBankTasks(bank.id);
     loadBankOpportunities(bank.id);
     loadBankPershing(bank.id);
+    loadBankPershingTrades(bank.id);
     loadBankFdicCheck(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
@@ -16489,6 +16539,97 @@
     refreshBankPershingPanel();
   }
 
+  function formatPershingTradeNumber(value, digits = 0) {
+    if (value === null || value === undefined || value === '') return '—';
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    return formatNumber(digits ? Number(n.toFixed(digits)) : Math.round(n));
+  }
+
+  function formatPershingTradePct(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '—';
+    return `${n.toFixed(2)}%`;
+  }
+
+  function renderBankPershingTradesPanel() {
+    const data = selectedBankPershingTrades;
+    const status = data && data.status ? data.status : null;
+    const trades = data && Array.isArray(data.trades) ? data.trades : [];
+    let body = '';
+    if (!data) {
+      body = '<p class="bank-activity-empty">Checking Pershing trade history...</p>';
+    } else if (!status || !status.available) {
+      body = '<p class="bank-activity-empty">No Pershing trade-history export has been imported yet.</p>';
+    } else if (!trades.length) {
+      body = '<p class="bank-activity-empty">No imported Pershing trades are linked to this bank.</p>';
+    } else {
+      const rows = trades.map(trade => {
+        const yld = trade.yieldToWorst != null ? trade.yieldToWorst : trade.yieldToMaturity;
+        const yldLabel = trade.yieldToWorst != null
+          ? 'YTW'
+          : (trade.yieldToMaturity != null ? (trade.yieldSource === 'estimated' ? 'Est YTM' : 'YTM') : '');
+        return `
+          <tr>
+            <td>${escapeHtml(formatActivityDate(trade.tradeDate) || trade.tradeDate || '—')}</td>
+            <td><span class="bank-pershing-side ${escapeHtml((trade.side || '').toLowerCase())}">${escapeHtml(trade.side || '—')}</span></td>
+            <td class="bank-pershing-number">${escapeHtml(trade.cusip || '—')}</td>
+            <td class="num">${escapeHtml(formatPershingTradeNumber(trade.quantityOrPar))}</td>
+            <td class="num">${escapeHtml(formatPershingTradeNumber(trade.price, 3))}</td>
+            <td class="num">${escapeHtml(yldLabel ? `${formatPershingTradePct(yld)} ${yldLabel}` : '—')}</td>
+            <td class="num">${escapeHtml(formatPershingTradePct(trade.coupon))}</td>
+            <td>${escapeHtml(formatActivityDate(trade.maturityDate) || trade.maturityDate || '—')}</td>
+            <td>${escapeHtml(trade.securityDescription || trade.issuer || '—')}</td>
+          </tr>
+        `;
+      }).join('');
+      const foot = `${formatNumber(status.tradeCount || 0)} imported trades${status.latestTradeDate ? ` · latest ${escapeHtml(formatActivityDate(status.latestTradeDate) || status.latestTradeDate)}` : ''}${status.unmatchedTradeCount ? ` · ${escapeHtml(formatNumber(status.unmatchedTradeCount))} unmatched to a bank` : ''}`;
+      body = `
+        <div class="bank-pershing-trades-wrap">
+          <table class="bank-pershing-trades">
+            <thead><tr><th>Date</th><th>Side</th><th>CUSIP</th><th class="num">Par/Qty</th><th class="num">Price</th><th class="num">Yield</th><th class="num">Coupon</th><th>Maturity</th><th>Description</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="bank-pershing-foot">${foot}. Showing newest ${escapeHtml(formatNumber(trades.length))} linked trades.</p>
+      `;
+    }
+    return `
+      <section class="bank-section bank-pershing-section" id="bankPershingTradesPanel">
+        <div class="bank-section-title">Pershing Trade History</div>
+        ${body}
+      </section>
+    `;
+  }
+
+  function refreshBankPershingTradesPanel() {
+    const panel = document.getElementById('bankPershingTradesPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankPershingTradesPanel();
+  }
+
+  async function loadBankPershingTrades(bankId) {
+    if (!bankId) {
+      selectedBankPershingTrades = null;
+      bankPershingTradesBankId = null;
+      refreshBankPershingTradesPanel();
+      return;
+    }
+    bankPershingTradesBankId = bankId;
+    selectedBankPershingTrades = null;
+    refreshBankPershingTradesPanel();
+    try {
+      const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/pershing/trades?limit=25`, { cache: 'no-store' }).then(readBankJson);
+      if (bankPershingTradesBankId !== bankId) return;
+      selectedBankPershingTrades = data;
+    } catch (_) {
+      if (bankPershingTradesBankId !== bankId) return;
+      selectedBankPershingTrades = { status: { available: false }, trades: [] };
+    }
+    refreshBankPershingTradesPanel();
+  }
+
   // ============ Bank Contacts (tear sheet) ============
 
   function renderBankContactsPanel() {
@@ -16531,7 +16672,7 @@
     if (bankContactsEditingId === contact.id) {
       return `<li class="bank-contact-row is-editing" data-contact-row="${escapeHtml(contact.id)}">${renderBankContactForm(contact, { mode: 'edit' })}</li>`;
     }
-    const phone = contact.phone ? `<a class="bank-contact-link" href="tel:${escapeHtml(phoneToTelHref(contact.phone))}">${escapeHtml(contact.phone)}</a>` : '';
+    const phone = contact.phone ? phoneLinkHtml(contact.phone, { disabled: contact.doNotCall }) : '';
     const email = contact.email ? `<a class="bank-contact-link" href="mailto:${escapeHtml(contact.email)}">${escapeHtml(contact.email)}</a>` : '';
     const roleLine = contact.role || '';
     const primaryBadge = contact.isPrimary ? '<span class="bank-contact-badge">Primary</span>' : '';
@@ -16593,10 +16734,6 @@
         </div>
       </form>
     `;
-  }
-
-  function phoneToTelHref(phone) {
-    return String(phone || '').replace(/[^\d+,;*#x]/gi, '');
   }
 
   function refreshBankContactsPanel() {
@@ -18916,7 +19053,7 @@
         <tr>
           <td><strong>${escapeHtml(c.name)}</strong>${c.isPrimary ? ' <span class="ao-class-pill">Primary</span>' : ''}${renderContactComplianceBadges(c)}</td>
           <td>${escapeHtml(c.role || '—')}</td>
-          <td>${c.phone ? `<a href="tel:${escapeHtml(c.phone.replace(/[^0-9+]/g, ''))}">${escapeHtml(c.phone)}</a>` : '—'}</td>
+          <td>${c.phone ? phoneLinkHtml(c.phone, { disabled: c.doNotCall }) : '—'}</td>
           <td>${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '—'}</td>
           <td><button type="button" class="text-btn" data-contact-bank="${escapeHtml(c.bankId)}">${escapeHtml(c.bankName)}</button></td>
           <td>${escapeHtml([c.city, c.state].filter(Boolean).join(', ') || '—')}</td>

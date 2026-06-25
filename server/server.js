@@ -75,6 +75,7 @@ const {
   getBondAccountingForBank,
   getBondAccountingStatus,
   importBondAccountingFolder,
+  loadBondAccountingBankList,
   loadBondAccountingManifest,
   resolveBondAccountingStoredFile
 } = require('./bond-accounting-store');
@@ -204,6 +205,8 @@ const {
   getPershingForBank,
   getPershingImportStatus,
   getPershingRollupsForBanks,
+  getPershingTradeImportStatus,
+  listPershingTradesForBank,
   listDormantPershingBanks
 } = require('./pershing-store');
 
@@ -7754,6 +7757,14 @@ function handleSwapInventory(res, query) {
   }
 }
 
+function swapLegNumberInRange(value, min, max) {
+  const n = numericValue(value);
+  if (n == null) return null;
+  if (min != null && n < min) return null;
+  if (max != null && n > max) return null;
+  return n;
+}
+
 function mapSwapHoldingPosition(row, sector) {
   return {
     sector,
@@ -7765,14 +7776,14 @@ function mapSwapHoldingPosition(row, sector) {
     par: row.par || 0,
     bookPrice: row.bookPrice || null,
     marketPrice: row.marketPrice || null,
-    bookYieldYtm: row.bookYieldYtm || null,
-    bookYieldYtw: row.bookYieldYtw || null,
-    marketYieldYtm: row.marketYieldYtm || null,
-    marketYieldYtw: row.marketYieldYtw || null,
+    bookYieldYtm: swapLegNumberInRange(row.bookYieldYtm, -10, 50),
+    bookYieldYtw: swapLegNumberInRange(row.bookYieldYtw, -10, 50),
+    marketYieldYtm: swapLegNumberInRange(row.marketYieldYtm, -10, 50),
+    marketYieldYtw: swapLegNumberInRange(row.marketYieldYtw, -10, 50),
     // Parser stores the workbook's "Eff. Dur" column as effectiveDuration;
     // legs carry it under modifiedDuration to match swap-store's schema.
-    modifiedDuration: row.effectiveDuration ?? null,
-    averageLife: row.averageLife || null,
+    modifiedDuration: swapLegNumberInRange(row.effectiveDuration, 0, 100),
+    averageLife: swapLegNumberInRange(row.averageLife, 0, 100),
     gainLoss: row.gainLoss || 0,
     bookValue: row.bookValue || null,
     marketValue: row.marketValue || null
@@ -8621,9 +8632,8 @@ async function handleBondAccountingUpload(req, res) {
     const bankListFile = files.find(f => f.fieldName === 'bondBankList' || /bank.*list/i.test(f.filename || ''));
     const portfolioFiles = files.filter(f => f !== bankListFile && /\.(xlsm|xlsx|xls)$/i.test(f.filename || ''));
 
-    if (!bankListFile) return sendJSON(res, 400, { error: 'Upload the bond-accounting bank list workbook.' });
     if (!portfolioFiles.length) return sendJSON(res, 400, { error: 'Choose the portfolio folder or upload at least one portfolio workbook.' });
-    if (!looksLikeExcel(bankListFile.data)) {
+    if (bankListFile && !looksLikeExcel(bankListFile.data)) {
       return sendJSON(res, 400, { error: `${bankListFile.filename} does not look like an Excel workbook.` });
     }
     for (const file of portfolioFiles) {
@@ -8636,14 +8646,20 @@ async function handleBondAccountingUpload(req, res) {
     if (!bankSummaries.length) {
       return sendJSON(res, 400, { error: 'Import bank call report data before importing bond-accounting portfolios.' });
     }
+    if (!bankListFile && !loadBondAccountingBankList(BANK_REPORTS_DIR)) {
+      return sendJSON(res, 400, { error: 'Upload the bond-accounting bank list workbook once before running monthly portfolio-only imports.' });
+    }
 
     fs.mkdirSync(BANK_REPORTS_DIR, { recursive: true });
     tmpDir = fs.mkdtempSync(path.join(BANK_REPORTS_DIR, 'bond-accounting-upload-'));
     const portfolioDir = path.join(tmpDir, 'portfolios');
     fs.mkdirSync(portfolioDir, { recursive: true });
 
-    const bankListPath = path.join(tmpDir, sanitizeFilename(bankListFile.filename || 'bond-accounting-bank-list.xlsx'));
-    fs.writeFileSync(bankListPath, bankListFile.data);
+    let bankListPath = '';
+    if (bankListFile) {
+      bankListPath = path.join(tmpDir, sanitizeFilename(bankListFile.filename || 'bond-accounting-bank-list.xlsx'));
+      fs.writeFileSync(bankListPath, bankListFile.data);
+    }
     for (const file of portfolioFiles) {
       fs.writeFileSync(path.join(portfolioDir, sanitizeFilename(file.filename)), file.data);
     }
@@ -8655,7 +8671,8 @@ async function handleBondAccountingUpload(req, res) {
     invalidateCoverageHoldingsIndex();
     appendAuditLog({
       event: 'bond-accounting-import',
-      bankListSourceFile: sanitizeFilename(bankListFile.filename),
+      bankListSourceFile: bankListFile ? sanitizeFilename(bankListFile.filename) : manifest.bankListSourceFile,
+      bankListMode: manifest.bankListMode || (bankListFile ? 'uploaded' : 'saved'),
       portfolioFileCount: manifest.portfolioFileCount,
       matchedCount: manifest.matchedCount,
       pCodeMatchedCount: manifest.pCodeMatchedCount,
@@ -9299,7 +9316,7 @@ async function autoFdicSyncTick() {
     } catch (_) { /* no stamp yet — run */ }
     if (lastRunAt && Date.now() - Date.parse(lastRunAt) < AUTO_FDIC_SYNC_EVERY_MS) return;
 
-    const result = await fdicBulkSync.syncFdicQuarter(BANK_REPORTS_DIR, { dryRun: false, log });
+    const result = await fdicBulkSync.syncFdicQuarter(BANK_REPORTS_DIR, { dryRun: false, log, stampDir: path.join(MARKET_DIR, 'fdic') });
     if (result.updated > 0) invalidateBankCaches();
     appendAuditLog({ event: 'fdic-sync', trigger: 'auto-weekly', ...result });
     fs.mkdirSync(path.dirname(autoFdicStatePath()), { recursive: true });
@@ -11166,7 +11183,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/pershing/status' && req.method === 'GET') {
-      return sendJSON(res, 200, getPershingImportStatus(BANK_REPORTS_DIR));
+      return sendJSON(res, 200, {
+        ...getPershingImportStatus(BANK_REPORTS_DIR),
+        trades: getPershingTradeImportStatus(BANK_REPORTS_DIR)
+      });
     }
 
     if (pathname === '/api/contacts/import' && req.method === 'POST') {
@@ -11316,7 +11336,7 @@ const server = http.createServer(async (req, res) => {
       }
       try {
         const dryRun = query.get('dryRun') === '1' || query.get('dryRun') === 'true';
-        const result = await fdicBulkSync.syncFdicQuarter(BANK_REPORTS_DIR, { dryRun, log });
+        const result = await fdicBulkSync.syncFdicQuarter(BANK_REPORTS_DIR, { dryRun, log, stampDir: path.join(MARKET_DIR, 'fdic') });
         if (!dryRun && result.updated > 0) invalidateBankCaches();
         appendAuditLog({ event: 'fdic-sync', ...result });
         return sendJSON(res, 200, result);
@@ -11973,6 +11993,20 @@ const server = http.createServer(async (req, res) => {
           limit: query.get('limit')
         })
       });
+    }
+
+    const bankPershingTradesMatch = pathname.match(/^\/api\/banks\/([^/]+)\/pershing\/trades$/);
+    if (bankPershingTradesMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankPershingTradesMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return sendJSON(res, 200, listPershingTradesForBank(BANK_REPORTS_DIR, bankId, {
+        from: query.get('from'),
+        to: query.get('to'),
+        side: query.get('side'),
+        securityType: query.get('securityType'),
+        cusip: query.get('cusip'),
+        limit: query.get('limit')
+      }));
     }
 
     // Per-bank slice of the CD rollover universe — powers the tear sheet's

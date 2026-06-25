@@ -106,6 +106,47 @@ function parseBankListWorkbook(bankListPath) {
   };
 }
 
+function hydrateBankList(value) {
+  const records = Array.isArray(value && value.records) ? value.records.map(row => ({
+    clientId: cleanText(row.clientId),
+    clientName: cleanText(row.clientName),
+    abaNumber: cleanDigits(row.abaNumber),
+    account: cleanText(row.account),
+    pCode: normalizePCode(row.pCode),
+    rssdId: cleanDigits(row.rssdId),
+    certNumber: cleanDigits(row.certNumber),
+    cuid: cleanText(row.cuid),
+    clientType: cleanText(row.clientType),
+    almClient: cleanText(row.almClient),
+    state: cleanText(row.state),
+    city: cleanText(row.city),
+    zipCode: cleanText(row.zipCode),
+    report: cleanText(row.report),
+    salesRep: cleanText(row.salesRep),
+    accountingClient: cleanText(row.accountingClient),
+    status: cleanText(row.status)
+  })).filter(row => row.pCode || row.clientName || row.certNumber) : [];
+  const byPCode = new Map();
+  for (const row of records) {
+    if (row.pCode && !byPCode.has(row.pCode.toUpperCase())) byPCode.set(row.pCode.toUpperCase(), row);
+  }
+  return {
+    importedAt: cleanText(value && value.importedAt),
+    sourceFile: cleanText(value && value.sourceFile) || 'saved bank-list map',
+    sheetName: cleanText(value && value.sheetName),
+    rowCount: records.length,
+    pCodeCount: byPCode.size,
+    records,
+    byPCode
+  };
+}
+
+function loadBondAccountingBankList(bankReportsDir) {
+  const bankListPath = bondAccountingBankListPathForReportsDir(bankReportsDir);
+  if (!fs.existsSync(bankListPath)) return null;
+  return hydrateBankList(JSON.parse(fs.readFileSync(bankListPath, 'utf8')));
+}
+
 function parsePortfolioFilename(filename) {
   const base = path.basename(filename);
   const match = base.match(/^(.+?)\(Account\)_(.+?)_(\d{8})_P(\d+)\.(xlsm|xlsx|xls)$/i);
@@ -166,10 +207,16 @@ function importBondAccountingFolder(bankReportsDir, bankListPath, portfolioFolde
   const rootDir = bondAccountingDirForReportsDir(bankReportsDir);
   fs.mkdirSync(rootDir, { recursive: true });
 
-  const bankList = parseBankListWorkbook(bankListPath);
+  const bankList = bankListPath
+    ? parseBankListWorkbook(bankListPath)
+    : loadBondAccountingBankList(bankReportsDir);
+  if (!bankList || !bankList.records.length) {
+    throw new Error('Upload the bond-accounting bank list workbook once before running monthly portfolio-only imports.');
+  }
   const certMap = bankSummaryMapByCert(options.bankSummaries || []);
   const portfolioFiles = listPortfolioFiles(portfolioFolderPath);
   const importedAt = new Date().toISOString();
+  const bankListMode = bankListPath ? 'uploaded' : 'saved';
   const matches = [];
   const unmatched = [];
 
@@ -205,7 +252,8 @@ function importBondAccountingFolder(bankReportsDir, bankListPath, portfolioFolde
     schemaVersion: 1,
     importedAt,
     sourceFolder: options.sourceFolderLabel || portfolioFolderPath,
-    bankListSourceFile: path.basename(bankListPath),
+    bankListSourceFile: bankList.sourceFile,
+    bankListMode,
     portfolioFileCount: portfolioFiles.length,
     matchedCount: matches.filter(row => row.status === 'matched').length,
     pCodeMatchedCount: matches.filter(row => row.status === 'needs-bank-data-match').length,
@@ -219,12 +267,14 @@ function importBondAccountingFolder(bankReportsDir, bankListPath, portfolioFolde
     matches
   };
 
-  writeJsonAtomic(bondAccountingBankListPathForReportsDir(bankReportsDir), {
-    importedAt,
-    sourceFile: bankList.sourceFile,
-    sheetName: bankList.sheetName,
-    records: bankList.records
-  }, 2);
+  if (bankListPath) {
+    writeJsonAtomic(bondAccountingBankListPathForReportsDir(bankReportsDir), {
+      importedAt,
+      sourceFile: bankList.sourceFile,
+      sheetName: bankList.sheetName,
+      records: bankList.records
+    }, 2);
+  }
   writeJsonAtomic(bondAccountingManifestPathForReportsDir(bankReportsDir), manifest, 2);
   return manifest;
 }
@@ -293,6 +343,7 @@ module.exports = {
   getBondAccountingForBank,
   getBondAccountingStatus,
   importBondAccountingFolder,
+  loadBondAccountingBankList,
   loadBondAccountingManifest,
   parseBankListWorkbook,
   parsePortfolioFilename,

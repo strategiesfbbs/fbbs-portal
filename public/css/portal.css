@@ -16439,6 +16439,65 @@ body {
   margin: 8px 0 0;
 }
 
+.bank-pershing-trades-wrap {
+  background: #fff;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.bank-pershing-trades {
+  border-collapse: collapse;
+  min-width: 900px;
+  width: 100%;
+}
+
+.bank-pershing-trades th,
+.bank-pershing-trades td {
+  border-bottom: 1px solid var(--line, #ddd);
+  font-size: 12px;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.bank-pershing-trades th {
+  color: var(--text3, #8a918d);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.bank-pershing-trades tr:last-child td {
+  border-bottom: 0;
+}
+
+.bank-pershing-trades .num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.bank-pershing-side {
+  border: 1px solid var(--line, #ddd);
+  border-radius: 6px;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 4px 6px;
+}
+
+.bank-pershing-side.buy {
+  border-color: rgba(46, 125, 50, 0.35);
+  color: #2e7d32;
+}
+
+.bank-pershing-side.sell {
+  border-color: rgba(176, 124, 16, 0.45);
+  color: #8a5d00;
+}
+
 .fits-pick-actions {
   display: inline-flex;
   flex: 0 0 auto;

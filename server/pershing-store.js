@@ -2,7 +2,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const sqliteDb = require('./sqlite-db');
+const swapMath = require('./swap-math');
 
 const PERSHING_DATABASE_FILENAME = 'pershing-accounts.sqlite';
 
@@ -51,6 +53,42 @@ function ensurePershingDatabase(outputDir) {
     CREATE INDEX IF NOT EXISTS idx_pershing_cert ON pershing_accounts(cert_number);
     CREATE INDEX IF NOT EXISTS idx_pershing_trade_date ON pershing_accounts(most_recent_trade_date);
     CREATE INDEX IF NOT EXISTS idx_pershing_primary_owner ON pershing_accounts(primary_owner_name);
+    CREATE TABLE IF NOT EXISTS pershing_trades (
+      trade_key TEXT PRIMARY KEY,
+      trade_id TEXT,
+      pershing_account_number TEXT NOT NULL,
+      bank_id TEXT,
+      trade_date TEXT NOT NULL,
+      settlement_date TEXT,
+      side TEXT,
+      cusip TEXT NOT NULL,
+      security_description TEXT,
+      security_type TEXT,
+      issuer TEXT,
+      coupon REAL,
+      maturity_date TEXT,
+      call_date TEXT,
+      quantity_or_par REAL,
+      price REAL,
+      yield_to_maturity REAL,
+      yield_to_worst REAL,
+      yield_source TEXT,
+      principal REAL,
+      accrued_interest REAL,
+      commission_or_markup REAL,
+      net_amount REAL,
+      rep_code TEXT,
+      rep_name TEXT,
+      trade_status TEXT,
+      cancel_correct_indicator TEXT,
+      as_of_date TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      source_file TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pershing_trades_bank_date ON pershing_trades(bank_id, trade_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_pershing_trades_account_date ON pershing_trades(pershing_account_number, trade_date DESC);
+    CREATE INDEX IF NOT EXISTS idx_pershing_trades_cusip ON pershing_trades(cusip);
+    CREATE INDEX IF NOT EXISTS idx_pershing_trades_security_type ON pershing_trades(security_type);
     CREATE TABLE IF NOT EXISTS pershing_meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -65,6 +103,13 @@ function ensurePershingDatabase(outputDir) {
   ];
   for (const [column, sql] of migrations) {
     if (!columns.includes(column)) runSqlite(dbPath, sql);
+  }
+  const tradeColumns = querySqliteJson(dbPath, 'PRAGMA table_info(pershing_trades);').map(row => row.name);
+  const tradeMigrations = [
+    ['yield_source', 'ALTER TABLE pershing_trades ADD COLUMN yield_source TEXT;']
+  ];
+  for (const [column, sql] of tradeMigrations) {
+    if (!tradeColumns.includes(column)) runSqlite(dbPath, sql);
   }
   return dbPath;
 }
@@ -132,6 +177,85 @@ function normalizeDate(value) {
   const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mdy) return `${mdy[3]}-${String(mdy[1]).padStart(2, '0')}-${String(mdy[2]).padStart(2, '0')}`;
   return raw.slice(0, 10);
+}
+
+function normalizeExcelText(value, maxLength = 300) {
+  let cleaned = cleanText(value, maxLength);
+  const formula = cleaned.match(/^="?([^"]+)"?$/);
+  if (formula) cleaned = formula[1];
+  return cleanText(cleaned, maxLength);
+}
+
+function normalizeAccountNumber(value) {
+  return normalizeExcelText(value, 40);
+}
+
+function normalizeCusip(value) {
+  return normalizeExcelText(value, 20).replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 9);
+}
+
+function normalizeSide(value) {
+  const side = cleanText(value, 40).toUpperCase();
+  if (!side) return '';
+  if (/^B(UY)?$/.test(side)) return 'BUY';
+  if (/^S(ELL)?$/.test(side)) return 'SELL';
+  if (/MAT|MATURE/.test(side)) return 'MATURITY';
+  if (/CALL/.test(side)) return 'CALL';
+  if (/REDEEM|REDM/.test(side)) return 'REDEMPTION';
+  if (/CANCEL/.test(side)) return 'CANCEL';
+  return side.slice(0, 40);
+}
+
+function numberOrNull(value, options = {}) {
+  if (value === undefined || value === null || value === '') return null;
+  let raw = cleanText(value, 80);
+  if (!raw) return null;
+  let neg = false;
+  if (/^\(.*\)$/.test(raw)) {
+    neg = true;
+    raw = raw.slice(1, -1);
+  }
+  raw = raw.replace(/[$,%\s,]/g, '');
+  if (!raw || raw === '-' || raw === '.') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  const valueNum = neg ? -n : n;
+  return options.absolute ? Math.abs(valueNum) : valueNum;
+}
+
+function extractCouponFromDescription(value) {
+  const text = cleanText(value, 500);
+  const match = text.match(/(\d+(?:\.\d+)?)\s*%/);
+  return match ? numberOrNull(match[1]) : null;
+}
+
+function estimateYieldToMaturity(record) {
+  if (!record || record.yieldToMaturity != null || record.yieldToWorst != null) return null;
+  const ytm = swapMath.yieldFromPriceAndMaturity({
+    price: record.price,
+    coupon: record.coupon,
+    maturity: record.maturityDate,
+    settleDate: record.settlementDate || record.tradeDate,
+    frequency: 2
+  });
+  return ytm == null ? null : Number(ytm.toFixed(3));
+}
+
+function stableTradeHash(parts) {
+  return crypto.createHash('sha256').update(parts.map(p => String(p ?? '')).join('|')).digest('hex').slice(0, 32);
+}
+
+function buildTradeKey(record) {
+  if (record.tradeId) return `id:${record.tradeId}`;
+  return `fb:${stableTradeHash([
+    record.pershingAccountNumber,
+    record.tradeDate,
+    record.cusip,
+    record.side,
+    record.quantityOrPar == null ? '' : record.quantityOrPar,
+    record.price == null ? '' : record.price,
+    record.netAmount == null ? '' : record.netAmount
+  ])}`;
 }
 
 function booleanValue(value) {
@@ -307,6 +431,213 @@ function importPershingAccounts(outputDir, rows, options = {}) {
   return stats;
 }
 
+function mapPershingTrade(row, options = {}) {
+  const sourceFile = cleanText(options.sourceFile, 260);
+  const importedAt = options.importedAt || new Date().toISOString();
+  const description = cleanText(field(row, ['security_description', 'Security Description', 'Description']), 500);
+  const record = {
+    tradeId: cleanText(field(row, ['trade_id', 'Trade ID', 'Trade Id', 'Execution ID']), 120),
+    pershingAccountNumber: normalizeAccountNumber(field(row, ['pershing_account_number', 'Pershing Account Number', 'Account Number', 'Account'])),
+    bankId: '',
+    tradeDate: normalizeDate(field(row, ['trade_date', 'Trade Date', 'Activity Date'])),
+    settlementDate: normalizeDate(field(row, ['settlement_date', 'Settlement Date'])),
+    side: normalizeSide(field(row, ['side', 'Buy/Sell', 'Buy Sell', 'Transaction Type'])),
+    cusip: normalizeCusip(field(row, ['cusip', 'CUSIP'])),
+    securityDescription: description,
+    securityType: cleanText(field(row, ['security_type', 'Security Type', 'Asset Type Code', 'Asset Type']), 80),
+    issuer: cleanText(field(row, ['issuer', 'Issuer', 'IP Name']), 240),
+    coupon: numberOrNull(field(row, ['coupon', 'Coupon'])) ?? extractCouponFromDescription(description),
+    maturityDate: normalizeDate(field(row, ['maturity_date', 'Maturity Date'])),
+    callDate: normalizeDate(field(row, ['call_date', 'Call Date'])),
+    quantityOrPar: numberOrNull(field(row, ['quantity_or_par', 'Quantity or Par', 'Quantity', 'Par']), { absolute: true }),
+    price: numberOrNull(field(row, ['price', 'Price', 'Price (Transaction Currency)'])),
+    yieldToMaturity: numberOrNull(field(row, ['yield_to_maturity', 'Yield to Maturity', 'YTM'])),
+    yieldToWorst: numberOrNull(field(row, ['yield_to_worst', 'Yield to Worst', 'YTW'])),
+    yieldSource: '',
+    principal: numberOrNull(field(row, ['principal', 'Principal'])),
+    accruedInterest: numberOrNull(field(row, ['accrued_interest', 'Accrued Interest'])),
+    commissionOrMarkup: numberOrNull(field(row, ['commission_or_markup', 'Commission/Markup', 'Commission', 'Markup'])),
+    netAmount: numberOrNull(field(row, ['net_amount', 'Net Amount'])),
+    repCode: cleanText(field(row, ['rep_code', 'Rep Code']), 80),
+    repName: cleanText(field(row, ['rep_name', 'Rep Name']), 200),
+    tradeStatus: cleanText(field(row, ['trade_status', 'Trade Status', 'Status']), 80),
+    cancelCorrectIndicator: cleanText(field(row, ['cancel_correct_indicator', 'Cancel/Correct Indicator', 'Cancel Correct Indicator']), 80),
+    asOfDate: normalizeDate(field(row, ['as_of_date', 'As Of Date'])) || normalizeDate(options.asOfDate) || new Date().toISOString().slice(0, 10),
+    importedAt,
+    sourceFile
+  };
+  if (record.yieldToMaturity != null || record.yieldToWorst != null) record.yieldSource = 'source';
+  const estimatedYtm = estimateYieldToMaturity(record);
+  if (estimatedYtm != null) {
+    record.yieldToMaturity = estimatedYtm;
+    record.yieldSource = 'estimated';
+  }
+  record.tradeKey = buildTradeKey(record);
+  return record;
+}
+
+function validateMappedTrade(record) {
+  if (!record.pershingAccountNumber) return 'Missing Pershing account number';
+  if (!record.tradeDate) return 'Missing trade date';
+  if (!record.side) return 'Missing side';
+  if (!record.cusip) return 'Missing CUSIP';
+  if (!record.asOfDate) return 'Missing as-of date';
+  return '';
+}
+
+function summarizeTradeImport(records, options = {}) {
+  const accountNumbers = new Set();
+  const bankIds = new Set();
+  const tradeKeys = new Set();
+  let invalidRows = 0;
+  let duplicateRows = 0;
+  let estimatedYieldRows = 0;
+  let oldestTradeDate = '';
+  let latestTradeDate = '';
+  for (const record of records) {
+    if (validateMappedTrade(record)) { invalidRows += 1; continue; }
+    if (tradeKeys.has(record.tradeKey)) duplicateRows += 1;
+    else tradeKeys.add(record.tradeKey);
+    if (record.yieldSource === 'estimated') estimatedYieldRows += 1;
+    accountNumbers.add(record.pershingAccountNumber);
+    if (record.bankId) bankIds.add(record.bankId);
+    if (!oldestTradeDate || record.tradeDate < oldestTradeDate) oldestTradeDate = record.tradeDate;
+    if (!latestTradeDate || record.tradeDate > latestTradeDate) latestTradeDate = record.tradeDate;
+  }
+  const importedCount = records.length - invalidRows;
+  return {
+    sourceFile: cleanText(options.sourceFile, 260),
+    importedAt: options.importedAt || '',
+    asOfDate: normalizeDate(options.asOfDate) || null,
+    dryRun: Boolean(options.dryRun),
+    totalRows: records.length,
+    invalidRows,
+    importedCount,
+    uniqueTradeCount: tradeKeys.size,
+    duplicateRows,
+    estimatedYieldRows,
+    matchedRows: records.filter(r => !validateMappedTrade(r) && r.bankId).length,
+    unmatchedRows: records.filter(r => !validateMappedTrade(r) && !r.bankId).length,
+    pershingAccountCount: accountNumbers.size,
+    bankCount: bankIds.size,
+    oldestTradeDate: oldestTradeDate || null,
+    latestTradeDate: latestTradeDate || null
+  };
+}
+
+function importPershingTrades(outputDir, rows, options = {}) {
+  const importedAt = options.importedAt || new Date().toISOString();
+  const sourceFile = cleanText(options.sourceFile || '', 260);
+  const asOfDate = normalizeDate(options.asOfDate) || new Date().toISOString().slice(0, 10);
+  const mapped = (rows || []).map(row => mapPershingTrade(row, { ...options, importedAt, sourceFile, asOfDate }));
+  const accountToBank = new Map();
+  const existingDbPath = pershingDatabasePathForDir(outputDir);
+  const canReadAccounts = fs.existsSync(existingDbPath);
+  const dbPath = canReadAccounts || !options.dryRun ? ensurePershingDatabase(outputDir) : existingDbPath;
+  if (canReadAccounts || !options.dryRun) {
+    const accounts = querySqliteJson(dbPath, `
+      SELECT pershing_account_number AS accountNumber, bank_id AS bankId
+      FROM pershing_accounts
+      WHERE is_deleted = 0;
+    `);
+    accounts.forEach(row => {
+      const accountNumber = normalizeAccountNumber(row.accountNumber);
+      if (accountNumber && row.bankId && !accountToBank.has(accountNumber)) accountToBank.set(accountNumber, row.bankId);
+    });
+  }
+  mapped.forEach(record => { record.bankId = accountToBank.get(record.pershingAccountNumber) || ''; });
+  const stats = summarizeTradeImport(mapped, { importedAt, sourceFile, asOfDate, dryRun: options.dryRun });
+  if (options.dryRun) return stats;
+
+  sqliteDb.withDatabase(dbPath, db => {
+    const insert = db.prepare(`
+      INSERT INTO pershing_trades (
+        trade_key, trade_id, pershing_account_number, bank_id, trade_date, settlement_date,
+        side, cusip, security_description, security_type, issuer, coupon, maturity_date,
+        call_date, quantity_or_par, price, yield_to_maturity, yield_to_worst, yield_source, principal,
+        accrued_interest, commission_or_markup, net_amount, rep_code, rep_name, trade_status,
+        cancel_correct_indicator, as_of_date, imported_at, source_file
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(trade_key) DO UPDATE SET
+        trade_id = excluded.trade_id,
+        pershing_account_number = excluded.pershing_account_number,
+        bank_id = excluded.bank_id,
+        trade_date = excluded.trade_date,
+        settlement_date = excluded.settlement_date,
+        side = excluded.side,
+        cusip = excluded.cusip,
+        security_description = excluded.security_description,
+        security_type = excluded.security_type,
+        issuer = excluded.issuer,
+        coupon = excluded.coupon,
+        maturity_date = excluded.maturity_date,
+        call_date = excluded.call_date,
+        quantity_or_par = excluded.quantity_or_par,
+        price = excluded.price,
+        yield_to_maturity = excluded.yield_to_maturity,
+        yield_to_worst = excluded.yield_to_worst,
+        yield_source = excluded.yield_source,
+        principal = excluded.principal,
+        accrued_interest = excluded.accrued_interest,
+        commission_or_markup = excluded.commission_or_markup,
+        net_amount = excluded.net_amount,
+        rep_code = excluded.rep_code,
+        rep_name = excluded.rep_name,
+        trade_status = excluded.trade_status,
+        cancel_correct_indicator = excluded.cancel_correct_indicator,
+        as_of_date = excluded.as_of_date,
+        imported_at = excluded.imported_at,
+        source_file = excluded.source_file;
+    `);
+    const meta = db.prepare(`
+      INSERT INTO pershing_meta (key, value) VALUES (?, ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+    `);
+    const tx = db.transaction(() => {
+      for (const record of mapped) {
+        if (validateMappedTrade(record)) continue;
+        insert.run(
+          record.tradeKey,
+          textOrNull(record.tradeId, 120),
+          record.pershingAccountNumber,
+          textOrNull(record.bankId, 80),
+          record.tradeDate,
+          textOrNull(record.settlementDate, 20),
+          textOrNull(record.side, 40),
+          record.cusip,
+          textOrNull(record.securityDescription, 500),
+          textOrNull(record.securityType, 80),
+          textOrNull(record.issuer, 240),
+          record.coupon,
+          textOrNull(record.maturityDate, 20),
+          textOrNull(record.callDate, 20),
+          record.quantityOrPar,
+          record.price,
+          record.yieldToMaturity,
+          record.yieldToWorst,
+          textOrNull(record.yieldSource, 40),
+          record.principal,
+          record.accruedInterest,
+          record.commissionOrMarkup,
+          record.netAmount,
+          textOrNull(record.repCode, 80),
+          textOrNull(record.repName, 200),
+          textOrNull(record.tradeStatus, 80),
+          textOrNull(record.cancelCorrectIndicator, 80),
+          record.asOfDate,
+          importedAt,
+          textOrNull(sourceFile, 260)
+        );
+      }
+      for (const [key, value] of Object.entries(stats)) {
+        meta.run(`trade.${key}`, value === null || value === undefined ? '' : String(value));
+      }
+    });
+    tx();
+  });
+  return stats;
+}
+
 function rowToAccount(row) {
   return {
     salesforcePershingId: row.salesforcePershingId || '',
@@ -473,6 +804,127 @@ function getPershingImportStatus(outputDir) {
   };
 }
 
+function getPershingTradeImportStatus(outputDir) {
+  const dbPath = pershingDatabasePathForDir(outputDir);
+  if (!fs.existsSync(dbPath)) return { available: false, importedAt: '', tradeCount: 0, bankCount: 0, unmatchedTradeCount: 0, latestTradeDate: '' };
+  ensurePershingDatabase(outputDir);
+  const metaRows = querySqliteJson(dbPath, 'SELECT key, value FROM pershing_meta WHERE key LIKE ?;', ['trade.%']);
+  const meta = Object.fromEntries(metaRows.map(row => [String(row.key).replace(/^trade\./, ''), row.value]));
+  const counts = querySqliteJson(dbPath, `
+    SELECT
+      COUNT(*) AS tradeCount,
+      COUNT(DISTINCT bank_id) AS bankCount,
+      SUM(CASE WHEN bank_id IS NULL OR bank_id = '' THEN 1 ELSE 0 END) AS unmatchedTradeCount,
+      MAX(trade_date) AS latestTradeDate
+    FROM pershing_trades;
+  `)[0] || {};
+  return {
+    available: Number(counts.tradeCount || 0) > 0,
+    importedAt: meta.importedAt || '',
+    sourceFile: meta.sourceFile || '',
+    asOfDate: meta.asOfDate || '',
+    tradeCount: Number(counts.tradeCount || 0),
+    bankCount: Number(counts.bankCount || 0),
+    unmatchedTradeCount: Number(counts.unmatchedTradeCount || 0),
+    latestTradeDate: counts.latestTradeDate || meta.latestTradeDate || ''
+  };
+}
+
+function rowToTrade(row) {
+  return {
+    tradeKey: row.tradeKey || '',
+    tradeId: row.tradeId || '',
+    pershingAccountNumber: row.pershingAccountNumber || '',
+    bankId: row.bankId || '',
+    tradeDate: row.tradeDate || '',
+    settlementDate: row.settlementDate || '',
+    side: row.side || '',
+    cusip: row.cusip || '',
+    securityDescription: row.securityDescription || '',
+    securityType: row.securityType || '',
+    issuer: row.issuer || '',
+    coupon: row.coupon == null ? null : Number(row.coupon),
+    maturityDate: row.maturityDate || '',
+    callDate: row.callDate || '',
+    quantityOrPar: row.quantityOrPar == null ? null : Number(row.quantityOrPar),
+    price: row.price == null ? null : Number(row.price),
+    yieldToMaturity: row.yieldToMaturity == null ? null : Number(row.yieldToMaturity),
+    yieldToWorst: row.yieldToWorst == null ? null : Number(row.yieldToWorst),
+    yieldSource: row.yieldSource || '',
+    principal: row.principal == null ? null : Number(row.principal),
+    accruedInterest: row.accruedInterest == null ? null : Number(row.accruedInterest),
+    commissionOrMarkup: row.commissionOrMarkup == null ? null : Number(row.commissionOrMarkup),
+    netAmount: row.netAmount == null ? null : Number(row.netAmount),
+    repCode: row.repCode || '',
+    repName: row.repName || '',
+    tradeStatus: row.tradeStatus || '',
+    cancelCorrectIndicator: row.cancelCorrectIndicator || '',
+    asOfDate: row.asOfDate || '',
+    importedAt: row.importedAt || '',
+    sourceFile: row.sourceFile || ''
+  };
+}
+
+function listPershingTradesForBank(outputDir, bankId, options = {}) {
+  const dbPath = ensurePershingDatabase(outputDir);
+  const clauses = ['bank_id = ?'];
+  const params = [String(bankId || '')];
+  const from = normalizeDate(options.from);
+  const to = normalizeDate(options.to);
+  const side = normalizeSide(options.side);
+  const securityType = cleanText(options.securityType, 80);
+  const cusip = normalizeCusip(options.cusip);
+  if (from) { clauses.push('trade_date >= ?'); params.push(from); }
+  if (to) { clauses.push('trade_date <= ?'); params.push(to); }
+  if (side) { clauses.push('side = ?'); params.push(side); }
+  if (securityType) { clauses.push('LOWER(security_type) = LOWER(?)'); params.push(securityType); }
+  if (cusip) { clauses.push('cusip LIKE ?'); params.push(`${cusip}%`); }
+  const limit = Math.max(1, Math.min(Number(options.limit) || 25, 250));
+  params.push(limit);
+  const trades = querySqliteJson(dbPath, `
+    SELECT
+      trade_key AS tradeKey,
+      trade_id AS tradeId,
+      pershing_account_number AS pershingAccountNumber,
+      bank_id AS bankId,
+      trade_date AS tradeDate,
+      settlement_date AS settlementDate,
+      side,
+      cusip,
+      security_description AS securityDescription,
+      security_type AS securityType,
+      issuer,
+      coupon,
+      maturity_date AS maturityDate,
+      call_date AS callDate,
+      quantity_or_par AS quantityOrPar,
+      price,
+      yield_to_maturity AS yieldToMaturity,
+      yield_to_worst AS yieldToWorst,
+      yield_source AS yieldSource,
+      principal,
+      accrued_interest AS accruedInterest,
+      commission_or_markup AS commissionOrMarkup,
+      net_amount AS netAmount,
+      rep_code AS repCode,
+      rep_name AS repName,
+      trade_status AS tradeStatus,
+      cancel_correct_indicator AS cancelCorrectIndicator,
+      as_of_date AS asOfDate,
+      imported_at AS importedAt,
+      source_file AS sourceFile
+    FROM pershing_trades
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY trade_date DESC, settlement_date DESC, cusip COLLATE NOCASE ASC
+    LIMIT ?;
+  `, params).map(rowToTrade);
+  return {
+    bankId: String(bankId || ''),
+    status: getPershingTradeImportStatus(outputDir),
+    trades
+  };
+}
+
 function listDormantPershingBanks(outputDir, options = {}) {
   const dbPath = ensurePershingDatabase(outputDir);
   const asOfDate = options.asOfDate || new Date().toISOString().slice(0, 10);
@@ -539,9 +991,13 @@ module.exports = {
   pershingDatabasePathForDir,
   ensurePershingDatabase,
   importPershingAccounts,
+  importPershingTrades,
   getPershingForBank,
   getPershingRollupsForBanks,
   getPershingImportStatus,
+  getPershingTradeImportStatus,
+  listPershingTradesForBank,
   listDormantPershingBanks,
-  mapPershingRecord
+  mapPershingRecord,
+  mapPershingTrade
 };

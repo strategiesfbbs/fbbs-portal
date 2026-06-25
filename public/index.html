@@ -703,15 +703,15 @@
         <div class="reports-import-head">
           <div>
             <h3>Bond Accounting Import</h3>
-            <p>Upload the bank-list workbook, then choose the portfolio export folder. Files are matched by P-code and FDIC certificate to the imported bank tear sheet data.</p>
+            <p>Choose the monthly portfolio export folder. The saved BankList map is reused automatically; upload a new BankList only when the roster changes.</p>
           </div>
           <button type="button" class="small-btn" id="bondAccountingImportBtn">Import Portfolios</button>
         </div>
         <div class="reports-import-grid">
           <label class="reports-picker" for="bondAccountingBankListInput" id="bondAccountingBankListPicker">
             <span>Bank List Workbook</span>
-            <strong id="bondAccountingBankListName">No workbook selected</strong>
-            <small>.xls, .xlsx, or .xlsm</small>
+            <strong id="bondAccountingBankListName">Using saved BankList map</strong>
+            <small>Optional. Upload .xls, .xlsx, or .xlsm only when P-codes change.</small>
             <input type="file" id="bondAccountingBankListInput" accept=".xlsm,.xlsx,.xls" hidden>
           </label>
           <label class="reports-picker" for="bondAccountingPortfolioInput" id="bondAccountingPortfolioPicker">
@@ -721,7 +721,7 @@
             <input type="file" id="bondAccountingPortfolioInput" accept=".xlsm,.xlsx,.xls" multiple webkitdirectory directory hidden>
           </label>
         </div>
-        <div class="reports-import-status" id="bondAccountingImportStatus">Ready for the bank list and portfolio folder.</div>
+        <div class="reports-import-status" id="bondAccountingImportStatus">Ready for the monthly portfolio folder.</div>
         <div class="reports-review-tools" id="bondAccountingReviewTools">
           <input type="search" id="bondAccountingSearchInput" placeholder="Search bank, P-code, cert, file">
           <select id="bondAccountingStatusFilter" aria-label="Bond accounting match status">
@@ -1868,20 +1868,20 @@
 
     <section class="bank-upload-panel">
       <div>
-        <h3>Bank call report workbook</h3>
+        <h3>Call report data</h3>
         <p id="bankImportStatus">Checking imported bank data&hellip;</p>
         <p id="bankStatusImportStatus">Account statuses default to Open until imported or edited.</p>
         <p id="averagedSeriesImportStatus">Averaged-series peer data has not been imported yet.</p>
-        <p id="fdicSyncStatus">FDIC quarterly sync: pulls the newest FDIC-filed quarter into every bank's tear sheet (headline fields) while waiting on the full workbook.</p>
+        <p id="fdicSyncStatus">FDIC call-report sync: pulls the newest public filed quarter into matching bank tear sheets; workbook upload remains available as fallback until parity is proven.</p>
         <p id="sfContactsImportStatus">Salesforce contacts: export Contacts to CSV in Salesforce, drop it here — rows match to banks by account name.</p>
       </div>
-      <button type="button" class="small-btn bank-upload-btn" id="fdicSyncBtn">Sync Latest Quarter from FDIC</button>
+      <button type="button" class="small-btn bank-upload-btn" id="fdicSyncBtn">Sync Call Reports from FDIC</button>
       <label class="small-btn bank-upload-btn">
         Import Salesforce Contacts
         <input type="file" id="sfContactsCsvInput" accept=".csv" hidden>
       </label>
       <label class="small-btn bank-upload-btn">
-        Upload Call Reports
+        Fallback Workbook Import
         <input type="file" id="bankWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
       </label>
       <label class="small-btn bank-upload-btn">

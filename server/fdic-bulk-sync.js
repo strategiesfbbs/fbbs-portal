@@ -5,7 +5,7 @@
  * The FedFis workbook stays the authoritative full import (it carries derived
  * fields the FDIC doesn't publish). This sync is the stopgap for the gap
  * between the FDIC releasing a quarter and the workbook arriving: it adds the
- * new period — ~30 mapped headline fields — to every bank whose cert matches,
+ * new period — explicitly mapped headline fields — to every bank whose cert matches,
  * and bumps the bank's summary period. It NEVER overwrites a period that
  * already exists (the workbook import rebuilds the whole DB later and
  * naturally supersedes these stopgap rows).
@@ -16,9 +16,10 @@
  */
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const sqliteDb = require('./sqlite-db');
-const { BANK_DATABASE_FILENAME } = require('./bank-data-importer');
+const { BANK_DATABASE_FILENAME, BANK_FIELDS } = require('./bank-data-importer');
 
 const API_BASE = 'https://api.fdic.gov/banks/financials';
 const FETCH_TIMEOUT_MS = 60000;
@@ -28,36 +29,39 @@ const PAGE_LIMIT = 10000;
 // ratios are % on both sides. Field meanings verified against live API
 // responses 2026-06-11 (cert 2738).
 const DIRECT_MAP = [
-  ['ASSET', 'totalAssets'],
-  ['DEP', 'totalDeposits'],
-  ['LNLSGR', 'totalLoans'],
-  ['LNLSDEPR', 'loansToDeposits'],
-  ['LNLSNTV', 'loansToAssets'],
-  ['SCPLEDGE', 'pledgedSecurities'],
-  ['SCAF', 'afsTotal'],
-  ['IGLSEC', 'realizedGainLossSecurities'],
-  ['EQ', 'totalEquityCapital'],
-  ['RBCT1J', 'tier1Capital'],
-  ['RBC1RWAJ', 'tier1RiskBasedRatio'],
-  ['RBCRWAJ', 'riskBasedCapitalRatio'],
-  ['RBC1AAJ', 'leverageRatio'],
-  ['EQCDIV', 'dividendsDeclared'],
-  ['EQCDIVNTINC', 'dividendsToNetIncome'],
-  ['ROA', 'roa'],
-  ['ROE', 'roe'],
-  ['INTINCY', 'yieldOnEarningAssets'],
-  ['INTEXPY', 'costOfFunds'],
-  ['NIMY', 'netInterestMargin'],
-  ['EEFFR', 'efficiencyRatio'],
-  ['NETINC', 'netIncome'],
-  ['LNATRESR', 'llrToLoans'],
-  ['NCLNLSR', 'nplsToLoans'],
-  ['LNATRES', 'loanLossReserve'],
-  ['ELNATR', 'loanLossProvision'],
-  ['NTLNLSR', 'netChargeoffsToAvgLoans'],
-  ['DEPLGAMT', 'largeDepositsToDeposits'], // $ amount; field type is percentOf with totalDeposits denominator
-  ['NUMEMP', 'fullTimeEmployees'],
-  ['OFFDOM', 'numberOfOffices'],
+  { ris: 'ASSET', key: 'totalAssets' },
+  { ris: 'DEP', key: 'totalDeposits' },
+  { ris: 'LNLSGR', key: 'totalLoans' },
+  { ris: 'LNLSDEPR', key: 'loansToDeposits' },
+  { ris: 'LNLSNTV', key: 'loansToAssets' },
+  { ris: 'SCPLEDGE', key: 'pledgedSecurities' },
+  { ris: 'SCAF', key: 'afsTotal' },
+  { ris: 'SCHF', key: 'htmTotal' },
+  { ris: 'IGLSEC', key: 'realizedGainLossSecurities' },
+  { ris: 'EQ', key: 'totalEquityCapital' },
+  { ris: 'RBCT1J', key: 'tier1Capital' },
+  { ris: 'RBC1RWAJ', key: 'tier1RiskBasedRatio' },
+  { ris: 'RBCRWAJ', key: 'riskBasedCapitalRatio' },
+  { ris: 'RBC1AAJ', key: 'leverageRatio' },
+  { ris: 'EQCDIV', key: 'dividendsDeclared' },
+  { ris: 'EQCDIVNTINC', key: 'dividendsToNetIncome' },
+  { ris: 'ROA', key: 'roa' },
+  { ris: 'ROE', key: 'roe' },
+  { ris: 'INTINCY', key: 'yieldOnEarningAssets' },
+  { ris: 'INTEXPY', key: 'costOfFunds' },
+  { ris: 'NIMY', key: 'netInterestMargin' },
+  { ris: 'EEFFR', key: 'efficiencyRatio' },
+  { ris: 'NETINC', key: 'netIncome' },
+  { ris: 'LNATRESR', key: 'llrToLoans' },
+  { ris: 'NCLNLSR', key: 'nplsToLoans' },
+  { ris: 'LNATRES', key: 'loanLossReserve' },
+  { ris: 'ELNATR', key: 'loanLossProvision' },
+  { ris: 'NTLNLSR', key: 'netChargeoffsToAvgLoans' },
+  { ris: 'DEPLGAMT', key: 'largeDepositsToDeposits' }, // $ amount; field type is percentOf with totalDeposits denominator
+  { ris: 'ASSTLTR', key: 'longTermAssetsToAssets' },
+  { ris: 'TFRA', key: 'fiduciaryAssets' },
+  { ris: 'NUMEMP', key: 'fullTimeEmployees' },
+  { ris: 'OFFDOM', key: 'numberOfOffices' },
 ];
 
 // Ratios the workbook carries pre-computed but the API serves as raw $:
@@ -65,17 +69,24 @@ const DIRECT_MAP = [
 const COMPUTED_MAP = [
   { key: 'brokeredDepositsToDeposits', num: 'BRO', den: 'DEP' },
   { key: 'securitiesToAssets', num: 'SC', den: 'ASSET' },
+  { key: 'securitiesFvToBv', num: 'SCMV', den: 'SC' },
   { key: 'nonInterestBearingDeposits', num: 'DEPNI', den: 'DEP' },
   { key: 'realEstateLoansToLoans', num: 'LNRE', den: 'LNLSGR' },
+  { key: 'farmLoansToLoans', num: 'LNREAG', den: 'LNLSGR' },
   { key: 'agProdLoansToLoans', num: 'LNAG', den: 'LNLSGR' },
   { key: 'ciLoansToLoans', num: 'LNCI', den: 'LNLSGR' },
   { key: 'consumerLoansToLoans', num: 'LNCON', den: 'LNLSGR' },
 ];
 
+const SUM_MAP = [
+  { key: 'totalBorrowings', fields: ['FREPP', 'OBOR'] },
+];
+
 const RIS_FIELDS = [...new Set(
   ['CERT', 'REPDTE']
-    .concat(DIRECT_MAP.map(([ris]) => ris))
+    .concat(DIRECT_MAP.map(({ ris }) => ris))
     .concat(COMPUTED_MAP.flatMap(c => [c.num, c.den]))
+    .concat(SUM_MAP.flatMap(c => c.fields))
 )];
 
 // Text/identity fields carried forward from the bank's most recent existing
@@ -92,6 +103,71 @@ const CARRY_FORWARD_KEYS = [
 function num(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function fieldDef(key) {
+  return (BANK_FIELDS || []).find(field => field.key === key) || { key, label: key, section: 'unknown', type: 'unknown' };
+}
+
+function buildFieldCoverage() {
+  const mapped = [];
+  for (const item of DIRECT_MAP) {
+    const def = fieldDef(item.key);
+    mapped.push({
+      key: item.key,
+      label: def.label,
+      section: def.section,
+      method: 'direct',
+      sourceFields: [item.ris],
+    });
+  }
+  for (const item of COMPUTED_MAP) {
+    const def = fieldDef(item.key);
+    mapped.push({
+      key: item.key,
+      label: def.label,
+      section: def.section,
+      method: 'ratio',
+      sourceFields: [item.num, item.den],
+    });
+  }
+  for (const item of SUM_MAP) {
+    const def = fieldDef(item.key);
+    mapped.push({
+      key: item.key,
+      label: def.label,
+      section: def.section,
+      method: 'sum',
+      sourceFields: item.fields.slice(),
+    });
+  }
+
+  const mappedKeys = new Set(mapped.map(row => row.key));
+  const carriedIdentity = CARRY_FORWARD_KEYS
+    .filter(key => !mappedKeys.has(key))
+    .map(key => {
+      const def = fieldDef(key);
+      return { key, label: def.label, section: def.section };
+    });
+  const remaining = (BANK_FIELDS || [])
+    .filter(field => !mappedKeys.has(field.key) && !CARRY_FORWARD_KEYS.includes(field.key))
+    .map(field => ({ key: field.key, label: field.label, section: field.section, type: field.type }));
+
+  return {
+    source: 'FDIC BankFind Suite financials endpoint',
+    mappedCount: mapped.length,
+    carriedIdentityCount: carriedIdentity.length,
+    remainingCount: remaining.length,
+    totalBankFields: (BANK_FIELDS || []).length,
+    mapped,
+    carriedIdentity,
+    remaining,
+    warnings: [
+      'FDIC sync still adds only newer missing periods; it never overwrites an existing workbook or FDIC period.',
+      'Identity fields are carried forward from the latest existing portal period when the financial endpoint does not provide them.',
+      'Detailed AFS/HTM sector splits remain marked for FFIEC bulk Call Report mapping before workbook retirement.',
+    ],
+  };
 }
 
 // '20260630' → '2026Q2' / end date '6/30/2026'.
@@ -118,7 +194,7 @@ function quarterRank(period) {
 // Pure, unit-tested.
 function mapRisRow(row) {
   const values = {};
-  for (const [ris, key] of DIRECT_MAP) {
+  for (const { ris, key } of DIRECT_MAP) {
     const v = num(row[ris]);
     if (v != null) values[key] = Number(v.toFixed(2));
   }
@@ -128,6 +204,18 @@ function mapRisRow(row) {
     if (numerator != null && denominator) {
       values[key] = Number((numerator / denominator * 100).toFixed(2));
     }
+  }
+  for (const { key, fields } of SUM_MAP) {
+    let hasValue = false;
+    let total = 0;
+    for (const sourceField of fields) {
+      const v = num(row[sourceField]);
+      if (v != null) {
+        hasValue = true;
+        total += v;
+      }
+    }
+    if (hasValue) values[key] = Number(total.toFixed(2));
   }
   return values;
 }
@@ -202,7 +290,7 @@ async function fetchQuarterByCert(repdte, fetchImpl, log) {
 /**
  * Sync the latest FDIC-filed quarter into bank-data.sqlite.
  *
- * opts: { dryRun?, fetchImpl?, log?, repdte? (override for tests) }
+ * opts: { dryRun?, fetchImpl?, log?, repdte? (override for tests), stampDir? }
  * Returns { period, repdte, filers, matched, updated, skippedExisting, dryRun }.
  * Throws on network/API failure (callers surface the error to the admin).
  */
@@ -211,6 +299,7 @@ async function syncFdicQuarter(outputDir, opts = {}) {
   const fetchImpl = opts.fetchImpl || fetch;
   const log = opts.log || (() => {});
   const dryRun = Boolean(opts.dryRun);
+  const fieldCoverage = buildFieldCoverage();
 
   const repdte = opts.repdte || await getLatestFiledRepdte(fetchImpl);
   const period = repdteToPeriod(repdte);
@@ -219,30 +308,30 @@ async function syncFdicQuarter(outputDir, opts = {}) {
   const byCert = await fetchQuarterByCert(repdte, fetchImpl, log);
 
   const banks = sqliteDb.querySqliteJson(dbPath, `
-    SELECT id, cert_number AS certNumber FROM banks
+    SELECT id, cert_number AS certNumber, detail_json AS detailJson FROM banks
     WHERE cert_number IS NOT NULL AND cert_number != '';
   `);
 
   let matched = 0;
   let skippedExisting = 0;
+  let updated = 0;
   const updates = [];
   for (const row of banks) {
     const risRow = byCert.get(String(row.certNumber).trim());
     if (!risRow) continue;
     matched += 1;
-    if (dryRun) continue;
+    if (dryRun) {
+      let bank = null;
+      try { bank = JSON.parse(row.detailJson || '{}'); } catch (_) { bank = null; }
+      if (bank && (bank.periods || []).some(p => p.period === period)) skippedExisting += 1;
+      else updated += 1;
+      continue;
+    }
     updates.push({ id: String(row.id), risRow });
   }
 
-  let updated = 0;
   if (dryRun) {
-    // Count how many would gain the period without rewriting anything.
-    const have = sqliteDb.querySqliteJson(dbPath, `
-      SELECT COUNT(*) AS n FROM banks, json_each(detail_json, '$.periods')
-      WHERE json_extract(json_each.value, '$.period') = ?;
-    `, [period]);
-    const alreadyHave = have.length ? Number(have[0].n) : 0;
-    return { period, repdte, filers: byCert.size, matched, updated: Math.max(0, matched - alreadyHave), skippedExisting: alreadyHave, dryRun: true };
+    return { period, repdte, filers: byCert.size, matched, updated, skippedExisting, dryRun: true, fieldCoverage };
   }
 
   sqliteDb.withDatabase(dbPath, (db) => {
@@ -282,14 +371,37 @@ async function syncFdicQuarter(outputDir, opts = {}) {
     });
     apply(updates);
     db.prepare('INSERT OR REPLACE INTO metadata (key, value) VALUES (?, ?);')
-      .run('fdicSync', JSON.stringify({ at: new Date().toISOString(), period, repdte, updated, skippedExisting }));
+      .run('fdicSync', JSON.stringify({ at: new Date().toISOString(), period, repdte, updated, skippedExisting, fieldCoverage }));
   });
 
+  if (opts.stampDir) {
+    fs.mkdirSync(opts.stampDir, { recursive: true });
+    const stamp = {
+      at: new Date().toISOString(),
+      period,
+      repdte,
+      filers: byCert.size,
+      matched,
+      updated,
+      skippedExisting,
+      fieldCoverage: {
+        mappedCount: fieldCoverage.mappedCount,
+        carriedIdentityCount: fieldCoverage.carriedIdentityCount,
+        remainingCount: fieldCoverage.remainingCount,
+        warnings: fieldCoverage.warnings,
+      },
+    };
+    const stampPath = path.join(opts.stampDir, 'fdic-sync-state.json');
+    fs.writeFileSync(`${stampPath}.tmp-${process.pid}`, JSON.stringify(stamp, null, 2));
+    fs.renameSync(`${stampPath}.tmp-${process.pid}`, stampPath);
+  }
+
   log('info', `FDIC sync: ${period} — ${updated} banks updated, ${skippedExisting} already had the period, ${matched} matched of ${byCert.size} filers`);
-  return { period, repdte, filers: byCert.size, matched, updated, skippedExisting, dryRun: false };
+  return { period, repdte, filers: byCert.size, matched, updated, skippedExisting, dryRun: false, fieldCoverage };
 }
 
 module.exports = {
+  buildFieldCoverage,
   buildFdicPeriodEntry,
   getLatestFiledRepdte,
   mapRisRow,
