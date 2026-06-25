@@ -10,6 +10,7 @@ data/structured-notes/*
 data/market-color/*
 data/exec-summary/*
 data/market/*
+data/salesforce-export/*
 data/audit.log
 !data/current/.gitkeep
 !data/archive/.gitkeep
@@ -22,6 +23,7 @@ data/audit.log
 !data/market-color/.gitkeep
 !data/exec-summary/.gitkeep
 !data/market/.gitkeep
+!data/salesforce-export/.gitkeep
 
 # Node / IIS logs
 node_modules/
