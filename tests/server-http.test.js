@@ -183,6 +183,7 @@ test('iis admin ingest routes reject non-admins before parsing', async () => {
       '/api/banks/bond-accounting/upload',
       '/api/brokered-cd/wirp/upload',
       '/api/exec-summary/upload',
+      '/api/contacts/import',
       '/api/daily-summary/refresh',
       '/api/offerings-pick/refresh',
       '/api/sales-dashboard/refresh'

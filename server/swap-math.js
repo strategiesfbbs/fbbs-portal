@@ -937,10 +937,15 @@ function validateLegInput(leg) {
 // one human-readable issue per incomplete leg; [] means ready to send. This is
 // the guard that keeps a proposal full of "—" placeholders from being frozen
 // into an immutable snapshot and printed for a bank.
-function validateLegsForSend(sells, buys) {
+function validateLegsForSend(sells, buys, settleDate) {
   const issues = [];
+  // Optional settle reference (backward-compatible 3rd arg): when supplied, a
+  // leg that matures on/before settle is flagged — a matured bond can't be part
+  // of a swap and its accrued/economics would be nonsensical.
+  const settle = settleDate ? toDate(settleDate) : null;
   const check = (leg, side, index) => {
     if (!leg) return;
+    const label = `${side === 'sell' ? 'Sell' : 'Buy'} leg ${index + 1}${leg.cusip ? ' (' + leg.cusip + ')' : ''}`;
     const missing = [];
     const par = num(leg.par);
     const haveBookValue = (num(leg.bookValue) || 0) > 0 || (par != null && num(leg.bookPrice) != null);
@@ -958,8 +963,11 @@ function validateLegsForSend(sells, buys) {
       if (!haveMarketYield) missing.push('a market yield (or market price + coupon + maturity to derive it)');
     }
     if (missing.length) {
-      const label = `${side === 'sell' ? 'Sell' : 'Buy'} leg ${index + 1}${leg.cusip ? ' (' + leg.cusip + ')' : ''}`;
       issues.push(`${label} needs ${missing.join(', ')}.`);
+    }
+    if (settle && leg.maturity) {
+      const mat = toDate(leg.maturity);
+      if (mat && mat <= settle) issues.push(`${label} matures on or before the settle date.`);
     }
   };
   (sells || []).forEach((l, i) => check(l, 'sell', i));

@@ -724,6 +724,40 @@ test('summarizeReinvestPackage guards empty input', () => {
   assert.strictEqual(r.count, 0, 'count 0');
 });
 
+// ---------- validateLegsForSend: settle-vs-maturity guard (2026-06-25 sweep) ----------
+
+test('validateLegsForSend flags a leg that matures on/before the settle date', () => {
+  const leg = {
+    cusip: '912828AA0', par: 100000, maturity: '2026-05-25',
+    bookPrice: 100, marketPrice: 99, bookYieldYtw: 4.0, marketYieldYtw: 4.2,
+  };
+  // No settleDate → backward-compatible: maturity check is dormant.
+  assert.strictEqual(m.validateLegsForSend([leg], []).length, 0, 'no settleDate → no maturity check');
+  // settleDate after maturity → flagged.
+  const issues = m.validateLegsForSend([leg], [], '2026-06-01');
+  assert.ok(issues.some(x => /matures on or before the settle date/.test(x)), 'matured leg flagged');
+  // settleDate before maturity → clean.
+  assert.strictEqual(m.validateLegsForSend([leg], [], '2026-01-01').length, 0, 'live leg passes');
+});
+
+// ---------- Regression locks on already-present guards (verified during the sweep) ----------
+
+test('solveBuyParForProceeds clamps a non-positive parIncrement to 1000', () => {
+  const sells = [{ par: 1000000, marketPrice: 100, coupon: 4, maturity: '2030-01-01' }];
+  const buys = [{ marketPrice: 100, coupon: 4, maturity: '2032-01-01' }];
+  const a = m.solveBuyParForProceeds({ sells, buys, settleDate: '2026-06-25', parIncrement: 0 });
+  const b = m.solveBuyParForProceeds({ sells, buys, settleDate: '2026-06-25', parIncrement: -50 });
+  assert.ok(a.ok && b.ok, 'solver still produces a result with a bad increment');
+  assert.strictEqual(a.suggestedPar % 1000, 0, 'falls back to a 1000 increment');
+  assert.strictEqual(b.suggestedPar % 1000, 0, 'negative increment also falls back to 1000');
+});
+
+test('teYield clamps a tax rate at/above 100% instead of dividing by zero', () => {
+  assert.strictEqual(m.teYield(3, 100), m.teYield(3, 99), 'tax >= 100% clamps to the 99% ceiling');
+  assert.ok(Number.isFinite(m.teYield(3, 99.99)), 'no Infinity/NaN at the boundary');
+  assert.strictEqual(m.teYield(3, null), null, 'missing tax rate → null');
+});
+
 // ---------- Done ----------
 
 console.log(`swap-math tests: ${passed} passed.`);

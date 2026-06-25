@@ -690,6 +690,7 @@ function isAdminOnlyApiWrite(pathname, method) {
     pathname === '/api/banks/bond-accounting/upload' ||
     pathname === '/api/brokered-cd/wirp/upload' ||
     pathname === '/api/exec-summary/upload' ||
+    pathname === '/api/contacts/import' ||
     pathname === '/api/daily-summary/refresh' ||
     pathname === '/api/offerings-pick/refresh' ||
     pathname === '/api/sales-dashboard/refresh'
