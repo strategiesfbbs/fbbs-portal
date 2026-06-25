@@ -221,6 +221,45 @@ Fix:
 - Default `requestedBy` to acting rep server-side.
 - Decide whether `Needs Billed` is active work or a separate billing queue count, then align My Work and Pulse labels.
 
+## Test coverage gaps to close
+
+### Pershing HTTP routes
+
+Store tests exist, but the new API routes need server-level coverage.
+
+Add one focused `tests/server-http.test.js` case that seeds `pershingStore.importPershingAccounts()` in the temp `DATA_DIR`, then asserts:
+
+- `GET /api/pershing/status` returns account count, bank count, unmatched count, and latest trade date.
+- `GET /api/banks/:id/pershing` returns the rollup plus account rows for a matched bank.
+- `GET /api/reports/pershing-dormant` respects `days`, `includeUndated`, status/state filters, and non-admin scope collapse.
+
+### Reports persistence HTTP CRUD
+
+`tests/report-store.test.js` covers the store, but HTTP route coverage is thin for:
+
+- `GET /api/reports`
+- `POST /api/reports`
+- `GET/POST /api/reports/hidden`
+- `PATCH/DELETE /api/reports/:id`
+
+Add assertions for route precedence, rep attribution, per-rep hidden behavior, update/delete 404s, and `pershing-dormant` report type round-trip.
+
+### CLI import scripts
+
+The pure modules are tested, but the command wrappers are not.
+
+Add `tests/import-scripts.test.js` with tiny temp CSV fixtures for:
+
+- `scripts/import-salesforce-export.js`
+  - dry-run writes no contacts.
+  - `--apply` without section flags writes no contacts.
+  - `--apply --contacts` writes contacts, manifest, and audit line.
+- `scripts/import-pershing-export.js`
+  - `--dry-run` does not create `pershing-accounts.sqlite`.
+  - apply creates expected account rows and status summary.
+
+Then add the test to `npm test`.
+
 ## Unmatched-data review queue
 
 Pershing unmatched rows are retained/countable but not surfaced.
@@ -247,4 +286,3 @@ Run targeted tests, then npm test if the changes touch server logic.
 ## Coordination with Claude
 
 Leave broad UI/CSS layout polish, dead CSS pruning, and visual cleanup to Claude's website sweep. Codex should handle data correctness, route behavior, import semantics, and tests.
-
