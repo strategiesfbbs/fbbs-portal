@@ -193,6 +193,12 @@ const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 const bankSignals = require('./bank-signals'); // PURE Signal Inbox engine (no I/O)
+const {
+  getPershingForBank,
+  getPershingImportStatus,
+  getPershingRollupsForBanks,
+  listDormantPershingBanks
+} = require('./pershing-store');
 
 // ---------- Config ----------
 
@@ -6428,6 +6434,43 @@ function handleAccountTouchReport(req, res, query) {
   }
 }
 
+// Pershing Dormant Trade Report — banks linked to Pershing accounts whose newest
+// trade is older than N days, plus no-trade-date accounts when requested.
+function handlePershingDormantReport(req, res, query) {
+  try {
+    const thresholdDays = Math.max(1, Math.min(3650, parseInt(query.get('days'), 10) || PERSHING_DORMANT_TRADE_DAYS));
+    const statuses = parseCsvParam(query.get('statuses'));
+    const states = parseCsvParam(query.get('states')).map(s => s.toUpperCase());
+    const owner = String(query.get('owner') || '').trim().toLowerCase();
+    const includeUndated = query.get('includeUndated') !== '0' && query.get('includeUndated') !== 'false';
+    const requestedScope = owner || (query.get('rep') || '');
+    const scope = enforcedRollupRep(req, {
+      auditEvent: 'pershing-dormant-scope-collapsed',
+      requestedScope,
+      reason: 'pershing-dormant'
+    });
+    const result = buildPershingDormantRows({
+      rep: scope.enforced ? scope.rep : null,
+      owner,
+      statuses,
+      states,
+      dormantDays: thresholdDays,
+      includeUndated,
+      limit: 1000
+    });
+    return sendJSON(res, 200, {
+      status: result.status,
+      thresholdDays: result.dormantDays,
+      includeUndated: result.includeUndated,
+      rep: publicRep(scope.enforced ? scope.rep : null),
+      rows: result.rows
+    });
+  } catch (err) {
+    log('error', 'Pershing dormant report failed:', err.message);
+    return sendJSON(res, 500, { error: err.message || 'Could not build Pershing dormant report' });
+  }
+}
+
 async function handleCreateReport(req, res) {
   try {
     const body = await readJsonBody(req, 256 * 1024);
@@ -9766,6 +9809,85 @@ function summarizeRepStrategy(row) {
 // An owned account is "going cold" when its newest manual CRM activity is older
 // than this many days (or it has never been touched).
 const COLD_ACCOUNT_DAYS = 30;
+const PERSHING_DORMANT_TRADE_DAYS = 365;
+
+function pershingOwnerText(row, coverage) {
+  return [
+    coverage && coverage.owner,
+    row && row.primaryOwnerName,
+    ...(Array.isArray(row && row.primaryOwnerNames) ? row.primaryOwnerNames : []),
+    ...(Array.isArray(row && row.accountOwnerNames) ? row.accountOwnerNames : []),
+  ].filter(Boolean).join(' ');
+}
+
+function pershingRowMatchesRep(row, coverage, rep) {
+  if (!rep) return true;
+  return ownerStringContainsRep(pershingOwnerText(row, coverage) || (row && row.ownerText) || '', rep);
+}
+
+function buildPershingDormantRows(options = {}) {
+  const dormantDays = Math.max(1, Math.min(3650, Number(options.dormantDays) || PERSHING_DORMANT_TRADE_DAYS));
+  const limit = Math.max(1, Math.min(Number(options.limit) || 250, 1000));
+  const includeUndated = options.includeUndated !== false;
+  const states = new Set((options.states || []).map(s => String(s || '').toUpperCase()).filter(Boolean));
+  const statuses = new Set((options.statuses || []).map(String).filter(Boolean));
+  const owner = String(options.owner || '').trim().toLowerCase();
+  const rep = options.rep || null;
+
+  const status = getPershingImportStatus(BANK_REPORTS_DIR);
+  if (!status.available) {
+    return { status, dormantDays, includeUndated, rows: [] };
+  }
+
+  const sourceRows = listDormantPershingBanks(BANK_REPORTS_DIR, {
+    asOfDate: options.asOfDate || todayStamp(),
+    dormantDays,
+    includeUndated,
+    limit: 1000
+  });
+  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, sourceRows.map(row => row.bankId)) || new Map();
+  let lastTouchMap = {};
+  try { lastTouchMap = lastActivityByBank(BANK_REPORTS_DIR) || {}; } catch (_) { /* report survives CRM-db hiccup */ }
+
+  const rows = sourceRows.map(row => {
+    const coverage = coverageMap.get(String(row.bankId)) || {};
+    const ownerText = pershingOwnerText(row, coverage);
+    return {
+      bankId: row.bankId,
+      certNumber: row.certNumber || coverage.certNumber || '',
+      displayName: coverage.displayName || row.displayName || row.bankId,
+      city: coverage.city || row.city || '',
+      state: coverage.state || row.state || '',
+      status: coverage.status || 'Open',
+      priority: coverage.priority || '',
+      owner: coverage.owner || '',
+      pershingOwner: (row.primaryOwnerNames || []).join(', ') || row.primaryOwnerName || '',
+      accountOwner: (row.accountOwnerNames || []).join(', '),
+      accountCount: row.accountCount,
+      datedAccountCount: row.datedAccountCount,
+      latestTradeDate: row.latestTradeDate || '',
+      daysSinceLatestTrade: row.daysSinceLatestTrade,
+      lastActivityDate: lastTouchMap[row.bankId] || '',
+      ownerText
+    };
+  }).filter(row => {
+    if (states.size && !states.has(String(row.state || '').toUpperCase())) return false;
+    if (statuses.size && !statuses.has(row.status || 'Open')) return false;
+    if (rep && !ownerStringContainsRep(row.ownerText || '', rep)) return false;
+    if (owner && !String(row.ownerText || '').toLowerCase().includes(owner)) return false;
+    return true;
+  }).sort((a, b) => {
+    const aUndated = !a.latestTradeDate;
+    const bUndated = !b.latestTradeDate;
+    if (aUndated !== bUndated) return aUndated ? -1 : 1;
+    if ((b.daysSinceLatestTrade || 0) !== (a.daysSinceLatestTrade || 0)) {
+      return (b.daysSinceLatestTrade || 0) - (a.daysSinceLatestTrade || 0);
+    }
+    return String(a.displayName || '').localeCompare(String(b.displayName || ''));
+  }).slice(0, limit);
+
+  return { status, dormantDays, includeUndated, rows };
+}
 
 function buildMyWorkResponse(rep) {
   // Build a "no rep set" envelope so the client can render a prompt without crashing.
@@ -9777,6 +9899,7 @@ function buildMyWorkResponse(rep) {
       myOpenStrategies: { count: 0, recent: [], byStatus: { Open: 0, 'In Progress': 0, 'Needs Billed': 0 } },
       myOverdueFollowups: { count: 0, items: [] },
       myColdAccounts: { count: 0, items: [], thresholdDays: COLD_ACCOUNT_DAYS },
+      myDormantPershing: { available: false, count: 0, items: [], thresholdDays: PERSHING_DORMANT_TRADE_DAYS },
       myTasks: { openCount: 0, overdue: [], dueToday: [], upcoming: [] },
       recentlyTouched: []
     };
@@ -9909,9 +10032,41 @@ function buildMyWorkResponse(rep) {
         lastActivityDate: lastTouchMap[row.bankId] || ''
       }))
     },
+    myDormantPershing: buildMyDormantPershing(rep),
     myTasks: buildMyTasks(rep, savedBanks),
     recentlyTouched
   };
+}
+
+function buildMyDormantPershing(rep) {
+  try {
+    const result = buildPershingDormantRows({
+      rep,
+      dormantDays: PERSHING_DORMANT_TRADE_DAYS,
+      includeUndated: true,
+      limit: 1000
+    });
+    return {
+      available: Boolean(result.status && result.status.available),
+      thresholdDays: result.dormantDays,
+      count: result.rows.length,
+      items: result.rows.slice(0, 8).map(row => ({
+        bankId: row.bankId,
+        displayName: row.displayName,
+        city: row.city,
+        state: row.state,
+        status: row.status,
+        owner: row.owner,
+        pershingOwner: row.pershingOwner,
+        accountCount: row.accountCount,
+        latestTradeDate: row.latestTradeDate,
+        daysSinceLatestTrade: row.daysSinceLatestTrade
+      }))
+    };
+  } catch (err) {
+    log('warn', 'buildMyDormantPershing failed:', err.message);
+    return { available: false, thresholdDays: PERSHING_DORMANT_TRADE_DAYS, count: 0, items: [] };
+  }
 }
 
 // Open-task buckets for My Work, with bank display names joined from saved
@@ -9971,6 +10126,7 @@ function gatherSignalInputs(scopedRep, options = {}) {
     rolloverWindowDays: options.rolloverWindowDays,
     assetFloorK: options.assetFloorK,
     fitMinScore: options.fitMinScore,
+    pershingDormantDays: options.pershingDormantDays,
   };
 
   // --- Coverage / CRM inputs ---
@@ -10024,6 +10180,15 @@ function gatherSignalInputs(scopedRep, options = {}) {
   const cdRolloverByBank = {};
   const fitsByBank = {};
   const fdicFlagsByBank = {};
+  let pershingByBank = {};
+  try {
+    if (getPershingImportStatus(BANK_REPORTS_DIR).available && ownedIds.length) {
+      const rollups = getPershingRollupsForBanks(BANK_REPORTS_DIR, ownedIds, { asOfDate: today });
+      pershingByBank = Object.fromEntries([...rollups.entries()].map(([bankId, rollup]) => [bankId, rollup]));
+    }
+  } catch (err) {
+    log('warn', 'Pershing signal gather failed:', err.message);
+  }
 
   const cdUniverse = (() => { try { return buildCdRolloverUniverse(); } catch (_) { return []; } })();
   const rolloverWindowDays = Number.isFinite(Number(options.rolloverWindowDays)) ? Number(options.rolloverWindowDays) : bankSignals.DEFAULTS.rolloverWindowDays;
@@ -10087,7 +10252,7 @@ function gatherSignalInputs(scopedRep, options = {}) {
   return {
     today, packageDate, thresholds, stateFilter,
     ownedBanks, mapBanksOut, mergedCoverage, lastTouchByBank, overdueTasks,
-    fundingScoreByBank, cdRolloverByBank, fitsByBank, fdicFlagsByBank,
+    fundingScoreByBank, cdRolloverByBank, fitsByBank, fdicFlagsByBank, pershingByBank,
   };
 }
 
@@ -10761,6 +10926,10 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, removed ? 200 : 404, removed ? { success: true } : { error: 'Not on your watchlist' });
     }
 
+    if (pathname === '/api/pershing/status' && req.method === 'GET') {
+      return sendJSON(res, 200, getPershingImportStatus(BANK_REPORTS_DIR));
+    }
+
     if (pathname === '/api/contacts/import' && req.method === 'POST') {
       const dryRun = query.get('dryRun') === '1' || query.get('dryRun') === 'true';
       return await handleContactsImport(req, res, dryRun);
@@ -10813,6 +10982,8 @@ const server = http.createServer(async (req, res) => {
           ? Math.max(0, Number(query.get('assetFloor'))) : undefined,
         fitMinScore: query.get('fitMin') != null && query.get('fitMin') !== ''
           ? Math.max(0, Number(query.get('fitMin'))) : undefined,
+        pershingDormantDays: query.get('pershingDays') != null && query.get('pershingDays') !== ''
+          ? Math.max(1, Math.min(3650, Math.round(Number(query.get('pershingDays')) || PERSHING_DORMANT_TRADE_DAYS))) : undefined,
       };
       let gathered;
       try {
@@ -10838,6 +11009,7 @@ const server = http.createServer(async (req, res) => {
         fundingScoreByBank: gathered.fundingScoreByBank,
         fitsByBank: gathered.fitsByBank,
         fdicFlagsByBank,
+        pershingByBank: gathered.pershingByBank,
       });
       const filtered = options.state
         ? result.categories.map(c => ({
@@ -11176,6 +11348,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === '/api/reports/account-touch' && req.method === 'GET') {
       return handleAccountTouchReport(req, res, query);
+    }
+    if (pathname === '/api/reports/pershing-dormant' && req.method === 'GET') {
+      return handlePershingDormantReport(req, res, query);
     }
     const reportIdMatch = pathname.match(/^\/api\/reports\/([^/]+)$/);
     if (reportIdMatch && req.method === 'PATCH') {
@@ -11543,6 +11718,21 @@ const server = http.createServer(async (req, res) => {
         fdic: snapshot,
         workbookPeriod,
         newerAvailable: Boolean(workbookPeriod && /^\d{4}Q\d$/.test(workbookPeriod) && fdicPeriod > workbookPeriod)
+      });
+    }
+
+    // Per-bank Pershing brokerage-account footprint from the Salesforce export:
+    // account count, latest trade date, and the linked account list.
+    const bankPershingMatch = pathname.match(/^\/api\/banks\/([^/]+)\/pershing$/);
+    if (bankPershingMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankPershingMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return sendJSON(res, 200, {
+        status: getPershingImportStatus(BANK_REPORTS_DIR),
+        ...getPershingForBank(BANK_REPORTS_DIR, bankId, {
+          asOfDate: todayStamp(),
+          limit: query.get('limit')
+        })
       });
     }
 

@@ -34,6 +34,7 @@ const DEFAULTS = {
   assetFloorK: 500000,     // totalAssets above this ($000) → "large" for no-owner
   fundingScoreFloor: 9,    // buildBrokeredCdOpportunity score ≥ this → pressure
   fitMinScore: 5,          // best offering-fit class score must clear this
+  pershingDormantDays: 365, // linked Pershing account with no trade in N days
 };
 
 // ---------------------------------------------------------------------------
@@ -84,6 +85,13 @@ const SIGNAL_DEFS = {
     actions: ['open', 'createOpportunity', 'logCall', 'dismiss'],
     packageScoped: true,
   },
+  'securities-pershing-dormant': {
+    category: 'Securities',
+    label: 'Pershing accounts with no recent trade',
+    severityBase: 'med',
+    actions: ['open', 'createOpportunity', 'logCall', 'dismiss'],
+    packageScoped: false,
+  },
   'muni-afs-book': {
     category: 'Muni',
     label: 'Banks with an AFS muni book',
@@ -131,6 +139,7 @@ const ENABLED = new Set([
   'funding-pressure',
   'funding-cd-rolling',
   'securities-offering-fit',
+  'securities-pershing-dormant',
   'muni-afs-book',
   'freshness-fdic-newer',
 ]);
@@ -446,6 +455,44 @@ function buildOfferingFit(inputs, th) {
   return out;
 }
 
+// securities-pershing-dormant: owned banks with linked Pershing accounts where
+// the bank's newest trade is older than the configured threshold, or no trade
+// date is present at all. Ranked most-stale-first.
+function buildPershingDormant(inputs, th) {
+  const { savedBanks, pershingByBank, today, packageDate } = inputs;
+  if (!Array.isArray(savedBanks) || !pershingByBank) return [];
+  const out = [];
+  for (const bank of savedBanks) {
+    const rollup = pershingByBank[bank.bankId];
+    if (!rollup || !num(rollup.accountCount)) continue;
+    const days = num(rollup.daysSinceLatestTrade);
+    const latest = dayStr(rollup.latestTradeDate);
+    if (latest && days !== null && days < th.pershingDormantDays) continue;
+    const missingDate = !latest;
+    const ageText = missingDate ? 'no trade date on file' : `${days} day${days === 1 ? '' : 's'} since last trade`;
+    out.push(makeSignal('securities-pershing-dormant', {
+      bankId: bank.bankId,
+      displayName: bank.displayName,
+      ...locationOf(bank),
+      status: bank.status || '', owner: bank.owner || '', priority: bank.priority || '',
+      headline: missingDate ? 'Pershing account has no trade date' : `No Pershing trade in ${days}d`,
+      detail: `${rollup.accountCount} linked Pershing account${rollup.accountCount === 1 ? '' : 's'}; ${ageText}. Securities re-engagement cue.`,
+      metric: { label: missingDate ? 'Linked accounts' : 'Days since trade', value: missingDate ? rollup.accountCount : days, unit: missingDate ? '' : 'days' },
+      severity: missingDate || (days !== null && days >= th.pershingDormantDays * 2) ? 'high' : 'med',
+      sortKey: missingDate ? Number.MAX_SAFE_INTEGER : days,
+      dismissId: dismissIdFor('securities-pershing-dormant', bank.bankId, today, packageDate),
+      extra: {
+        accountCount: rollup.accountCount,
+        datedAccountCount: rollup.datedAccountCount || 0,
+        latestTradeDate: latest || null,
+        daysSinceLatestTrade: days,
+        thresholdDays: th.pershingDormantDays,
+      },
+    }));
+  }
+  return out;
+}
+
 // muni-afs-book: owned banks carrying an AFS muni book (afsMunis>0). afsMunis-desc.
 // If afsMunis is not projected at all (undefined on every map row), emit nothing
 // and let the route attach a warning — never crash.
@@ -570,6 +617,7 @@ function buildBankSignals(inputs = {}) {
     assetFloorK: clampNum((inputs.thresholds || {}).assetFloorK, DEFAULTS.assetFloorK, 0, 1e12),
     fundingScoreFloor: clampNum((inputs.thresholds || {}).fundingScoreFloor, DEFAULTS.fundingScoreFloor, 0, 15),
     fitMinScore: clampNum((inputs.thresholds || {}).fitMinScore, DEFAULTS.fitMinScore, 0, 1000),
+    pershingDormantDays: clampNum((inputs.thresholds || {}).pershingDormantDays, DEFAULTS.pershingDormantDays, 1, 3650),
   };
 
   // Normalize the inputs object the builders read (carry today/packageDate).
@@ -583,6 +631,7 @@ function buildBankSignals(inputs = {}) {
     'funding-pressure': buildFundingPressure,
     'funding-cd-rolling': buildCdRolling,
     'securities-offering-fit': buildOfferingFit,
+    'securities-pershing-dormant': buildPershingDormant,
     'muni-afs-book': buildMuniAfsBook,
     'freshness-fdic-newer': buildFdicNewer,
   };

@@ -199,6 +199,29 @@ test('securities-offering-fit: best class gates fitMin, pick re-attached, inStat
   assert.strictEqual(rows[0].dismissId, `securities-offering-fit:b1:${PKG}`, 'package-scoped dismissId uses packageDate');
 });
 
+test('securities-pershing-dormant: linked accounts with stale or missing trade dates, most stale first', () => {
+  const inputs = {
+    scope: 'rep', today: TODAY, packageDate: PKG,
+    thresholds: { pershingDormantDays: 365 },
+    savedBanks: [
+      { bankId: 'b1', displayName: 'Very Dormant', owner: 'asmith', status: 'Client', city: 'A', state: 'IA' },
+      { bankId: 'b2', displayName: 'Missing Date', owner: 'asmith', status: 'Prospect', city: 'B', state: 'MO' },
+      { bankId: 'b3', displayName: 'Recent Trade', owner: 'asmith', status: 'Client', city: 'C', state: 'NE' },
+    ],
+    pershingByBank: {
+      b1: { accountCount: 2, datedAccountCount: 2, latestTradeDate: '2025-01-01', daysSinceLatestTrade: 539 },
+      b2: { accountCount: 1, datedAccountCount: 0, latestTradeDate: '', daysSinceLatestTrade: null },
+      b3: { accountCount: 1, datedAccountCount: 1, latestTradeDate: '2026-05-01', daysSinceLatestTrade: 54 },
+    },
+  };
+  const resp = sig.buildBankSignals(inputs);
+  const rows = byKey(resp, 'securities-pershing-dormant');
+  assert.deepStrictEqual(rows.map(r => r.bankId), ['b2', 'b1'], 'missing-date then stale; recent excluded');
+  assert.strictEqual(rows[0].severity, 'high', 'missing trade date is high severity');
+  assert.strictEqual(rows[1].metric.value, 539, 'days since trade carried as metric');
+  assert.strictEqual(rows[1].dismissId, `securities-pershing-dormant:b1:${TODAY}`, 'daily dismissId');
+});
+
 // ---------------------------------------------------------------------------
 // muni-afs-book
 // ---------------------------------------------------------------------------

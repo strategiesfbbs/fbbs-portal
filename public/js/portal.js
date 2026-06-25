@@ -53,6 +53,8 @@
   let bankOppsBankId = null;
   let bankOppSaving = false;
   let bankOppAdding = false;
+  let selectedBankPershing = null;    // Pershing brokerage-account footprint
+  let bankPershingBankId = null;
   let bankLoadRequestId = 0;
   let tearSheetCoverageRequestId = 0;
   let selectedBankProductFit = [];
@@ -368,6 +370,14 @@
       category: 'Sales',
       folder: 'Sales Strategy',
       description: 'Covered banks with no logged activity in the last N days — most neglected first.'
+    },
+    'pershing-dormant': {
+      slug: 'pershing-dormant',
+      name: 'Pershing Dormant Trade Report',
+      shortName: 'Pershing',
+      category: 'Sales',
+      folder: 'Sales Strategy',
+      description: 'Linked Pershing banks with no recent trade activity, scoped by coverage or Pershing owner.'
     },
     'billing-queue': {
       slug: 'billing-queue',
@@ -1166,6 +1176,7 @@
     if (type === 'billing-queue') return exportBillingQueueCsv();
     if (type === 'activity-by-rep') return exportActivityReportCsv();
     if (type === 'account-touch') return exportAccountTouchCsv();
+    if (type === 'pershing-dormant') return exportPershingDormantCsv();
     return showToast('CSV export is not available for this report type yet', true);
   }
 
@@ -2511,6 +2522,23 @@
         <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
           <span class="my-work-list-name">${escapeHtml(row.displayName || 'Bank')}</span>
           <span class="my-work-list-meta">${escapeHtml(row.lastActivityDate ? `Last touch ${row.lastActivityDate}` : 'Never logged')}</span>
+        </button>
+      </li>
+    `);
+
+    const pershing = (work && work.myDormantPershing) || { available: false, count: 0, items: [], thresholdDays: 365 };
+    setMyWorkNum('pershing', pershing.count);
+    const pershingDetail = document.querySelector('[data-mywork-detail="pershing"]');
+    if (pershingDetail) {
+      pershingDetail.textContent = pershing.available
+        ? `No Pershing trade in ${pershing.thresholdDays || 365}+ days`
+        : 'Pershing export not imported';
+    }
+    setMyWorkList('pershing', pershing.items, row => `
+      <li>
+        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
+          <span class="my-work-list-name">${escapeHtml(row.displayName || 'Bank')}</span>
+          <span class="my-work-list-meta">${escapeHtml(row.latestTradeDate ? `Last trade ${row.latestTradeDate}` : 'No trade date')}${row.pershingOwner ? ` · ${escapeHtml(row.pershingOwner)}` : ''}</span>
         </button>
       </li>
     `);
@@ -10504,6 +10532,7 @@
     if (type === 'billing-queue') return '<div id="reportsBillingQueueMount"></div>';
     if (type === 'activity-by-rep') return '<div id="reportsActivityMount"></div>';
     if (type === 'account-touch') return '<div id="reportsAccountTouchMount"></div>';
+    if (type === 'pershing-dormant') return '<div id="reportsPershingDormantMount"></div>';
     return '<p class="reports-muted">Select a report type to begin.</p>';
   }
 
@@ -10546,7 +10575,7 @@
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
             <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Save View is available for Custom Bank Lists"'}>Save View</button>
-            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'account-touch'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
+            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'account-touch', 'pershing-dormant'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
         </main>
@@ -11496,6 +11525,7 @@
       if (type === 'billing-queue') renderBillingQueueMount();
       if (type === 'activity-by-rep') renderActivityReportMount();
       if (type === 'account-touch') renderAccountTouchMount();
+      if (type === 'pershing-dormant') renderPershingDormantMount();
       if (autorun && !handledAutorun) setTimeout(() => runReportBuilder(type), 0);
     } else if (path === 'data/files') {
       app.innerHTML = reportsDataHtml(true);
@@ -11924,6 +11954,18 @@
     rows: []
   };
 
+  let pershingDormantState = {
+    loading: false,
+    loaded: false,
+    days: 365,
+    statuses: '',
+    states: '',
+    owner: '',
+    includeUndated: true,
+    rows: [],
+    status: null
+  };
+
   function renderActivityReportMount() {
     const mount = document.getElementById('reportsActivityMount');
     if (!mount) return;
@@ -12115,6 +12157,113 @@
     const header = ['Bank', 'City', 'State', 'Status', 'Owner', 'Last Activity', 'Days Since Contact', 'Next Action'];
     const body = s.rows.map(row => [row.displayName, row.city, row.state, row.status, row.owner, row.lastActivityDate || 'Never', row.daysSinceContact == null ? 'Never' : row.daysSinceContact, row.nextActionDate]);
     downloadCsv(`account_touch_${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body]);
+    showToast(`Exported ${formatNumber(s.rows.length)} rows`);
+  }
+
+  function renderPershingDormantMount() {
+    const mount = document.getElementById('reportsPershingDormantMount');
+    if (!mount) return;
+    const s = pershingDormantState;
+    const statusOptions = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
+    const selectedStatuses = new Set(String(s.statuses || '').split(',').filter(Boolean));
+    const statusNote = s.status && s.status.available
+      ? `<p class="reports-muted">Pershing export: ${escapeHtml(formatNumber(s.status.accountCount || 0))} accounts across ${escapeHtml(formatNumber(s.status.bankCount || 0))} matched banks${s.status.latestTradeDate ? ` · latest trade ${escapeHtml(s.status.latestTradeDate)}` : ''}.</p>`
+      : '<p class="reports-muted">Import the Pershing export to populate this report.</p>';
+    const body = s.loading
+      ? '<div class="bank-search-empty">Checking Pershing trade recency...</div>'
+      : !s.loaded
+        ? '<div class="bank-search-empty">Set the threshold and run the report.</div>'
+        : !s.rows.length
+          ? '<div class="bank-search-empty">No linked Pershing banks match that stale-trade screen.</div>'
+          : `
+            <div class="reports-list-wrap">
+              <table class="reports-list">
+                <thead><tr><th>Bank</th><th>Status</th><th>Coverage Owner</th><th>Pershing Owner</th><th>Accounts</th><th>Latest Trade</th><th>Days Since</th><th>Last Touch</th><th></th></tr></thead>
+                <tbody>
+                  ${s.rows.map(row => {
+                    const days = row.daysSinceLatestTrade;
+                    const cls = days == null || days > 730 ? 'is-cold' : days > 365 ? 'is-aging' : 'is-fresh';
+                    return `
+                      <tr>
+                        <td><strong>${escapeHtml(row.displayName || 'Bank')}</strong><span class="reports-desc">${escapeHtml([row.city, row.state].filter(Boolean).join(', '))}</span></td>
+                        <td>${escapeHtml(row.status || 'Open')}</td>
+                        <td>${escapeHtml(row.owner || '—')}</td>
+                        <td>${escapeHtml(row.pershingOwner || row.accountOwner || '—')}</td>
+                        <td>${escapeHtml(formatNumber(row.accountCount || 0))}</td>
+                        <td>${escapeHtml(row.latestTradeDate || 'No trade date')}</td>
+                        <td><span class="views-last-activity ${cls}">${days == null ? 'Missing' : escapeHtml(`${formatNumber(days)}d`)}</span></td>
+                        <td>${escapeHtml(row.lastActivityDate || 'Never')}</td>
+                        <td><button type="button" class="text-btn" data-custom-bank-open="${escapeHtml(row.bankId)}">Open</button></td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          `;
+    mount.innerHTML = `
+      <div class="activity-report-builder">
+        <div class="custom-report-grid">
+          <label>No trade in (days)
+            <input type="number" id="pershingDormantDays" min="1" step="1" value="${escapeHtml(String(s.days))}">
+          </label>
+          <label>States
+            <input type="text" id="pershingDormantStates" placeholder="MO, IL, AR..." value="${escapeHtml(s.states)}">
+          </label>
+          <label>Owner
+            <input type="text" id="pershingDormantOwner" placeholder="Coverage or Pershing owner" value="${escapeHtml(s.owner)}">
+          </label>
+          <label>Status
+            <select id="pershingDormantStatusFilter" multiple size="5">
+              ${statusOptions.map(opt => `<option value="${escapeHtml(opt)}" ${selectedStatuses.has(opt) ? 'selected' : ''}>${escapeHtml(opt)}</option>`).join('')}
+            </select>
+          </label>
+          <div class="custom-report-toggles">
+            <label><input type="checkbox" id="pershingDormantIncludeUndated" ${s.includeUndated ? 'checked' : ''}> Include missing trade dates</label>
+          </div>
+        </div>
+        ${statusNote}
+        <div id="pershingDormantOutput">${body}</div>
+      </div>
+    `;
+  }
+
+  async function runPershingDormantReport() {
+    const s = pershingDormantState;
+    s.loading = true;
+    renderPershingDormantMount();
+    try {
+      const params = new URLSearchParams();
+      params.set('days', String(s.days || 365));
+      if (s.statuses) params.set('statuses', s.statuses);
+      if (s.states) params.set('states', String(s.states).toUpperCase().split(/[\s,]+/).filter(Boolean).join(','));
+      if (s.owner) params.set('owner', s.owner);
+      params.set('includeUndated', s.includeUndated ? '1' : '0');
+      const data = await fetch(`/api/reports/pershing-dormant?${params}`, { cache: 'no-store' }).then(readBankJson);
+      s.rows = Array.isArray(data.rows) ? data.rows : [];
+      s.status = data.status || null;
+      s.loaded = true;
+      addSessionReport('pershing-dormant');
+      showToast('Pershing dormant trade report ready');
+    } catch (e) {
+      showToast(e.message || 'Could not build Pershing dormant trade report', true);
+    } finally {
+      s.loading = false;
+      renderPershingDormantMount();
+    }
+  }
+
+  function exportPershingDormantCsv() {
+    const s = pershingDormantState;
+    if (!s.rows.length) return showToast('Run the Pershing dormant trade report first', true);
+    const header = ['Bank', 'City', 'State', 'Status', 'Coverage Owner', 'Pershing Owner', 'Account Owner', 'Linked Accounts', 'Dated Accounts', 'Latest Trade', 'Days Since Trade', 'Last Activity'];
+    const body = s.rows.map(row => [
+      row.displayName, row.city, row.state, row.status, row.owner, row.pershingOwner, row.accountOwner,
+      row.accountCount, row.datedAccountCount, row.latestTradeDate || 'No trade date',
+      row.daysSinceLatestTrade == null ? 'Missing' : row.daysSinceLatestTrade,
+      row.lastActivityDate || 'Never'
+    ]);
+    downloadCsv(`pershing_dormant_trades_${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body]);
     showToast(`Exported ${formatNumber(s.rows.length)} rows`);
   }
 
@@ -12349,6 +12498,13 @@
       if (target.id === 'accountTouchStatusFilter') {
         accountTouchState.statuses = Array.from(target.selectedOptions || []).map(opt => opt.value).join(',');
       }
+      if (target.id === 'pershingDormantDays') pershingDormantState.days = Math.max(1, parseInt(target.value, 10) || 365);
+      if (target.id === 'pershingDormantStates') pershingDormantState.states = target.value || '';
+      if (target.id === 'pershingDormantOwner') pershingDormantState.owner = target.value || '';
+      if (target.id === 'pershingDormantStatusFilter') {
+        pershingDormantState.statuses = Array.from(target.selectedOptions || []).map(opt => opt.value).join(',');
+      }
+      if (target.id === 'pershingDormantIncludeUndated') pershingDormantState.includeUndated = Boolean(target.checked);
     });
     document.addEventListener('click', event => {
       const clickTarget = event.target && event.target.closest ? event.target : event.target?.parentElement;
@@ -12669,6 +12825,9 @@
     }
     if (type === 'account-touch') {
       runAccountTouchReport();
+    }
+    if (type === 'pershing-dormant') {
+      runPershingDormantReport();
     }
   }
   // ----------------------------------------------------------------------
@@ -13504,7 +13663,7 @@
   // ----- Tear-sheet tabs (Sales Workspace / Call Report) + signals strip -----
 
   let bankTearSheetTab = 'callreport'; // persists across bank loads within the session
-  const bankSignalState = { bankId: null, cdRollover: null, fdic: null };
+  const bankSignalState = { bankId: null, cdRollover: null, fdic: null, pershing: null };
 
   function setBankTearSheetTab(tab) {
     bankTearSheetTab = tab === 'callreport' ? 'callreport' : 'sales';
@@ -13570,6 +13729,21 @@
       chips.push(fdic.newer
         ? bankSignalChip('amber', 'FDIC', `${fdic.period} out — refresh import`, 'tab:callreport')
         : bankSignalChip('green', 'FDIC', `${fdic.period} current`, 'tab:callreport'));
+    }
+
+    const pershing = bankSignalState.pershing;
+    if (pershing && pershing.available) {
+      if (pershing.accountCount > 0) {
+        let tone = 'neutral';
+        let value = 'No trade date';
+        if (pershing.daysSinceLatestTrade != null) {
+          tone = pershing.daysSinceLatestTrade <= 90 ? 'green' : (pershing.daysSinceLatestTrade <= 365 ? 'amber' : 'red');
+          value = pershing.daysSinceLatestTrade === 0 ? 'Today' : `${pershing.daysSinceLatestTrade}d ago`;
+        }
+        chips.push(bankSignalChip(tone, 'Last trade', value, 'bankPershingPanel'));
+      } else {
+        chips.push(bankSignalChip('neutral', 'Pershing', 'No linked acct', 'bankPershingPanel'));
+      }
     }
 
     // THC portfolio: unrealized G/L + data vintage in one glance.
@@ -13907,6 +14081,7 @@
         ${renderBankTasksPanel()}
         ${renderBankOpportunitiesPanel()}
         ${renderBankContactsPanel()}
+        ${renderBankPershingPanel()}
         ${renderBankAssistantPanel()}
         ${renderBankProductFitPanel()}
         <div class="bank-services-pair">
@@ -13976,10 +14151,12 @@
     bankSignalState.bankId = bank.id;
     bankSignalState.cdRollover = null;
     bankSignalState.fdic = null;
+    bankSignalState.pershing = null;
     bankSignalState.thc = null;
     loadBankActivity(bank.id);
     loadBankTasks(bank.id);
     loadBankOpportunities(bank.id);
+    loadBankPershing(bank.id);
     loadBankFdicCheck(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
@@ -15657,6 +15834,98 @@
     } catch (e) {
       showToast(e.message, true);
     }
+  }
+
+  // ============ Pershing trade footprint (tear sheet) ============
+
+  function pershingTradeAgeLabel(days) {
+    if (days === null || days === undefined || days === '') return '';
+    const n = Number(days);
+    if (!Number.isFinite(n)) return '';
+    if (n === 0) return 'today';
+    if (n === 1) return '1 day ago';
+    if (n < 365) return `${n} days ago`;
+    const years = n / 365;
+    return `${years.toFixed(years >= 10 ? 0 : 1)} years ago`;
+  }
+
+  function renderBankPershingPanel() {
+    const data = selectedBankPershing;
+    const status = data && data.status ? data.status : null;
+    const rollup = data && data.rollup ? data.rollup : null;
+    let body = '';
+    if (!data) {
+      body = '<p class="bank-activity-empty">Checking Pershing brokerage footprint...</p>';
+    } else if (!status || !status.available) {
+      body = '<p class="bank-activity-empty">No Pershing export has been imported yet.</p>';
+    } else if (!rollup || !rollup.accountCount) {
+      body = '<p class="bank-activity-empty">No Pershing brokerage account is linked to this bank yet.</p>';
+    } else {
+      const latest = rollup.latestTradeDate
+        ? `${escapeHtml(formatActivityDate(rollup.latestTradeDate))}${rollup.daysSinceLatestTrade != null ? ` (${escapeHtml(pershingTradeAgeLabel(rollup.daysSinceLatestTrade))})` : ''}`
+        : 'No trade date on linked accounts';
+      const owners = (rollup.owners || []).slice(0, 3).map(o => `${escapeHtml(o.name)} <span>${escapeHtml(formatNumber(o.count))}</span>`).join('');
+      const accounts = (data.accounts || []).slice(0, 8).map(account => `
+        <li class="bank-pershing-account">
+          <span class="bank-pershing-number">${escapeHtml(account.pershingAccountNumber)}</span>
+          <span>${escapeHtml(account.mostRecentTradeDate ? formatActivityDate(account.mostRecentTradeDate) : 'No trade date')}</span>
+          <span>${escapeHtml(account.primaryOwnerName || account.primaryOwnerId || 'Unassigned')}</span>
+        </li>
+      `).join('');
+      const extra = (data.accounts || []).length > 8 ? `<p class="bank-pershing-foot">Showing 8 of ${escapeHtml(formatNumber(data.accounts.length))} linked accounts.</p>` : '';
+      body = `
+        <div class="bank-pershing-summary">
+          <div><span>Latest trade</span><strong>${latest}</strong></div>
+          <div><span>Pershing accounts</span><strong>${escapeHtml(formatNumber(rollup.accountCount || 0))}</strong></div>
+          <div><span>With trade date</span><strong>${escapeHtml(formatNumber(rollup.datedAccountCount || 0))}</strong></div>
+        </div>
+        ${owners ? `<div class="bank-pershing-owners">${owners}</div>` : ''}
+        <ol class="bank-pershing-list">${accounts}</ol>
+        ${extra}
+      `;
+    }
+    return `
+      <section class="bank-section bank-pershing-section" id="bankPershingPanel">
+        <div class="bank-section-title">Trade Footprint</div>
+        ${body}
+      </section>
+    `;
+  }
+
+  function refreshBankPershingPanel() {
+    const panel = document.getElementById('bankPershingPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankPershingPanel();
+    updateBankSignalStrip();
+  }
+
+  async function loadBankPershing(bankId) {
+    if (!bankId) {
+      selectedBankPershing = null;
+      bankPershingBankId = null;
+      refreshBankPershingPanel();
+      return;
+    }
+    bankPershingBankId = bankId;
+    selectedBankPershing = null;
+    refreshBankPershingPanel();
+    try {
+      const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/pershing`, { cache: 'no-store' }).then(readBankJson);
+      if (bankPershingBankId !== bankId) return;
+      selectedBankPershing = data;
+      const rollup = data.rollup || {};
+      bankSignalState.pershing = {
+        available: !!(data.status && data.status.available),
+        accountCount: Number(rollup.accountCount || 0),
+        latestTradeDate: rollup.latestTradeDate || '',
+        daysSinceLatestTrade: rollup.daysSinceLatestTrade
+      };
+    } catch (_) {
+      if (bankPershingBankId !== bankId) return;
+      selectedBankPershing = { status: { available: false }, rollup: null, accounts: [] };
+      bankSignalState.pershing = null;
+    }
+    refreshBankPershingPanel();
   }
 
   // ============ Bank Contacts (tear sheet) ============

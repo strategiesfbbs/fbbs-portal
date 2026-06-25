@@ -15749,6 +15749,81 @@ body {
 .bank-signal-red .bank-signal-value { color: #b71c1c; }
 .bank-signal-neutral .bank-signal-value { color: var(--text2, #4a514d); }
 
+.bank-pershing-summary {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 10px;
+}
+
+.bank-pershing-summary div {
+  background: #fff;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 8px;
+  padding: 9px 10px;
+}
+
+.bank-pershing-summary span {
+  color: var(--text3, #8a918d);
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+
+.bank-pershing-summary strong {
+  color: var(--text, #1b1f1d);
+  font-size: 13px;
+}
+
+.bank-pershing-owners {
+  color: var(--text2, #4a514d);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.bank-pershing-owners span {
+  color: var(--text3, #8a918d);
+  font-weight: 600;
+  margin-left: 3px;
+}
+
+.bank-pershing-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bank-pershing-account {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(92px, 1fr) minmax(92px, 1fr) minmax(110px, 1fr);
+  padding: 8px 10px;
+}
+
+.bank-pershing-number {
+  color: var(--accent, #1a3a2a);
+  font-weight: 800;
+}
+
+.bank-pershing-foot {
+  color: var(--text3, #8a918d);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
 .fits-pick-actions {
   display: inline-flex;
   flex: 0 0 auto;
