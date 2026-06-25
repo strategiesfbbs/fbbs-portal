@@ -679,6 +679,26 @@
         </div>
       </section>
 
+      <section class="reports-import-panel" id="thcSummaryImportPanel">
+        <div class="reports-import-head">
+          <div>
+            <h3>THC Summary Import</h3>
+            <p>Upload a sales-safe THC summary JSON file with report dates, cycles, headline portfolio metrics, scenario summaries, and trade-simulation status. Raw holdings, account numbers, CUSIPs, pledged detail, and safekeeping fields are rejected.</p>
+          </div>
+          <button type="button" class="small-btn" id="thcSummaryImportBtn">Import THC Summary</button>
+        </div>
+        <div class="reports-import-grid reports-import-grid-single">
+          <label class="reports-picker" for="thcSummaryInput" id="thcSummaryPicker">
+            <span>THC Summary JSON</span>
+            <strong id="thcSummaryName">No JSON selected</strong>
+            <small>JSON array or { records: [...] } using the safe summary contract.</small>
+            <input type="file" id="thcSummaryInput" accept=".json,.txt,application/json" hidden>
+          </label>
+        </div>
+        <div class="reports-import-status" id="thcSummaryImportStatus">Ready for a safe THC summary JSON file.</div>
+        <div class="reports-match-list" id="thcSummaryMatchList"></div>
+      </section>
+
       <section class="reports-import-panel" id="bondAccountingImportPanel">
         <div class="reports-import-head">
           <div>
@@ -2027,7 +2047,14 @@
   <div class="container">
     <div class="section-title-bar">
       <h3>Securities</h3>
-      <div class="kicker">Star rows in All Offerings to add</div>
+      <div class="kicker">Star rows in All Offerings or paste CUSIPs below</div>
+    </div>
+    <div class="watchlist-cusip-add">
+      <label class="ef-field">
+        <span>Add by CUSIP</span>
+        <textarea id="watchlistCusips" rows="2" placeholder="Paste one or more CUSIPs, separated by spaces, commas, or new lines"></textarea>
+      </label>
+      <button type="button" class="small-btn" id="watchlistAddCusips">Add CUSIPs</button>
     </div>
     <div class="explorer-table-wrap">
       <table class="explorer-table">
@@ -2141,16 +2168,74 @@
         <input type="text" id="ao-search" placeholder="Issuer, description, CUSIP&hellip;" autocomplete="off">
       </label>
       <label class="ef-field">
+        <span>Saved screen</span>
+        <select id="aoSavedSearch"><option value="">Load saved...</option></select>
+      </label>
+      <label class="ef-field">
         <span>Min yield %</span>
         <input type="number" id="ao-minyield" step="0.05" min="0" max="20" placeholder="e.g. 5.00">
+      </label>
+      <label class="ef-field">
+        <span>Matures after</span>
+        <input type="date" id="ao-minmaturity">
       </label>
       <label class="ef-field">
         <span>Matures by</span>
         <input type="date" id="ao-maxmaturity">
       </label>
       <div class="ef-field ef-actions">
+        <button type="button" class="small-btn" id="ao-save-search">Save Screen</button>
+        <button type="button" class="small-btn" id="ao-delete-search">Delete</button>
         <button type="button" class="small-btn" id="ao-clear">Clear</button>
         <button type="button" class="small-btn" id="ao-export">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="ao-workbench-controls">
+      <div class="ao-tristate-wrap" id="aoTriFilters" aria-label="Attribute filters"></div>
+      <div class="ao-density-controls" aria-label="Grid density">
+        <span class="kicker">Density</span>
+        <button type="button" class="small-btn" data-ao-density="compact">Compact</button>
+        <button type="button" class="small-btn" data-ao-density="comfortable">Comfortable</button>
+      </div>
+    </div>
+
+    <div class="ao-facet-grid" id="aoFacetFilters">
+      <label class="ef-field">
+        <span>State</span>
+        <select id="ao-state"><option value="">All states</option></select>
+      </label>
+      <label class="ef-field">
+        <span>Sector / structure</span>
+        <select id="ao-sector"><option value="">All sectors</option></select>
+      </label>
+      <label class="ef-field">
+        <span>Rating</span>
+        <select id="ao-rating"><option value="">Any rating</option></select>
+      </label>
+      <label class="ef-field">
+        <span>Min size $</span>
+        <input type="number" id="ao-minsize" step="10000" min="0" placeholder="e.g. 250000">
+      </label>
+      <label class="ef-field">
+        <span>Max price</span>
+        <input type="number" id="ao-maxprice" step="0.001" min="0" placeholder="e.g. 102.000">
+      </label>
+    </div>
+
+    <div class="ao-selection-bar" id="aoSelectionBar" hidden>
+      <div>
+        <strong id="aoSelectionCount">0 selected</strong>
+        <span id="aoSelectionMeta"></span>
+      </div>
+      <div class="ao-selection-actions">
+        <button type="button" class="small-btn" id="aoSelectVisible">Select visible</button>
+        <button type="button" class="small-btn" id="aoClearSelection">Clear</button>
+        <button type="button" class="small-btn" id="aoWatchSelected">Add to Watchlist</button>
+        <button type="button" class="small-btn" id="aoBuildOffer">Build Offer</button>
+        <button type="button" class="small-btn" id="aoCompareSelected">Compare</button>
+        <button type="button" class="small-btn" id="aoCrmSelected">CRM Action</button>
+        <button type="button" class="small-btn" id="aoExportSelected">Export selected</button>
       </div>
     </div>
 
@@ -2158,6 +2243,8 @@
       <table class="explorer-table" id="allOfferingsTable">
         <thead>
           <tr>
+            <th class="ao-select-col"><input type="checkbox" id="aoSelectPage" aria-label="Select visible offerings"></th>
+            <th class="ao-expand-col"></th>
             <th data-aosort="assetClass">Class</th>
             <th data-aosort="description">Description</th>
             <th data-aosort="cusip">CUSIP</th>

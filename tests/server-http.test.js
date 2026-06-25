@@ -539,6 +539,49 @@ test('my-work surfaces cold accounts; views join lastActivityDate', async () => 
   });
 });
 
+test('bank activity route rejects contact IDs from another bank', async () => {
+  const bankImporter = require('../server/bank-data-importer');
+  const coverageStore = require('../server/bank-coverage-store');
+  await withServer({}, async ({ port, dataDir }) => {
+    const reportsDir = path.join(dataDir, 'bank-reports');
+    fs.mkdirSync(reportsDir, { recursive: true });
+    const banks = [
+      { id: 'ACT-1', displayName: 'Activity One Bank', city: 'Alton', state: 'IL', certNumber: '101' },
+      { id: 'ACT-2', displayName: 'Activity Two Bank', city: 'Pana', state: 'IL', certNumber: '202' }
+    ].map(summary => ({
+      id: summary.id,
+      summary: { ...summary, name: summary.displayName, period: '2026Q1' },
+      periods: [{ period: '2026Q1', endDate: '2026-03-31', values: { name: summary.displayName, city: summary.city, state: summary.state, certNumber: summary.certNumber } }]
+    }));
+    bankImporter.writeBankDatabase({
+      metadata: { importedAt: '2026-06-25T00:00:00.000Z', sourceFile: 'test', latestPeriod: '2026Q1', bankCount: 2, rowCount: 2, fields: bankImporter.BANK_FIELDS },
+      banks
+    }, reportsDir);
+    const validContact = coverageStore.createBankContact(reportsDir, banks[0].summary, { name: 'Valid Contact' });
+    const otherContact = coverageStore.createBankContact(reportsDir, banks[1].summary, { name: 'Other Contact' });
+    const headers = { 'Content-Type': 'application/json' };
+    const baseBody = { kind: 'call', subject: 'Check-in', activityDate: '2026-06-25' };
+
+    const bad = await request(port, {
+      method: 'POST',
+      path: '/api/banks/ACT-1/activity',
+      headers,
+      body: JSON.stringify({ ...baseBody, contactId: otherContact.id })
+    });
+    assert.strictEqual(bad.status, 400, bad.text);
+    assert.match(bad.json.error, /does not belong/i);
+
+    const good = await request(port, {
+      method: 'POST',
+      path: '/api/banks/ACT-1/activity',
+      headers,
+      body: JSON.stringify({ ...baseBody, contactId: validContact.id })
+    });
+    assert.strictEqual(good.status, 200, good.text);
+    assert.strictEqual(good.json.activity.contactId, validContact.id);
+  });
+});
+
 test('activity-summary and account-touch report routes aggregate manual activities', async () => {
   const coverageStore = require('../server/bank-coverage-store');
   await withServer({}, async ({ port, dataDir }) => {

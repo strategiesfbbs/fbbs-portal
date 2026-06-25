@@ -78,6 +78,13 @@ const {
   loadBondAccountingManifest,
   resolveBondAccountingStoredFile
 } = require('./bond-accounting-store');
+const {
+  getThcSummaryForBank,
+  getThcSummaryStatus,
+  importThcSummaryPayload,
+  loadThcSummaryManifest,
+  sanitizeThcSummaryManifest
+} = require('./thc-summary-store');
 const { loadParsedPortfolio } = require('./portfolio-parser');
 const {
   getWirpStatus,
@@ -688,6 +695,7 @@ function isAdminOnlyApiWrite(pathname, method) {
     pathname === '/api/bank-account-statuses/upload' ||
     pathname === '/api/banks/averaged-series/upload' ||
     pathname === '/api/banks/bond-accounting/upload' ||
+    pathname === '/api/banks/thc-summary/upload' ||
     pathname === '/api/brokered-cd/wirp/upload' ||
     pathname === '/api/exec-summary/upload' ||
     pathname === '/api/contacts/import' ||
@@ -2505,9 +2513,10 @@ function searchBanks(query, limit = 12) {
   }
 }
 
-function getBankById(id) {
+function getBankById(id, options = {}) {
   const bankId = String(id || '').trim();
-  if (bankDetailCache.has(bankId)) return bankDetailCache.get(bankId);
+  const cacheKey = `${bankId}|thcLinks:${options.includeAdminLinks ? '1' : '0'}`;
+  if (bankDetailCache.has(cacheKey)) return bankDetailCache.get(cacheKey);
   try {
     const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId);
     if (!data || !data.bank || !data.bank.summary) return data;
@@ -2522,12 +2531,15 @@ function getBankById(id) {
         })
       : null;
     const peerComparison = preferredComparison || getPeerComparisonForBank(data.bank);
-    return cacheSet(bankDetailCache, bankId, {
+    return cacheSet(bankDetailCache, cacheKey, {
       ...data,
       bank: {
         ...data.bank,
         summary: enrichBankSummary(data.bank.summary, statuses, coverageMap),
         bondAccounting: getBondAccountingForBank(BANK_REPORTS_DIR, data.bank.id),
+        thcSummary: getThcSummaryForBank(BANK_REPORTS_DIR, data.bank.summary || data.bank, {
+          includeAdminLinks: Boolean(options.includeAdminLinks)
+        }),
         peerPreference: preferredPeer,
         peerComparison
       }
@@ -2572,7 +2584,8 @@ function getBankDataStatus() {
     ...bankStatus,
     accountStatuses: getBankAccountStatusImportStatus(BANK_REPORTS_DIR),
     averagedSeries: getAveragedSeriesStatus(BANK_REPORTS_DIR),
-    bondAccounting: getBondAccountingStatus(BANK_REPORTS_DIR)
+    bondAccounting: getBondAccountingStatus(BANK_REPORTS_DIR),
+    thcSummary: getThcSummaryStatus(BANK_REPORTS_DIR)
   };
 }
 
@@ -4761,6 +4774,13 @@ async function handleLogBankActivity(req, res, bankId) {
     if (!MANUAL_ACTIVITY_KINDS.includes(String(body.kind || ''))) {
       return sendJSON(res, 400, { error: 'Invalid activity type' });
     }
+    const contactId = String(body.contactId || '').trim();
+    if (contactId) {
+      const contact = getBankContact(BANK_REPORTS_DIR, contactId);
+      if (!contact || String(contact.bankId || '') !== String(bankId)) {
+        return sendJSON(res, 400, { error: 'Activity contact does not belong to this bank' });
+      }
+    }
     upsertSavedBank(BANK_REPORTS_DIR, summary, body.coverage || {});
     const rep = resolveRequestRep(req);
     const activity = recordManualActivity(BANK_REPORTS_DIR, {
@@ -4770,7 +4790,7 @@ async function handleLogBankActivity(req, res, bankId) {
       subject: body.subject,
       body: body.body,
       activityDate: body.activityDate,
-      contactId: body.contactId,
+      contactId,
       actorUsername: rep ? rep.username : '',
       actorDisplay: body.loggedBy || (rep ? rep.displayName : '')
     });
@@ -5789,6 +5809,7 @@ function flattenPortfolioHoldings(parsedHoldings) {
         yieldGap: bookYield != null && marketYield != null ? marketYield - bookYield : null,
         averageLife: nullableNumber(row.averageLife),
         effectiveDuration: nullableNumber(row.effectiveDuration),
+        effectiveConvexity: nullableNumber(row.effectiveConvexity),
         oasBp: nullableNumber(row.oasBp ?? row.spreadBp),
         callable: Boolean(row.nextCall || row.callDate)
       });
@@ -5865,6 +5886,132 @@ function buildPortfolioLadder(positions, anchorDate) {
     .sort((a, b) => a.year - b.year)
     .slice(0, 16)
     .map(row => ({ ...row, par: Math.round(row.par), marketValue: Math.round(row.marketValue) }));
+}
+
+function parseIsoDateMs(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return null;
+  const ms = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function quarterKeyFromDate(value) {
+  const ms = parseIsoDateMs(value);
+  if (ms == null) return '';
+  const d = new Date(ms);
+  const q = Math.floor(d.getUTCMonth() / 3) + 1;
+  return `${d.getUTCFullYear()}Q${q}`;
+}
+
+function quarterSortKey(key) {
+  const m = String(key || '').match(/^(\d{4})Q([1-4])$/);
+  return m ? Number(m[1]) * 10 + Number(m[2]) : 999999;
+}
+
+function buildPortfolioCashFlowWall(positions, anchorDate) {
+  const anchorMs = parseIsoDateMs(anchorDate) || Date.now();
+  const buckets = new Map();
+  const touch = key => {
+    const existing = buckets.get(key) || {
+      bucket: key,
+      maturityPar: 0,
+      maturityMarketValue: 0,
+      maturityCount: 0,
+      callPar: 0,
+      callMarketValue: 0,
+      callCount: 0
+    };
+    buckets.set(key, existing);
+    return existing;
+  };
+  for (const row of positions || []) {
+    const par = nullableNumber(row.par) || 0;
+    const marketValue = nullableNumber(row.marketValue) || 0;
+    const maturityMs = parseIsoDateMs(row.maturity);
+    if (maturityMs != null && maturityMs >= anchorMs) {
+      const bucket = touch(quarterKeyFromDate(row.maturity));
+      bucket.maturityPar += par;
+      bucket.maturityMarketValue += marketValue;
+      bucket.maturityCount += 1;
+    }
+    const callMs = parseIsoDateMs(row.nextCall);
+    if (callMs != null && callMs >= anchorMs && (maturityMs == null || callMs <= maturityMs)) {
+      const bucket = touch(quarterKeyFromDate(row.nextCall));
+      bucket.callPar += par;
+      bucket.callMarketValue += marketValue;
+      bucket.callCount += 1;
+    }
+  }
+  const rows = Array.from(buckets.values())
+    .filter(row => row.bucket)
+    .sort((a, b) => quarterSortKey(a.bucket) - quarterSortKey(b.bucket))
+    .slice(0, 16)
+    .map(row => ({
+      ...row,
+      maturityPar: Math.round(row.maturityPar),
+      maturityMarketValue: Math.round(row.maturityMarketValue),
+      callPar: Math.round(row.callPar),
+      callMarketValue: Math.round(row.callMarketValue),
+      totalPar: Math.round(row.maturityPar + row.callPar),
+      totalMarketValue: Math.round(row.maturityMarketValue + row.callMarketValue)
+    }));
+  const totals = rows.reduce((acc, row) => {
+    acc.maturityPar += row.maturityPar || 0;
+    acc.callPar += row.callPar || 0;
+    acc.maturityCount += row.maturityCount || 0;
+    acc.callCount += row.callCount || 0;
+    return acc;
+  }, { maturityPar: 0, callPar: 0, maturityCount: 0, callCount: 0 });
+  return {
+    rows,
+    totals,
+    basis: 'Buckets stated maturity as certain runoff and next-call date as potential runoff; values come from the parsed THC bond-accounting workbook.'
+  };
+}
+
+function buildStandardRateShockProxy(summary, sectors) {
+  const marketValue = nullableNumber(summary && summary.marketValue);
+  const duration = nullableNumber(summary && summary.effectiveDuration);
+  if (!marketValue || duration == null) {
+    return {
+      available: false,
+      basis: 'Duration-based shock proxy unavailable because the parsed portfolio lacks market value or effective duration.'
+    };
+  }
+  const convexity = nullableNumber(summary.effectiveConvexity);
+  const shocks = [-300, -200, -100, 0, 100, 200, 300].map(bp => {
+    const dy = bp / 10000;
+    const priceChangePct = ((-duration * dy) + (convexity != null ? 0.5 * convexity * dy * dy : 0)) * 100;
+    const marketValueAfter = marketValue * (1 + priceChangePct / 100);
+    return {
+      shockBp: bp,
+      priceChangePct,
+      estimatedMarketValue: Math.round(marketValueAfter),
+      estimatedChange: Math.round(marketValueAfter - marketValue)
+    };
+  });
+  const sectorRows = (sectors || [])
+    .filter(row => nullableNumber(row.marketValue) && nullableNumber(row.effectiveDuration) != null)
+    .slice(0, 6)
+    .map(row => {
+      const mv = nullableNumber(row.marketValue) || 0;
+      const dur = nullableNumber(row.effectiveDuration) || 0;
+      const up100Pct = -dur * 0.01 * 100;
+      return {
+        sector: row.sector || 'Other',
+        marketValue: Math.round(mv),
+        effectiveDuration: dur,
+        up100EstimatedChange: Math.round(mv * up100Pct / 100)
+      };
+    });
+  return {
+    available: true,
+    basis: 'Standard duration/convexity price proxy over the investment portfolio. This is not THC EVE, EaR, OAS, prepayment, deposit-beta, or policy-limit modeling.',
+    marketValue: Math.round(marketValue),
+    effectiveDuration: duration,
+    effectiveConvexity: convexity,
+    shocks,
+    sectorRows
+  };
 }
 
 function buildPortfolioReviewFlags(positions, sectors, summary, profile) {
@@ -6176,6 +6323,7 @@ function buildPortfolioReview(bankId, query) {
     weightedCoupon: nullableNumber(totals.weightedCoupon) ?? weightedAverage(positions, 'coupon', 'par'),
     weightedAverageLife: nullableNumber(totals.weightedAverageLife) ?? weightedAverage(positions, 'averageLife'),
     effectiveDuration: weightedAverage(positions, 'effectiveDuration'),
+    effectiveConvexity: weightedAverage(positions, 'effectiveConvexity'),
     yieldOnSecurities: numericValue(values.yieldOnSecurities),
     netInterestMargin: numericValue(values.netInterestMargin),
     costOfFunds: numericValue(values.costOfFunds),
@@ -6257,6 +6405,8 @@ function buildPortfolioReview(bankId, query) {
     classificationSplit,
     topHoldings,
     ladder: buildPortfolioLadder(positions, parsedHoldings.asOfDate || inventory.asOfDate),
+    cashFlowWall: buildPortfolioCashFlowWall(positions, parsedHoldings.asOfDate || inventory.asOfDate),
+    rateShockProxy: buildStandardRateShockProxy(reviewSummary, sectors),
     analytics,
     decisionLayer,
     opportunities: buildPortfolioOpportunityRows(decisionLayer, sectors, candidates.kept || []),
@@ -6281,13 +6431,52 @@ function buildPortfolioReview(bankId, query) {
   };
 }
 
-function handlePortfolioReview(res, query) {
+function sanitizePortfolioReviewForRep(review) {
+  if (!review || review.available === false) return review;
+  const decisionLayer = review.decisionLayer ? {
+    commentary: review.decisionLayer.commentary || [],
+    priorities: review.decisionLayer.priorities || [],
+    peerOutliers: review.decisionLayer.peerOutliers || [],
+    scenario: review.decisionLayer.scenario || null,
+    actions: (review.decisionLayer.actions || []).filter(action => action && action.id !== 'bond-swap')
+  } : null;
+  return {
+    ...review,
+    summaryOnly: true,
+    summaryOnlyReason: 'Sales-safe THC summary: raw portfolio holdings and position-level swap screens are admin-only.',
+    topHoldings: [],
+    holdings: [],
+    swapIdeas: [],
+    rejectedSwapIdeas: [],
+    screens: {
+      topLosses: [],
+      lossPct: [],
+      yieldReset: [],
+      lowYield: [],
+      durationWatch: [],
+      callableWatch: []
+    },
+    decisionLayer,
+    opportunities: (review.opportunities || []).filter(row => !/specific swap candidate/i.test(row && row.type || ''))
+  };
+}
+
+function shouldShowFullPortfolioReview(req) {
+  const { auth } = authInfoForRequest(req);
+  return !shouldEnforceRepScope(auth) || Boolean(auth.isAdmin);
+}
+
+function portfolioReviewForRequest(req, review) {
+  return shouldShowFullPortfolioReview(req) ? review : sanitizePortfolioReviewForRep(review);
+}
+
+function handlePortfolioReview(req, res, query) {
   const bankId = String(query.get('bankId') || '').trim();
   if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
   try {
     const review = buildPortfolioReview(bankId, query);
     if (!review) return sendJSON(res, 404, { error: 'Bank not found' });
-    return sendJSON(res, 200, review);
+    return sendJSON(res, 200, portfolioReviewForRequest(req, review));
   } catch (err) {
     log('error', `Portfolio review failed for ${bankId}:`, err.message);
     return sendJSON(res, 500, { error: err.message || 'Could not build portfolio review' });
@@ -6435,8 +6624,9 @@ function handleAccountTouchReport(req, res, query) {
   }
 }
 
-// Pershing Dormant Trade Report — banks linked to Pershing accounts whose newest
-// trade is older than N days, plus no-trade-date accounts when requested.
+// Pershing Account Recency Report — banks linked to Pershing accounts whose
+// account-level latest trade date is older than N days, plus missing-date
+// accounts when requested.
 function handlePershingDormantReport(req, res, query) {
   try {
     const thresholdDays = Math.max(1, Math.min(3650, parseInt(query.get('days'), 10) || PERSHING_DORMANT_TRADE_DAYS));
@@ -8480,6 +8670,45 @@ async function handleBondAccountingUpload(req, res) {
     if (tmpDir) {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     }
+  }
+}
+
+async function handleThcSummaryUpload(req, res) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  try {
+    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const file = files.find(f => /\.(json|txt)$/i.test(f.filename || '')) || files[0];
+    if (!file || !file.data || !file.data.length) return sendJSON(res, 400, { error: 'Upload a THC summary JSON file.' });
+    const text = file.data.toString('utf8').replace(/^\uFEFF/, '');
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch (err) {
+      return sendJSON(res, 400, { error: 'THC summary import must be valid JSON.' });
+    }
+    const bankSummaries = listBankSummaries(BANK_REPORTS_DIR);
+    if (!bankSummaries.length) {
+      return sendJSON(res, 400, { error: 'Import bank call report data before importing THC summaries.' });
+    }
+    const manifest = importThcSummaryPayload(BANK_REPORTS_DIR, payload, {
+      bankSummaries,
+      sourceFile: sanitizeFilename(file.filename || 'thc-summary.json')
+    });
+    appendAuditLog({
+      event: 'thc-summary-import',
+      sourceFile: sanitizeFilename(file.filename || ''),
+      recordCount: manifest.recordCount,
+      matchedCount: manifest.matchedCount,
+      unmatchedCount: manifest.unmatchedCount
+    });
+    invalidateBankCaches();
+    return sendJSON(res, 200, { success: true, manifest });
+  } catch (err) {
+    log('error', 'THC summary import failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'THC summary import failed' });
   }
 }
 
@@ -10895,13 +11124,22 @@ const server = http.createServer(async (req, res) => {
       const rep = resolveRequestRep(req);
       if (!rep) return sendJSON(res, 200, { rep: null, items: [] });
       const items = listWatchlist(BANK_REPORTS_DIR, rep.username);
-      const live = new Map(buildAllOfferingsRows().filter(r => r.cusip).map(r => [r.cusip, r]));
+      const live = new Map(buildAllOfferingsRows()
+        .filter(r => r.cusip)
+        .map(r => [String(r.cusip).trim().toUpperCase(), r]));
       const bankIds = items.filter(i => i.kind === 'bank').map(i => i.refId);
       const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, bankIds);
       const enriched = items.map(item => {
         if (item.kind === 'security') {
-          const row = live.get(item.refId);
-          return { ...item, stillOffered: Boolean(row), live: row ? { yield: row.yield, price: row.price, maturity: row.maturity, assetClass: row.assetClass, page: row.page } : null };
+          const row = live.get(String(item.refId || '').trim().toUpperCase());
+          return { ...item, stillOffered: Boolean(row), live: row ? {
+            description: row.description,
+            yield: row.yield,
+            price: row.price,
+            maturity: row.maturity,
+            assetClass: row.assetClass,
+            page: row.page
+          } : null };
         }
         const s = summaries.get(String(item.refId)) || {};
         return { ...item, bankName: s.displayName || s.name || item.label || item.refId, city: s.city || '', state: s.state || '' };
@@ -11307,7 +11545,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/portfolio-review' && req.method === 'GET') {
-      return handlePortfolioReview(res, query);
+      return handlePortfolioReview(req, res, query);
     }
 
     // Printable portfolio review (Save-as-PDF handout). Keyed by bankId like the
@@ -11324,7 +11562,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (!review) return sendText(res, 404, 'Bank not found');
       if (review.available === false) return sendText(res, 404, review.notice || 'No portfolio available for this bank');
-      const html = renderPortfolioReviewHtml(review, { bankName: review.bankName });
+      const html = renderPortfolioReviewHtml(portfolioReviewForRequest(req, review), { bankName: review.bankName });
       return sendPrintableHtml(res, html);
     }
 
@@ -11723,7 +11961,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Per-bank Pershing brokerage-account footprint from the Salesforce export:
-    // account count, latest trade date, and the linked account list.
+    // account count, account-level latest trade date, and linked accounts.
     const bankPershingMatch = pathname.match(/^\/api\/banks\/([^/]+)\/pershing$/);
     if (bankPershingMatch && req.method === 'GET') {
       const bankId = safeDecodeURIComponent(bankPershingMatch[1]);
@@ -11990,6 +12228,19 @@ const server = http.createServer(async (req, res) => {
       return await handleBondAccountingUpload(req, res);
     }
 
+    if (pathname === '/api/banks/thc-summary/upload' && req.method === 'POST') {
+      return await handleThcSummaryUpload(req, res);
+    }
+
+    if (pathname === '/api/banks/thc-summary' && req.method === 'GET') {
+      const manifest = loadThcSummaryManifest(BANK_REPORTS_DIR);
+      if (!manifest) return sendJSON(res, 404, { error: 'No THC summary file has been imported yet' });
+      const { auth } = authInfoForRequest(req);
+      return sendJSON(res, 200, sanitizeThcSummaryManifest(manifest, {
+        includeAdminLinks: !shouldEnforceRepScope(auth) || Boolean(auth && auth.isAdmin)
+      }));
+    }
+
     if (pathname.startsWith('/api/banks/bond-accounting/files/') && req.method === 'GET') {
       const storedPath = safeDecodeURIComponent(pathname.slice('/api/banks/bond-accounting/files/'.length));
       const filePath = resolveBondAccountingStoredFile(BANK_REPORTS_DIR, storedPath);
@@ -12025,7 +12276,10 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname.startsWith('/api/banks/') && req.method === 'GET') {
       const id = pathname.slice('/api/banks/'.length);
-      const data = getBankById(id);
+      const { auth } = authInfoForRequest(req);
+      const data = getBankById(id, {
+        includeAdminLinks: !shouldEnforceRepScope(auth) || Boolean(auth && auth.isAdmin)
+      });
       if (!data) return sendJSON(res, 404, { error: 'Bank not found' });
       // Optional cohort override — recompute peer comparison from the
       // requested cohort instead of returning the cached best-fit result.
