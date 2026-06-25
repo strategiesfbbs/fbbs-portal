@@ -186,3 +186,44 @@ Pure-module unit tests, no fixtures needed beyond small inline rows:
 - `buildAccountIndex` — record-type mapping, cert normalization, `byCert` collisions.
 - `matchContactToBank` — cert hit, name fallback, RIA→unmatched with reason, orphan.
 - `buildContactImportPlan` — dedup against `existingKeys`, junk-email strip, funnel `stats` equal the §3 numbers on the real export (a guarded integration check that skips if the raw export/DB is absent, like the FDIC tests).
+
+---
+
+## 9. Completion — 2026-06-25 (idempotency, apply, audit, compliance)
+
+Codex's review noted the Foundation was sound but the migration incomplete. This
+section supersedes the "proposal-only" framing in §5/§6 for owner/status and adds
+idempotency, an audit trail, and compliance handling. (Scope stayed Salesforce-side
+— `bank-coverage-store.js` is the contacts store, not a Codex/Pershing file.)
+
+### Idempotency (re-import is safe)
+- `bank_contacts` gained **`salesforce_contact_id`** (PRAGMA-guarded ADD COLUMN, `migrateBankContactColumns`) + a **partial unique index** (`WHERE salesforce_contact_id IS NOT NULL`) so the DB itself rejects a duplicate SF contact while leaving manual contacts unconstrained.
+- A one-shot **backfill** (`backfillSalesforceContactIds`, guarded by a `coverage_meta` flag) populates the column from the original import's `notes` ("Salesforce <id> · imported …"), so the already-imported 1,736 rows are recognized on re-import.
+- `buildContactImportPlan` now classifies each contact as **create / update / unchanged / duplicate / unmatched**: an existing row (by `salesforce_contact_id`) with changed name/title/phone/email/compliance → **update** (changed fields only); identical → **unchanged** (no write; light normalization ignores phone-format/email-case churn). Verified: a second `--apply --contacts` on the live DB does **0 create / 0 update / 1,736 unchanged**.
+
+### Apply flags (dry-run remains the default)
+- `--apply` is the master switch; it writes only the **explicitly named** sections: `--contacts`, `--owners`, `--statuses` (`--owner-proposal`/`--status-proposal` kept as display aliases). `--apply` with no section flag writes nothing.
+- **Contacts**: `create` → `createBankContact` (carries sfId + compliance flags); `update` → `updateBankContact` (changed fields; sfId preserved, never cleared).
+
+### Owner backfill — corrected target & policy
+- The authoritative owner field is **`bank_account_statuses.owner`** (what `runAccountStatusView` filters on and `effectiveAccountStatus` surfaces via `coverage.owner || status.owner`), **not** `bank_coverage.owner`. Writing a coverage row would have set `status='Open'` and — since any coverage row overrides the overlay — **downgraded Client/Prospect banks**. Owner apply therefore uses `upsertBankAccountStatus({owner})`, which **preserves the existing status**.
+- "Blank" is judged on the **effective** owner. Reality on this data: `account_status.owner` is already 100% populated (4,657/4,657) from the workbook's "Account Team Members" — **3,571 on the "A.W. Spellmeyer" catch-all**, the rest real reps. So blank-only owner backfill is **~a no-op (1 genuinely-blank bank)**. The catch-all entries are **left as-is** per "don't overwrite worked coverage" — replacing the Spellmeyer catch-all with the contact-modal owner would be a separate, owner-approved decision, not a blank-only backfill.
+
+### Status backfill — applied
+- `--apply --statuses` seeds/upgrades via `upsertBankAccountStatus({status})`: **seed** (portal blank) or **upgrade** (portal `Open` → SF Client/Prospect); a worked status is never overridden. Applied **46** (45 Open→Prospect, 1 seed). Re-run is idempotent (0 proposals). Where a coverage row exists (it overrides the overlay), the coverage status is synced too.
+
+### Compliance (decision: store, all-false today, no UI)
+- `bank_contacts` gained `do_not_call` / `opt_out_email` / `email_bounced` (INTEGER 0/1). **Every value in the current export is false**, but the columns are populated on import so a future export that flips them needs no migration. No UI built (per handoff); the flags are available to the tear-sheet/reports when wanted.
+
+### Audit trail
+- Every apply writes a durable **manifest** to `data/salesforce-export/manifests/import-<ts>.json` (mode, sections, per-section counts, created/updated sfIds with changed fields, owner/status bank lists) **and** appends one `{"event":"salesforce-import", …}` line to `data/audit.log`. Per-bank timeline spam is intentionally avoided (1,736 rows) — the manifest is the record.
+
+### Resolved open decisions (from §7)
+- **#2 status authority** → import-as-seed/upgrade, never override worked (applied).
+- **#3 owner source** → contact-modal, blank-only on the effective owner; catch-all left as-is.
+- **#4 existing contacts dedup** → idempotent via `salesforce_contact_id` (+ backfill); name/email dedup remains the fallback for non-SF rows.
+- **#5 compliance columns** → added and populated (all-false documented).
+- **#1 RIAs** → still deferred (no bank entity; the 211 RIA + 82 GENERAL contacts remain a named `unmatched` bucket).
+
+### Tests
+`tests/salesforce-import.test.js` (15): adds the create/update/unchanged classification, a temp-DB store test (sfId persist + unique-index guard + update preserves sfId), the notes→sfId backfill, the owner/status apply-target behavior (status preserved), and a live-DB idempotency assertion in the integration check.

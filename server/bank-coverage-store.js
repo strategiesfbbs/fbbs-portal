@@ -198,8 +198,65 @@ function ensureCoverageDatabase(outputDir) {
     );
   `);
   migrateBankActivityColumns(dbPath);
+  migrateBankContactColumns(dbPath);
   migrateCoverageWorkspaceData(dbPath);
+  backfillSalesforceContactIds(dbPath);
   return dbPath;
+}
+
+// bank_contacts gained Salesforce-sync columns (2026-06-24): a stable
+// salesforce_contact_id so a re-import updates the existing row instead of
+// duplicating, plus the three compliance flags carried from the Salesforce
+// export (all false in the current export, but the desk must honor them if a
+// future export populates them). Same PRAGMA-guarded ADD COLUMN pattern as
+// migrateBankActivityColumns; the partial unique index enforces one row per
+// Salesforce contact while leaving manually-entered (NULL) contacts unconstrained.
+function migrateBankContactColumns(dbPath) {
+  const columns = querySqliteJson(dbPath, `PRAGMA table_info(bank_contacts);`);
+  const have = new Set(columns.map(col => col.name));
+  const additions = [
+    ['salesforce_contact_id', 'TEXT'],
+    ['do_not_call', 'INTEGER NOT NULL DEFAULT 0'],
+    ['opt_out_email', 'INTEGER NOT NULL DEFAULT 0'],
+    ['email_bounced', 'INTEGER NOT NULL DEFAULT 0']
+  ];
+  for (const [name, type] of additions) {
+    if (!have.has(name)) {
+      runSqlite(dbPath, `ALTER TABLE bank_contacts ADD COLUMN ${name} ${type};`);
+    }
+  }
+  runSqlite(dbPath, `CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_contacts_sfid
+    ON bank_contacts(salesforce_contact_id) WHERE salesforce_contact_id IS NOT NULL;`);
+}
+
+// One-shot: the first Salesforce contact import (before the salesforce_contact_id
+// column existed) stamped the SF id only into notes ("Salesforce <id> · imported
+// …"). Backfill the column from those notes so re-imports recognize and update
+// those rows rather than creating duplicates. Guarded by a coverage_meta flag +
+// a per-process cache, exactly like migrateCoverageWorkspaceData.
+const SF_CONTACT_BACKFILL_KEY = 'salesforce-contact-id-backfilled-v1';
+const sfContactBackfilledDbs = new Set();
+
+function backfillSalesforceContactIds(dbPath) {
+  if (sfContactBackfilledDbs.has(dbPath)) return;
+  const flag = querySqliteJson(dbPath, 'SELECT value FROM coverage_meta WHERE key = ?;', [SF_CONTACT_BACKFILL_KEY]);
+  if (flag.length) { sfContactBackfilledDbs.add(dbPath); return; }
+  const rows = querySqliteJson(
+    dbPath,
+    "SELECT id, notes FROM bank_contacts WHERE salesforce_contact_id IS NULL AND notes LIKE 'Salesforce %';"
+  );
+  for (const row of rows) {
+    const m = /^Salesforce\s+(\S+)/.exec(String(row.notes || ''));
+    if (!m) continue;
+    try {
+      runSqlite(dbPath, 'UPDATE bank_contacts SET salesforce_contact_id = ? WHERE id = ?;', [m[1], row.id]);
+    } catch (e) {
+      // Unique-index collision (shouldn't happen — one SF contact → one row);
+      // leave NULL and let the name/email dedup handle it.
+    }
+  }
+  runSqlite(dbPath, 'INSERT INTO coverage_meta (key, value) VALUES (?, ?);', [SF_CONTACT_BACKFILL_KEY, new Date().toISOString()]);
+  sfContactBackfilledDbs.add(dbPath);
 }
 
 // bank_activities started as a passive system-audit log. Manual CRM activities
@@ -647,6 +704,10 @@ function contactSelectSql(where = '1 = 1') {
       email AS email,
       is_primary AS isPrimary,
       notes AS notes,
+      salesforce_contact_id AS salesforceContactId,
+      do_not_call AS doNotCall,
+      opt_out_email AS optOutEmail,
+      email_bounced AS emailBounced,
       created_at AS createdAt,
       updated_at AS updatedAt
     FROM bank_contacts
@@ -666,6 +727,10 @@ function mapContactRow(row) {
     email: row.email || '',
     isPrimary: Boolean(Number(row.isPrimary || 0)),
     notes: row.notes || '',
+    salesforceContactId: row.salesforceContactId || '',
+    doNotCall: Boolean(Number(row.doNotCall || 0)),
+    optOutEmail: Boolean(Number(row.optOutEmail || 0)),
+    emailBounced: Boolean(Number(row.emailBounced || 0)),
     createdAt: row.createdAt || '',
     updatedAt: row.updatedAt || ''
   };
@@ -728,6 +793,10 @@ function createBankContact(outputDir, bankSummary, input = {}) {
   const role = cleanText(input.role, 120);
   const notes = cleanMultilineText(input.notes, 2000);
   const isPrimary = input.isPrimary ? 1 : 0;
+  const salesforceContactId = cleanText(input.salesforceContactId, 80);
+  const doNotCall = input.doNotCall ? 1 : 0;
+  const optOutEmail = input.optOutEmail ? 1 : 0;
+  const emailBounced = input.emailBounced ? 1 : 0;
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
 
@@ -741,12 +810,14 @@ function createBankContact(outputDir, bankSummary, input = {}) {
   statements.push({
     sql: `
       INSERT INTO bank_contacts (
-        id, bank_id, cert_number, name, role, phone, email, is_primary, notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        id, bank_id, cert_number, name, role, phone, email, is_primary, notes,
+        salesforce_contact_id, do_not_call, opt_out_email, email_bounced, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     `,
     params: [
       id, summary.bankId, textOrNull(summary.certNumber), name, textOrNull(role),
-      textOrNull(phone), textOrNull(email), isPrimary, textOrNull(notes), now, now
+      textOrNull(phone), textOrNull(email), isPrimary, textOrNull(notes),
+      textOrNull(salesforceContactId), doNotCall, optOutEmail, emailBounced, now, now
     ]
   });
   txSqlite(dbPath, statements);
@@ -764,6 +835,14 @@ function updateBankContact(outputDir, contactId, input = {}) {
   const email = input.email !== undefined ? cleanEmail(input.email) : existing.email;
   const notes = input.notes !== undefined ? cleanMultilineText(input.notes, 2000) : existing.notes;
   const isPrimary = input.isPrimary !== undefined ? (input.isPrimary ? 1 : 0) : (existing.isPrimary ? 1 : 0);
+  const doNotCall = input.doNotCall !== undefined ? (input.doNotCall ? 1 : 0) : (existing.doNotCall ? 1 : 0);
+  const optOutEmail = input.optOutEmail !== undefined ? (input.optOutEmail ? 1 : 0) : (existing.optOutEmail ? 1 : 0);
+  const emailBounced = input.emailBounced !== undefined ? (input.emailBounced ? 1 : 0) : (existing.emailBounced ? 1 : 0);
+  // salesforce_contact_id is a stable key: settable when linking a previously
+  // manual row, but never cleared once present.
+  const salesforceContactId = input.salesforceContactId !== undefined
+    ? (cleanText(input.salesforceContactId, 80) || existing.salesforceContactId)
+    : existing.salesforceContactId;
   const now = new Date().toISOString();
 
   const statements = [];
@@ -782,10 +861,17 @@ function updateBankContact(outputDir, contactId, input = {}) {
         email = ?,
         is_primary = ?,
         notes = ?,
+        salesforce_contact_id = ?,
+        do_not_call = ?,
+        opt_out_email = ?,
+        email_bounced = ?,
         updated_at = ?
       WHERE id = ?;
     `,
-    params: [name, textOrNull(role), textOrNull(phone), textOrNull(email), isPrimary, textOrNull(notes), now, existing.id]
+    params: [
+      name, textOrNull(role), textOrNull(phone), textOrNull(email), isPrimary, textOrNull(notes),
+      textOrNull(salesforceContactId), doNotCall, optOutEmail, emailBounced, now, existing.id
+    ]
   });
   txSqlite(dbPath, statements);
   return getBankContact(outputDir, existing.id);
@@ -806,24 +892,34 @@ function listAllContacts(outputDir, options = {}) {
   const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 2000), 10000));
   const rows = querySqliteJson(dbPath, `
     SELECT id, bank_id AS bankId, cert_number AS certNumber, name, role, phone, email,
-           is_primary AS isPrimary, notes, created_at AS createdAt, updated_at AS updatedAt
+           is_primary AS isPrimary, notes, salesforce_contact_id AS salesforceContactId,
+           do_not_call AS doNotCall, opt_out_email AS optOutEmail, email_bounced AS emailBounced,
+           created_at AS createdAt, updated_at AS updatedAt
     FROM bank_contacts
     ORDER BY name COLLATE NOCASE ASC
     LIMIT ?;
   `, [limit]);
-  return rows.map(row => ({
-    id: row.id,
-    bankId: row.bankId,
-    certNumber: row.certNumber || '',
-    name: row.name || '',
-    role: row.role || '',
-    phone: row.phone || '',
-    email: row.email || '',
-    isPrimary: Boolean(row.isPrimary),
-    notes: row.notes || '',
-    createdAt: row.createdAt || '',
-    updatedAt: row.updatedAt || ''
-  }));
+  return rows.map(mapContactRow);
+}
+
+// Look up existing contacts by Salesforce contact id (the import's idempotency
+// key). Returns Map<salesforceContactId, contact>. Scales to the import set
+// (bounded by the export size), unlike listAllContacts' firm-wide cap.
+function getContactsBySalesforceIds(outputDir, salesforceIds = []) {
+  const ids = [...new Set((salesforceIds || []).map(s => String(s || '').trim()).filter(Boolean))];
+  if (!ids.length) return new Map();
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const rows = querySqliteJson(
+    dbPath,
+    `${contactSelectSql(`salesforce_contact_id IN (${ids.map(() => '?').join(',')})`)} ${contactOrderBy()};`,
+    ids
+  );
+  const map = new Map();
+  rows.forEach(row => {
+    const c = mapContactRow(row);
+    if (c && c.salesforceContactId) map.set(c.salesforceContactId, c);
+  });
+  return map;
 }
 
 // ---------- Bank activity timeline ----------
@@ -1925,6 +2021,7 @@ module.exports = {
   getBillingItem,
   getPreferredPeerGroup,
   getProductFitById,
+  getContactsBySalesforceIds,
   getSavedBankCoverageMap,
   lastActivityByBank,
   listActivitiesForBank,

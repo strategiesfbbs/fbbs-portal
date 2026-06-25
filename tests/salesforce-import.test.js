@@ -6,6 +6,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const sf = require('../server/salesforce-import');
 
@@ -160,8 +161,37 @@ test('buildContactImportPlan dedups against existing + within run, counts stats'
   assert.strictEqual(plan.stats.create, 1, 'only the first New One is created');
   assert.strictEqual(plan.stats.duplicate, 2);
   assert.strictEqual(plan.stats.unmatched, 2);
+  assert.strictEqual(plan.stats.update, 0);
+  assert.strictEqual(plan.stats.unchanged, 0);
   assert.strictEqual(plan.stats.viaCert, 1);
   assert.strictEqual(plan.create[0].contact.name, 'New One');
+  assert.ok(plan.create[0].desired, 'create carries desired field set');
+});
+
+test('buildContactImportPlan is idempotent via salesforce_contact_id (update vs unchanged)', () => {
+  const accountIndex = sf.buildAccountIndex([
+    { Account_Id_18__c: 'A1', RecordTypeId: '012Hs000000CFaPIAW', Cert_Number__c: '4829', Name: 'First Bank' },
+  ]);
+  const certToBankId = new Map([['4829', 'B1']]);
+  const nameToBankId = new Map();
+  // The export contact, already imported once under sfId 003A.
+  const contact = { accountId: 'A1', sfId: '003A', name: 'Mike Hoffman', title: 'President/CEO', phone: '(573) 468-3191', mobile: '', email: 'mhoffman@bank.com', junk: false, doNotCall: false, optOutEmail: false, emailBounced: false };
+
+  // (a) existing row identical (phone stored with different formatting) → unchanged, no write
+  const existingSame = new Map([['003A', { id: 'row1', bankId: 'B1', name: 'Mike Hoffman', role: 'President/CEO', phone: '5734683191', email: 'MHOFFMAN@bank.com', doNotCall: false, optOutEmail: false, emailBounced: false }]]);
+  let plan = sf.buildContactImportPlan([contact], { accountIndex, certToBankId, nameToBankId, existingKeys: new Set(), existingBySfId: existingSame });
+  assert.strictEqual(plan.stats.create, 0);
+  assert.strictEqual(plan.stats.unchanged, 1, 'cosmetic phone/email diffs do not trigger an update');
+  assert.strictEqual(plan.stats.update, 0);
+
+  // (b) existing row with a changed title + new DoNotCall flag → update with changed fields
+  const changedContact = { ...contact, title: 'CEO', doNotCall: true };
+  const existingDiff = new Map([['003A', { id: 'row1', bankId: 'B1', name: 'Mike Hoffman', role: 'President/CEO', phone: '5734683191', email: 'mhoffman@bank.com', doNotCall: false, optOutEmail: false, emailBounced: false }]]);
+  plan = sf.buildContactImportPlan([changedContact], { accountIndex, certToBankId, nameToBankId, existingKeys: new Set(), existingBySfId: existingDiff });
+  assert.strictEqual(plan.stats.update, 1);
+  assert.strictEqual(plan.stats.create, 0);
+  assert.deepStrictEqual(plan.update[0].changed.sort(), ['doNotCall', 'role']);
+  assert.strictEqual(plan.update[0].existingId, 'row1');
 });
 
 // ---- backfill proposals ----
@@ -197,6 +227,77 @@ test('buildStatusBackfillPlan: seed blanks, upgrade Open, respect worked statuse
   assert.strictEqual(b1.kind, 'seed');
   assert.strictEqual(b5.kind, 'upgrade');
   assert.strictEqual(b5.suggestedStatus, 'Client');
+});
+
+// ---- store-level apply behavior (temp DBs) ----
+test('[store] bank_contacts sfId: create persists sfId+compliance, update preserves sfId, no duplicate', () => {
+  const bcs = require('../server/bank-coverage-store');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-store-'));
+  try {
+    const summary = { id: 'B1', certNumber: '4829', displayName: 'Test Bank', name: 'Test Bank', city: 'Ames', state: 'IA' };
+    const c = bcs.createBankContact(tmp, summary, {
+      name: 'Mike H', role: 'CEO', phone: '515-555-1212', email: 'mike@b.com',
+      salesforceContactId: '003A', doNotCall: true, notes: 'Salesforce 003A · imported 2026-06-24',
+    });
+    assert.strictEqual(c.salesforceContactId, '003A');
+    assert.strictEqual(c.doNotCall, true);
+
+    const map = bcs.getContactsBySalesforceIds(tmp, ['003A', '003ZZZ']);
+    assert.strictEqual(map.size, 1);
+    assert.ok(map.has('003A'));
+
+    // DB-level idempotency guard: a second insert with the same sfId is rejected.
+    assert.throws(() => bcs.createBankContact(tmp, summary, { name: 'Dup', salesforceContactId: '003A' }),
+      /UNIQUE|constraint/i, 'partial unique index blocks a duplicate sfId');
+
+    const updated = bcs.updateBankContact(tmp, c.id, { role: 'President', doNotCall: false });
+    assert.strictEqual(updated.role, 'President');
+    assert.strictEqual(updated.doNotCall, false);
+    assert.strictEqual(updated.salesforceContactId, '003A', 'sfId preserved on update');
+    assert.strictEqual(bcs.listAllContacts(tmp).length, 1, 'still one row');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('[store] backfillSalesforceContactIds links notes-only rows on first migrate', () => {
+  const sqlite = require('../server/sqlite-db');
+  const bcs = require('../server/bank-coverage-store');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-backfill-'));
+  try {
+    const dbPath = path.join(tmp, 'bank-coverage.sqlite');
+    // Simulate the pre-sfId schema + a notes-only imported row (the original import shape).
+    sqlite.execSqlite(dbPath, `
+      CREATE TABLE bank_contacts (id TEXT PRIMARY KEY, bank_id TEXT NOT NULL, cert_number TEXT,
+        name TEXT NOT NULL, role TEXT, phone TEXT, email TEXT, is_primary INTEGER NOT NULL DEFAULT 0,
+        notes TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE coverage_meta (key TEXT PRIMARY KEY, value TEXT);
+    `);
+    sqlite.runSqlite(dbPath, 'INSERT INTO bank_contacts (id,bank_id,name,notes,created_at,updated_at) VALUES (?,?,?,?,?,?);',
+      ['c1', 'B1', 'Old Person', 'Salesforce 003OLD · imported 2026-06-24', 't', 't']);
+    // First store call on this fresh dbPath triggers migrate (adds column) + backfill.
+    const map = bcs.getContactsBySalesforceIds(tmp, ['003OLD']);
+    assert.ok(map.has('003OLD'), 'notes-only row got salesforce_contact_id backfilled');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('[store] owner/status apply target is account_status: owner backfill preserves worked status', () => {
+  const ass = require('../server/bank-account-status-store');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sf-ownerstatus-'));
+  try {
+    const summary = { id: 'B1', certNumber: '4829', displayName: 'Test Bank', name: 'Test Bank', city: 'Ames', state: 'IA' };
+    // a worked Client status exists on the overlay
+    ass.upsertBankAccountStatus(tmp, summary, { status: 'Client' });
+    // owner backfill = upsertBankAccountStatus({owner}) — must NOT downgrade the status
+    ass.upsertBankAccountStatus(tmp, summary, { owner: 'Gio Rozo', source: 'salesforce-import' });
+    let as = ass.getBankAccountStatuses(tmp, ['B1']).get('B1');
+    assert.strictEqual(as.owner, 'Gio Rozo');
+    assert.strictEqual(as.status, 'Client', 'owner backfill preserved the worked status (no Open clobber)');
+
+    // status seed/upgrade on a fresh bank
+    const b2 = { id: 'B2', certNumber: '5555', displayName: 'Bank Two', name: 'Bank Two', city: 'Des Moines', state: 'IA' };
+    ass.upsertBankAccountStatus(tmp, b2, { status: 'Prospect', source: 'salesforce-import' });
+    as = ass.getBankAccountStatuses(tmp, ['B2']).get('B2');
+    assert.strictEqual(as.status, 'Prospect');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 
 // ---- parseCsv ----
@@ -244,6 +345,29 @@ test('[integration] real export reproduces the documented funnel (skips if absen
   assert.ok(plan.stats.unmatched >= 250, `unmatched ${plan.stats.unmatched} (RIA/general/orphan)`);
   // RIA contacts must be a named unmatched reason, not lost
   assert.ok(Object.keys(plan.stats.byReason).some(r => /RIA/.test(r)), 'RIA reason present');
+
+  // Live idempotency: if contacts were already applied, re-planning against the
+  // live coverage DB must NOT re-create them — they reconcile as unchanged/update.
+  const covDb = path.join(__dirname, '..', 'data', 'bank-reports', 'bank-coverage.sqlite');
+  if (fs.existsSync(covDb)) {
+    const { getContactsBySalesforceIds, listAllContacts } = require('../server/bank-coverage-store');
+    const existingBySfId = getContactsBySalesforceIds(path.join(__dirname, '..', 'data', 'bank-reports'), contacts.map(c => c.sfId));
+    const existingKeys = new Set();
+    for (const c of listAllContacts(path.join(__dirname, '..', 'data', 'bank-reports'), { limit: 10000 })) {
+      if (c.email) existingKeys.add(`${c.bankId}|e|${c.email.toLowerCase()}`);
+      if (c.name) existingKeys.add(`${c.bankId}|n|${c.name.toLowerCase()}`);
+    }
+    const plan2 = sf.buildContactImportPlan(contacts, { accountIndex, certToBankId, nameToBankId, existingKeys, existingBySfId });
+    // re-import never creates more than a fresh slate, and the buckets sum to total
+    assert.ok(plan2.stats.create <= plan.stats.create, 'idempotent: re-run creates no more than fresh');
+    assert.strictEqual(
+      plan2.stats.create + plan2.stats.update + plan2.stats.unchanged + plan2.stats.duplicate + plan2.stats.unmatched,
+      plan2.stats.total, 'buckets reconcile to total');
+    if (existingBySfId.size >= 1700) {
+      assert.ok(plan2.stats.create <= 40, `after apply, create should be tiny (was ${plan2.stats.create})`);
+      assert.ok(plan2.stats.unchanged + plan2.stats.update >= 1700, 'most contacts reconcile as unchanged/update');
+    }
+  }
 });
 
 // ---- run ----

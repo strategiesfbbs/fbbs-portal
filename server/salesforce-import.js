@@ -263,13 +263,53 @@ function matchContactToBank(contact, { accountIndex, certToBankId, nameToBankId 
 
 // ---------- plans ----------
 
-// Build the contact import plan (NO writes). existingKeys = Set of
-// `${bankId}|e|${email.toLowerCase()}` and `${bankId}|n|${name.toLowerCase()}`
-// (from the portal's listAllContacts), so a re-run dedups against what's
-// already there. Within one run we also dedup against rows we just queued.
-function buildContactImportPlan(contacts = [], { accountIndex, certToBankId, nameToBankId, existingKeys } = {}) {
+// The bank_contacts field set we want for a parsed Salesforce contact.
+function desiredContactFields(contact) {
+  return {
+    name: contact.name,
+    role: contact.title,
+    phone: contact.phone || contact.mobile,
+    email: contact.email,
+    doNotCall: !!contact.doNotCall,
+    optOutEmail: !!contact.optOutEmail,
+    emailBounced: !!contact.emailBounced,
+  };
+}
+
+// Light field comparison that mirrors the store's cleaning, so a re-import of
+// unchanged data classifies as 'unchanged' (no write) instead of churning on
+// cosmetic differences (phone formatting, email case). Returns changed keys.
+function sameTextField(a, b) { return String(a == null ? '' : a).trim() === String(b == null ? '' : b).trim(); }
+function sameEmailField(a, b) { return String(a == null ? '' : a).trim().toLowerCase() === String(b == null ? '' : b).trim().toLowerCase(); }
+function samePhoneField(a, b) {
+  const d = v => String(v == null ? '' : v).toLowerCase().replace(/[^\dx]/g, '');
+  return d(a) === d(b);
+}
+function contactChanges(desired, existing) {
+  const changed = [];
+  if (!sameTextField(desired.name, existing.name)) changed.push('name');
+  if (!sameTextField(desired.role, existing.role)) changed.push('role');
+  if (!samePhoneField(desired.phone, existing.phone)) changed.push('phone');
+  if (!sameEmailField(desired.email, existing.email)) changed.push('email');
+  if (!!desired.doNotCall !== !!existing.doNotCall) changed.push('doNotCall');
+  if (!!desired.optOutEmail !== !!existing.optOutEmail) changed.push('optOutEmail');
+  if (!!desired.emailBounced !== !!existing.emailBounced) changed.push('emailBounced');
+  return changed;
+}
+
+// Build the contact import plan (NO writes). Idempotent:
+//   - existingBySfId: Map<salesforceContactId, existingContact> (from the
+//     store). A contact already imported under its SF id is classified as
+//     'update' (with the changed fields) or 'unchanged' — never duplicated.
+//   - existingKeys: Set of `${bankId}|e|${email}` / `${bankId}|n|${name}` for
+//     contacts WITHOUT an SF-id match, so a first import still dedups against
+//     pre-existing/manual rows. Within one run we also dedup queued rows.
+function buildContactImportPlan(contacts = [], { accountIndex, certToBankId, nameToBankId, existingKeys, existingBySfId } = {}) {
   const seen = new Set(existingKeys || []);
+  const bySfId = existingBySfId || new Map();
   const create = [];
+  const update = [];
+  const unchanged = [];
   const duplicate = [];
   const unmatched = [];
   const byReason = {};
@@ -283,6 +323,20 @@ function buildContactImportPlan(contacts = [], { accountIndex, certToBankId, nam
       byReason[m.reason] = (byReason[m.reason] || 0) + 1;
       continue;
     }
+    const desired = desiredContactFields(contact);
+
+    // Already imported under this Salesforce id → update changed fields only.
+    // (The row keeps its current bank; re-homing a contact to a different bank
+    // is a rare, out-of-scope case handled manually.)
+    const existing = contact.sfId ? bySfId.get(contact.sfId) : null;
+    if (existing) {
+      const changed = contactChanges(desired, existing);
+      if (changed.length) update.push({ bankId: existing.bankId, existingId: existing.id, contact, desired, changed });
+      else unchanged.push({ bankId: existing.bankId, existingId: existing.id, contact });
+      continue;
+    }
+
+    // New SF contact — dedup against pre-existing rows by bank + name/email.
     const keyN = `${m.bankId}|n|${contact.name.toLowerCase()}`;
     const keyE = contact.email ? `${m.bankId}|e|${contact.email.toLowerCase()}` : '';
     if (seen.has(keyN) || (keyE && seen.has(keyE))) {
@@ -292,14 +346,16 @@ function buildContactImportPlan(contacts = [], { accountIndex, certToBankId, nam
     seen.add(keyN);
     if (keyE) seen.add(keyE);
     if (m.via === 'cert') viaCert += 1; else if (m.via === 'name') viaName += 1;
-    create.push({ bankId: m.bankId, contact, via: m.via });
+    create.push({ bankId: m.bankId, contact, via: m.via, desired });
   }
 
   return {
-    create, duplicate, unmatched,
+    create, update, unchanged, duplicate, unmatched,
     stats: {
       total: contacts.length,
       create: create.length,
+      update: update.length,
+      unchanged: unchanged.length,
       duplicate: duplicate.length,
       unmatched: unmatched.length,
       viaCert, viaName,
@@ -374,6 +430,8 @@ module.exports = {
   classifyTitle,
   parseContacts,
   matchContactToBank,
+  desiredContactFields,
+  contactChanges,
   buildContactImportPlan,
   buildOwnerBackfillPlan,
   buildStatusBackfillPlan,
