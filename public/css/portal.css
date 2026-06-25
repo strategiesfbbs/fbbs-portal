@@ -512,6 +512,11 @@ summary:focus-visible,
   padding: 6px 12px;
   text-transform: uppercase;
 }
+/* Separate each group from the results above it (the first label sits flush). */
+.jump-group-label:not(:first-child) {
+  border-top: 1px solid var(--border-light);
+  margin-top: 6px;
+}
 .top-strip-links {
   align-items: center;
   margin-left: auto;
@@ -811,15 +816,17 @@ summary:focus-visible,
   border-radius: 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   padding: 12px;
 }
 
-.my-work-tile-warn { background: #fdf3ee; border-color: #e9c8b6; }
+/* Warning tiles use the gold/amber status family (was a clashing peach) to match
+   the hero-status "partial" pill and the rest of the warn system. */
+.my-work-tile-warn { background: rgba(212, 153, 38, 0.08); border-color: rgba(212, 153, 38, 0.18); }
 
 .my-work-tile-kicker {
   color: #5a615e;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
   margin: 0;
@@ -5097,7 +5104,7 @@ body {
    ============================================================ */
 .home-tile-grid {
   display: grid;
-  gap: 18px;
+  gap: 14px;
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
@@ -8044,6 +8051,7 @@ body {
 
 .reports-list th {
   background: #f8faf8;
+  box-shadow: inset 0 -1px 0 var(--line), 0 2px 4px rgba(16, 23, 21, 0.04);
   color: var(--green);
   font-size: 11px;
   letter-spacing: 0.04em;
@@ -10095,9 +10103,9 @@ body {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  gap: 9px;
+  gap: 10px;
   min-width: 0;
-  padding: 12px;
+  padding: 13px;
 }
 
 .strategy-card-head {
@@ -10349,7 +10357,7 @@ body {
   color: var(--text3);
   display: flex;
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   gap: 7px 10px;
 }
@@ -10877,13 +10885,13 @@ body {
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 14px 16px;
+  padding: 16px 18px;
 }
 
 .pulse-card h3 {
   color: var(--text);
   font-size: 13px;
-  font-weight: 900;
+  font-weight: 700;
   letter-spacing: 0.04em;
   margin: 0 0 10px;
   text-transform: uppercase;
@@ -10934,7 +10942,7 @@ body {
 
 .pulse-bar-track {
   align-items: center;
-  background: #f0f4f1;
+  background: #e4ebe6;
   border-radius: 4px;
   display: flex;
   gap: 6px;
@@ -13281,10 +13289,13 @@ body {
   margin-top: 22px;
 }
 .snapshot-step-metrics span {
+  align-items: center;
   background: rgba(255, 255, 255, 0.055);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 999px;
   color: rgba(241, 245, 243, 0.78);
+  display: inline-flex;
+  min-height: 32px;
   font-size: 12px;
   font-weight: 800;
   padding: 8px 11px;
@@ -16669,4 +16680,52 @@ body {
     background: #fff !important; border-left-width: 3px;
   }
   .sig-row:hover { background: #fff !important; }
+}
+
+/* ============================================================
+   Phase 2 responsive + polish (2026-06-25, Claude UI lane)
+   Consolidated at end-of-file so these @media overrides win by
+   source order over their base rules, and stay clear of the
+   concurrent All-Offerings (.ao-*) work mid-file. Deferred:
+   .bank-call-report-label-col mobile width — it feeds the
+   table-layout:fixed width calc and needs real-table QA.
+   ============================================================ */
+
+/* Wide call-report / explorer tables: let long uppercase headers wrap
+   instead of a nowrap row that clips on mid-size screens. */
+@media (max-width: 1200px) {
+  .explorer-table th { white-space: normal; word-break: break-word; }
+}
+
+/* Bank tear-sheet header: stack the profile tools under the identity
+   block. Children carry flex:1 1 240px, which becomes a 240px HEIGHT
+   once the axis is vertical — so reset them to content height, full width. */
+@media (max-width: 900px) {
+  .bank-profile-head { flex-direction: column; align-items: stretch; }
+  .bank-profile-head > div:first-child,
+  .bank-profile-head > .bank-profile-tools { flex: 0 0 auto; width: 100%; }
+}
+
+/* Sales Workspace toolbar collapses to a column on tablets so the signal
+   strip and the action cluster each get a full row. */
+@media (max-width: 800px) {
+  .bank-workspace-toolbar { flex-direction: column; align-items: stretch; }
+  .bank-workspace-actions { width: 100%; }
+}
+
+/* Peer-average banner: compact type/padding so it doesn't overwrap. */
+@media (max-width: 700px) {
+  .bank-peer-banner { font-size: 11px; gap: 6px; padding: 6px 10px; }
+}
+
+/* Phones: stack explorer filter rows full-width instead of a cramped wrap,
+   and tighten the market-snapshot showcase padding. */
+@media (max-width: 640px) {
+  .af-row,
+  .af-row-narrow { flex-direction: column; align-items: stretch; }
+  .af-row .ef-field,
+  .af-row-narrow .ef-field,
+  .af-row .af-search-field,
+  .af-row .af-flex { flex: 1 1 auto; min-width: 0; width: 100%; }
+  .market-snapshot-card { padding: 18px 16px; }
 }
