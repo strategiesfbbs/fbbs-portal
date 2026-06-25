@@ -6760,7 +6760,7 @@ async function handleSendSwapProposal(req, res, id) {
     // Don't freeze a proposal whose printed economics would be full of "—".
     // Once sent, the snapshot is immutable and goes to the bank, so block the
     // send and tell the rep exactly which legs are missing what.
-    const sendIssues = swapMath.validateLegsForSend(snapshot.sells, snapshot.buys);
+    const sendIssues = swapMath.validateLegsForSend(snapshot.sells, snapshot.buys, snapshot.settleDate);
     if (sendIssues.length) {
       return sendJSON(res, 400, {
         error: 'This proposal is missing data needed for a complete client artifact. Fill in the fields below, then send.',

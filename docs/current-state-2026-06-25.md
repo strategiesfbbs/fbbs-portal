@@ -32,15 +32,13 @@ Imported from the 2026-06-24 Salesforce export (`data/salesforce-export/2026-06-
   `data/salesforce-export/manifests/` + one `salesforce-import` line to
   `data/audit.log`. Tests: `tests/salesforce-import.test.js`.
 
-## Pershing — IN PROGRESS (Codex)
+## Pershing — ACCOUNT RECENCY DONE (Codex)
 
-Account-level Pershing integration is **Codex's vertical**, actively in progress
-(uncommitted at the time of writing). Touch only by coordinating with Codex:
+Account-level Pershing integration is committed in `a083aaa`:
 `server/pershing-store.js`, `scripts/import-pershing-export.js`, the Pershing
-routes in `server/server.js`, the Pershing UI in `public/js/portal.js`/
+routes in `server/server.js`, the Pershing UI in `public/js/portal.js` /
 `public/css/portal.css`, the Pershing signal in `server/bank-signals.js`, and
-`tests/pershing-store.test.js`. See those files for the authoritative schema and
-route shapes — this doc deliberately does not restate them so it can't drift.
+`tests/pershing-store.test.js`.
 
 The Pershing export joins a brokerage account to a bank
 (`Account__c → Salesforce account → FDIC cert → bank`) and carries a
