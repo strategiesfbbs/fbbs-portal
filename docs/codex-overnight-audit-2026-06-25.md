@@ -26,8 +26,7 @@ Targeted verification already run:
 - `node tests/frontend-parse.test.js` — passed.
 - `node tests/server-http.test.js` — passed after localhost permission.
 - `node tests/swap-math.test.js` — passed.
-
-Run full `npm test` before merging further changes.
+- Full `npm test` — passed after the handoff updates.
 
 ## Data facts to build from
 
