@@ -40,6 +40,15 @@
   --maps-dormant: #6D7A72;
   --sidebar-width: 248px;
   --top-strip-height: 48px;
+  /* Previously-undefined tokens that were used across the sheet WITHOUT a
+     definition (so they rendered as dropped values / off-palette fallbacks):
+     var(--green) ×51, var(--shadow-sm) ×7, var(--bg-soft) ×5. Routed to the
+     brand palette to fix the silent fallbacks at the source (2026-06-25 sweep).
+     --font-display (×5) is intentionally left for the design-system pass — it's
+     a typography decision (see docs/design-system-2026-06-25.md). */
+  --green: var(--racing-green);
+  --bg-soft: var(--surface-2);
+  --shadow-sm: 0 1px 2px rgba(16, 23, 21, 0.06);
 }
 
 body {
@@ -6179,6 +6188,19 @@ body {
 .text-btn.danger:hover {
   color: #5f1616;
 }
+
+/* ---- 2026-06-25 UI sweep: a11y focus states + missing secondary variant ---- */
+/* Global keyboard-focus rings on interactive controls that previously only had
+   scoped focus states (matches the existing outline:none + --focus-ring pattern). */
+.text-btn:focus-visible,
+.small-btn:focus-visible,
+.file-chip:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* .small-btn.secondary is used in markup but was undefined — it rendered as the
+   primary outline button, so secondary actions had no visual distinction. Neutral
+   palette-token variant (specificity beats the base .small-btn rules). */
+.small-btn.secondary { border-color: var(--border); color: var(--text2); }
+.small-btn.secondary:hover { background: var(--surface-3); color: var(--text); }
 
 .bank-recent-list {
   display: grid;
