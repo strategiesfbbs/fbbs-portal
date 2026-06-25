@@ -3455,7 +3455,7 @@ summary:focus-visible,
 .ef-field > span {
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 1.2px;
+  letter-spacing: 0.5px;
   text-transform: uppercase;
   color: var(--hookers-green);
 }
@@ -3595,12 +3595,16 @@ summary:focus-visible,
   white-space: nowrap;
 }
 .explorer-table th[data-sort]:hover { background: var(--racing-green-dark); }
+/* Neutral sort affordance on every sortable header; active asc/desc rules below override it (later source order, equal specificity). */
+.explorer-table th[data-sort]::after { content: ' ⇅'; font-size: 8px; opacity: 0.4; }
+.explorer-table th[data-sort]:hover::after { opacity: 0.7; }
 .explorer-table th.sort-asc::after { content: ' ▲'; font-size: 9px; opacity: 0.8; }
 .explorer-table th.sort-desc::after { content: ' ▼'; font-size: 9px; opacity: 0.8; }
 .explorer-table td {
-  padding: 8px 12px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border-light);
   vertical-align: middle;
+  line-height: 1.35;
 }
 .explorer-table tr:hover td { background: var(--surface-hover); }
 .explorer-table .issuer-cell { font-weight: 600; color: var(--text); }
@@ -4416,6 +4420,9 @@ body {
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(16, 23, 21, 0.05);
 }
+/* Racing-green accent stripe — placed after the grouped card rule above so its full
+   `border` shorthand doesn't override the left accent (equal specificity, later wins). */
+.legend-box { border-left: 3px solid var(--racing-green); }
 .doc-card {
   overflow: hidden;
 }
@@ -7258,7 +7265,7 @@ body {
 }
 
 .bank-section {
-  margin-top: 18px;
+  margin-top: 12px;
 }
 
 .bank-section-title {
@@ -7267,7 +7274,7 @@ body {
   color: var(--text);
   font-size: 14px;
   font-weight: 700;
-  padding: 9px 12px;
+  padding: 7px 10px;
 }
 
 .bank-intelligence-section {
@@ -8398,8 +8405,8 @@ body {
   color: var(--text);
   font: inherit;
   font-size: 13px;
-  min-height: 38px;
-  padding: 8px 10px;
+  min-height: 36px;
+  padding: 7px 10px;
 }
 
 .custom-report-quickchips {
@@ -8509,7 +8516,7 @@ body {
   border-radius: 8px;
   display: grid;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .custom-report-conditions-head {
@@ -8544,13 +8551,17 @@ body {
   color: var(--text);
   font: inherit;
   font-size: 13px;
-  min-height: 34px;
-  padding: 6px 8px;
+  min-height: 36px;
+  padding: 7px 8px;
 }
 
 .custom-cond-row select:first-child { max-width: 280px; }
 .custom-cond-value { width: 140px; }
 .custom-cond-and { color: var(--text3); font-size: 12px; }
+/* Keep the remove (✕) button anchored to the row's right edge regardless of how many
+   controls render (no-value / normal / between have 3, 4, or 6 children) — a fixed grid
+   would misalign those cases, so we stay flex and push the button right. */
+.custom-cond-row [data-cond-remove] { margin-left: auto; }
 
 /* Group By controls */
 .custom-report-groupby {
@@ -8560,7 +8571,7 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .custom-report-groupby label {
@@ -8576,8 +8587,8 @@ body {
   border-radius: 6px;
   font: inherit;
   font-size: 13px;
-  min-height: 34px;
-  padding: 6px 8px;
+  min-height: 36px;
+  padding: 7px 8px;
 }
 
 .custom-group-aggs {
@@ -8714,6 +8725,7 @@ body {
 
 .custom-report-table td {
   white-space: nowrap;
+  padding: 6px 10px;
 }
 
 .reports-data-grid {
@@ -10509,9 +10521,9 @@ body {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 10px 12px;
+  padding: 8px 10px;
 }
 
 .bank-contact-row.is-editing { background: #f3f7f4; }
@@ -10688,9 +10700,9 @@ body {
   border-left-width: 3px;
   border-radius: 8px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: 22px minmax(0, 1fr) auto;
-  padding: 9px 12px;
+  padding: 8px 10px;
 }
 
 .bank-activity-item.is-coverage { border-left-color: #4f8a6b; }
@@ -11261,7 +11273,7 @@ body {
 .views-detail-table th,
 .views-detail-table td {
   border-bottom: 1px solid var(--line);
-  padding: 8px 10px;
+  padding: 6px 10px;
   text-align: left;
   vertical-align: top;
 }
@@ -13615,7 +13627,7 @@ body {
 .swap-blotter-tbl { width: 100%; border-collapse: collapse; font-size: 12px; background: #fff; }
 .swap-blotter-tbl th { background: var(--racing-green, #16523a); color: #fff; text-align: left; padding: 6px 9px; font-size: 9.5px; letter-spacing: 0.03em; text-transform: uppercase; white-space: nowrap; }
 .swap-blotter-tbl th.r, .swap-blotter-tbl td.r { text-align: right; font-variant-numeric: tabular-nums; }
-.swap-blotter-tbl td { padding: 6px 9px; border-bottom: 1px solid #eef2ef; white-space: nowrap; }
+.swap-blotter-tbl td { padding: 5px 8px; border-bottom: 1px solid #eef2ef; white-space: nowrap; }
 .swap-blotter-tbl tr:nth-child(even) td { background: #f7faf8; }
 .swap-blotter-tbl .cu { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--racing-green, #16523a); }
 .swap-blotter-tbl td.posc { color: #2f6b3a; font-weight: 700; }
@@ -15008,6 +15020,13 @@ body {
     font-size: 13px;
   }
 
+  /* The global ≤900px rule collapses .explorer-stats to one column; keep KPI tiles
+     denser on phones with a 2-up grid. Lives after that rule, so it wins at ≤640px. */
+  .explorer-stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
   .top-strip {
     display: grid;
     grid-template-columns: 42px minmax(0, 1fr);
@@ -15363,7 +15382,7 @@ body {
 /* ============ Bank tasks panel (CRM task engine) ============ */
 .bank-tasks-section .bank-section-title { display: flex; align-items: center; justify-content: space-between; }
 .bank-task-list { list-style: none; margin: 0; padding: 0; }
-.bank-task-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 2px; border-bottom: 1px solid var(--border-light); }
+.bank-task-item { display: flex; gap: 8px; align-items: flex-start; padding: 8px 2px; border-bottom: 1px solid var(--border-light); }
 .bank-task-item:last-child { border-bottom: none; }
 .bank-task-complete {
   flex: none; width: 18px; height: 18px; margin-top: 2px; border-radius: 50%;
@@ -15382,7 +15401,7 @@ body {
 
 /* ============ Bank opportunities panel + Pulse pipeline ============ */
 .bank-opps-section .bank-section-title { display: flex; align-items: center; justify-content: space-between; }
-.bank-opp-item { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding: 10px 2px; border-bottom: 1px solid var(--border-light); }
+.bank-opp-item { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; padding: 8px 2px; border-bottom: 1px solid var(--border-light); }
 .bank-opp-item:last-child { border-bottom: none; }
 .bank-opp-body { min-width: 0; }
 .bank-opp-title { margin: 0; font-size: 14px; font-weight: 600; }
@@ -15411,10 +15430,10 @@ body {
 .bank-fdic-check .fdic-stat-label { font-weight: 400; color: var(--text2); font-size: 11px; margin-right: 2px; }
 
 /* ============ All Offerings (cross-asset explorer) ============ */
-.all-offerings-classes { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.all-offerings-classes { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
 .ao-chip-count { opacity: .6; font-size: 11px; margin-left: 4px; }
 .ao-class-pill {
-  display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 4px 10px;
   border-radius: 10px; background: var(--border-light); color: var(--text2); white-space: nowrap;
 }
 .ao-class-pill.ao-class-cd { background: #e7f1ec; color: var(--success); }
@@ -15691,7 +15710,7 @@ body {
   display: flex;
   gap: 0;
   border-bottom: 2px solid var(--line, #ddd);
-  margin: 18px 0 0;
+  margin: 16px 0 0;
 }
 
 .bank-tab-bar button {
@@ -15713,14 +15732,14 @@ body {
 }
 
 .bank-tab-panel {
-  padding-top: 16px;
+  padding-top: 12px;
 }
 
 .bank-workspace-toolbar {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   justify-content: space-between;
   margin-bottom: 14px;
 }
@@ -15728,7 +15747,7 @@ body {
 .bank-workspace-actions {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .bank-signal-strip {
@@ -15895,6 +15914,10 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
+}
+@media (max-width: 640px) {
+  .cd-nat-tiles { gap: 12px; }
+  .cd-nat-tile { min-width: 100px; }
 }
 
 .cd-nat-tile {
