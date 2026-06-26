@@ -33,6 +33,7 @@
 
 const ddTax = require('./daily-dashboard'); // AUDIENCE_KEYS, audienceEconomics, rowYtw
 const swapMath = require('./swap-math');     // municipalTeYield — verified BQ/TEFRA TEY
+const tradeFitModule = require('./trade-fit'); // data-backed buyer-pattern nudge (Pershing history)
 
 const AUDIENCE_KEYS = ddTax.AUDIENCE_KEYS;
 
@@ -458,6 +459,20 @@ function buyerTypesFor(c) {
   return auds.length ? auds.map(k => AUD_LABEL[k] || k) : ['All client types'];
 }
 
+/**
+ * Per-audience trade-fit for a candidate, computed from the firm's OWN Pershing
+ * buy history via trade-fit.js. A fit NUDGE only: relative value still drives
+ * ranking; trade history breaks close calls toward proven demand and supplies
+ * grounded buyer-fit talking-point language. Returns null when no profile was
+ * injected (e.g. unit tests, or a box with no Pershing data) so the engine stays
+ * pure and degrades cleanly. `bucketKey` is the candidate's maturity band so the
+ * audience's by-band demand lines up with the security.
+ */
+function tradeFitFor(c, profile, bucketKey) {
+  if (!profile) return null;
+  return tradeFitModule.tradeFitForCandidate(c, profile, bucketKey, AUDIENCE_KEYS);
+}
+
 function caveatsFor(c, w, rv) {
   const out = [];
   const price = num(c.price);
@@ -875,6 +890,91 @@ function regimeShift(todayTable, priorTable) {
 
 function take(arr, n) { return arr.slice(0, n); }
 
+function bestAudienceSpread(c) {
+  const spreads = Object.values((c && c.rv && c.rv.audSpreadBps) || {}).filter(v => v != null && Number.isFinite(v));
+  return spreads.length ? Math.max(...spreads) : null;
+}
+
+function bucketIdeaRank(a, b) {
+  const scoreA = a.rv && a.rv.rvBps != null ? a.rv.rvBps : -Infinity;
+  const scoreB = b.rv && b.rv.rvBps != null ? b.rv.rvBps : -Infinity;
+  if (scoreA !== scoreB) return scoreB - scoreA;
+
+  const audA = bestAudienceSpread(a);
+  const audB = bestAudienceSpread(b);
+  const audRankA = audA != null ? audA : -Infinity;
+  const audRankB = audB != null ? audB : -Infinity;
+  if (audRankA !== audRankB) return audRankB - audRankA;
+
+  const peerA = a.rv && a.rv.peerSpreadBps != null ? a.rv.peerSpreadBps : -Infinity;
+  const peerB = b.rv && b.rv.peerSpreadBps != null ? b.rv.peerSpreadBps : -Infinity;
+  if (peerA !== peerB) return peerB - peerA;
+
+  const ytwA = num(a.ytw) != null ? num(a.ytw) : -Infinity;
+  const ytwB = num(b.ytw) != null ? num(b.ytw) : -Infinity;
+  if (ytwA !== ytwB) return ytwB - ytwA;
+
+  return String(a.cusip || '').localeCompare(String(b.cusip || ''));
+}
+
+/**
+ * Per-audience candidate ordering that SPANS THE MATURITY CURVE and leans on what
+ * the audience actually buys — the fix for "the dashboard never recommends 0–1y
+ * or 5–7y". Pure-yield/pure-spread ranking buries the short and belly because an
+ * upward curve makes long bonds carry the most spread; this instead surfaces the
+ * best relative-value idea in EACH populated maturity band, then the next-best in
+ * each, and so on (a bucket round-robin). Buckets are visited in the order the
+ * audience has historically traded them (the trade-fit profile's by-band demand),
+ * falling back to best-in-band relative value when there is no profile.
+ *
+ * Within a band, candidates are ranked by the tax-aware spread that audience
+ * earns (audSpreadBps — the relative-value measure), nudged only slightly by the
+ * trade-fit score, so trade history is a tie-breaker and never rescues a rich
+ * bond. Returns an ordered CUSIP list. Pure.
+ */
+function buildAudienceOrdering(pool, audienceKey, profile) {
+  // Desirability within a band: relative value first, a light trade-fit nudge.
+  const spreadOf = c => {
+    const sp = c.rv.audSpreadBps[audienceKey];
+    return sp == null ? -Infinity : sp;
+  };
+  const desir = c => {
+    const sp = spreadOf(c);
+    const tf = (c.rv.tradeFit && c.rv.tradeFit[audienceKey] && c.rv.tradeFit[audienceKey].score) || 0;
+    return (sp === -Infinity ? -1e6 : sp) + tf * 0.5;
+  };
+
+  const byBucket = new Map();
+  for (const c of pool) {
+    const b = c.rv.bucket || 'na';
+    if (!byBucket.has(b)) byBucket.set(b, []);
+    byBucket.get(b).push(c);
+  }
+  for (const list of byBucket.values()) list.sort((a, b) => desir(b) - desir(a));
+
+  const bandDemand = b => {
+    if (!profile || !profile.audiences || !profile.audiences[audienceKey]) return 0;
+    return profile.audiences[audienceKey].byBucket[b] || 0;
+  };
+  // Visit bands by how much this audience trades them, then by best in-band value.
+  const bandOrder = [...byBucket.keys()].sort((a, b) =>
+    (bandDemand(b) - bandDemand(a)) || (desir(byBucket.get(b)[0]) - desir(byBucket.get(a)[0])));
+
+  // Round-robin: the best idea in each band first (curve coverage up front), then
+  // the second-best in each band, etc.
+  const out = [];
+  let round = 0, added = true;
+  while (added) {
+    added = false;
+    for (const b of bandOrder) {
+      const list = byBucket.get(b);
+      if (round < list.length) { out.push(list[round].cusip); added = true; }
+    }
+    round++;
+  }
+  return out;
+}
+
 /**
  * Enrich a Phase-1 candidate set with relative value and produce the dashboard
  * sections. Pure given its inputs.
@@ -904,6 +1004,7 @@ function buildRelativeValue(opts) {
   const priorMap = o.priorMap || null;
   const priorRows = Array.isArray(o.priorRows) && o.priorRows.length ? o.priorRows : null;
   const cof = num(o.cof) != null ? num(o.cof) : DEFAULT_COF_PCT;
+  const tradeProfile = o.tradeProfile || null; // Pershing buyer-pattern profile (trade-fit.js); null degrades cleanly
   const leadersN = num(o.leadersN) || 12;
   const perBoardN = num(o.perBoardN) || 8;
 
@@ -937,7 +1038,20 @@ function buildRelativeValue(opts) {
   }
 
   // Pass 3 — composite risk-adjusted cheapness + cross-asset percentile score.
-  for (const c of enriched) c.rv.rvBps = compositeRvBps(c, c.rv, c._w);
+  // Trade history adds only a small fit nudge, so a familiar buyer pattern never
+  // overwhelms a genuinely better relative-value screen (and only ever helps an
+  // already positive-RV bond — it can't rescue a rich/structurally-weak one).
+  for (const c of enriched) {
+    c.rv.rvBps = compositeRvBps(c, c.rv, c._w);
+    c.rv.tradeFit = tradeFitFor(c, tradeProfile, c.rv.bucket);
+    c.rv.tradeFitScore = c.rv.tradeFit
+      ? Math.max(...Object.values(c.rv.tradeFit).map(row => row.score || 0))
+      : null;
+    c.rv.tradeFitReasons = c.rv.tradeFit
+      ? Array.from(new Set(Object.values(c.rv.tradeFit).flatMap(row => row.reasons || []))).slice(0, 4)
+      : [];
+    if (c.rv.tradeFitScore != null && c.rv.rvBps > 0) c.rv.rvBps += Math.round(c.rv.tradeFitScore * 0.4);
+  }
   const sortedRv = enriched.map(c => c.rv.rvBps).filter(v => v != null).sort((a, b) => a - b);
   for (const c of enriched) {
     c.rv.score = c.rv.rvBps != null ? percentileRank(sortedRv, c.rv.rvBps) : null;
@@ -982,18 +1096,25 @@ function buildRelativeValue(opts) {
       || ((b.rv.audSpreadBps.ccorp || -Infinity) - (a.rv.audSpreadBps.ccorp || -Infinity)));
 
   // Best idea per maturity bucket (so the long end can't sweep the board).
+  // This board is coverage-first: every populated maturity band should surface a
+  // defensible pick even when that band is not strong enough to make the global
+  // Leaders list. That matters for short cash and belly-extension calls where
+  // "best in this band" is still useful sales guidance.
   const byBucket = {};
   for (const b of MATURITY_BUCKETS) {
-    const inB = leaders.filter(c => c.rv.bucket === b.key);
+    const inB = enriched.filter(c => c.rv.bucket === b.key).sort(bucketIdeaRank);
     byBucket[b.key] = { label: b.label, count: inB.length, top: take(inB, 3) };
   }
 
-  // Tax-aware audience re-ranking: spread the AUDIENCE earns over Treasury.
+  // Curve-spanning, trade-weighted audience ordering: the best relative-value idea
+  // in EACH maturity band first (so the short end and belly are never buried by
+  // long-bond carry), with bands visited in the order this audience has historically
+  // traded them. This is what the picks are drawn from, so the dashboard covers the
+  // whole curve instead of clustering at the long end.
   const byAudience = {};
   for (const k of AUDIENCE_KEYS) {
     const pool = enriched.filter(c => (c.audiences || []).includes(k));
-    pool.sort((a, b) => ((b.rv.audSpreadBps[k] == null ? -Infinity : b.rv.audSpreadBps[k]) - (a.rv.audSpreadBps[k] == null ? -Infinity : a.rv.audSpreadBps[k])) || byRvDesc(a, b));
-    byAudience[k] = pool.map(c => c.cusip);
+    byAudience[k] = buildAudienceOrdering(pool, k, tradeProfile);
   }
 
   // Today's Standouts — top by score across ALL classes, issuer-deduped, with a
@@ -1143,6 +1264,8 @@ module.exports = {
   structurePenaltyBps,
   buyerTypesFor,
   caveatsFor,
+  tradeFitFor,
+  buildAudienceOrdering,
   chipsFor,
   computeMovers,
   rvForCandidate,

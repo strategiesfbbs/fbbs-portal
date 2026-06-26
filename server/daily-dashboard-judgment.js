@@ -72,7 +72,8 @@ const SYSTEM_PROMPT =
   'premiums and tiny blocks), fdicSpreadBps and perMonthBps (CDs), mmdSpreadBps (a ' +
   'muni\'s spread to the MMD scale for its grade — the desk\'s true muni cheapness) and ' +
   'ratioPct (muni/Treasury yield ratio), peerSpreadBps (vs same sector/maturity/rating peers), bucket ' +
-  '(maturity band), rating, and trend (new/wider/improved/repeat vs the prior run).\n\n' +
+  '(maturity band), rating, trend (new/wider/improved/repeat vs the prior run), and ' +
+  'tradeFit (a small buyer-pattern signal from FBBS Pershing history by audience).\n\n' +
   'THE DESK SELLS RELATIVE VALUE, NOT RAW YIELD. Rank and choose on CHEAPNESS — spread ' +
   'to the matched Treasury / FDIC / peers and rvScore — NOT on the highest absolute ' +
   'yield. A long bond that only wins because it carries more yield is exactly what to ' +
@@ -91,8 +92,16 @@ const SYSTEM_PROMPT =
   'and ria. Use a candidate for an audience ONLY if that audience key appears in that ' +
   'candidate\'s "aud" list.\n' +
   '- Diversify: no more than 3 picks from any one assetClass within a single audience.\n' +
+  '- SPAN THE MATURITY CURVE: cover the short end (0–3y), the belly (3–7y) and the ' +
+  'long end (7y+) when the inventory supports it — pick the best relative value in ' +
+  'each band rather than clustering on the longest, highest-carry bonds. The byAudience ' +
+  'list is already ordered to put the best idea in each band up front; lean on bands the ' +
+  'audience actually trades (its tradeFit by maturity).\n' +
   '- Rank each audience\'s picks by RELATIVE VALUE for that client — the audSpreadBps / ' +
-  'rvScore — best (cheapest) first, NOT by raw effective yield.\n' +
+  'rvScore — best (cheapest) first within each band, NOT by raw effective yield.\n' +
+  '- Use tradeFit as a TIE-BREAKER and talking-point clue only: it can favor CDs/munis/' +
+  'government-agency paper for banks and CDs/munis/corporates/structured credit for RIAs ' +
+  'when RV is close, but it must never rescue a rich or structurally weak bond.\n' +
   '- rationale = WHY IT SCREENS: one sentence on the cheapness (spread to Treasury / ' +
   'FDIC / peers, structure, rating, trend) — not a yield restatement.\n' +
   '- talkingPoint = a single ready-to-say line a rep can read to the client.\n' +
@@ -200,6 +209,7 @@ function compactCandidate(c) {
     moverBp: rv.moverBp,                              // cheapened/richened vs the prior run
     peerSpreadBps: rv.peerSpreadBps,
     audSpreadBps: rv.audSpreadBps && Object.keys(rv.audSpreadBps).length ? rv.audSpreadBps : undefined,
+    tradeFit: rv.tradeFit && Object.keys(rv.tradeFit).length ? Object.fromEntries(Object.entries(rv.tradeFit).map(([k, v]) => [k, { score: v.score, reasons: v.reasons }])) : undefined,
     trend: rv.trend,
   });
 }
@@ -241,9 +251,12 @@ function buildDashboardPrompt(candidateSet, macroInput, meta) {
     'Do ALL of the following, using ONLY CUSIPs that appear in securities:\n' +
     '1. picks — for EACH audience (ccorp, scorp, ria): choose 3 to 5 CUSIPs, best first by ' +
     'RELATIVE VALUE for that client (rvScore / audSpreadBps / spread to Treasury, FDIC or ' +
-    'peers) — NOT by the highest raw yield. A CUSIP is eligible for an audience ONLY if that ' +
+    'peers) — NOT by the highest raw yield. Use tradeFit only as a tie-breaker when the RV ' +
+    'case is close, and as a clue for buyer-fit language. A CUSIP is eligible for an audience ONLY if that ' +
     'audience key is in the candidate\'s "aud" list; the byAudience list is the desk\'s ' +
-    'relative-value ranking to start from, but any "aud"-eligible candidate is allowed. No more ' +
+    'curve-spanning, trade-weighted relative-value ranking to start from (best idea in each ' +
+    'maturity band first), but any "aud"-eligible candidate is allowed. SPAN THE CURVE — include ' +
+    'short (0–3y), belly (3–7y) and long (7y+) ideas when present, not just the longest. No more ' +
     'than 3 picks of one assetClass within an audience. For each pick give a <=8-word headline, ' +
     'a one-sentence (<=160 char) rationale = WHY IT SCREENS (cite the cheapness qualitatively: ' +
     'spread to the curve / FDIC / peers, structure, rating, trend — not a yield restatement), ' +
@@ -508,6 +521,12 @@ function attachRow(row, audKey, headline, rationale, source, rationaleMax, talki
   const t = source === 'model' ? safeModelProse(talkingPoint) : talkingPoint;
   const why = (r && String(r).trim()) ? clamp(r, rationaleMax || LEN.rationale) : clamp(whyScreensLine(row), rationaleMax || LEN.rationale);
   const tp = (t && String(t).trim()) ? clamp(t, LEN.talkingPoint) : clamp(talkingPointLine(row), LEN.talkingPoint);
+  // Audience-specific buyer-fit note from OUR Pershing trade history (qualitative,
+  // never a number). Only the reason for THIS audience — not the cross-audience union.
+  const fitRow = audKey && rv && rv.tradeFit ? rv.tradeFit[audKey] : null;
+  const buyerFit = (fitRow && Array.isArray(fitRow.reasons) && fitRow.reasons.length)
+    ? clamp(fitRow.reasons[0].charAt(0).toUpperCase() + fitRow.reasons[0].slice(1) + '.', 120)
+    : null;
   return {
     cusip: row.cusip,
     assetClass: row.assetClass || 'Other',
@@ -529,6 +548,7 @@ function attachRow(row, audKey, headline, rationale, source, rationaleMax, talki
     caveat: rv && Array.isArray(rv.caveats) && rv.caveats.length ? clamp(rv.caveats[0], 200) : null,
     buyer: rv && Array.isArray(rv.buyerTypes) && rv.buyerTypes.length ? rv.buyerTypes[0] : null,
     deepDiscount: row.price != null && row.price <= 99.0,
+    buyerFit,
     headline: clamp(h, LEN.headline),
     rationale: why,
     talkingPoint: tp,
@@ -546,7 +566,16 @@ function groundPick(p, audKey, byCusip, eligible, flags) {
   return attachRow(row, audKey, p && p.headline, p && p.rationale, 'model', LEN.rationale, p && p.talkingPoint, flags);
 }
 
-/** Assemble one audience: ground model picks, dedup, ≤3/class, backfill to ≥3. */
+/**
+ * Assemble one audience's picks: ground the model's picks, then backfill to SPAN
+ * THE MATURITY CURVE — the best idea in each not-yet-covered maturity band (the
+ * pool is curve-ordered best-in-band first), so the dashboard always offers short,
+ * belly and long ideas instead of clustering on long-bond carry. Backfilling that
+ * merely reaches the per-audience floor is a degradation (the model under-
+ * delivered); backfilling for curve breadth ABOVE the floor is the intended
+ * design and does NOT mark the read degraded. When the pool carries no band info
+ * (a Phase-1 set), the curve target collapses to the MIN floor — legacy behavior.
+ */
 function groundAudiencePicks(rawPicks, audKey, candidateSet, byCusip, eligible, flags) {
   const out = [];
   const seen = new Set();
@@ -554,27 +583,50 @@ function groundAudiencePicks(rawPicks, audKey, candidateSet, byCusip, eligible, 
   const classOf = g => g.assetClass || 'Other';
   const atCap = cls => (classCount.get(cls) || 0) >= MAX_PER_CLASS;
   const bump = cls => classCount.set(cls, (classCount.get(cls) || 0) + 1);
+  const bucketOf = g => (g && g.rv && g.rv.bucket) || null;
+  const coveredBuckets = new Set();
 
+  // 1. Ground the model's picks (drop hallucinations / wrong-audience / class-cap).
   for (const p of (Array.isArray(rawPicks) ? rawPicks : [])) {
     if (out.length >= MAX_PICKS_PER_AUDIENCE) break;
     const g = groundPick(p, audKey, byCusip, eligible, flags);
     if (!g || seen.has(g.cusip)) continue;
     if (atCap(classOf(g))) { flags.add('dropped-class-cap'); continue; }
     seen.add(g.cusip); bump(classOf(g)); out.push(g);
+    if (bucketOf(g)) coveredBuckets.add(bucketOf(g));
   }
 
+  const pool = candidateSet.byAudience[audKey] || [];
+  // Curve target: cover the populated maturity bands, up to the per-audience max.
+  // No band info → collapses to the MIN floor (Phase-1 set / unit tests).
+  const populatedBuckets = new Set(pool.map(bucketOf).filter(Boolean));
+  const curveTarget = Math.min(MAX_PICKS_PER_AUDIENCE, Math.max(MIN_PER_AUDIENCE, populatedBuckets.size));
+
+  // 2. Curve-coverage backfill — one best-in-band idea per uncovered band first.
+  for (const cand of pool) {
+    if (out.length >= curveTarget) break;
+    if (seen.has(cand.cusip)) continue;
+    const b = bucketOf(cand);
+    if (!b) continue;                                          // no band info → adds no curve value here
+    if (coveredBuckets.has(b)) continue;                       // one per band before doubling up
+    if (atCap(cand.assetClass || 'Other')) continue;
+    const belowFloor = out.length < MIN_PER_AUDIENCE;
+    out.push(attachRow(cand, audKey, '', '', 'backfill'));
+    seen.add(cand.cusip); bump(cand.assetClass || 'Other');
+    if (b) coveredBuckets.add(b);
+    // Below the floor = the model under-delivered (degrade); above = intended breadth.
+    flags.add(belowFloor ? 'backfilled' : 'curve-filled');
+  }
+
+  // 3. Hard floor — ensure ≥ MIN even when bands/classes are thin.
   if (out.length < MIN_PER_AUDIENCE) {
-    const pool = candidateSet.byAudience[audKey] || [];
-    // Pass 1 — backfill respecting the per-class cap. Empty prose → the
-    // deterministic, RV-grounded why/talking-point fill in attachRow.
-    for (const cand of pool) {
+    for (const cand of pool) { // respect the per-class cap first
       if (out.length >= MIN_PER_AUDIENCE) break;
       if (seen.has(cand.cusip) || atCap(cand.assetClass || 'Other')) continue;
       out.push(attachRow(cand, audKey, '', '', 'backfill'));
       seen.add(cand.cusip); bump(cand.assetClass || 'Other'); flags.add('backfilled');
     }
-    // Pass 2 — floor-of-3 wins over the class cap (a present page beats a short one).
-    for (const cand of pool) {
+    for (const cand of pool) { // floor-of-MIN wins over the class cap
       if (out.length >= MIN_PER_AUDIENCE) break;
       if (seen.has(cand.cusip)) continue;
       out.push(attachRow(cand, audKey, '', '', 'backfill'));
@@ -857,18 +909,18 @@ function buildRvSections(rvAnalysis) {
  * call and NO disk write. Same record shape as a generated read, flagged
  * aiGenerated:false. Throws only for zero candidates.
  *
- * opts: { rows, econ, meta, curve?, fred?, priorMap?, taxRates?, floorK? }
+ * opts: { rows, econ, meta, curve?, fred?, mmd?, priorMap?, tradeProfile?, taxRates?, floorK? }
  */
 function buildLiveDashboard(opts) {
   const o = opts || {};
   const meta = o.meta || {};
   const packageDate = meta.date || (o.econ && o.econ.asOfDate) || null;
-  const candidateSet = dailyDashboard.buildCandidateSet(o.rows, { taxRates: o.taxRates || null, floorK: o.floorK });
+  const candidateSet = dailyDashboard.buildCandidateSet(o.rows, { taxRates: o.taxRates || null, floorK: o.floorK, asOf: packageDate });
   if (!candidateSet.candidates.length) throw new Error('No audience-eligible offerings to build a dashboard from');
   const rvAnalysis = rvEngine.buildRelativeValue({
     candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null,
     priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, rvTable: o.rvTable || null, priorRvTable: o.priorRvTable || null, cof: o.cof,
-    asOf: packageDate, priorMap: o.priorMap || null,
+    asOf: packageDate, priorMap: o.priorMap || null, tradeProfile: o.tradeProfile || null,
   });
   const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);
   const macroInput = dailySummary.buildSummaryInput(o.econ, meta);
@@ -937,8 +989,8 @@ function writeCache(marketDir, record) {
  * no-key failure is CAUGHT and grounded against an empty reply, so the result is
  * always a complete (possibly degraded) dashboard — never a 5xx.
  *
- * opts: { marketDir (required), rows, econ, meta, taxRates?, floorK?, force?,
- *         noCache?,
+ * opts: { marketDir (required), rows, econ, meta, curve?, fred?, mmd?, priorMap?,
+ *         tradeProfile?, taxRates?, floorK?, force?, noCache?,
  *         apiKey?, model?, createMessageImpl?, now?, log? }
  */
 async function generateDashboard(opts) {
@@ -956,7 +1008,7 @@ async function generateDashboard(opts) {
     }
   }
 
-  const candidateSet = dailyDashboard.buildCandidateSet(o.rows, { taxRates: o.taxRates || null, floorK: o.floorK });
+  const candidateSet = dailyDashboard.buildCandidateSet(o.rows, { taxRates: o.taxRates || null, floorK: o.floorK, asOf: packageDate });
   if (!candidateSet.candidates.length) {
     throw new Error('No audience-eligible offerings to build a dashboard from');
   }
@@ -966,7 +1018,7 @@ async function generateDashboard(opts) {
   const rvAnalysis = rvEngine.buildRelativeValue({
     candidateSet, curve: o.curve || null, fred: o.fred || null, mmd: o.mmd || null,
     priorRows: o.priorRows || null, priorMeta: o.priorMeta || null, rvTable: o.rvTable || null, priorRvTable: o.priorRvTable || null, cof: o.cof,
-    asOf: packageDate, priorMap: o.priorMap || null,
+    asOf: packageDate, priorMap: o.priorMap || null, tradeProfile: o.tradeProfile || null,
   });
   const groundingSet = buildGroundingSet(candidateSet, rvAnalysis);
 

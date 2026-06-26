@@ -36,7 +36,7 @@ const { parseBairdSyndicateWorkbook, looksLikeBairdSyndicateWorkbook } = require
 const { parseEconomicUpdateText } = require('./economic-update-parser');
 const XLSX = require('./xlsx');
 const execSummaryStore = require('./exec-summary-store');
-const { parseMmdCurveText } = require('./mmd-parser');
+const { parseMmdCurveText, parseMmdCurveWorkbook } = require('./mmd-parser');
 const { parseTreasuryNotesWorkbook, looksLikeTreasuryWorkbook } = require('./treasury-notes-parser');
 const { parseAgenciesFiles } = require('./agencies-parser');
 const { parseCorporatesFiles } = require('./corporates-parser');
@@ -75,6 +75,7 @@ const {
   getBondAccountingForBank,
   getBondAccountingStatus,
   importBondAccountingFolder,
+  importOneOffPortfolioForBank,
   loadBondAccountingBankList,
   loadBondAccountingManifest,
   resolveBondAccountingStoredFile
@@ -198,9 +199,9 @@ const dailySummary = require('./daily-summary');
 const offeringsPick = require('./offerings-pick');
 const dailyDashboard = require('./daily-dashboard');                 // Phase 1: audience/tax candidate layer
 const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2: grounded Claude judgment layer
+const tradeFit = require('./trade-fit');                             // data-backed buyer-pattern profile (Pershing history)
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
-const bankSignals = require('./bank-signals'); // PURE Signal Inbox engine (no I/O)
 const {
   getPershingForBank,
   getPershingImportStatus,
@@ -698,6 +699,7 @@ function isAdminOnlyApiWrite(pathname, method) {
     pathname === '/api/bank-account-statuses/upload' ||
     pathname === '/api/banks/averaged-series/upload' ||
     pathname === '/api/banks/bond-accounting/upload' ||
+    /^\/api\/banks\/[^/]+\/bond-accounting\/upload$/.test(pathname) ||
     pathname === '/api/banks/thc-summary/upload' ||
     pathname === '/api/brokered-cd/wirp/upload' ||
     pathname === '/api/exec-summary/upload' ||
@@ -729,6 +731,11 @@ function classifyFile(filename, explicitSlot) {
 
   // Excel workbook slots. Route by filename keyword.
   if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
+    // The MMD scale usually arrives as a PDF but the desk also exports it as an
+    // Excel grid (same YEAR/AAA/P-R/INS'D/AA/A/BAA columns). Accept either form.
+    if (lower.includes('mmd') || lower.includes('municipal market data')) {
+      return 'mmd';
+    }
     if ((lower.includes('treasury') || lower.includes('tsy')) &&
         (lower.includes('note') || lower.includes('notes'))) {
       return 'treasuryNotes';
@@ -820,6 +827,9 @@ function classifyFolderDropFile(filename) {
   if (looksLikeInternalCdWorkbook(filename) || looksLikeWirpWorkbook(filename)) return null;
 
   if (/\.(xlsx|xlsm|xls)$/i.test(lower)) {
+    if (lower.includes('mmd') || lower.includes('municipal market data')) {
+      return 'mmd';
+    }
     if ((lower.includes('treasury') || lower.includes('tsy')) &&
         (lower.includes('note') || lower.includes('notes'))) {
       return 'treasuryNotes';
@@ -981,7 +991,15 @@ function validateUploadSignature(file, slot) {
     }
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF or Excel file.`;
   }
-  if (['econ', 'relativeValue', 'cd', 'munioffers', 'mmd'].includes(slot)) {
+  if (slot === 'mmd') {
+    // The MMD scale uploads as a PDF or as the desk's Excel grid export.
+    const ext = path.extname(file.filename || '').toLowerCase();
+    if (['.xlsx', '.xlsm', '.xls'].includes(ext)) {
+      return looksLikeExcel(file.data) ? null : `${file.filename} does not look like an Excel workbook.`;
+    }
+    return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF or Excel file.`;
+  }
+  if (['econ', 'relativeValue', 'cd', 'munioffers'].includes(slot)) {
     return looksLikePdf(file.data) ? null : `${file.filename} does not look like a PDF file.`;
   }
   if (slot === 'bairdSyndicate') {
@@ -1420,14 +1438,15 @@ function findPackageFileForSlot(dirPath, slot, meta = {}, files = null) {
   return names.find(filename => classifyFile(filename) === slot) || null;
 }
 
-function findMmdPdfInPackage(dirPath, files = null) {
+function findMmdFileInPackage(dirPath, files = null) {
   const names = Array.isArray(files)
     ? files
     : fs.existsSync(dirPath)
       ? fs.readdirSync(dirPath).filter(f => !f.startsWith('_'))
       : [];
 
-  return names.find(filename => /\.pdf$/i.test(filename) && classifyFile(filename) === 'mmd') || null;
+  // The MMD scale may be a PDF or an Excel grid export — match either by slot.
+  return names.find(filename => classifyFile(filename) === 'mmd') || null;
 }
 
 function readSlotFileForPackage(dirPath, slot, { slotFilenames = {}, priorMeta = {} } = {}) {
@@ -1512,7 +1531,7 @@ function readPackageDir(dirPath, { dateIfMissingMeta = null } = {}) {
   }
 
   if (!pkg.mmd) {
-    pkg.mmd = findMmdPdfInPackage(dirPath, files);
+    pkg.mmd = findMmdFileInPackage(dirPath, files);
   }
 
   if (meta.date) pkg.date = meta.date;
@@ -1711,15 +1730,21 @@ async function loadMmdCurveFromPackage(dirPath, { writeCache = false } = {}) {
     }
   }
 
-  const sourceFile = findMmdPdfInPackage(dirPath);
+  const sourceFile = findMmdFileInPackage(dirPath);
   if (!sourceFile) return null;
 
   const sourcePath = safeJoin(dirPath, sourceFile);
   if (!sourcePath || !fs.existsSync(sourcePath)) return null;
 
   try {
-    const extracted = await extractPdfText(fs.readFileSync(sourcePath));
-    const payload = parseMmdCurveText(extracted && extracted.text);
+    const buffer = fs.readFileSync(sourcePath);
+    let payload;
+    if (/\.(xlsx|xlsm|xls)$/i.test(sourceFile)) {
+      payload = parseMmdCurveWorkbook(buffer);
+    } else {
+      const extracted = await extractPdfText(buffer);
+      payload = parseMmdCurveText(extracted && extracted.text);
+    }
     payload.extractedAt = new Date().toISOString();
     payload.sourceFile = sourceFile;
     if (writeCache) {
@@ -2404,8 +2429,9 @@ function mergeSalesCues(existing, generated) {
 async function buildDailyIntelligence() {
   const pkg = getCurrentPackage() || {};
   const meta = readMetaFile(CURRENT_DIR);
-  const [economicUpdate, cdOfferings, muniOfferings, treasuryNotes, agencies, corporates] = await Promise.all([
+  const [economicUpdate, relativeValue, cdOfferings, muniOfferings, treasuryNotes, agencies, corporates] = await Promise.all([
     loadCurrentEconomicUpdate(),
+    loadCurrentRelativeValueSnapshot().catch(() => null),
     Promise.resolve(loadCurrentOfferings()),
     Promise.resolve(loadCurrentMuniOfferings()),
     Promise.resolve(loadCurrentTreasuryNotes()),
@@ -2418,20 +2444,12 @@ async function buildDailyIntelligence() {
   const treasuryRows = Array.isArray(treasuryNotes && treasuryNotes.notes) ? treasuryNotes.notes : [];
   const agencyRows = Array.isArray(agencies && agencies.offerings) ? agencies.offerings : [];
   const corporateRows = Array.isArray(corporates && corporates.offerings) ? corporates.offerings : [];
+  const relativeValueRows = Array.isArray(relativeValue && relativeValue.rows) ? relativeValue.rows : [];
   const packageDate = pkg.date || (economicUpdate && economicUpdate.asOfDate) || (cdOfferings && cdOfferings.asOfDate) || null;
-
-  const picks = [
-    pickAgencySpread(agencyRows, packageDate),
-    pickMuniBq(muniRows),
-    pickRetailCd(cdRows),
-    pickTreasury(treasuryRows, packageDate),
-    pickAgencyCallable(agencyRows, packageDate),
-    pickBrokeredCdFunding(meta),
-    pickCorporateRia(corporateRows, packageDate)
-  ].filter(Boolean);
 
   const warnings = [
     ...(economicUpdate && Array.isArray(economicUpdate.warnings) ? economicUpdate.warnings.map(w => ({ source: 'Economic Update', message: w })) : []),
+    ...(relativeValue && Array.isArray(relativeValue.warnings) ? relativeValue.warnings.map(w => ({ source: 'CD Relative Value', message: w })) : []),
     ...(cdOfferings && Array.isArray(cdOfferings.warnings) ? cdOfferings.warnings.map(w => ({ source: 'CD Offerings', message: w })) : []),
     ...(muniOfferings && Array.isArray(muniOfferings.warnings) ? muniOfferings.warnings.map(w => ({ source: 'Muni Offerings', message: w })) : []),
     ...(treasuryNotes && Array.isArray(treasuryNotes.warnings) ? treasuryNotes.warnings.map(w => ({ source: 'Treasury Notes', message: w })) : []),
@@ -2461,18 +2479,33 @@ async function buildDailyIntelligence() {
       releases: economicUpdate && Array.isArray(economicUpdate.releases) ? economicUpdate.releases : [],
       salesCues: mergeSalesCues(extractedSalesCues, generatedSalesCues)
     },
+    relativeValue: {
+      asOfDate: relativeValue && relativeValue.asOfDate ? relativeValue.asOfDate : null,
+      sourceFile: relativeValue && relativeValue.sourceFile ? relativeValue.sourceFile : null,
+      rowCount: relativeValueRows.length,
+      rows: relativeValueRows.map(row => ({
+        term: row.term,
+        ust: row.ust,
+        cd: row.cd,
+        cdSpread: row.cdSpread,
+        agency: row.agency,
+        agencySpread: row.agencySpread,
+        muniTey296: row.muniTey296,
+        muniTey21: row.muniTey21,
+        corp: row.corp,
+        corpSpread: row.corpSpread
+      }))
+    },
     brokeredCdTerms: Array.isArray(meta.brokeredCdTerms) ? meta.brokeredCdTerms : [],
-    picks,
     warnings,
     gaps: [
       !economicUpdate ? 'Economic Update data is missing.' : null,
+      !relativeValueRows.length ? 'CD Relative Value data is missing.' : null,
       !treasuryRows.length ? 'Treasury Notes inventory is missing.' : null,
       !cdRows.length ? 'Retail CD offerings are missing.' : null,
       !muniRows.length ? 'Muni offerings are missing.' : null,
       !agencyRows.length ? 'Agency inventory is missing.' : null,
-      !corporateRows.length ? 'Corporate inventory is missing.' : null,
-      'Structured products are not yet a parsed daily slot.',
-      'MBS/CMO featured idea still depends on the MBS/CMO source workspace.'
+      !corporateRows.length ? 'Corporate inventory is missing.' : null
     ].filter(Boolean)
   };
 }
@@ -2786,8 +2819,7 @@ function buildGoLiveStatus(req) {
   const packageDate = pkg.date || '';
   const claudeConfigured = claudeClient.isConfigured();
   const dailySummaryCache = aiCacheStatus('Daily Summary', dailySummary.getCachedSummary(MARKET_DIR), packageDate, claudeConfigured);
-  const dailyPicksCache = aiCacheStatus('Pick of Day', offeringsPick.getCachedPicks(MARKET_DIR), packageDate, claudeConfigured);
-  const salesDashboardCache = aiCacheStatus('Sales Dashboard', dailyDashboardJudgment.getCachedDashboard(MARKET_DIR), packageDate, claudeConfigured);
+  const salesDashboardCache = aiCacheStatus('Daily Bond Pick', dailyDashboardJudgment.getCachedDashboard(MARKET_DIR), packageDate, claudeConfigured);
   const marketCaches = [
     cacheFileStatus('market-wire-headlines.json', 2 * 60 * 60 * 1000),
     cacheFileStatus('market-wire-indicators.json', 24 * 60 * 60 * 1000),
@@ -2797,7 +2829,7 @@ function buildGoLiveStatus(req) {
     cacheFileStatus('fred-indicators.json', 12 * 60 * 60 * 1000)
   ];
   const marketWarnCount = marketCaches.filter(c => c.state !== 'ok').length;
-  const aiCaches = [dailySummaryCache, dailyPicksCache, salesDashboardCache];
+  const aiCaches = [dailySummaryCache, salesDashboardCache];
   const aiWarnCount = aiCaches.filter(c => c.state !== 'ok').length;
 
   const checks = [
@@ -2871,7 +2903,7 @@ function buildGoLiveStatus(req) {
       'claude-ai',
       'Claude AI configuration',
       claudeConfigured ? 'ok' : 'warn',
-      claudeConfigured ? 'Anthropic API key is configured.' : 'AI summary/picks/dashboard refreshes are dormant until a key is configured.'
+      claudeConfigured ? 'Anthropic API key is configured.' : 'AI summary/dashboard refreshes are dormant until a key is configured.'
     ),
     statusCheck(
       'ai-cache',
@@ -2879,7 +2911,7 @@ function buildGoLiveStatus(req) {
       aiWarnCount ? 'warn' : 'ok',
       aiWarnCount
         ? `${aiWarnCount} AI cache${aiWarnCount === 1 ? '' : 's'} need refresh for the current package.`
-        : 'Daily Summary, Pick of Day, and Sales Dashboard are current.'
+        : 'Daily Summary and Daily Bond Pick are current.'
     ),
     statusCheck(
       'market-cache',
@@ -4192,6 +4224,74 @@ const HOLDINGS_SECTOR_BOOST = {
   treasury:  { sectors: ['Treasury'], boost: 8, label: 'treasuries' }
 };
 
+function buyerMuniSuitability(bank, productType, offering) {
+  if (productType !== 'muni') return null;
+  const text = [
+    offering && offering.section,
+    offering && offering.sector,
+    offering && offering.description,
+    offering && offering.taxStatus
+  ].filter(Boolean).join(' ');
+  const taxable = Boolean(offering && offering.taxable) || /\btaxable\b/i.test(text);
+  const hasExplicitBq = offering && typeof offering.bq === 'boolean';
+  const textClaimsBq = /\bbq\b|bank.?qualified/i.test(text);
+  const textClaimsNonBq = /\bnon[-\s]?bq\b|not\s+bank.?qualified|non[-\s]?bank.?qualified/i.test(text);
+  const bq = hasExplicitBq ? offering.bq : (textClaimsBq && !textClaimsNonBq);
+  // Tax-exempt status alone does NOT establish bank-qualified status — BQ is a
+  // separate issuer designation (small-issuer ≤$10MM/yr). Only treat BQ as
+  // "known" when there's an explicit flag or the row text actually asserts BQ /
+  // non-BQ; a tax-exempt muni with no BQ signal must fall through to the
+  // "BQ unverified" read rather than being confidently labeled "Non-BQ" (which
+  // also wrongly docked the buyer's fit score).
+  const bqKnown = hasExplicitBq || textClaimsBq || textClaimsNonBq;
+  const subSRaw = String(bank && bank.subchapterS || '').trim().toLowerCase();
+  const isSubS = subSRaw === 'yes' ? true : subSRaw === 'no' ? false : null;
+
+  if (taxable) {
+    return {
+      tone: 'neutral',
+      label: 'Taxable muni',
+      detail: 'Taxable muni; review like a taxable bank investment.'
+    };
+  }
+  if (bq) {
+    if (isSubS === true) {
+      return { tone: 'good', label: 'BQ / Sub-S', detail: 'BQ exempt muni; Sub-S TEFRA haircut is not the same C-corp drag.' };
+    }
+    if (isSubS === false) {
+      return { tone: 'good', label: 'BQ / C-corp', detail: 'BQ exempt muni; C-corp TEFRA treatment should be reviewed in after-tax yield.' };
+    }
+    return { tone: 'neutral', label: 'BQ muni', detail: 'BQ exempt muni; bank tax posture is not known here.' };
+  }
+  if (!bqKnown) {
+    return {
+      tone: 'neutral',
+      label: 'BQ unverified',
+      detail: 'BQ status is not parsed for this row; confirm before pitching.',
+      confidence: 'unverified'
+    };
+  }
+  if (isSubS === false) {
+    return {
+      tone: 'warn',
+      label: 'Non-BQ / C-corp',
+      detail: 'Non-BQ exempt muni; C-corp TEFRA drag likely, check after-tax yield before pitching.'
+    };
+  }
+  if (isSubS === true) {
+    return {
+      tone: 'warn',
+      label: 'Non-BQ / Sub-S',
+      detail: 'Non-BQ exempt muni; confirm the bank policy fit before pitching.'
+    };
+  }
+  return {
+    tone: 'neutral',
+    label: 'Non-BQ muni',
+    detail: 'Non-BQ exempt muni; confirm tax fit and after-tax yield before pitching.'
+  };
+}
+
 function scoreCoverageBankForOffering(bank, productType, offering, holdingsForBank, opts = {}) {
   const status = String(bank.accountStatusLabel || 'Open');
   let base = BUYER_STATUS_BASE[status] || 0;
@@ -4231,10 +4331,12 @@ function scoreCoverageBankForOffering(bank, productType, offering, holdingsForBa
   } else if (productType === 'muni') {
     const offState = String((offering && (offering.issuerState || offering.state)) || '').toUpperCase();
     const bankState = String(bank.state || '').toUpperCase();
+    const suitability = buyerMuniSuitability(bank, productType, offering);
     if (offState && bankState && offState === bankState) { score += 28; why.push(`In-state (${bankState})`); }
     if (securities !== null && securities >= 18) { score += 10; why.push(`Securities ${securities.toFixed(0)}% (active book)`); }
     if (assets !== null && assets >= 500000) { score += 6; why.push('Size supports broader BQ universe'); }
     if (ltd !== null && ltd > 95) { score -= 8; why.push(`L/D ${ltd.toFixed(0)}% (funding-pressured)`); }
+    if (suitability && suitability.tone === 'warn' && suitability.confidence !== 'unverified') { score -= 4; why.push(suitability.label); }
   } else if (productType === 'cd') {
     if (ltd !== null && ltd >= 95) { score += 22; why.push(`L/D ${ltd.toFixed(0)}% (likely in market)`); }
     else if (ltd !== null && ltd >= 85) { score += 14; why.push(`L/D ${ltd.toFixed(0)}%`); }
@@ -4266,6 +4368,68 @@ function scoreCoverageBankForOffering(bank, productType, offering, holdingsForBa
   return { score, rationale: why };
 }
 
+function isoDayDiff(a, b) {
+  if (!a || !b) return null;
+  const start = Date.parse(`${String(a).slice(0, 10)}T00:00:00Z`);
+  const end = Date.parse(`${String(b).slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.floor((end - start) / 86400000);
+}
+
+function buyerLeadContext(bankId, lastTouchMap, today) {
+  const context = {
+    lastTouchDate: lastTouchMap && lastTouchMap[bankId] || '',
+    lastTouchAgeDays: null,
+    lastTouchLabel: '',
+    nextTask: null,
+    openTaskCount: 0,
+    openOpportunityCount: 0,
+    openOpportunityValue: 0,
+    leadSignals: [],
+    crmDegraded: false
+  };
+  if (context.lastTouchDate) {
+    context.lastTouchAgeDays = isoDayDiff(context.lastTouchDate, today);
+    context.lastTouchLabel = context.lastTouchAgeDays === 0
+      ? 'Touched today'
+      : context.lastTouchAgeDays != null
+        ? `Last touch ${context.lastTouchAgeDays}d ago`
+        : `Last touch ${context.lastTouchDate}`;
+    if (context.lastTouchAgeDays != null && context.lastTouchAgeDays >= 60) context.leadSignals.push(`Cold ${context.lastTouchAgeDays}d`);
+    else if (context.lastTouchAgeDays != null && context.lastTouchAgeDays <= 14) context.leadSignals.push(context.lastTouchLabel);
+  } else {
+    context.lastTouchLabel = 'No logged touch';
+    context.leadSignals.push('No logged touch');
+  }
+
+  try {
+    const tasks = listTasksForBank(BANK_REPORTS_DIR, bankId) || [];
+    context.openTaskCount = tasks.length;
+    const dated = tasks.filter(t => t && t.dueDate).sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
+    const task = dated[0] || tasks[0] || null;
+    if (task) {
+      context.nextTask = { id: task.id, title: task.title || 'Follow-up', dueDate: task.dueDate || '', priority: task.priority || '' };
+      context.leadSignals.push(task.dueDate ? `Task due ${task.dueDate}` : 'Open task');
+    }
+  } catch (_) {
+    context.crmDegraded = true;
+    context.leadSignals.push('CRM context unavailable');
+  }
+
+  try {
+    const opps = listOpportunitiesForBank(BANK_REPORTS_DIR, bankId) || [];
+    context.openOpportunityCount = opps.length;
+    context.openOpportunityValue = opps.reduce((sum, opp) => sum + (Number(opp.estValue) || 0), 0);
+    if (opps.length) context.leadSignals.push(`${opps.length} open opp${opps.length === 1 ? '' : 's'}`);
+  } catch (_) {
+    context.crmDegraded = true;
+    context.leadSignals.push('CRM context unavailable');
+  }
+
+  context.leadSignals = Array.from(new Set(context.leadSignals)).slice(0, 4);
+  return context;
+}
+
 function findBuyerCandidates({ productType, offering, limit = 10, owner = '' }) {
   if (!BUYER_PRODUCT_TYPES.has(productType)) {
     const err = new Error('Unsupported product type');
@@ -4286,6 +4450,9 @@ function findBuyerCandidates({ productType, offering, limit = 10, owner = '' }) 
     ? coverage.filter(b => String((b.accountStatus && b.accountStatus.owner) || '').trim().toLowerCase() === ownerKey)
     : coverage;
   const holdingsIndex = getCoverageHoldingsIndex();
+  let lastTouchMap = {};
+  try { lastTouchMap = lastActivityByBank(BANK_REPORTS_DIR) || {}; } catch (_) { /* buyer list survives CRM activity hiccups */ }
+  const today = new Date().toISOString().slice(0, 10);
   const scored = pool
     .map(b => {
       const holdingsForBank = holdingsIndex ? holdingsIndex.get(String(b.id)) : null;
@@ -4302,12 +4469,17 @@ function findBuyerCandidates({ productType, offering, limit = 10, owner = '' }) 
         owner: (b.accountStatus && b.accountStatus.owner) || '',
         period: b.period || '',
         score: Math.round(result.score),
-        rationale: result.rationale
+        rationale: result.rationale,
+        suitability: buyerMuniSuitability(b, productType, offering)
       };
     })
     .filter(Boolean)
     .sort((a, b) => b.score - a.score)
-    .slice(0, Math.max(1, Math.min(limit, 25)));
+    .slice(0, Math.max(1, Math.min(limit, 25)))
+    .map(buyer => ({
+      ...buyer,
+      crm: buyerLeadContext(buyer.bankId, lastTouchMap, today)
+    }));
   let notice = '';
   if (coverage.length === 0) notice = 'No banks have an active coverage status — every bank is set to Open.';
   else if (ownerKey && pool.length === 0) notice = `No covered banks are assigned to ${owner}.`;
@@ -4328,7 +4500,20 @@ async function handleBuyerCandidates(req, res) {
     if (!BUYER_PRODUCT_TYPES.has(productType)) return sendJSON(res, 400, { error: 'Unsupported product type' });
     const offering = (body.offering && typeof body.offering === 'object') ? body.offering : {};
     const limit = Number(body.limit) || 10;
-    const owner = typeof body.owner === 'string' ? body.owner : '';
+    let owner = typeof body.owner === 'string' ? body.owner : '';
+    const { rep, auth } = authInfoForRequest(req);
+    if (shouldEnforceRepScope(auth) && !auth.isAdmin) {
+      const effectiveOwner = rep ? String(rep.displayName || rep.username || '').trim() : '';
+      if (owner && owner !== effectiveOwner) {
+        auditRepScopeCollapse(req, {
+          event: 'buyer-scope-collapsed',
+          requestedScope: owner,
+          effectiveRep: effectiveOwner || (rep && rep.username) || '',
+          reason: 'non-admin'
+        });
+      }
+      owner = effectiveOwner;
+    }
     const result = findBuyerCandidates({ productType, offering, limit, owner });
     return sendJSON(res, 200, result);
   } catch (err) {
@@ -5312,12 +5497,14 @@ function listSwapEligibleBanks() {
     .filter(row => row && row.bankId)
     .map(row => String(row.bankId));
   const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, matchIds);
+  const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, matchIds);
+  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, matchIds);
   const seen = new Map();
   for (const row of manifest.matches) {
     if (!row || !row.bankId) continue;
     const id = String(row.bankId);
     if (seen.has(id)) continue;
-    const summary = summaries.get(id);
+    const summary = enrichBankSummary(summaries.get(id), statuses, coverageMap);
     if (!summary) continue;
     seen.set(id, {
       id,
@@ -5482,6 +5669,28 @@ function assessCallEconomics(pos, remainingYears, yardsticks, curve) {
   return { likelihood, marketYield: Number(marketYield.toFixed(2)), spreadBp, basis };
 }
 
+function firstMaturityCalendarOwner(...values) {
+  for (const value of values) {
+    const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
+    if (cleaned) return cleaned;
+  }
+  return '';
+}
+
+function pershingRollupOwner(rollup) {
+  const owners = Array.isArray(rollup && rollup.owners) ? rollup.owners : [];
+  const first = owners.find(owner => owner && owner.name);
+  return first ? first.name : '';
+}
+
+function maturityCalendarOwnerFor(accountStatus, pershingRollup, bankListRow) {
+  return firstMaturityCalendarOwner(
+    accountStatus && accountStatus.owner,
+    pershingRollupOwner(pershingRollup),
+    bankListRow && bankListRow.salesRep
+  );
+}
+
 function buildMaturityCalendar(query, curve) {
   const windowDays = Math.max(1, Math.min(3650, Math.round(Number(query.get('window')) || 90)));
   const ownerFilter = String(query.get('owner') || '').trim().toLowerCase();
@@ -5504,11 +5713,23 @@ function buildMaturityCalendar(query, curve) {
 
   const matchIds = manifest.matches.filter(r => r && r.bankId).map(r => String(r.bankId));
   const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, matchIds);
+  const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, matchIds);
+  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, matchIds);
 
   // Midnight-UTC today, so "days out" is stable regardless of request time of day.
   const todayMs = Math.floor(Date.now() / 86400000) * 86400000;
   const horizonMs = todayMs + windowDays * 86400000;
   const callYardsticks = buildCallYardsticks(todayMs);
+  let pershingRollups = new Map();
+  try {
+    if (getPershingImportStatus(BANK_REPORTS_DIR).available) {
+      pershingRollups = getPershingRollupsForBanks(BANK_REPORTS_DIR, matchIds, {
+        asOfDate: new Date(todayMs).toISOString().slice(0, 10)
+      });
+    }
+  } catch (err) {
+    log('warn', 'Maturity calendar: Pershing owner join failed:', err.message);
+  }
 
   const seenBank = new Set();
   const owners = new Set();
@@ -5525,9 +5746,10 @@ function buildMaturityCalendar(query, curve) {
     if (!parsed) continue;
     seenBank.add(bankId);
 
-    const summary = summaries.get(bankId) || {};
-    const owner = (summary.accountStatus && summary.accountStatus.owner) || '';
-    const status = (summary.accountStatus && summary.accountStatus.status) || '';
+    const summary = enrichBankSummary(summaries.get(bankId) || {}, statuses, coverageMap);
+    const accountStatus = summary.accountStatus || defaultAccountStatus(summary);
+    const owner = maturityCalendarOwnerFor(accountStatus, pershingRollups.get(bankId), row.bankList);
+    const status = (accountStatus && accountStatus.status) || '';
     const state = String(summary.state || '').toUpperCase();
     if (owner) owners.add(owner);
     if (stateFilter && state !== stateFilter) continue;
@@ -6722,35 +6944,47 @@ async function handleSetReportHidden(req, res) {
 async function handleCreateSwapProposal(req, res) {
   try {
     const body = await readJsonBody(req);
-    const bankId = String(body.bankId || '').trim();
-    if (!bankId) return sendJSON(res, 400, { error: 'bankId is required' });
+    let bankId = String(body.bankId || '').trim();
+    const manualClientName = String(body.clientName || body.wealthManagerName || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    const isManualClient = !bankId && manualClientName;
+    if (!bankId && !isManualClient) return sendJSON(res, 400, { error: 'bankId or clientName is required' });
     const rep = resolveRequestRep(req);
 
-    const summary = getBankSummaryForCoverage(bankId);
-    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+    let summary = bankId ? getBankSummaryForCoverage(bankId) : null;
+    if (!summary && !isManualClient) return sendJSON(res, 404, { error: 'Bank not found' });
+    if (isManualClient) {
+      bankId = `manual-ria-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      summary = { id: bankId, displayName: manualClientName, name: manualClientName, subchapterS: '' };
+    }
 
     const isSubS = summary.subchapterS === 'Yes';
     const proposalDate = new Date().toISOString().slice(0, 10);
     const settleDate = swapMath.ymd(swapMath.defaultSettleDate(proposalDate)) || proposalDate;
+    const manualTaxStatus = isManualClient ? String(body.taxStatus || body.clientType || 'RIA / Money Manager').replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+    const defaultManualTaxRate = body.taxRate == null ? 0 : body.taxRate;
+    const notes = isManualClient
+      ? [`Manual client proposal${manualTaxStatus ? ` · Tax status: ${manualTaxStatus}` : ''}.`, body.notes].filter(Boolean).join('\n')
+      : body.notes;
 
     const created = swapStore.createProposal(BANK_REPORTS_DIR, {
       bankId,
       title: body.title || `Bond Swap — ${summary.displayName || summary.name}`,
       proposalDate,
       settleDate: body.settleDate || settleDate,
-      isSubchapterS: body.isSubchapterS != null ? body.isSubchapterS : isSubS,
-      taxRate: body.taxRate,
+      isSubchapterS: body.isSubchapterS != null ? body.isSubchapterS : (isManualClient ? null : isSubS),
+      taxRate: isManualClient ? defaultManualTaxRate : body.taxRate,
       horizonYears: body.horizonYears,
       breakevenCapMonths: body.breakevenCapMonths || swapMath.DEFAULT_FBBS_RULES.breakevenSoftCapMonths,
       maturityFloorMonths: body.maturityFloorMonths || swapMath.DEFAULT_FBBS_RULES.maturitySoftFloorMonths,
       preparedBy: body.preparedBy || (rep ? rep.displayName : undefined),
-      preparedFor: body.preparedFor,
-      notes: body.notes
+      preparedFor: body.preparedFor || (isManualClient ? manualClientName : undefined),
+      notes
     });
     appendAuditLog({
-      event: 'swap-proposal-create',
+      event: isManualClient ? 'swap-proposal-create-manual-client' : 'swap-proposal-create',
       proposalId: created.proposal.id,
       bankId,
+      clientName: isManualClient ? manualClientName : null,
       rep: rep ? rep.username : null
     });
     return sendJSON(res, 200, withComputedSummary(created));
@@ -8094,7 +8328,30 @@ function cusipSearchSources() {
       type: 'muni', typeLabel: 'Muni', page: 'muni-explorer',
       rows: slot(MUNI_OFFERINGS_FILENAME, 'muni offerings').offerings || [],
       describe: r => join([r.issuerName, fmtPct(r.coupon), r.maturity, fmtPct(r.ytw) && `${fmtPct(r.ytw)} YTW`]),
-      normalize: r => ({ description: r.issuerName || '', coupon: pct(r.coupon), yield: pct(r.ytw) ?? pct(r.ytm), maturity: r.maturity || null, price: pct(r.price), state: r.issuerState || '', sector: r.section || 'Muni', availabilityK: numOf(r.quantity), callDate: r.callDate || null, moody: r.moodysRating || null, sp: r.spRating || null, creditEnhancement: r.creditEnhancement || null }),
+      normalize: r => {
+        const section = String(r.section || '').trim();
+        const sectionKey = section.toLowerCase();
+        const isTaxable = sectionKey === 'taxable' || /\btaxable\b/i.test(section);
+        const isBq = sectionKey === 'bq' || /\bbq\b|bank.?qualified/i.test(section);
+        const bq = isTaxable ? null : isBq ? true : sectionKey === 'municipals' ? false : null;
+        return {
+          description: r.issuerName || '',
+          coupon: pct(r.coupon),
+          yield: pct(r.ytw) ?? pct(r.ytm),
+          maturity: r.maturity || null,
+          price: pct(r.price),
+          state: r.issuerState || '',
+          sector: section || 'Muni',
+          taxStatus: isTaxable ? 'Taxable' : isBq ? 'BQ' : sectionKey === 'municipals' ? 'Tax-exempt' : '',
+          taxable: isTaxable,
+          bq,
+          availabilityK: numOf(r.quantity),
+          callDate: r.callDate || null,
+          moody: r.moodysRating || null,
+          sp: r.spRating || null,
+          creditEnhancement: r.creditEnhancement || null
+        };
+      },
     },
     {
       type: 'agency', typeLabel: 'Agency', page: 'agencies',
@@ -8174,8 +8431,8 @@ function buildSalesDashboardSourceStatus(rows) {
     ? `Only ${pkg.agenciesBullets ? 'bullets' : 'callables'} published; the other agency side is absent.`
     : '';
   return [
-    source('econ', 'Economic Update', !!pkg.econ, { page: 'econ', note: pkg.econ || 'Market context is missing.' }),
-    source('relativeValue', 'Relative Value sheet', !!(pkg.relativeValue || pkg.relativeValueRowsCount), { count: pkg.relativeValueRowsCount, page: 'relativeValue', note: pkg.relativeValue || '' }),
+    source('econ', 'Economic Update', !!pkg.econ, { page: 'daily-intelligence', note: pkg.econ || 'Market context is missing.' }),
+    source('relativeValue', 'Relative Value sheet', !!(pkg.relativeValue || pkg.relativeValueRowsCount), { count: pkg.relativeValueRowsCount, page: 'sales-dashboard', note: pkg.relativeValue || '' }),
     source('mmd', 'MMD curve', !!(pkg.mmd || pkg.mmdCurveCount), { count: pkg.mmdCurveCount, page: 'mmd', note: pkg.mmd || '' }),
     source('treasury', 'Treasury offerings', !!(pkg.treasuryNotes || count('treasury')), { count: count('treasury') || pkg.treasuryNotesCount, page: 'treasury-explorer', note: pkg.treasuryNotes || '' }),
     source('cd', 'CD offerings', !!(pkg.cdoffers || count('cd')), { count: count('cd') || pkg.offeringsCount, page: 'explorer', note: pkg.cdoffers || '' }),
@@ -8308,6 +8565,27 @@ function dashboardPriorPackage(packageDate) {
     if (Number.isFinite(d)) daysAgo = Math.max(0, d);
   }
   return { priorRows, priorMeta: { priorDate, daysAgo } };
+}
+
+// Cached Pershing buyer-pattern profile for the Sales Dashboard trade-fit nudge.
+// Building it is a one-pass study over ~130K trade rows + the matched banks'
+// Subchapter-S election, so it's memoized and only rebuilt when the trade DB file
+// changes (an import rewrites it). Never throws — a missing/unreadable DB returns
+// null and the dashboard simply runs without the nudge.
+let _tradeFitProfileCache = { mtimeMs: null, profile: null };
+function loadTradeFitProfile() {
+  try {
+    const dbPath = path.join(BANK_REPORTS_DIR, tradeFit.PERSHING_DB || 'pershing-accounts.sqlite');
+    let mtimeMs = null;
+    try { mtimeMs = fs.statSync(dbPath).mtimeMs; } catch (_) { return null; }
+    if (_tradeFitProfileCache.mtimeMs === mtimeMs) return _tradeFitProfileCache.profile;
+    const profile = tradeFit.buildTradeFitProfile({ bankReportsDir: BANK_REPORTS_DIR, log });
+    _tradeFitProfileCache = { mtimeMs, profile };
+    return profile;
+  } catch (err) {
+    log('warn', 'Trade-fit profile load failed:', err && err.message);
+    return null;
+  }
 }
 
 // Per-audience tax-rate overrides for the Sales Dashboard custom lens, parsed
@@ -8683,6 +8961,49 @@ async function handleBondAccountingUpload(req, res) {
   } catch (err) {
     log('error', 'Bond accounting import failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Bond accounting import failed' });
+  } finally {
+    if (tmpDir) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+}
+
+async function handleBankOneOffBondAccountingUpload(req, res, bankId) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+
+  let tmpDir = '';
+  try {
+    const summary = getBankSummaryForCoverage(bankId);
+    if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
+
+    const { files, fields } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const file = files.find(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename || '')) || files[0];
+    if (!file || !file.data) return sendJSON(res, 400, { error: 'Upload a Thomas Ho portfolio workbook.' });
+    if (!looksLikeExcel(file.data)) return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
+
+    fs.mkdirSync(BANK_REPORTS_DIR, { recursive: true });
+    tmpDir = fs.mkdtempSync(path.join(BANK_REPORTS_DIR, 'bond-accounting-oneoff-'));
+    const tmpPath = path.join(tmpDir, sanitizeFilename(file.filename || 'thomas-ho-portfolio.xlsx'));
+    fs.writeFileSync(tmpPath, file.data);
+
+    const result = importOneOffPortfolioForBank(BANK_REPORTS_DIR, summary, tmpPath, {
+      reportDate: fields && fields.reportDate ? fields.reportDate : ''
+    });
+    invalidateCoverageHoldingsIndex();
+    invalidateBankCaches();
+    appendAuditLog({
+      event: 'bond-accounting-oneoff-import',
+      bankId,
+      filename: sanitizeFilename(file.filename),
+      reportDate: result.match.reportDate,
+      storedPath: result.match.storedPath
+    });
+    return sendJSON(res, 200, { success: true, manifest: result.manifest, match: result.match });
+  } catch (err) {
+    log('error', 'One-off bond accounting import failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'One-off bond accounting import failed' });
   } finally {
     if (tmpDir) {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
@@ -9596,15 +9917,22 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
     }
   }
 
-  // Extract the MMD PDF into a native curve graph dataset if present.
+  // Extract the MMD scale into a native curve graph dataset if present. The desk
+  // publishes it as a PDF or as an Excel grid export — parse whichever arrived.
   let mmdCurveCount = null;
   let mmdWarnings = [];
   let mmdAsOfDate = null;
   const mmdFile = files.find(f => classifyFile(f.filename, f.explicitSlot) === 'mmd');
   if (mmdFile) {
     const sourceFile = slotFilenames.mmd || sanitizeFilename(mmdFile.filename);
-    const extracted = await extractPdfText(mmdFile.data);
-    const payload = parseMmdCurveText(extracted && extracted.text);
+    const isWorkbook = /\.(xlsx|xlsm|xls)$/i.test(sourceFile) || looksLikeExcel(mmdFile.data);
+    let payload;
+    if (isWorkbook) {
+      payload = parseMmdCurveWorkbook(mmdFile.data);
+    } else {
+      const extracted = await extractPdfText(mmdFile.data);
+      payload = parseMmdCurveText(extracted && extracted.text);
+    }
     mmdCurveCount = Array.isArray(payload.curve) ? payload.curve.length : 0;
     mmdWarnings = payload.warnings || [];
     mmdAsOfDate = payload.asOfDate;
@@ -10092,22 +10420,32 @@ function buildPershingDormantRows(options = {}) {
     includeUndated,
     limit: 1000
   });
-  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, sourceRows.map(row => row.bankId)) || new Map();
+  const bankIds = sourceRows.map(row => row.bankId);
+  const accountStatuses = getBankAccountStatuses(BANK_REPORTS_DIR, bankIds);
+  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, bankIds) || new Map();
   let lastTouchMap = {};
   try { lastTouchMap = lastActivityByBank(BANK_REPORTS_DIR) || {}; } catch (_) { /* report survives CRM-db hiccup */ }
 
   const rows = sourceRows.map(row => {
     const coverage = coverageMap.get(String(row.bankId)) || {};
-    const ownerText = pershingOwnerText(row, coverage);
-    return {
-      bankId: row.bankId,
+    const summary = {
+      id: row.bankId,
       certNumber: row.certNumber || coverage.certNumber || '',
       displayName: coverage.displayName || row.displayName || row.bankId,
       city: coverage.city || row.city || '',
-      state: coverage.state || row.state || '',
-      status: coverage.status || 'Open',
-      priority: coverage.priority || '',
-      owner: coverage.owner || '',
+      state: coverage.state || row.state || ''
+    };
+    const accountStatus = effectiveAccountStatus(summary, accountStatuses, coverageMap);
+    const ownerText = pershingOwnerText(row, accountStatus);
+    return {
+      bankId: row.bankId,
+      certNumber: summary.certNumber,
+      displayName: summary.displayName,
+      city: summary.city,
+      state: summary.state,
+      status: accountStatus.status || 'Open',
+      priority: accountStatus.priority || '',
+      owner: accountStatus.owner || '',
       pershingOwner: (row.primaryOwnerNames || []).join(', ') || row.primaryOwnerName || '',
       accountOwner: (row.accountOwnerNames || []).join(', '),
       accountCount: row.accountCount,
@@ -10343,185 +10681,6 @@ function listKnownReps() {
     log('warn', 'listKnownReps failed:', err.message);
     return [];
   }
-}
-
-// ---- Signal Inbox (#signals) ----
-// Gathers every input the PURE bank-signals engine needs, then hands it ONE
-// resolved object. Discipline (perf + scope):
-//   - The full-set numeric signals (large-no-owner, muni-afs pre-filter) read
-//     ONLY the cached map projection (getMapBankData), never a per-bank parse.
-//   - The per-bank reads (funding score, CD-rollover slice, offering fits, FDIC
-//     freshness) loop ONLY over the rep's OWNED saved-bank set (hundreds max),
-//     so a page load never fans out across the ~4,400-bank table.
-//   - coverage-large-no-owner is firm-set (unowned rows shown to all reps); every
-//     other signal is rep-scoped here by ownerStringContainsRep before the engine.
-// scopedRep === null means firm-wide (admin ?rep=all).
-function gatherSignalInputs(scopedRep, options = {}) {
-  const today = todayStamp();
-  const mapData = getMapBankData();
-  if (!mapData || !Array.isArray(mapData.banks)) {
-    const err = new Error('Bank dataset not loaded');
-    err.statusCode = 503;
-    throw err;
-  }
-  const pkg = getCurrentPackage() || {};
-  const packageDate = pkg.date || null;
-  const stateFilter = String(options.state || '').trim().toUpperCase();
-
-  const thresholds = {
-    coldDays: COLD_ACCOUNT_DAYS,
-    rolloverWindowDays: options.rolloverWindowDays,
-    assetFloorK: options.assetFloorK,
-    fitMinScore: options.fitMinScore,
-    pershingDormantDays: options.pershingDormantDays,
-  };
-
-  // --- Coverage / CRM inputs ---
-  const allSavedBanks = (listSavedBanks(BANK_REPORTS_DIR) || []);
-  // Rep-scope the owned set the per-bank signals run over.
-  let ownedBanks = scopedRep
-    ? allSavedBanks.filter(b => ownerStringContainsRep(b.owner, scopedRep))
-    : allSavedBanks.filter(b => String(b.owner || '').trim()); // firm-wide: any owned bank
-  if (stateFilter) {
-    ownedBanks = ownedBanks.filter(b => String(b.state || '').toUpperCase() === stateFilter);
-  }
-  const ownedIds = ownedBanks.map(b => b.bankId);
-
-  let lastTouchByBank = {};
-  try { lastTouchByBank = lastActivityByBank(BANK_REPORTS_DIR) || {}; } catch (_) { /* survive a coverage hiccup */ }
-
-  const overdueTasks = listOverdueOpenTasks(BANK_REPORTS_DIR, {
-    username: scopedRep ? scopedRep.username : null,
-    today,
-  }) || [];
-  // Coverage records for the union of owned banks + overdue-task banks (status filter).
-  const coverageIds = [...new Set([...ownedIds, ...overdueTasks.map(t => t.bankId)])];
-  const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, coverageIds) || new Map();
-
-  // --- Firm-set numeric signals from the cached map projection only ---
-  // Coverage owner for every map bank above the floor (large-no-owner). Read the
-  // owner from coverage; the map projection itself doesn't carry owner.
-  const assetFloorK = Number.isFinite(Number(options.assetFloorK)) ? Number(options.assetFloorK) : bankSignals.DEFAULTS.assetFloorK;
-  let mapBanksForLarge = mapData.banks.filter(b => {
-    const a = Number(b.totalAssets);
-    return Number.isFinite(a) && a >= assetFloorK;
-  });
-  if (stateFilter) {
-    mapBanksForLarge = mapBanksForLarge.filter(b => String(b.state || '').toUpperCase() === stateFilter);
-  }
-  const largeIds = mapBanksForLarge.map(b => b.id);
-  const largeCoverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, largeIds) || new Map();
-  // Merge the two coverage maps so the engine can resolve owners for both sets.
-  const mergedCoverage = new Map(coverageMap);
-  for (const [k, v] of largeCoverageMap) mergedCoverage.set(k, v);
-
-  // The mapBanks the engine sees: union of (large-no-owner candidates) + (owned
-  // banks' map rows, for muni-afs). Keyed by id so we don't double-feed.
-  const mapById = new Map(mapData.banks.map(b => [String(b.id), b]));
-  const mapBanksOut = new Map();
-  for (const b of mapBanksForLarge) mapBanksOut.set(String(b.id), b);
-  for (const id of ownedIds) { const b = mapById.get(String(id)); if (b) mapBanksOut.set(String(id), b); }
-
-  // --- Per-bank reads, OWNED set only ---
-  const fundingScoreByBank = {};
-  const cdRolloverByBank = {};
-  const fitsByBank = {};
-  const fdicFlagsByBank = {};
-  let pershingByBank = {};
-  try {
-    if (getPershingImportStatus(BANK_REPORTS_DIR).available && ownedIds.length) {
-      const rollups = getPershingRollupsForBanks(BANK_REPORTS_DIR, ownedIds, { asOfDate: today });
-      pershingByBank = Object.fromEntries([...rollups.entries()].map(([bankId, rollup]) => [bankId, rollup]));
-    }
-  } catch (err) {
-    log('warn', 'Pershing signal gather failed:', err.message);
-  }
-
-  const cdUniverse = (() => { try { return buildCdRolloverUniverse(); } catch (_) { return []; } })();
-  const rolloverWindowDays = Number.isFinite(Number(options.rolloverWindowDays)) ? Number(options.rolloverWindowDays) : bankSignals.DEFAULTS.rolloverWindowDays;
-  const todayMs = Math.floor(Date.now() / 86400000) * 86400000;
-  const horizonMs = todayMs + rolloverWindowDays * 86400000;
-  const fitLimit = Number.isFinite(Number(options.fitMinScore)) ? 4 : 4;
-  const hasPackage = Boolean(pkg && pkg.date);
-
-  for (const bank of ownedBanks) {
-    const bankId = bank.bankId;
-    const mb = mapById.get(String(bankId));
-
-    // Funding score (per-bank parse — owned set only).
-    try {
-      const bankData = getBankById(bankId);
-      if (bankData && bankData.bank) {
-        const analysis = buildBrokeredCdOpportunity(bankData);
-        if (analysis) fundingScoreByBank[bankId] = { score: analysis.score, recommendation: analysis.recommendation, need: analysis.need };
-      }
-    } catch (_) { /* one bank's funding read never sinks the page */ }
-
-    // CD rollover slice (same logic as /api/banks/:id/cd-rollover).
-    try {
-      const cert = mb ? String(mb.certNumber || '').trim() : '';
-      const nameKey = normalizeBankNameForMatch(bank.displayName || '');
-      const cds = cdUniverse
-        .filter(cd => {
-          const matMs = Date.parse(cd.maturity);
-          if (!Number.isFinite(matMs) || matMs < todayMs || matMs > horizonMs) return false;
-          return (cert && cd.cert === cert) || (nameKey && normalizeBankNameForMatch(cd.name) === nameKey);
-        })
-        .sort((a, b) => String(a.maturity).localeCompare(String(b.maturity)))
-        .map(cd => ({
-          cusip: cd.cusip, maturity: cd.maturity,
-          daysOut: Math.round((Date.parse(cd.maturity) - todayMs) / 86400000),
-          rate: cd.rate, term: cd.term,
-        }));
-      if (cds.length) cdRolloverByBank[bankId] = cds;
-    } catch (_) { /* skip */ }
-
-    // Offering fits (skip entirely when no package is loaded).
-    if (hasPackage) {
-      try {
-        const fits = findOfferingFitsForBank(bankId, fitLimit);
-        if (fits && Array.isArray(fits.classes) && fits.classes.length) {
-          fitsByBank[bankId] = { classes: fits.classes };
-        }
-      } catch (_) { /* a single bank's fit read never throws the page */ }
-    }
-
-    // FDIC freshness (async, 24h-cached). cert required.
-    try {
-      const cert = mb ? String(mb.certNumber || '').trim() : '';
-      if (cert) {
-        // fire below; collected via Promise.all to avoid serial awaits in the loop
-        fdicFlagsByBank[bankId] = { __pendingCert: cert, __workbookPeriod: mb ? String(mb.period || '') : '' };
-      }
-    } catch (_) { /* skip */ }
-  }
-
-  return {
-    today, packageDate, thresholds, stateFilter,
-    ownedBanks, mapBanksOut, mergedCoverage, lastTouchByBank, overdueTasks,
-    fundingScoreByBank, cdRolloverByBank, fitsByBank, fdicFlagsByBank, pershingByBank,
-  };
-}
-
-// Resolve the FDIC freshness flags (async, 24h-cached). Done outside the main
-// gather loop so the per-bank getFdicSnapshot calls run concurrently and a
-// network hiccup degrades to "no freshness signal" instead of throwing.
-async function resolveFdicFlags(fdicFlagsByBank) {
-  const out = {};
-  const entries = Object.entries(fdicFlagsByBank || {});
-  await Promise.all(entries.map(async ([bankId, pending]) => {
-    const cert = pending && pending.__pendingCert;
-    const workbookPeriod = (pending && pending.__workbookPeriod) || '';
-    if (!cert) return;
-    try {
-      const snapshot = await fdicBankfind.getFdicSnapshot(cert, { cacheDir: path.join(MARKET_DIR, 'fdic'), log });
-      if (!snapshot || !snapshot.latest) return;
-      const fdicPeriod = String(snapshot.latest.period || '');
-      const newerAvailable = Boolean(workbookPeriod && /^\d{4}Q\d$/.test(workbookPeriod) && fdicPeriod > workbookPeriod);
-      out[bankId] = { newerAvailable, fdicPeriod, workbookPeriod };
-    } catch (_) { /* a bank's FDIC read failing just drops its freshness signal */ }
-  }));
-  return out;
 }
 
 // ---- Live CRM dashboard (#pulse) ----
@@ -11004,7 +11163,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // AI "Pick of the day" (Claude). Same read/refresh split as the desk read:
+    // Legacy AI offerings shortlist (Claude). Same read/refresh split as the desk read:
     // GET returns the cached picks (never billable); POST .../refresh generates.
     if (pathname === '/api/offerings-pick' && req.method === 'GET') {
       const configured = claudeClient.isConfigured();
@@ -11079,7 +11238,7 @@ const server = http.createServer(async (req, res) => {
         const priorMap = dailyDashboardJudgment.loadPriorSnapshot(MARKET_DIR, packageDate);
         const { priorRows, priorMeta } = dashboardPriorPackage(packageDate);
         const priorRvTable = (priorMeta && priorMeta.priorDate) ? await loadArchivedRelativeValueSnapshot(priorMeta.priorDate).catch(() => null) : null;
-        const live = dailyDashboardJudgment.buildLiveDashboard({ rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates });
+        const live = dailyDashboardJudgment.buildLiveDashboard({ rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates, tradeProfile: loadTradeFitProfile() });
         const staleAi = !!(cached && (cached.packageDate !== packageDate || !cached.rv || !cached.rv.inventory || !cached.rv.creditYield || !cached.rv.bankCapital || cached.degraded || cached.modelError));
         const catalysts = buildSalesDashboardCatalysts(live, { econ, marketColor, marketWire: marketWireCached });
         return sendJSON(res, 200, { ok: true, configured, packageDate, dashboard: live, sources, catalysts, cached: false, aiGenerated: false, stale: staleAi, aiCachedDate: cached ? cached.packageDate : null, customTax: !!taxRates });
@@ -11106,7 +11265,7 @@ const server = http.createServer(async (req, res) => {
         const priorRvTable = (priorMeta && priorMeta.priorDate) ? await loadArchivedRelativeValueSnapshot(priorMeta.priorDate).catch(() => null) : null;
         const rows = buildAllOfferingsRows();
         const sources = buildSalesDashboardSourceStatus(rows);
-        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates, force: true, noCache: !!taxRates, log });
+        const record = await dailyDashboardJudgment.generateDashboard({ marketDir: MARKET_DIR, rows, econ, meta, curve, fred, mmd, rvTable, priorRvTable, priorMap, priorRows, priorMeta, taxRates, tradeProfile: loadTradeFitProfile(), force: true, noCache: !!taxRates, log });
         const catalysts = buildSalesDashboardCatalysts(record, { econ, marketColor: loadCachedMarketColorForDashboard(), marketWire: loadCachedMarketWireForDashboard() });
         appendAuditLog({
           event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
@@ -11225,105 +11384,6 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/crm/dashboard' && req.method === 'GET') {
       const { rep } = repScopeFromQuery(req, query, { auditEvent: 'crm-dashboard-scope-collapsed' });
       return sendJSON(res, 200, buildCrmDashboard(rep));
-    }
-
-    // Signal Inbox (#signals): rep-scoped morning desk signals across Coverage /
-    // Funding / Securities / Muni / Portfolio / Data-Freshness. Read-only GET.
-    if (pathname === '/api/bank-signals' && req.method === 'GET') {
-      const { rep } = repScopeFromQuery(req, query, { auditEvent: 'bank-signals-scope-collapsed' });
-      const scopedRep = rep; // null = firm-wide (admin ?rep=all)
-      const scope = scopedRep ? 'rep' : 'firm';
-      const options = {
-        state: query.get('state') || '',
-        rolloverWindowDays: query.get('window') != null
-          ? Math.max(1, Math.min(365, Math.round(Number(query.get('window')) || 180))) : undefined,
-        assetFloorK: query.get('assetFloor') != null && query.get('assetFloor') !== ''
-          ? Math.max(0, Number(query.get('assetFloor'))) : undefined,
-        fitMinScore: query.get('fitMin') != null && query.get('fitMin') !== ''
-          ? Math.max(0, Number(query.get('fitMin'))) : undefined,
-        pershingDormantDays: query.get('pershingDays') != null && query.get('pershingDays') !== ''
-          ? Math.max(1, Math.min(3650, Math.round(Number(query.get('pershingDays')) || PERSHING_DORMANT_TRADE_DAYS))) : undefined,
-      };
-      let gathered;
-      try {
-        gathered = gatherSignalInputs(scopedRep, options);
-      } catch (err) {
-        log('warn', 'bank-signals gather failed:', err.message);
-        return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not build signals' });
-      }
-      const fdicFlagsByBank = await resolveFdicFlags(gathered.fdicFlagsByBank);
-      const result = bankSignals.buildBankSignals({
-        rep: rep ? { username: rep.username, displayName: rep.displayName } : null,
-        scope,
-        today: gathered.today,
-        packageDate: gathered.packageDate,
-        thresholds: gathered.thresholds,
-        dismissed: [], // dismissals are applied client-side (localStorage); see CLAUDE.md
-        savedBanks: gathered.ownedBanks,
-        coverageByBank: gathered.mergedCoverage,
-        lastTouchByBank: gathered.lastTouchByBank,
-        overdueTasks: gathered.overdueTasks,
-        mapBanks: Array.from(gathered.mapBanksOut.values()),
-        cdRolloverByBank: gathered.cdRolloverByBank,
-        fundingScoreByBank: gathered.fundingScoreByBank,
-        fitsByBank: gathered.fitsByBank,
-        fdicFlagsByBank,
-        pershingByBank: gathered.pershingByBank,
-      });
-      const filtered = options.state
-        ? result.categories.map(c => ({
-            ...c,
-            signals: c.signals.filter(s => String(s.state || '').toUpperCase() === String(options.state).toUpperCase()),
-          })).map(c => ({ ...c, count: c.signals.length }))
-        : result.categories;
-      // optional ?category= narrows to one category (count stays per-category)
-      const wantCategory = String(query.get('category') || '').trim();
-      const categories = wantCategory
-        ? filtered.filter(c => c.category === wantCategory)
-        : filtered;
-      return sendJSON(res, 200, {
-        rep: result.rep,
-        scope: result.scope,
-        packageDate: gathered.packageDate,
-        generatedAt: result.generatedAt,
-        thresholds: gathered.thresholds,
-        categories,
-        totals: {
-          signals: categories.reduce((sum, c) => sum + c.count, 0),
-          rows: result.totals.rows,
-        },
-        warnings: result.warnings,
-      });
-    }
-
-    // Dismiss a signal — audit-trail only (v1 stores nothing server-side; the
-    // client hides the row via localStorage). Built now so v2 can back it with a
-    // table without changing the contract. POST /api/bank-signals/:key/dismiss
-    const signalDismissMatch = pathname.match(/^\/api\/bank-signals\/([^/]+)\/dismiss$/);
-    if (signalDismissMatch && req.method === 'POST') {
-      const key = safeDecodeURIComponent(signalDismissMatch[1]);
-      if (!key || !bankSignals.SIGNAL_DEFS[key]) {
-        return sendJSON(res, 400, { error: 'Unknown signal key' });
-      }
-      let body;
-      try { body = await readJsonBody(req); } catch (err) {
-        return sendJSON(res, err.statusCode || 400, { error: err.message || 'Invalid body' });
-      }
-      const bankId = String(body.bankId || '').trim();
-      if (!bankId) return sendJSON(res, 400, { error: 'A bankId is required' });
-      const today = todayStamp();
-      const def = bankSignals.SIGNAL_DEFS[key];
-      const pkgDate = body.packageDate ? String(body.packageDate).trim() : (getCurrentPackage() || {}).date || '';
-      const dismissId = bankSignals.dismissIdFor(key, bankId, today, def.packageScoped ? pkgDate : '');
-      const rep = resolveRequestRep(req);
-      appendAuditLog({
-        event: 'bank-signals-dismiss',
-        signalKey: key,
-        bankId,
-        dismissId,
-        rep: rep ? rep.username : '',
-      });
-      return sendJSON(res, 200, { ok: true, dismissId });
     }
 
     // Pull the newest FDIC-filed quarter into bank-data.sqlite (stopgap until
@@ -12260,6 +12320,13 @@ const server = http.createServer(async (req, res) => {
 
     if (pathname === '/api/banks/bond-accounting/upload' && req.method === 'POST') {
       return await handleBondAccountingUpload(req, res);
+    }
+
+    const bankBondAccountingUploadMatch = pathname.match(/^\/api\/banks\/([^/]+)\/bond-accounting\/upload$/);
+    if (bankBondAccountingUploadMatch && req.method === 'POST') {
+      const bankId = safeDecodeURIComponent(bankBondAccountingUploadMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank id' });
+      return await handleBankOneOffBondAccountingUpload(req, res, bankId);
     }
 
     if (pathname === '/api/banks/thc-summary/upload' && req.method === 'POST') {

@@ -181,6 +181,7 @@ test('iis admin ingest routes reject non-admins before parsing', async () => {
       '/api/bank-account-statuses/upload',
       '/api/banks/averaged-series/upload',
       '/api/banks/bond-accounting/upload',
+      '/api/banks/bank-1/bond-accounting/upload',
       '/api/brokered-cd/wirp/upload',
       '/api/exec-summary/upload',
       '/api/contacts/import',
@@ -665,6 +666,34 @@ test('unknown /api GET returns 404 JSON, not the SPA shell; unknown non-api path
     const spa = await request(port, { path: '/some/client/route' });
     assert.strictEqual(spa.status, 200, spa.text);
     assert.ok(/<!doctype html>/i.test(spa.text), 'non-api path should serve index.html');
+  });
+});
+
+test('swap proposal create supports manual RIA clients without a bank record', async () => {
+  await withServer({}, async ({ port }) => {
+    const body = JSON.stringify({
+      clientName: 'Oak Hill Wealth',
+      taxStatus: 'RIA / Money Manager',
+      taxRate: 0,
+      isSubchapterS: null,
+      preparedFor: 'Oak Hill Wealth',
+      title: 'Bond Swap — Oak Hill Wealth'
+    });
+    const created = await request(port, {
+      method: 'POST',
+      path: '/api/swap-proposals',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    });
+    assert.strictEqual(created.status, 200, created.text);
+    assert.match(created.json.proposal.bankId, /^manual-ria-/);
+    assert.strictEqual(created.json.proposal.preparedFor, 'Oak Hill Wealth');
+    assert.strictEqual(created.json.proposal.taxRate, 0);
+    assert.strictEqual(created.json.proposal.isSubchapterS, null);
+
+    const fetched = await request(port, { path: `/api/swap-proposals/${created.json.proposal.id}` });
+    assert.strictEqual(fetched.status, 200, fetched.text);
+    assert.strictEqual(fetched.json.proposal.preparedFor, 'Oak Hill Wealth');
   });
 });
 

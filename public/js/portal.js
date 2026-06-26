@@ -78,6 +78,9 @@
   let strategyRequests = [];
   let strategyCounts = {};
   let strategyNotifications = { requests: [], counts: {} };
+  let strategyActiveId = sessionStorage.getItem('fbbs.strategy.activeId') || '';
+  let workspaceContextRailActive = null;
+  let workspaceContextRailEventsBound = false;
   let meState = {
     rep: null,
     auth: { allowRepOverride: true, mode: 'local', isAdmin: false },
@@ -140,7 +143,7 @@
   const DOC_TYPES = {
     econ:              { label: 'Economic Update', ext: 'PDF',  viewer: 'econ' },
     relativeValue:     { label: 'Relative Value', ext: 'PDF', viewer: 'relativeValue' },
-    mmd:               { label: 'MMD Curve', ext: 'PDF', viewer: 'mmd' },
+    mmd:               { label: 'MMD Curve', ext: 'PDF / XLSX', viewer: 'mmd' },
     treasuryNotes:     { label: 'Treasury Notes', ext: 'XLSX', viewer: 'treasuryNotes' },
     cd:                { label: 'Brokered CD Sheet', ext: 'PDF', viewer: 'cd' },
     cdoffers:          { label: 'Daily CD Offerings PDF', ext: 'PDF', viewer: 'cdoffers' },
@@ -152,77 +155,104 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'signals', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
-  const NAV_ITEMS = [
-    { page: 'home', group: 'Home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
-    { page: 'pulse', group: 'FBBS', label: 'CRM Pulse', description: 'Live CRM dashboard — clients, prospects, follow-ups, logged activity', aliases: 'crm pulse dashboard kpi clients prospects by state strategies activity follow-ups' },
-    { page: 'signals', group: 'FBBS', label: 'Signal Inbox', description: 'Highest-leverage reasons to act — cold owned accounts, overdue prospect tasks, large unclaimed banks, funding pressure, CD rollover, offering fits, AFS muni books, and FDIC data freshness', aliases: 'signal inbox signals alerts triage cold accounts funding pressure cd rolling offering fit muni afs fdic newer overdue task whitespace reasons to call action queue' },
-    { page: 'exec-summary', group: 'Operations', label: 'Exec Summary', description: 'Management-only daily capital, risk, P&L, and desk-activity dashboard', aliases: 'executive summary ceo capital net cap excess requirement buffer risk dv01 pnl revenue desk rep counterparty haircut management board' },
-    { page: 'daily-intelligence', group: 'FBBS', label: 'Daily Intelligence', description: 'Auto-generated market snapshot and rule-based picks', aliases: 'daily intelligence market snapshot top picks sales dashboard replacement' },
-    { page: 'sales-dashboard', group: 'FBBS', label: 'Sales Dashboard', description: 'Curated daily picks by client tax structure (C-Corp / S-Corp / RIA), with the macro→pick call, Bond of the Day, and Strategy of the Day', aliases: 'sales dashboard audience fit picks ccorp scorp ria client tax structure taxable equivalent tey bond of the day botd strategy of the day sod curated morning' },
-    { page: 'econ', group: 'FBBS', label: 'Economic Update', description: 'View or download the economic PDF', aliases: 'economy pdf download fbbs' },
-    { page: 'relativeValue', group: 'CDs', label: 'Relative Value', description: 'View or download the relative value PDF', aliases: 'relative value rv pdf daily sheet document' },
-    { page: 'market-color', group: 'FBBS', label: 'Market Color', description: 'News hub: market wire, official headlines, and desk color', aliases: 'morning iq market color email news s&p macro headlines wire hub' },
-    { page: 'mmd', group: 'FBBS', label: 'MMD Curve', description: 'View the Bloomberg FTAX MMD curve, Treasury ratios, and sales talking points', aliases: 'mmd curve ftax bloomberg muni municipal market data aaa ratios' },
-    { page: 'cd', group: 'CDs', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
-    { page: 'cdoffers', group: 'Documents', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
-    { page: 'cd-recap', group: 'CDs', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' },
-    { page: 'all-offerings', group: 'Offerings', label: 'All Offerings', description: 'Every security in today\'s inventory across all asset classes — one screen', aliases: 'all offerings cross asset unified everything inventory cd muni agency corporate treasury mbs structured screen blotter' },
-    { page: 'watchlist', group: 'Offerings', label: 'My Watchlist', description: 'Securities and banks you starred, re-joined to today\'s inventory', aliases: 'watchlist watch starred favorites my list follow' },
-    { page: 'treasury-explorer', group: 'Offerings', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
-    { page: 'explorer', group: 'Offerings', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates offerings' },
-    { page: 'munioffers', group: 'Documents', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
-    { page: 'muni-explorer', group: 'Offerings', label: 'Muni Explorer', description: 'Filter, sort, and export muni offerings', aliases: 'municipal bonds state rating munis offerings' },
-    { page: 'agencies', group: 'Offerings', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
-    { page: 'corporates', group: 'Offerings', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
-    { page: 'mbs-cmo', group: 'Offerings', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
-    { page: 'structured-notes', group: 'Offerings', label: 'Structured Notes', description: 'New issue and structured note inventory parsed from trader emails', aliases: 'structured notes new issue jpm gs bmo td callable zero steepener cusip' },
-    { page: 'banks', group: 'Banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
-    { page: 'contacts', group: 'Banks', label: 'Contacts', description: 'Firm-wide contacts directory — every contact across every bank', aliases: 'contacts directory people phone email rolodex cfo president treasurer decision maker' },
-    { page: 'maps', group: 'Banks', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' },
-    { page: 'reports', group: 'Banks', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
-    { page: 'peer-groups', group: 'Banks', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
-    { page: 'maturity-calendar', group: 'Banks', label: 'Maturity Calendar', description: 'Covered banks with bonds maturing or first-callable in the window — reinvestment call list', aliases: 'maturity call calendar rollover runoff reinvestment maturing callable proceeds call list coverage bond accounting' },
-    { page: 'cd-rollover', group: 'Banks', label: 'CD Rollover Wall', description: 'Issuing banks with brokered CDs maturing in the window — funding re-raise call list', aliases: 'cd rollover wall brokered funding maturing reissue re-raise liability deposits call list' },
-    { page: 'strategies', group: 'Strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies' },
-    { page: 'bond-swap', group: 'Strategies', label: 'Bond Swap', description: 'Portfolio Idea Engine and multi-leg swap-proposal builder', aliases: 'bond swap proposal portfolio idea engine swap builder cusip leg reinvest blotter' },
-    { page: 'archive', group: 'Operations', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
-    { page: 'upload', group: 'Operations', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
-    { page: 'package-qa', group: 'Operations', label: 'Package QA', description: 'Post-publish review of today\'s package — slot completeness and row counts', aliases: 'package qa quality review slots counts completeness validation check published treasury muni baird agency corporate' },
-    { page: 'admin', group: 'Operations', label: 'Admin', description: 'Review the publish audit log', aliases: 'audit log admin history' }
+  const NAV_GROUPS = [
+    {
+      key: 'today',
+      icon: 'TD',
+      label: 'Today',
+      defaultOpen: true,
+      items: [
+        { page: 'home', label: 'Home', description: 'Portal home page', aliases: 'home start main' },
+        { page: 'daily-intelligence', label: 'Daily Intelligence', description: 'Digital Economic Update and CD Relative Value intel', aliases: 'daily intelligence economic update market snapshot relative value cd rates' },
+        { page: 'pulse', label: 'CRM Pulse', description: 'Live CRM dashboard — clients, prospects, follow-ups, logged activity', aliases: 'crm pulse dashboard kpi clients prospects by state strategies activity follow-ups' },
+        { page: 'sales-dashboard', label: 'Sales Dashboard', description: 'One daily bond pick plus the relative-value workup behind it', aliases: 'sales dashboard daily bond pick bond of the day botd relative value morning' },
+        { page: 'market-color', label: 'Market Color', description: 'News hub: market wire, official headlines, and desk color', aliases: 'morning iq market color email news s&p macro headlines wire hub' },
+        { page: 'mmd', label: 'MMD Curve', description: 'View the Bloomberg FTAX MMD curve, Treasury ratios, and sales talking points', aliases: 'mmd curve ftax bloomberg muni municipal market data aaa ratios' }
+      ]
+    },
+    {
+      key: 'offerings',
+      icon: 'MO',
+      label: 'Markets & Offerings',
+      defaultOpen: true,
+      items: [
+        { page: 'all-offerings', label: 'All Offerings', description: 'Every security in today\'s inventory across all asset classes — one screen', aliases: 'all offerings cross asset unified everything inventory cd muni agency corporate treasury mbs structured screen blotter' },
+        { page: 'watchlist', label: 'My Watchlist', description: 'Securities and banks you starred, re-joined to today\'s inventory', aliases: 'watchlist watch starred favorites my list follow' },
+        { page: 'treasury-explorer', label: 'Treasury Explorer', description: 'Filter, sort, and export Treasury Notes', aliases: 'treasury notes tsy cusip yield price spread offerings' },
+        { page: 'explorer', label: 'CD Explorer', description: 'Filter, sort, and export CD offerings', aliases: 'search cds cusip issuer rates offerings' },
+        { page: 'muni-explorer', label: 'Muni Explorer', description: 'Filter, sort, and export muni offerings', aliases: 'municipal bonds state rating munis offerings' },
+        { page: 'agencies', label: 'Agency Explorer', description: 'Search agency bullets and callables', aliases: 'agency agencies fhlb fnma callable bullet offerings' },
+        { page: 'corporates', label: 'Corporate Explorer', description: 'Search corporate inventory', aliases: 'corporate bonds issuer ticker sector offerings' },
+        { page: 'mbs-cmo', label: 'MBS/CMO Explorer', description: 'Upload, model, filter, and export mortgage-backed and CMO offerings', aliases: 'mbs cmo mortgage pools bloomberg bbg pac fmed offering screen snip' },
+        { page: 'structured-notes', label: 'Structured Notes', description: 'New issue and structured note inventory parsed from trader emails', aliases: 'structured notes new issue jpm gs bmo td callable zero steepener cusip' },
+        { page: 'cd', label: 'Brokered CD Sheet', description: 'View or download the brokered CD rate sheet', aliases: 'rate sheet brokered cd pdf' },
+        { page: 'cd-recap', label: 'Weekly CD Recap', description: 'Deduped weekly CD issuance summary', aliases: 'weekly recap history median coupon cds' }
+      ]
+    },
+    {
+      key: 'banks',
+      icon: 'BK',
+      label: 'Banks & Coverage',
+      items: [
+        { page: 'banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
+        { page: 'contacts', label: 'Contacts', description: 'Firm-wide contacts directory — every contact across every bank', aliases: 'contacts directory people phone email rolodex cfo president treasurer decision maker' },
+        { page: 'views', label: 'Saved Views', description: 'Salesforce-style filtered bank lists and custom bank views', aliases: 'views saved views bank lists custom reports clients prospects open accounts stale follow-ups' },
+        { page: 'reports', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
+        { page: 'peer-groups', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
+        { page: 'maturity-calendar', label: 'Maturity Calendar', description: 'Covered banks with bonds maturing or first-callable in the window — reinvestment call list', aliases: 'maturity call calendar rollover runoff reinvestment maturing callable proceeds call list coverage bond accounting' },
+        { page: 'cd-rollover', label: 'CD Rollover Wall', description: 'Issuing banks with brokered CDs maturing in the window — funding re-raise call list', aliases: 'cd rollover wall brokered funding maturing reissue re-raise liability deposits call list' },
+        { page: 'maps', label: 'Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' }
+      ]
+    },
+    {
+      key: 'queues',
+      icon: 'WQ',
+      label: 'Work Queues',
+      items: [
+        { page: 'strategies', label: 'Strategies Queue', description: 'Track bond swap, Muni BCIS, THO, CECL, and miscellaneous requests', aliases: 'bond swap bcis tho th o cecl monday tasks requests billing strategies needs billed work queue' },
+        { page: 'bond-swap', label: 'Bond Swap', description: 'Portfolio Idea Engine and multi-leg swap-proposal builder', aliases: 'bond swap proposal portfolio idea engine swap builder cusip leg reinvest blotter' }
+      ]
+    },
+    {
+      key: 'operations',
+      icon: 'OP',
+      label: 'Operations',
+      items: [
+        { page: 'package-qa', label: 'Package QA', description: 'Post-publish review of today\'s package — slot completeness and row counts', aliases: 'package qa quality review slots counts completeness validation check published treasury muni baird agency corporate' },
+        { page: 'archive', label: 'Archive', description: 'Open previously published packages', aliases: 'history dates old documents' },
+        { page: 'upload', label: 'Upload', description: 'Publish today\'s daily package', aliases: 'publish files drop documents agency cd muni corporate' },
+        { page: 'exec-summary', label: 'Exec Summary', description: 'Management-only daily capital, risk, P&L, and desk-activity dashboard', aliases: 'executive summary ceo capital net cap excess requirement buffer risk dv01 pnl revenue desk rep counterparty haircut management board' },
+        { page: 'admin', label: 'Admin', description: 'Review the publish audit log', aliases: 'audit log admin history' }
+      ]
+    }
   ];
 
-  const NAV_GROUP_BY_PAGE = {
-    'daily-intelligence': 'fbbs',
-    signals: 'fbbs',
-    econ: 'fbbs',
-    relativeValue: 'cds',
-    'market-color': 'fbbs',
-    mmd: 'fbbs',
-    cd: 'cds',
-    'cd-recap': 'cds',
-    'sales-dashboard': 'fbbs',
-    'all-offerings': 'offerings',
-    watchlist: 'offerings',
-    'treasury-explorer': 'offerings',
-    explorer: 'offerings',
-    'muni-explorer': 'offerings',
-    agencies: 'offerings',
-    corporates: 'offerings',
-    'mbs-cmo': 'offerings',
-    'structured-notes': 'offerings',
-    banks: 'banks',
-    contacts: 'banks',
-    maps: 'banks',
-    reports: 'banks',
-    'peer-groups': 'banks',
-    'maturity-calendar': 'banks',
-    'cd-rollover': 'banks'
-  };
+  const NAV_OFF_SIDEBAR_ITEMS = [
+    { page: 'econ', groupKey: 'today', label: 'Economic Update PDF', description: 'View or download the raw Economic Update PDF', aliases: 'economic update raw pdf document', searchable: false },
+    { page: 'relativeValue', groupKey: 'today', label: 'Relative Value PDF', description: 'View or download the raw Relative Value PDF', aliases: 'relative value raw pdf document', searchable: false },
+    { page: 'treasuryNotes', groupKey: 'offerings', label: 'Treasury Notes Workbook', description: 'Raw Treasury Notes workbook route', aliases: 'treasury notes workbook raw document', searchable: false },
+    { page: 'cdoffers', groupKey: 'offerings', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
+    { page: 'munioffers', groupKey: 'offerings', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
+    { page: 'cd-internal', groupKey: 'offerings', label: 'Internal CD Workbook', description: 'Internal CD master workbook route', aliases: 'internal cd workbook cost master', searchable: false }
+  ];
+
+  const NAV_GROUP_LABEL_BY_KEY = Object.fromEntries(NAV_GROUPS.map(group => [group.key, group.label]));
+  const NAV_ITEMS = NAV_GROUPS.flatMap(group =>
+    group.items.map(item => ({ ...item, group: group.label, groupKey: group.key }))
+  ).concat(
+    NAV_OFF_SIDEBAR_ITEMS
+      .filter(item => item.searchable !== false)
+      .map(item => ({ ...item, group: NAV_GROUP_LABEL_BY_KEY[item.groupKey] || item.groupKey }))
+  );
+  const NAV_GROUP_BY_PAGE = Object.fromEntries([
+    ...NAV_GROUPS.flatMap(group => group.items.map(item => [item.page, group.key])),
+    ...NAV_OFF_SIDEBAR_ITEMS.map(item => [item.page, item.groupKey])
+  ]);
 
   const DEFAULT_BROKERED_CD_TERMS = [
     { label: '3 mo', months: 3, low: 3.900, mid: 3.950, high: 4.000 },
@@ -1446,6 +1476,7 @@
     if (!filename) return null;
     const lower = filename.toLowerCase();
     if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm') || lower.endsWith('.xls')) {
+      if (lower.includes('mmd') || lower.includes('municipal market data')) return 'mmd';
       if ((lower.includes('treasury') || lower.includes('tsy')) &&
           (lower.includes('note') || lower.includes('notes'))) return 'treasuryNotes';
       if (lower.includes('baird') || lower.includes('syndicate')) return 'bairdSyndicate';
@@ -1576,7 +1607,6 @@
     const allowAdmin = isAdminUiAllowed();
     [
       'dailySummaryBtn',
-      'dailyPicksBtn',
       'salesDashboardBtn',
       'wirpUploadLabel',
       'reportsAveragedSeriesImportBtn',
@@ -1661,6 +1691,7 @@
 
     window.scrollTo({ top: 0, behavior: 'auto' });
     closeNavSearch();
+    closeWorkspaceContextRail();
 
     if (updateHash && window.location.hash !== '#' + pageName) {
       history.replaceState(null, '', '#' + pageName);
@@ -1674,7 +1705,6 @@
       });
     }
     if (pageName === 'pulse') loadCrmPulse();
-    if (pageName === 'signals') enterSignalInbox();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
     if (pageName === 'relativeValue') {
       loadRelativeValueSnapshot();
@@ -2176,6 +2206,8 @@
     renderViewer('cd');
     renderViewer('cdoffers');
     renderViewer('munioffers');
+    renderDailySourceDocs();
+    renderSalesSourceDocs();
     renderCdCostCalculator();
     if (document.getElementById('p-relativeValue')?.classList.contains('active')) {
       loadRelativeValueSnapshot();
@@ -3318,6 +3350,28 @@
     }[c]));
   }
 
+  function renderSidebarNav() {
+    const nav = document.getElementById('sidebarNav');
+    if (!nav || nav.dataset.rendered === '1') return;
+    nav.innerHTML = NAV_GROUPS.map(group => {
+      const isOpen = Boolean(group.defaultOpen);
+      const subId = `nav-sub-${group.key}`;
+      return `<div class="nav-section nav-group${isOpen ? ' open' : ''}" data-nav-group="${escapeHtml(group.key)}">
+        <button class="nav-parent" type="button" aria-expanded="${isOpen ? 'true' : 'false'}" aria-controls="${escapeHtml(subId)}" data-nav-toggle="${escapeHtml(group.key)}">
+          <span class="nav-icon">${escapeHtml(group.icon || '')}</span>
+          <span class="nav-label">${escapeHtml(group.label)}</span>
+          <span class="nav-caret">&#8250;</span>
+        </button>
+        <div class="nav-sub" id="${escapeHtml(subId)}">
+          ${group.items.map(item => `<a class="nav-link nav-minor" data-page="${escapeHtml(item.page)}" href="#${escapeHtml(item.page)}">
+            <span class="nav-label">${escapeHtml(item.label)}</span>
+          </a>`).join('')}
+        </div>
+      </div>`;
+    }).join('');
+    nav.dataset.rendered = '1';
+  }
+
   function phoneToTelHref(phone) {
     const raw = String(phone || '').trim();
     if (!raw) return '';
@@ -3403,6 +3457,48 @@
       sub.textContent = `No ${meta.label} uploaded`;
       btn.style.display = 'none';
     }
+  }
+
+  function currentFileUrl(slot, download) {
+    const file = currentPackage && currentPackage[slot];
+    if (!file) return '';
+    return '/current/' + encodeURIComponent(file) + (download ? '?download=1' : '');
+  }
+
+  function sourceDocCard(slot, title, body, canonicalPage) {
+    const file = currentPackage && currentPackage[slot];
+    const label = file || 'Not uploaded';
+    const ready = !!file;
+    const view = ready ? `<a class="small-btn secondary" href="${escapeHtml(currentFileUrl(slot, false))}" target="_blank" rel="noopener">View PDF</a>` : '';
+    const download = ready ? `<a class="small-btn" href="${escapeHtml(currentFileUrl(slot, true))}">Download</a>` : '<button type="button" class="small-btn" data-goto="upload">Upload</button>';
+    const canonical = canonicalPage ? `<button type="button" class="text-btn" data-goto="${escapeHtml(canonicalPage)}">Open digital view</button>` : '';
+    return `<article class="source-doc-card source-doc-${ready ? 'ready' : 'missing'}">
+      <div class="source-doc-copy">
+        <span class="source-doc-status">${ready ? 'Loaded' : 'Missing'}</span>
+        <h4>${escapeHtml(title)}</h4>
+        <p>${escapeHtml(body)}</p>
+        <small>${escapeHtml(label)}</small>
+      </div>
+      <div class="source-doc-actions">${canonical}${view}${download}</div>
+    </article>`;
+  }
+
+  function renderDailySourceDocs() {
+    const el = document.getElementById('dailyIntelSourceDocs');
+    if (!el) return;
+    el.innerHTML = [
+      sourceDocCard('econ', 'Digital Economic Update', 'Rates, curve, releases, and market data extracted from the daily Economic Update.', 'econ'),
+      sourceDocCard('relativeValue', 'Digital CD Relative Value', 'CD, Treasury, agency, muni, and corporate comparisons extracted from the CD Relative Value sheet.', 'relativeValue')
+    ].join('');
+  }
+
+  function renderSalesSourceDocs() {
+    const el = document.getElementById('salesDashSourceDocs');
+    if (!el) return;
+    el.innerHTML = [
+      sourceDocCard('relativeValue', 'Relative Value PDF', 'Original daily rate-comparison sheet for audit and download.', null),
+      sourceDocCard('econ', 'Economic Update PDF', 'Market backdrop feeding the Sales Dashboard benchmarks.', 'daily-intelligence')
+    ].join('');
   }
 
   // ============ Economic Update Tool ============
@@ -3637,12 +3733,13 @@
   // ============ Daily Intelligence ============
 
   async function loadDailyIntelligence() {
-    const picksEl = document.getElementById('dailyIntelPicks');
     const curveEl = document.getElementById('dailyIntelCurveChart');
     const summaryEl = document.getElementById('dailyIntelSummary');
-    if (picksEl) picksEl.innerHTML = '<div class="market-empty">Building rule-based picks&hellip;</div>';
+    const rvEl = document.getElementById('dailyIntelRelativeValue');
+    renderDailySourceDocs();
     if (curveEl) curveEl.innerHTML = '<div class="market-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading Treasury curve&hellip;</span></div>';
     if (summaryEl) summaryEl.innerHTML = marketSkeletonCards(4);
+    if (rvEl) rvEl.innerHTML = '<div class="market-empty small">Loading CD relative value&hellip;</div>';
     try {
       const res = await fetch('/api/daily-intelligence', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -3822,31 +3919,38 @@
     `;
   }
 
-  function renderDailyPickCard(pick) {
-    const audience = (pick.audience || []).join(' / ');
-    const metrics = pick.metrics && pick.metrics.tey296 != null
-      ? `<div class="daily-pick-metrics">
-          <span>TEY 21% ${escapeHtml(formatPercentTile(pick.metrics.tey21, 3))}</span>
-          <span>TEY 29.6% ${escapeHtml(formatPercentTile(pick.metrics.tey296, 3))}</span>
-        </div>`
-      : '';
+  function dailyRelativeValueRow(row) {
+    const cdSpread = Number(row && row.cdSpread);
+    const spreadTone = Number.isFinite(cdSpread) && cdSpread >= 20 ? 'good' : (Number.isFinite(cdSpread) && cdSpread < 10 ? 'warn' : '');
     return `
-      <article class="daily-pick-card">
-        <div class="daily-pick-head">
-          <span>${escapeHtml(pick.type || 'Pick')}</span>
-          <em>${escapeHtml(audience || pick.label || '')}</em>
-        </div>
-        <h4>${escapeHtml(pick.title || 'Untitled pick')}</h4>
-        <div class="daily-pick-value">${escapeHtml(pick.value || 'Review')}</div>
-        <p>${escapeHtml(pick.detail || '')}</p>
-        ${metrics}
-        <div class="daily-pick-foot">
-          ${pick.cusip ? `<code>${escapeHtml(pick.cusip)}</code>` : '<span></span>'}
-          <button type="button" class="small-btn" data-goto="${escapeHtml(pick.page || 'home')}"${pick.cusip ? ` data-cusip="${escapeHtml(pick.cusip)}"` : ''}>Open</button>
-        </div>
-        <div class="daily-pick-reason">${escapeHtml(pick.reason || '')}</div>
-      </article>
+      <div class="daily-rv-row">
+        <strong>${escapeHtml(row.term || 'Term')}</strong>
+        <span>CD ${escapeHtml(rvRateValue(row.cd))}</span>
+        <span>UST ${escapeHtml(rvRateValue(row.ust))}</span>
+        <em class="${escapeHtml(spreadTone)}">${escapeHtml(rvSpreadValue(row.cdSpread))} bp</em>
+      </div>
     `;
+  }
+
+  function renderDailyRelativeValue(rv) {
+    const el = document.getElementById('dailyIntelRelativeValue');
+    const count = document.getElementById('dailyIntelRvCount');
+    if (!el || !count) return;
+    const rows = rv && Array.isArray(rv.rows) ? rv.rows : [];
+    count.textContent = rows.length ? `${rows.length} terms` : '—';
+    if (!rows.length) {
+      el.innerHTML = '<div class="market-empty small">CD Relative Value data is not loaded.</div>';
+      return;
+    }
+    const leaders = rows
+      .filter(row => Number.isFinite(Number(row.cd)) || Number.isFinite(Number(row.cdSpread)))
+      .slice(0, 6);
+    const bestCd = rows
+      .filter(row => Number.isFinite(Number(row.cdSpread)))
+      .sort((a, b) => Number(b.cdSpread) - Number(a.cdSpread))[0];
+    const source = rv.sourceFile ? `<p class="daily-rv-source">${escapeHtml(rv.sourceFile)}</p>` : '';
+    const best = bestCd ? `<p class="daily-rv-source">Best CD spread: ${escapeHtml(bestCd.term || 'term')} at ${escapeHtml(rvSpreadValue(bestCd.cdSpread))} bp to UST.</p>` : '';
+    el.innerHTML = leaders.map(dailyRelativeValueRow).join('') + best + source;
   }
 
   function renderDailyIntelligence() {
@@ -3858,9 +3962,10 @@
     const slopeEl = document.getElementById('dailyIntelCurveSlope');
     const cues = document.getElementById('dailyIntelSalesCues');
     const cueCount = document.getElementById('dailyIntelCueCount');
-    const picksEl = document.getElementById('dailyIntelPicks');
+    const rvEl = document.getElementById('dailyIntelRelativeValue');
+    const rvCount = document.getElementById('dailyIntelRvCount');
     const gapsEl = document.getElementById('dailyIntelGaps');
-    if (!sub || !stat || !kicker || !status || !summary || !slopeEl || !cues || !cueCount || !picksEl || !gapsEl) return;
+    if (!sub || !stat || !kicker || !status || !summary || !slopeEl || !cues || !cueCount || !rvEl || !rvCount || !gapsEl) return;
 
     const data = dailyIntelData;
     if (!data) {
@@ -3869,7 +3974,8 @@
       kicker.textContent = 'Error';
       status.innerHTML = '<div class="daily-intel-alert">Could not load the daily intelligence endpoint.</div>';
       summary.innerHTML = '';
-      picksEl.innerHTML = '<div class="market-empty">No rule-based picks available.</div>';
+      rvEl.innerHTML = '<div class="market-empty small">CD Relative Value data is not loaded.</div>';
+      rvCount.textContent = '—';
       gapsEl.innerHTML = '';
       renderDailyCurveChart([]);
       return;
@@ -3890,11 +3996,13 @@
     const crude = dailyMarketRow(marketRows, ['CRUDE FUTURE', 'Crude Oil']);
     const sofr = dailyMarketRow(marketRates, ['SOFR']);
     const counts = data.counts || {};
-    const picks = data.picks || [];
+    const rv = data.relativeValue || {};
     const warnings = data.warnings || [];
     const gaps = data.gaps || [];
+    const sourceCount = (data.package && data.package.econ ? 1 : 0)
+      + ((data.package && data.package.relativeValue) || (rv && rv.rowCount) ? 1 : 0);
 
-    stat.textContent = formatNumber(picks.length);
+    stat.textContent = `${sourceCount}/2`;
     sub.textContent = data.asOfDate
       ? `Auto-generated from the ${formatShortDate(data.asOfDate)} uploaded package.`
       : 'Auto-generated from the current uploaded package.';
@@ -3907,6 +4015,7 @@
       <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.munis || 0))}</strong> Munis</div>
       <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.agencies || 0))}</strong> Agencies</div>
       <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(counts.corporates || 0))}</strong> Corporates</div>
+      <div class="daily-intel-pill"><strong>${escapeHtml(formatNumber(rv.rowCount || 0))}</strong> RV Rows</div>
       <div class="daily-intel-pill ${warnings.length ? 'warn' : ''}"><strong>${escapeHtml(formatNumber(warnings.length))}</strong> Warnings</div>
     `;
 
@@ -3931,9 +4040,7 @@
       </div>
     `).join('') : '<div class="market-empty small">No sales cues extracted.</div>';
 
-    picksEl.innerHTML = picks.length
-      ? picks.map(renderDailyPickCard).join('')
-      : '<div class="market-empty">No rule-based picks available from the current package.</div>';
+    renderDailyRelativeValue(rv);
 
     gapsEl.innerHTML = gaps.length
       ? gaps.map(gap => `<div class="daily-gap-item">${escapeHtml(gap)}</div>`).join('')
@@ -4088,7 +4195,7 @@
           <strong>${escapeHtml(cue.title)}</strong>
           <p>${escapeHtml(cue.detail)}</p>
         </article>
-      `).join('') : `<div class="market-empty small">${loadFailed ? 'MMD curve data could not be loaded.' : 'Upload today&apos;s MMD PDF to generate sales cues.'}</div>`;
+      `).join('') : `<div class="market-empty small">${loadFailed ? 'MMD curve data could not be loaded.' : 'Upload today&apos;s MMD PDF or Excel to generate sales cues.'}</div>`;
     }
 
     const ratios = document.getElementById('mmdRatioGrid');
@@ -4113,13 +4220,15 @@
             <td><strong>${escapeHtml(row.label || `${row.term}Y`)}</strong></td>
             <td>${escapeHtml(row.maturityYear || '—')}</td>
             <td>${escapeHtml(rvRateValue(row.aaa))}</td>
+            <td>${escapeHtml(rvRateValue(row.preRefunded))}</td>
+            <td>${escapeHtml(rvRateValue(row.insured))}</td>
             <td>${escapeHtml(rvRateValue(row.aa))}</td>
             <td>${escapeHtml(rvRateValue(row.a))}</td>
             <td>${escapeHtml(rvRateValue(row.baa))}</td>
             <td>${ratio ? escapeHtml(`${ratio.ratioPct}%`) : '—'}</td>
           </tr>
         `;
-      }).join('') : `<tr><td colspan="7">${loadFailed ? 'Could not load /api/mmd. Restart the portal server after this update.' : 'MMD curve table unavailable.'}</td></tr>`;
+      }).join('') : `<tr><td colspan="9">${loadFailed ? 'Could not load /api/mmd. Restart the portal server after this update.' : 'MMD curve table unavailable.'}</td></tr>`;
     }
   }
 
@@ -4132,6 +4241,8 @@
     if (downloadBtn) {
       if (mmdFile) {
         const src = '/current/' + encodeURIComponent(mmdFile);
+        const isXlsx = /\.(xlsx|xlsm|xls)$/i.test(mmdFile);
+        downloadBtn.textContent = isXlsx ? 'Download Excel ↓' : 'Download PDF ↓';
         downloadBtn.style.display = '';
         downloadBtn.onclick = () => { window.location.href = src + '?download=1'; };
       } else {
@@ -4140,13 +4251,13 @@
       }
     }
     const rows = data && Array.isArray(data.curve) ? data.curve.filter(row => Number.isFinite(Number(row.aaa))) : [];
-    setText('mmdCurveLabel', data && data.asOfDate ? formatShortDate(data.asOfDate) : (data === null ? 'MMD unavailable' : 'MMD PDF'));
+    setText('mmdCurveLabel', data && data.asOfDate ? formatShortDate(data.asOfDate) : (data === null ? 'MMD unavailable' : 'MMD scale'));
     setText('mmdSub', data && data.asOfDate
-      ? `AAA municipal curve from the uploaded MMD PDF · ${formatShortDate(data.asOfDate)}`
-      : (data === null ? 'No MMD curve data loaded.' : 'Upload the daily MMD PDF to populate this page.'));
+      ? `AAA municipal curve from the uploaded MMD scale · ${formatShortDate(data.asOfDate)}`
+      : (data === null ? 'No MMD curve data loaded.' : 'Upload the daily MMD PDF or Excel to populate this page.'));
     renderMmdSalesInfo(rows);
     if (!rows.length) {
-      el.innerHTML = '<div class="market-empty small">Upload today&apos;s MMD PDF to draw the AAA curve.</div>';
+      el.innerHTML = '<div class="market-empty small">Upload today&apos;s MMD PDF or Excel to draw the AAA curve.</div>';
       return;
     }
 
@@ -5866,58 +5977,106 @@
   };
 
   function setupSwapBuilderTab() {
-    const picker = document.getElementById('swapBankSelect');
-    const handleBankSelection = () => {
-      const id = picker.value || null;
-      if (id === swapBuilderState.bankId) return;
-      setSwapSelectedBank(id);
-      swapBuilderState.view = 'home';
-      swapBuilderState.proposalId = null;
-      swapBuilderState.record = null;
-      replaceHashParams('bond-swap', { bank: id || '' });
-      if (id) loadSuggestedSwapsForBank(id);
-      else renderSwapBuilderEmpty();
-      loadRecentSwapProposals(id);
-    };
+    const picker = document.getElementById('swapBankSearchInput');
+    const results = document.getElementById('swapBankResults');
+    let searchTimer = null;
     if (picker) {
-      picker.addEventListener('change', handleBankSelection);
-      picker.addEventListener('input', handleBankSelection);
+      picker.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => searchSwapBanks(picker.value), 180);
+      });
+      picker.addEventListener('focus', () => {
+        if (results && results.childElementCount) results.hidden = false;
+        else searchSwapBanks(picker.value);
+      });
       picker.addEventListener('keydown', event => {
-        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        if (event.key !== 'Enter') return;
+        const first = results && results.querySelector('[data-swap-bank-result]');
+        if (!first) return;
         event.preventDefault();
-        const direction = event.key === 'ArrowDown' ? 1 : -1;
-        const max = picker.options.length - 1;
-        picker.selectedIndex = Math.max(0, Math.min(max, picker.selectedIndex + direction));
-        handleBankSelection();
+        chooseSwapBank(first.dataset.swapBankResult, first.dataset.swapBankName || first.textContent || '');
       });
     }
     const body = document.getElementById('swapBuilderBody');
     if (body && picker) {
       body.addEventListener('click', event => {
+        if (event.target.closest('[data-swap-ria-start]')) {
+          renderManualClientSwapForm();
+          return;
+        }
         if (!event.target.closest('[data-swap-pick-bank]')) return;
         picker.focus();
-        if (typeof picker.showPicker === 'function') {
-          try { picker.showPicker(); } catch (e) { /* not user-activated; focus is enough */ }
-        }
+        searchSwapBanks(picker.value);
       });
     }
+    document.addEventListener('click', event => {
+      if (!results || results.hidden) return;
+      if (event.target.closest('.swap-bank-picker')) return;
+      results.hidden = true;
+    });
   }
 
   function setSwapSelectedBank(bankId, fallbackName = '') {
     const id = bankId ? String(bankId) : null;
-    const select = document.getElementById('swapBankSelect');
+    const input = document.getElementById('swapBankSearchInput');
     swapBuilderState.bankId = id;
-    if (select) {
-      select.value = id || '';
-      const selected = select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
-      if (id && selected && selected.value === id) {
-        swapBuilderState.bankName = selected.textContent || fallbackName || id;
-      } else {
-        swapBuilderState.bankName = id ? (fallbackName || swapBuilderState.bankName || id) : '';
+    swapBuilderState.bankName = id ? (fallbackName || swapBuilderState.bankName || id) : '';
+    if (input) input.value = id ? swapBuilderState.bankName : '';
+  }
+
+  async function searchSwapBanks(query) {
+    const results = document.getElementById('swapBankResults');
+    if (!results) return;
+    const q = String(query || '').trim();
+    results.hidden = false;
+    results.innerHTML = '<div class="swap-bank-result-empty">Searching…</div>';
+    try {
+      const params = new URLSearchParams({ q, limit: '12' });
+      const res = await fetch('/api/banks/search?' + params.toString(), { cache: 'no-store' });
+      const data = await readBankJson(res);
+      const rows = Array.isArray(data.results) ? data.results : [];
+      if (!rows.length) {
+        results.innerHTML = '<div class="swap-bank-result-empty">No matching banks found.</div>';
+        return;
       }
-    } else {
-      swapBuilderState.bankName = id ? (fallbackName || swapBuilderState.bankName || id) : '';
+      results.innerHTML = rows.map(row => {
+        const label = bankDisplayName(row);
+        const meta = [row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.accountStatusLabel || (row.accountStatus && row.accountStatus.status)].filter(Boolean).join(' · ');
+        return `
+          <button type="button" data-swap-bank-result="${escapeHtml(row.id)}" data-swap-bank-name="${escapeHtml(label)}">
+            <strong>${escapeHtml(label)}</strong>
+            <span>${escapeHtml(meta)}</span>
+          </button>`;
+      }).join('');
+      results.querySelectorAll('[data-swap-bank-result]').forEach(btn => {
+        btn.addEventListener('click', () => chooseSwapBank(btn.dataset.swapBankResult, btn.dataset.swapBankName || btn.textContent || ''));
+      });
+    } catch (err) {
+      results.innerHTML = `<div class="swap-bank-result-empty">${escapeHtml(err.message || 'Bank search failed')}</div>`;
     }
+  }
+
+  function chooseSwapBank(bankId, bankName) {
+    const id = bankId || null;
+    if (id === swapBuilderState.bankId) {
+      const results = document.getElementById('swapBankResults');
+      if (results) results.hidden = true;
+      return;
+    }
+    setSwapSelectedBank(id, bankName);
+    swapBuilderState.view = 'home';
+    swapBuilderState.proposalId = null;
+    swapBuilderState.record = null;
+    replaceHashParams('bond-swap', { bank: id || '' });
+    if (id) loadSuggestedSwapsForBank(id);
+    else renderSwapBuilderEmpty();
+    loadRecentSwapProposals(id);
+    const results = document.getElementById('swapBankResults');
+    if (results) results.hidden = true;
+  }
+
+  function isManualSwapClientId(bankId) {
+    return /^manual-ria-/i.test(String(bankId || ''));
   }
 
   // ============ Maturity & Call Calendar ============
@@ -6391,583 +6550,6 @@
     downloadCsv('fbbs_cd_rollover_wall_' + cdRolloverState.window + 'd_' + stamp + '.csv', rows);
   }
 
-  // =========================================================================
-  // Signal Inbox (#signals) — the highest-leverage "reasons to act" feed.
-  // Renders GET /api/bank-signals grouped by category, with per-row actions
-  // (Open tear sheet / Create Task / Create Opportunity / Log Call / Dismiss)
-  // wired to the existing per-bank routes. Dismissals are client-side
-  // localStorage (per the v1 contract) PLUS a POST for the audit trail.
-  // =========================================================================
-  const SIGNALS_FILTER_KEY = 'fbbs.signalInboxFilters.v1';
-  const SIGNALS_CATEGORY_ORDER = ['Coverage', 'Funding', 'Securities', 'Muni', 'Portfolio', 'Data-Freshness'];
-  const SIGNAL_ACTION_LABELS = {
-    open: 'Open Tear Sheet',
-    createTask: 'Create Task',
-    createOpportunity: 'Create Opportunity',
-    logCall: 'Log Call',
-    saveReport: 'Save as Report',
-    dismiss: 'Dismiss'
-  };
-  let signalInboxState = {
-    wired: false,
-    loading: false,
-    data: null,
-    scope: 'me',          // 'me' | 'all' (admin only)
-    state: '',
-    category: '',         // '' = all categories
-    search: '',
-    collapsed: {}         // category -> bool (collapsed state)
-  };
-
-  function signalDismissKey() {
-    const rep = meState.rep && (meState.rep.username || meState.rep.displayName) ? (meState.rep.username || meState.rep.displayName) : 'anon';
-    return 'fbbs.signalsDismissed.' + String(rep).toLowerCase();
-  }
-
-  function loadDismissedSignalIds() {
-    try {
-      const raw = localStorage.getItem(signalDismissKey());
-      const arr = raw ? JSON.parse(raw) : [];
-      return new Set(Array.isArray(arr) ? arr.map(String) : []);
-    } catch (_) { return new Set(); }
-  }
-
-  function rememberDismissedSignal(dismissId) {
-    if (!dismissId) return;
-    try {
-      const set = loadDismissedSignalIds();
-      set.add(String(dismissId));
-      localStorage.setItem(signalDismissKey(), JSON.stringify(Array.from(set)));
-    } catch (_) { /* localStorage may be unavailable — dismissal degrades to session-only */ }
-  }
-
-  function persistSignalFilters() {
-    try {
-      sessionStorage.setItem(SIGNALS_FILTER_KEY, JSON.stringify({
-        scope: signalInboxState.scope,
-        state: signalInboxState.state,
-        category: signalInboxState.category,
-        search: signalInboxState.search
-      }));
-    } catch (_) { /* non-fatal */ }
-  }
-
-  function restoreSignalFilters() {
-    try {
-      const raw = sessionStorage.getItem(SIGNALS_FILTER_KEY);
-      if (!raw) return;
-      const saved = JSON.parse(raw) || {};
-      if (saved.scope === 'me' || saved.scope === 'all') signalInboxState.scope = saved.scope;
-      if (typeof saved.state === 'string') signalInboxState.state = saved.state;
-      if (typeof saved.category === 'string') signalInboxState.category = saved.category;
-      if (typeof saved.search === 'string') signalInboxState.search = saved.search;
-    } catch (_) { /* non-fatal */ }
-  }
-
-  function enterSignalInbox() {
-    restoreSignalFilters();
-    if (!signalInboxState.wired) {
-      signalInboxState.wired = true;
-      const scopeCtl = document.getElementById('signalsScopeControl');
-      const scopeSel = document.getElementById('signalsScope');
-      // The firm-wide scope toggle is admin-only (non-admin ?rep=all collapses
-      // server-side, so showing it would be a misleading dead-end).
-      if (scopeCtl) scopeCtl.hidden = !isAdminUiAllowed();
-      if (scopeSel) {
-        scopeSel.value = signalInboxState.scope;
-        scopeSel.addEventListener('change', () => {
-          signalInboxState.scope = scopeSel.value === 'all' ? 'all' : 'me';
-          persistSignalFilters();
-          loadSignalInbox();
-        });
-      }
-      const stateSel = document.getElementById('signalsState');
-      if (stateSel) stateSel.addEventListener('change', () => {
-        signalInboxState.state = stateSel.value || '';
-        persistSignalFilters();
-        loadSignalInbox();
-      });
-      const searchEl = document.getElementById('signalsSearch');
-      if (searchEl) {
-        searchEl.value = signalInboxState.search || '';
-        let t;
-        searchEl.addEventListener('input', () => {
-          clearTimeout(t);
-          t = setTimeout(() => {
-            signalInboxState.search = searchEl.value || '';
-            persistSignalFilters();
-            renderSignalInbox(); // client-side search — no re-fetch
-          }, 200);
-        });
-      }
-      const refreshBtn = document.getElementById('signalsRefresh');
-      if (refreshBtn) refreshBtn.addEventListener('click', () => loadSignalInbox(true));
-      const exportBtn = document.getElementById('signalsExport');
-      if (exportBtn) exportBtn.addEventListener('click', exportSignalsCsv);
-
-      // Category chip + per-row action delegation (one listener for the page body).
-      const chips = document.getElementById('signalsCategoryChips');
-      if (chips) chips.addEventListener('click', e => {
-        const btn = e.target.closest('button[data-sig-cat]');
-        if (!btn) return;
-        const cat = btn.getAttribute('data-sig-cat') || '';
-        signalInboxState.category = cat;
-        persistSignalFilters();
-        renderSignalInbox();
-      });
-      const body = document.getElementById('signalsBody');
-      if (body) body.addEventListener('click', onSignalBodyClick);
-    } else {
-      const scopeCtl = document.getElementById('signalsScopeControl');
-      if (scopeCtl) scopeCtl.hidden = !isAdminUiAllowed();
-    }
-    loadSignalInbox();
-  }
-
-  async function loadSignalInbox(force) {
-    if (signalInboxState.loading) return;
-    const body = document.getElementById('signalsBody');
-    if (!body) return;
-    if (!force && signalInboxState.data) { renderSignalInbox(); return; }
-    signalInboxState.loading = true;
-    body.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Scanning your banks for signals&hellip;</span></div>';
-    try {
-      const params = new URLSearchParams();
-      if (signalInboxState.scope === 'all' && isAdminUiAllowed()) params.set('rep', 'all');
-      if (signalInboxState.state) params.set('state', signalInboxState.state);
-      const res = await fetch('/api/bank-signals' + (params.toString() ? '?' + params.toString() : ''), { cache: 'no-store' });
-      if (res.status === 503) {
-        signalInboxState.data = null;
-        body.innerHTML = '<p class="muted-note">The bank dataset is not loaded yet. Import the call-report workbook from the Upload page, then refresh.</p>';
-        return;
-      }
-      if (!res.ok) throw new Error('Request failed (' + res.status + ')');
-      signalInboxState.data = await res.json();
-      renderSignalInbox();
-    } catch (err) {
-      signalInboxState.data = null;
-      body.innerHTML = '<p class="error-note">Could not load Signal Inbox: ' + escapeHtml(err.message) + '</p>';
-    } finally {
-      signalInboxState.loading = false;
-    }
-  }
-
-  // Apply client-side filters (dismissed localStorage rows, state, category,
-  // name search) to the server's already-ranked categories. Returns the same
-  // shape with filtered signals + recomputed counts.
-  function visibleSignalCategories() {
-    const data = signalInboxState.data;
-    if (!data || !Array.isArray(data.categories)) return [];
-    const dismissed = loadDismissedSignalIds();
-    const q = (signalInboxState.search || '').trim().toLowerCase();
-    const stateFilter = (signalInboxState.state || '').toUpperCase();
-    return data.categories.map(cat => {
-      const signals = (cat.signals || []).filter(sig => {
-        if (sig.dismissId && dismissed.has(String(sig.dismissId))) return false;
-        if (stateFilter && String(sig.state || '').toUpperCase() !== stateFilter) return false;
-        if (q) {
-          const hay = `${sig.displayName || ''} ${sig.city || ''} ${sig.state || ''} ${sig.headline || ''}`.toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      });
-      return { category: cat.category, label: cat.label, count: signals.length, signals };
-    });
-  }
-
-  function renderSignalInbox() {
-    const data = signalInboxState.data;
-    const body = document.getElementById('signalsBody');
-    if (!body) return;
-
-    // Scope / rep label + meta.
-    const repLabel = data && data.rep ? (data.rep.displayName || data.rep.username) : (data && data.scope === 'firm' ? 'Firm-wide' : '');
-    const sub = document.getElementById('signalsSub');
-    if (sub && data) {
-      sub.textContent = (data.scope === 'firm')
-        ? 'Firm-wide signals across every covered bank — cold accounts, funding pressure, offering fits, and data freshness.'
-        : `Your action queue${repLabel ? ', ' + repLabel : ''} — cold owned accounts, overdue prospect tasks, funding pressure, offering fits, and data freshness.`;
-    }
-
-    // Populate the state dropdown from the loaded rows (once we know the data).
-    populateSignalStateOptions();
-
-    const cats = visibleSignalCategories();
-    const totalVisible = cats.reduce((sum, c) => sum + c.count, 0);
-    setText('signalsHeroStat', formatNumber(totalVisible));
-
-    // Category chips (counts reflect post-dismiss, pre-state/search filtering so
-    // they stay a stable map of where signals live). We recompute against the
-    // dismissed set but ignore the state/search filter for the chip badges.
-    renderSignalCategoryChips();
-
-    // Meta line.
-    const meta = document.getElementById('signalsMeta');
-    if (meta && data) {
-      const rowsTotal = data.totals ? data.totals.rows : 0;
-      const refreshed = data.generatedAt ? formatRelativeAt(data.generatedAt) : '';
-      meta.textContent = `${formatNumber(totalVisible)} signal${totalVisible === 1 ? '' : 's'} shown · ${formatNumber(rowsTotal)} computed this package` +
-        (data.packageDate ? ` (package ${data.packageDate})` : '') + (refreshed ? ` · refreshed ${refreshed}` : '');
-    }
-
-    // Warnings (e.g. afsMunis not projected).
-    const warnBox = document.getElementById('signalsWarnings');
-    if (warnBox) {
-      const warnings = (data && Array.isArray(data.warnings)) ? data.warnings : [];
-      if (warnings.length) {
-        warnBox.hidden = false;
-        warnBox.innerHTML = warnings.map(w => `<p class="sig-warning">${escapeHtml(w)}</p>`).join('');
-      } else {
-        warnBox.hidden = true;
-        warnBox.innerHTML = '';
-      }
-    }
-
-    // Body: one collapsible section per category in fixed order. If a single
-    // category filter is active, only that one renders.
-    const activeCat = signalInboxState.category;
-    const shown = activeCat ? cats.filter(c => c.category === activeCat) : cats;
-    const sections = shown.map(renderSignalCategorySection).join('');
-    if (!totalVisible) {
-      body.innerHTML = '<div class="empty-state"><div class="empty-state-icon" aria-hidden="true">&#10003;</div><h3>Inbox zero</h3><p>No live signals for the current filters. New signals surface as accounts go cold, offerings land, and data ages.</p></div>';
-      return;
-    }
-    body.innerHTML = sections;
-  }
-
-  function populateSignalStateOptions() {
-    const sel = document.getElementById('signalsState');
-    const data = signalInboxState.data;
-    if (!sel || !data || !Array.isArray(data.categories)) return;
-    const states = new Set();
-    data.categories.forEach(cat => (cat.signals || []).forEach(sig => {
-      const st = String(sig.state || '').toUpperCase();
-      if (st && st.length === 2) states.add(st);
-    }));
-    const ordered = Array.from(states).sort();
-    const current = signalInboxState.state || '';
-    sel.innerHTML = '<option value="">All states</option>' +
-      ordered.map(st => `<option value="${escapeHtml(st)}"${st === current ? ' selected' : ''}>${escapeHtml(st)}</option>`).join('');
-  }
-
-  function renderSignalCategoryChips() {
-    const wrap = document.getElementById('signalsCategoryChips');
-    const data = signalInboxState.data;
-    if (!wrap || !data || !Array.isArray(data.categories)) return;
-    const dismissed = loadDismissedSignalIds();
-    const counts = {};
-    let total = 0;
-    data.categories.forEach(cat => {
-      const live = (cat.signals || []).filter(s => !(s.dismissId && dismissed.has(String(s.dismissId)))).length;
-      counts[cat.category] = { label: cat.label, count: live };
-      total += live;
-    });
-    const active = signalInboxState.category;
-    const chips = [`<button type="button" class="sig-chip${!active ? ' active' : ''}" data-sig-cat="">All <span class="sig-chip-count">${formatNumber(total)}</span></button>`];
-    SIGNALS_CATEGORY_ORDER.forEach(catKey => {
-      const info = counts[catKey];
-      if (!info) return;
-      chips.push(`<button type="button" class="sig-chip${active === catKey ? ' active' : ''}" data-sig-cat="${escapeHtml(catKey)}">${escapeHtml(info.label)} <span class="sig-chip-count">${formatNumber(info.count)}</span></button>`);
-    });
-    wrap.innerHTML = chips.join('');
-  }
-
-  function renderSignalCategorySection(cat) {
-    if (!cat.signals.length) return '';
-    const collapsed = !!signalInboxState.collapsed[cat.category];
-    const rows = collapsed ? '' : cat.signals.map(renderSignalRow).join('');
-    return `
-      <section class="sig-category${collapsed ? ' is-collapsed' : ''}" data-sig-section="${escapeHtml(cat.category)}">
-        <button type="button" class="sig-category-head" data-sig-collapse="${escapeHtml(cat.category)}" aria-expanded="${collapsed ? 'false' : 'true'}">
-          <span class="sig-category-caret" aria-hidden="true">${collapsed ? '&#9656;' : '&#9662;'}</span>
-          <span class="sig-category-name">${escapeHtml(cat.label)}</span>
-          <span class="sig-category-count">${formatNumber(cat.count)}</span>
-        </button>
-        <div class="sig-rows">${rows}</div>
-      </section>`;
-  }
-
-  function renderSignalRow(sig) {
-    const sev = ['high', 'med', 'low'].includes(sig.severity) ? sig.severity : 'med';
-    const loc = [sig.city, sig.state].filter(Boolean).join(', ');
-    const metric = sig.metric && (sig.metric.value !== null && sig.metric.value !== undefined && sig.metric.value !== '')
-      ? `<span class="sig-metric"><span class="sig-metric-val">${escapeHtml(formatSignalMetricValue(sig.metric))}</span><span class="sig-metric-lbl">${escapeHtml(sig.metric.label || '')}</span></span>`
-      : '';
-    const chips = signalReasonChips(sig).map(c => `<span class="sig-tag">${escapeHtml(c)}</span>`).join('');
-    const actions = (Array.isArray(sig.actions) ? sig.actions : []).map(key => signalActionButton(key, sig)).filter(Boolean).join('');
-    const statusBadge = sig.status ? `<span class="sig-status">${escapeHtml(sig.status)}</span>` : '';
-    const priorityBadge = sig.priority ? `<span class="sig-priority sig-priority-${escapeHtml(String(sig.priority).toLowerCase())}">${escapeHtml(sig.priority)}</span>` : '';
-    return `
-      <article class="sig-row sig-sev-${sev}" data-sig-key="${escapeHtml(sig.signalKey)}" data-sig-bank="${escapeHtml(sig.bankId)}" data-sig-dismiss="${escapeHtml(sig.dismissId || '')}">
-        <span class="sig-dot sig-dot-${sev}" title="${sev === 'high' ? 'High' : sev === 'low' ? 'Low' : 'Medium'} priority" aria-hidden="true"></span>
-        <div class="sig-main">
-          <div class="sig-headline-row">
-            <span class="sig-headline">${escapeHtml(sig.headline || '')}</span>
-            ${metric}
-          </div>
-          <div class="sig-bank-line">
-            <span class="sig-bank-name">${escapeHtml(sig.displayName || sig.bankId)}</span>
-            ${loc ? `<span class="sig-bank-loc">${escapeHtml(loc)}</span>` : ''}
-            ${statusBadge}${priorityBadge}
-          </div>
-          ${sig.detail ? `<p class="sig-detail">${escapeHtml(sig.detail)}</p>` : ''}
-          ${chips ? `<div class="sig-tags">${chips}</div>` : ''}
-        </div>
-        <div class="sig-actions">${actions}</div>
-      </article>`;
-  }
-
-  function formatSignalMetricValue(metric) {
-    if (!metric) return '';
-    const v = metric.value;
-    const unit = metric.unit || '';
-    if (v === null || v === undefined || v === '') return '';
-    if (unit === '$000') return moneyKLabel(v);
-    if (typeof v === 'number') {
-      const n = Number.isInteger(v) ? formatNumber(v) : v.toLocaleString('en-US', { maximumFractionDigits: 2 });
-      return unit && unit !== '' ? `${n}${unit.startsWith('/') ? unit : ' ' + unit}` : n;
-    }
-    return String(v) + (unit && !unit.startsWith('/') && unit !== '' ? ' ' + unit : (unit || ''));
-  }
-
-  function moneyKLabel(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return String(value);
-    if (n >= 1000) return '$' + (n / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 }) + 'MM';
-    return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 }) + 'K';
-  }
-
-  // Short "reason it screens" chips derived from the signal's extra payload.
-  function signalReasonChips(sig) {
-    const extra = sig.extra || {};
-    const chips = [];
-    switch (sig.signalKey) {
-      case 'coverage-cold-owned':
-        if (extra.lastTouch) chips.push('Last touch ' + extra.lastTouch);
-        else chips.push('No touch on record');
-        if (extra.thresholdDays) chips.push('> ' + extra.thresholdDays + 'd cold');
-        break;
-      case 'coverage-prospect-overdue-task':
-        if (extra.dueDate) chips.push('Due ' + extra.dueDate);
-        if (extra.overdueDays) chips.push(extra.overdueDays + 'd overdue');
-        break;
-      case 'coverage-large-no-owner':
-        chips.push('Unclaimed');
-        if (extra.certNumber) chips.push('Cert ' + extra.certNumber);
-        break;
-      case 'funding-pressure':
-        if (extra.recommendation) chips.push(extra.recommendation);
-        if (extra.score != null) chips.push('Score ' + extra.score + '/15');
-        break;
-      case 'funding-cd-rolling':
-        if (extra.count != null) chips.push(extra.count + ' CD' + (extra.count === 1 ? '' : 's') + ' ≤' + (extra.windowDays || '') + 'd');
-        if (extra.nearestMaturity) chips.push('Nearest ' + extra.nearestMaturity);
-        if (extra.nearestCusip) chips.push(extra.nearestCusip);
-        break;
-      case 'securities-offering-fit':
-        if (extra.bestLabel) chips.push(extra.bestLabel);
-        if (extra.inStateMuni) chips.push('In-state');
-        if (extra.pick && extra.pick.cusip) chips.push(extra.pick.cusip);
-        if (extra.pick && extra.pick.yield != null) chips.push(Number(extra.pick.yield).toFixed(2) + '%');
-        break;
-      case 'muni-afs-book':
-        if (extra.afsMunis != null) chips.push('AFS ' + moneyKLabel(extra.afsMunis));
-        if (extra.isSubS) chips.push('Sub-S');
-        else if (extra.subchapterS) chips.push('C-corp · BQ ~32bp');
-        break;
-      case 'freshness-fdic-newer':
-        if (extra.fdicPeriod) chips.push('FDIC ' + extra.fdicPeriod);
-        if (extra.workbookPeriod) chips.push('Workbook ' + extra.workbookPeriod);
-        break;
-      default:
-        break;
-    }
-    return chips;
-  }
-
-  function signalActionButton(key, sig) {
-    const label = SIGNAL_ACTION_LABELS[key];
-    if (!label) return '';
-    if (key === 'open') {
-      // Reuse the global data-goto bank deep-link plumbing.
-      return `<button type="button" class="small-btn" data-sig-open="${escapeHtml(sig.bankId)}">${escapeHtml(label)}</button>`;
-    }
-    if (key === 'dismiss') {
-      return `<button type="button" class="text-btn sig-dismiss-btn" data-sig-action="dismiss">${escapeHtml(label)}</button>`;
-    }
-    return `<button type="button" class="text-btn" data-sig-action="${escapeHtml(key)}">${escapeHtml(label)}</button>`;
-  }
-
-  function onSignalBodyClick(e) {
-    const collapseBtn = e.target.closest('[data-sig-collapse]');
-    if (collapseBtn) {
-      const cat = collapseBtn.getAttribute('data-sig-collapse');
-      signalInboxState.collapsed[cat] = !signalInboxState.collapsed[cat];
-      renderSignalInbox();
-      return;
-    }
-    const openBtn = e.target.closest('[data-sig-open]');
-    if (openBtn) {
-      const bankId = openBtn.getAttribute('data-sig-open');
-      navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
-      return;
-    }
-    const actionBtn = e.target.closest('[data-sig-action]');
-    if (!actionBtn) return;
-    const rowEl = actionBtn.closest('[data-sig-bank]');
-    if (!rowEl) return;
-    const action = actionBtn.getAttribute('data-sig-action');
-    const sig = findSignalRow(rowEl.getAttribute('data-sig-key'), rowEl.getAttribute('data-sig-bank'), rowEl.getAttribute('data-sig-dismiss'));
-    if (!sig) return;
-    if (action === 'dismiss') return dismissSignal(sig, rowEl, actionBtn);
-    if (action === 'createTask') return signalCreateTask(sig, actionBtn);
-    if (action === 'createOpportunity') return signalCreateOpportunity(sig, actionBtn);
-    if (action === 'logCall') return signalLogCall(sig, actionBtn);
-  }
-
-  function findSignalRow(signalKey, bankId, dismissId) {
-    const data = signalInboxState.data;
-    if (!data || !Array.isArray(data.categories)) return null;
-    for (const cat of data.categories) {
-      for (const sig of (cat.signals || [])) {
-        if (sig.signalKey === signalKey && String(sig.bankId) === String(bankId) &&
-            (!dismissId || String(sig.dismissId || '') === String(dismissId))) {
-          return sig;
-        }
-      }
-    }
-    return null;
-  }
-
-  async function dismissSignal(sig, rowEl, btn) {
-    // Client-side hide is the source of truth in v1; the POST is audit-only.
-    rememberDismissedSignal(sig.dismissId);
-    if (rowEl) rowEl.remove();
-    // Update chips/counts/meta to reflect the hidden row.
-    renderSignalCategoryChips();
-    const cats = visibleSignalCategories();
-    const totalVisible = cats.reduce((sum, c) => sum + c.count, 0);
-    setText('signalsHeroStat', formatNumber(totalVisible));
-    showToast('Signal dismissed');
-    try {
-      await fetch('/api/bank-signals/' + encodeURIComponent(sig.signalKey) + '/dismiss', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bankId: sig.bankId, packageDate: signalInboxState.data && signalInboxState.data.packageDate ? signalInboxState.data.packageDate : undefined })
-      });
-    } catch (_) { /* audit-only — a failed POST never un-dismisses the row */ }
-  }
-
-  async function signalCreateTask(sig, btn) {
-    const title = window.prompt('New task for ' + (sig.displayName || sig.bankId) + ':', signalDefaultTaskTitle(sig));
-    if (title === null) return;
-    if (!title.trim()) return showToast('Give the task a title', true);
-    if (btn) btn.disabled = true;
-    try {
-      const res = await fetch('/api/banks/' + encodeURIComponent(sig.bankId) + '/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), priority: 'Normal' })
-      });
-      const out = await readBankJson(res);
-      if (!res.ok) throw new Error(out.error || ('HTTP ' + res.status));
-      if (btn) btn.textContent = 'Task ✓';
-      showToast('Task created for ' + (sig.displayName || sig.bankId));
-    } catch (e) {
-      if (btn) btn.disabled = false;
-      showToast(e.message || 'Could not create task', true);
-    }
-  }
-
-  function signalDefaultTaskTitle(sig) {
-    switch (sig.signalKey) {
-      case 'coverage-cold-owned': return 'Reach out — account going cold';
-      case 'coverage-prospect-overdue-task': return 'Follow up on overdue task';
-      case 'coverage-large-no-owner': return 'Qualify unclaimed prospect';
-      case 'funding-pressure': return 'Discuss brokered-CD funding';
-      case 'funding-cd-rolling': return 'Call re: CD re-raise';
-      case 'securities-offering-fit': return 'Pitch ' + ((sig.extra && sig.extra.pick && sig.extra.pick.description) || (sig.extra && sig.extra.bestLabel) || 'offering');
-      case 'muni-afs-book': return 'Show muni offerings — AFS book';
-      default: return 'Follow up';
-    }
-  }
-
-  async function signalCreateOpportunity(sig, btn) {
-    if (btn) btn.disabled = true;
-    const description = signalOpportunityDescription(sig);
-    const product = signalOpportunityProduct(sig);
-    try {
-      const res = await fetch('/api/banks/' + encodeURIComponent(sig.bankId) + '/opportunities', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ product, description })
-      });
-      const out = await readBankJson(res);
-      if (!res.ok) throw new Error(out.error || ('HTTP ' + res.status));
-      if (btn) btn.textContent = 'Opp ✓';
-      showToast('Opportunity created for ' + (sig.displayName || sig.bankId));
-    } catch (e) {
-      if (btn) btn.disabled = false;
-      showToast(e.message || 'Could not create opportunity', true);
-    }
-  }
-
-  function signalOpportunityProduct(sig) {
-    if (sig.signalKey === 'funding-pressure' || sig.signalKey === 'funding-cd-rolling') return 'Brokered CDs';
-    if (sig.signalKey === 'securities-offering-fit' || sig.signalKey === 'muni-afs-book') return 'Securities Purchase';
-    return 'Securities Purchase';
-  }
-
-  function signalOpportunityDescription(sig) {
-    const pick = sig.extra && sig.extra.pick;
-    if (sig.signalKey === 'securities-offering-fit' && pick) {
-      return `${pick.description || pick.cusip || ''}${pick.cusip ? ' (' + pick.cusip + ')' : ''}${pick.yield != null ? ', ' + Number(pick.yield).toFixed(2) + '%' : ''} — from Signal Inbox offering fit.`;
-    }
-    return (sig.headline || '') + ' — created from Signal Inbox.';
-  }
-
-  async function signalLogCall(sig, btn) {
-    const note = window.prompt('Log a call note for ' + (sig.displayName || sig.bankId) + ':', '');
-    if (note === null) return;
-    if (btn) btn.disabled = true;
-    try {
-      const res = await fetch('/api/banks/' + encodeURIComponent(sig.bankId) + '/activity', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kind: 'call',
-          subject: sig.headline || 'Call',
-          body: note.trim() || (sig.detail || ''),
-          activityDate: new Date().toISOString().slice(0, 10)
-        })
-      });
-      const out = await readBankJson(res);
-      if (!res.ok) throw new Error(out.error || ('HTTP ' + res.status));
-      if (btn) btn.textContent = 'Logged ✓';
-      showToast('Call logged for ' + (sig.displayName || sig.bankId));
-    } catch (e) {
-      if (btn) btn.disabled = false;
-      showToast(e.message || 'Could not log call', true);
-    }
-  }
-
-  function exportSignalsCsv() {
-    const cats = visibleSignalCategories();
-    const rows = [['Category', 'Signal', 'Bank ID', 'Bank', 'City', 'State', 'Status', 'Owner', 'Severity', 'Headline', 'Metric', 'Detail']];
-    let any = false;
-    cats.forEach(cat => (cat.signals || []).forEach(sig => {
-      any = true;
-      const metricStr = sig.metric ? `${sig.metric.label || ''}: ${formatSignalMetricValue(sig.metric)}` : '';
-      rows.push([
-        cat.label, sig.signalKey, sig.bankId, sig.displayName || '', sig.city || '', sig.state || '',
-        sig.status || '', sig.owner || '', sig.severity || '', sig.headline || '', metricStr, sig.detail || ''
-      ]);
-    }));
-    if (!any) return showToast('Nothing to export for the current filters.', true);
-    const pkg = (signalInboxState.data && signalInboxState.data.packageDate) || new Date().toISOString().slice(0, 10);
-    downloadCsv('fbbs_signal_inbox_' + pkg + '.csv', rows);
-  }
-
   // Entry point fired by goTo() when the Bond Swap page activates. Reads the
   // bank / proposal deep-link params off the #bond-swap hash and restores the
   // matching view (suggested-swaps home, or an open proposal in the editor).
@@ -6997,35 +6579,26 @@
   }
 
   async function loadSwapEligibleBanks() {
-    const select = document.getElementById('swapBankSelect');
-    if (!select) return;
-    try {
-      const res = await fetch('/api/swap-proposals/eligible-banks', { cache: 'no-store' });
-      const data = await res.json();
-      swapBuilderState.eligibleBanks = Array.isArray(data.banks) ? data.banks : [];
-      select.innerHTML = '<option value="">Choose a bank with a bond-accounting file…</option>'
-        + swapBuilderState.eligibleBanks.map(b =>
-            `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)} · ${escapeHtml(b.city || '')}${b.state ? ', ' + escapeHtml(b.state) : ''} · ${b.isSubchapterS ? 'Sub-S' : 'C-corp'}</option>`
-          ).join('');
-      // Restore selection from hash if present
-      const params = hashParamsForPage('bond-swap');
-      const bankFromHash = params.get('bank') || '';
-      const proposalFromHash = params.get('proposal') || '';
-      if (bankFromHash && swapBuilderState.eligibleBanks.some(b => b.id === bankFromHash)) {
+    swapBuilderState.eligibleBanks = [];
+    const params = hashParamsForPage('bond-swap');
+    const bankFromHash = params.get('bank') || '';
+    const proposalFromHash = params.get('proposal') || '';
+    if (bankFromHash) {
+      if (isManualSwapClientId(bankFromHash)) {
+        setSwapSelectedBank(bankFromHash, swapBuilderState.bankName || bankFromHash);
+      } else try {
+        const res = await fetch('/api/banks/' + encodeURIComponent(bankFromHash), { cache: 'no-store' });
+        const data = await readBankJson(res);
+        const summary = data && data.bank && data.bank.summary ? data.bank.summary : {};
+        setSwapSelectedBank(bankFromHash, bankDisplayName(summary) || summary.name || bankFromHash);
+      } catch (_) {
         setSwapSelectedBank(bankFromHash);
-        // Only push the home-suggested view if we're not also restoring a
-        // specific proposal — otherwise openProposalInEditor's render gets
-        // race-overwritten by the suggested-swap load.
-        if (!proposalFromHash && swapBuilderState.view !== 'editor') {
-          loadSuggestedSwapsForBank(bankFromHash);
-        }
-        loadRecentSwapProposals(bankFromHash);
-      } else if (swapBuilderState.bankId && swapBuilderState.eligibleBanks.some(b => b.id === swapBuilderState.bankId)) {
-        setSwapSelectedBank(swapBuilderState.bankId);
       }
-    } catch (err) {
-      select.innerHTML = `<option value="">Failed to load banks (${escapeHtml(err.message || 'error')})</option>`;
+      if (!proposalFromHash && swapBuilderState.view !== 'editor') loadSuggestedSwapsForBank(bankFromHash);
+      loadRecentSwapProposals(bankFromHash);
+      return;
     }
+    if (swapBuilderState.bankId) setSwapSelectedBank(swapBuilderState.bankId, swapBuilderState.bankName);
   }
 
   function emptyStateHtml({ icon = '', title = '', hint = '', action = '' } = {}) {
@@ -7049,9 +6622,60 @@
     body.innerHTML = emptyStateHtml({
       icon: '⇄',
       title: 'No bank selected',
-      hint: 'Choose a bank with a bond-accounting file on record to see suggested swaps, or build your own proposal by CUSIP.',
-      action: '<button type="button" class="small-btn" data-swap-pick-bank>Choose a bank</button>'
+      hint: 'Search any bank to build a manual proposal, or use suggested swaps when a portfolio is on file.',
+      action: '<button type="button" class="small-btn" data-swap-pick-bank>Choose a bank</button> <button type="button" class="small-btn primary" data-swap-ria-start>New RIA / wealth manager swap</button>'
     });
+  }
+
+  function renderManualClientSwapForm() {
+    const body = document.getElementById('swapBuilderBody');
+    if (!body) return;
+    body.innerHTML = `
+      <section class="swap-manual-client-form">
+        <header>
+          <div>
+            <strong>New manual RIA / wealth manager swap</strong>
+            <span>Type the client name and tax lens, then add manual sell and buy legs.</span>
+          </div>
+        </header>
+        <div class="swap-manual-client-grid">
+          <label><span>Wealth manager / RIA name</span><input type="text" id="swapManualClientName" autocomplete="off"></label>
+          <label><span>Tax status</span><select id="swapManualTaxStatus">
+            <option value="ria">RIA / Money Manager (0%)</option>
+            <option value="ccorp">C-corp (21%)</option>
+            <option value="scorp">Sub-S (29.6%)</option>
+            <option value="custom">Custom rate</option>
+          </select></label>
+          <label id="swapManualCustomTaxWrap" hidden><span>Custom tax rate (%)</span><input type="number" id="swapManualCustomTax" step="0.1" min="0" max="99.9" value="0"></label>
+        </div>
+        <div class="swap-manual-client-actions">
+          <button type="button" class="small-btn" data-swap-manual-cancel>Cancel</button>
+          <button type="button" class="publish-btn" data-swap-manual-create>Create draft</button>
+        </div>
+      </section>`;
+    const name = document.getElementById('swapManualClientName');
+    const taxStatus = document.getElementById('swapManualTaxStatus');
+    const customWrap = document.getElementById('swapManualCustomTaxWrap');
+    if (name) name.focus();
+    if (taxStatus && customWrap) {
+      taxStatus.addEventListener('change', () => {
+        customWrap.hidden = taxStatus.value !== 'custom';
+      });
+    }
+    body.querySelector('[data-swap-manual-cancel]')?.addEventListener('click', () => renderSwapBuilderEmpty());
+    body.querySelector('[data-swap-manual-create]')?.addEventListener('click', createManualClientSwapProposal);
+  }
+
+  function manualClientTaxSettings() {
+    const status = (document.getElementById('swapManualTaxStatus') || {}).value || 'ria';
+    if (status === 'ccorp') return { taxRate: 21, isSubchapterS: false, taxStatus: 'C-corp' };
+    if (status === 'scorp') return { taxRate: 29.6, isSubchapterS: true, taxStatus: 'Sub-S' };
+    if (status === 'custom') {
+      const raw = (document.getElementById('swapManualCustomTax') || {}).value;
+      const rate = raw === '' ? null : Number(raw);
+      return { taxRate: Number.isFinite(rate) ? rate : 0, isSubchapterS: null, taxStatus: 'Custom taxable' };
+    }
+    return { taxRate: 0, isSubchapterS: null, taxStatus: 'RIA / Money Manager' };
   }
 
   async function loadSuggestedSwapsForBank(bankId) {
@@ -7919,6 +7543,41 @@
     }
   }
 
+  async function createManualClientSwapProposal() {
+    const nameInput = document.getElementById('swapManualClientName');
+    const clientName = String(nameInput && nameInput.value || '').replace(/\s+/g, ' ').trim();
+    if (!clientName) {
+      showToast('Type the wealth manager or RIA name first', true);
+      if (nameInput) nameInput.focus();
+      return;
+    }
+    const tax = manualClientTaxSettings();
+    try {
+      const res = await fetch('/api/swap-proposals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientName,
+          taxStatus: tax.taxStatus,
+          taxRate: tax.taxRate,
+          isSubchapterS: tax.isSubchapterS,
+          preparedFor: clientName,
+          title: `Bond Swap — ${clientName}`,
+          notes: 'Manual RIA / wealth manager proposal — legs entered by rep.'
+        })
+      });
+      const created = await res.json();
+      if (!res.ok) throw new Error(created.error || 'Could not create proposal');
+      const manualId = created.proposal && created.proposal.bankId;
+      setSwapSelectedBank(manualId || '', clientName);
+      showToast(`Draft ${created.proposal.id} created — add sell + buy legs`);
+      await openProposalInEditor(created.proposal.id);
+      loadRecentSwapProposals(manualId || null);
+    } catch (err) {
+      showToast('Could not create proposal: ' + (err.message || err), true);
+    }
+  }
+
   // ============ Inline editor ============
 
   async function openProposalInEditor(id) {
@@ -7937,7 +7596,7 @@
       swapBuilderState.record = record;
       const recordBankId = record.proposal.bankId || swapBuilderState.bankId || '';
       if (recordBankId) {
-        setSwapSelectedBank(recordBankId);
+        setSwapSelectedBank(recordBankId, isManualSwapClientId(recordBankId) ? (record.proposal.preparedFor || record.proposal.title || recordBankId) : '');
         replaceHashParams('bond-swap', {
           bank: recordBankId,
           proposal: id
@@ -7947,7 +7606,7 @@
       // Prime the picker caches in parallel so the rep can type a CUSIP
       // the moment the editor renders.
       const bankId = record.proposal.bankId;
-      primeSwapPickerCaches(bankId).catch(() => {});
+      primeSwapPickerCaches(isManualSwapClientId(bankId) ? '' : bankId).catch(() => {});
       renderProposalEditor(record);
     } catch (err) {
       renderSwapBuilderEmpty('Could not load proposal: ' + (err.message || err));
@@ -13103,6 +12762,10 @@
       const data = await readBankJson(res);
       strategyRequests = Array.isArray(data.requests) ? data.requests : [];
       strategyCounts = data.counts || {};
+      if (strategyActiveId && !strategyRequests.some(row => row.id === strategyActiveId)) {
+        strategyActiveId = '';
+        sessionStorage.removeItem('fbbs.strategy.activeId');
+      }
       renderStrategyBoard();
     } catch (e) {
       strategyRequests = [];
@@ -13144,6 +12807,187 @@
     });
   }
 
+  function strategyById(id) {
+    return (strategyRequests || []).find(row => String(row.id) === String(id)) || null;
+  }
+
+  function workspaceContextRoot(rail) {
+    return rail ? rail.closest('.workspace-3col') : null;
+  }
+
+  function ensureWorkspaceRailBackdrop() {
+    let backdrop = document.getElementById('workspaceRailBackdrop');
+    if (backdrop) return backdrop;
+    backdrop = document.createElement('div');
+    backdrop.id = 'workspaceRailBackdrop';
+    backdrop.className = 'workspace-rail-backdrop';
+    backdrop.hidden = true;
+    document.body.appendChild(backdrop);
+    backdrop.addEventListener('click', () => closeWorkspaceContextRail());
+    return backdrop;
+  }
+
+  function bindWorkspaceContextRailEvents() {
+    if (workspaceContextRailEventsBound) return;
+    workspaceContextRailEventsBound = true;
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && workspaceContextRailActive) closeWorkspaceContextRail();
+    });
+  }
+
+  function workspaceContextRailIsDrawer() {
+    return typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(max-width: 1200px)').matches;
+  }
+
+  function decorateWorkspaceContextRail(rail) {
+    if (!rail) return;
+    const existing = Array.from(rail.children).find(child => child.classList && child.classList.contains('workspace-rail-close'));
+    if (existing) return;
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'workspace-rail-close';
+    close.setAttribute('aria-label', 'Close detail rail');
+    close.innerHTML = '&times;';
+    close.addEventListener('click', () => closeWorkspaceContextRail(rail));
+    rail.insertBefore(close, rail.firstChild);
+  }
+
+  function openWorkspaceContextRail(rail) {
+    if (!rail) return;
+    const root = workspaceContextRoot(rail);
+    if (!root) return;
+    decorateWorkspaceContextRail(rail);
+    if (workspaceContextRailActive && workspaceContextRailActive !== rail) {
+      const priorRoot = workspaceContextRoot(workspaceContextRailActive);
+      if (priorRoot) priorRoot.classList.remove('context-open');
+    }
+    workspaceContextRailActive = rail;
+    root.classList.add('context-open');
+    if (workspaceContextRailIsDrawer()) {
+      document.body.classList.add('workspace-drawer-open');
+      ensureWorkspaceRailBackdrop().hidden = false;
+    } else {
+      const backdrop = document.getElementById('workspaceRailBackdrop');
+      if (backdrop) backdrop.hidden = true;
+    }
+    bindWorkspaceContextRailEvents();
+  }
+
+  function closeWorkspaceContextRail(rail) {
+    const active = rail || workspaceContextRailActive;
+    if (!active) return;
+    const root = workspaceContextRoot(active);
+    if (root) root.classList.remove('context-open');
+    if (!rail || active === workspaceContextRailActive) workspaceContextRailActive = null;
+    document.body.classList.remove('workspace-drawer-open');
+    const backdrop = document.getElementById('workspaceRailBackdrop');
+    if (backdrop) backdrop.hidden = true;
+  }
+
+  function setActiveStrategyRequest(id, options = {}) {
+    const row = strategyById(id);
+    if (!row) return;
+    strategyActiveId = row.id;
+    sessionStorage.setItem('fbbs.strategy.activeId', row.id);
+    if (!options.skipRender) renderStrategyBoard();
+    else renderStrategyContextRail();
+    openWorkspaceContextRail(document.getElementById('strategyContextRail'));
+  }
+
+  function strategyMetaLine(row) {
+    return [
+      row.displayName,
+      [row.city, row.state].filter(Boolean).join(', '),
+      row.certNumber ? `Cert ${row.certNumber}` : '',
+      row.requestedBy ? `By ${row.requestedBy}` : '',
+      row.assignedTo ? `Owner ${row.assignedTo}` : ''
+    ].filter(Boolean).join(' · ');
+  }
+
+  function strategyContextMetric(label, value) {
+    const displayValue = value === null || value === undefined || value === '' ? '—' : value;
+    return `<span><strong>${escapeHtml(displayValue)}</strong>${escapeHtml(label)}</span>`;
+  }
+
+  function renderStrategyContextRail() {
+    const rail = document.getElementById('strategyContextRail');
+    if (!rail) return;
+    const row = strategyById(strategyActiveId);
+    if (!row) {
+      rail.innerHTML = `<div class="strategy-context-empty">
+        <div class="ao-context-kicker">Selected Request</div>
+        <h3>Pick a request</h3>
+        <p>Click a strategy card to see its details, bank link, status moves, billing action, files, and notes.</p>
+      </div>`;
+      decorateWorkspaceContextRail(rail);
+      return;
+    }
+    const availableMoves = row.isArchived ? [] : STRATEGY_STATUSES.filter(status => status !== row.status);
+    const fileLinks = renderStrategyFiles(row);
+    rail.innerHTML = `<div class="strategy-context-card">
+      <div class="ao-context-top">
+        <div>
+          <div class="ao-context-kicker">Selected Request</div>
+          <h3>${escapeHtml(row.requestType || 'Miscellaneous')}</h3>
+        </div>
+        <em class="bank-pill ${coverageClass(row.status)}">${escapeHtml(row.status || 'Open')}</em>
+      </div>
+      <button type="button" class="strategy-bank-link" data-strategy-context-bank="${escapeHtml(row.bankId || '')}">
+        ${escapeHtml(row.displayName || 'Bank')}
+      </button>
+      <p class="ao-context-note">${escapeHtml(strategyMetaLine(row))}</p>
+      <div class="strategy-context-metrics">
+        ${strategyContextMetric('Priority', row.priority ? `${row.priority}/5` : '—')}
+        ${strategyContextMetric('Updated', row.updatedAt ? formatFullTimestamp(row.updatedAt) : '—')}
+        ${strategyContextMetric('Completed', row.completedAt ? formatFullTimestamp(row.completedAt) : '—')}
+        ${strategyContextMetric('Billed', row.billedAt ? formatFullTimestamp(row.billedAt) : '—')}
+      </div>
+      <div class="strategy-context-section">
+        <h4>Summary</h4>
+        <p>${escapeHtml(row.summary || 'Strategy request')}</p>
+        ${row.comments ? `<div class="strategy-card-comments">${escapeHtml(row.comments).replace(/\n/g, '<br>')}</div>` : ''}
+      </div>
+      ${renderStrategyThcMeta(row)}
+      ${fileLinks ? `<div class="strategy-context-section">${fileLinks}</div>` : ''}
+      <div class="strategy-context-actions">
+        ${row.bankId ? '<button type="button" class="small-btn" data-strategy-context-action="bank">Open bank</button>' : ''}
+        <button type="button" class="small-btn" data-strategy-context-action="details">Details</button>
+        ${availableMoves.map(status => `<button type="button" class="small-btn" data-strategy-context-move="${escapeHtml(status)}">Move to ${escapeHtml(status)}</button>`).join('')}
+        ${!row.isArchived && row.status === 'Completed' ? '<button type="button" class="small-btn" data-strategy-context-action="archive">Archive</button>' : ''}
+        ${!row.isArchived && row.status === 'Needs Billed' ? '<button type="button" class="small-btn" data-strategy-context-action="bill-archive">Mark billed + archive</button>' : ''}
+        ${row.isArchived ? '<button type="button" class="small-btn" data-strategy-context-action="restore">Restore</button>' : ''}
+      </div>
+    </div>`;
+    rail.querySelectorAll('[data-strategy-context-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-strategy-context-action');
+        if (action === 'bank' && row.bankId) return navigateToHash(bankDeepLinkHash(row.bankId), loadBankFromHashRoute);
+        if (action === 'details') {
+          showStrategyEditor(row.id);
+          const card = Array.from(document.querySelectorAll('[data-strategy-card]'))
+            .find(el => el.getAttribute('data-strategy-card') === row.id);
+          if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          return;
+        }
+        if (action === 'archive') return archiveStrategyRequest(row.id, false);
+        if (action === 'bill-archive') return archiveStrategyRequest(row.id, true);
+        if (action === 'restore') return restoreStrategyRequest(row.id);
+      });
+    });
+    rail.querySelectorAll('[data-strategy-context-move]').forEach(btn => {
+      btn.addEventListener('click', () => updateStrategyStatus(row.id, btn.getAttribute('data-strategy-context-move')));
+    });
+    rail.querySelectorAll('[data-strategy-context-bank]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const bankId = btn.getAttribute('data-strategy-context-bank');
+        if (bankId) navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
+      });
+    });
+    decorateWorkspaceContextRail(rail);
+  }
+
   function renderStrategyBoard(errorMessage) {
     const board = document.getElementById('strategyBoard');
     const countsEl = document.getElementById('strategyCounts');
@@ -13173,6 +13017,7 @@
     }
     if (errorMessage) {
       board.innerHTML = `<div class="bank-search-empty">${escapeHtml(errorMessage)}</div>`;
+      renderStrategyContextRail();
       return;
     }
     const rows = filteredStrategies();
@@ -13180,10 +13025,16 @@
       board.innerHTML = archivedMode === 'only'
         ? '<div class="bank-search-empty">No archived strategy requests yet.</div>'
         : '<div class="bank-search-empty">No strategy requests yet. Open a bank tear sheet and submit the first request.</div>';
+      renderStrategyContextRail();
       return;
+    }
+    if (strategyActiveId && !rows.some(row => row.id === strategyActiveId)) {
+      strategyActiveId = '';
+      sessionStorage.removeItem('fbbs.strategy.activeId');
     }
     if (!rows.length) {
       board.innerHTML = '<div class="bank-search-empty">No strategy requests match those filters.</div>';
+      renderStrategyContextRail();
       return;
     }
     board.innerHTML = STRATEGY_STATUSES.map(status => {
@@ -13200,6 +13051,18 @@
         </section>
       `;
     }).join('');
+    board.querySelectorAll('[data-strategy-card]').forEach(card => {
+      card.addEventListener('click', event => {
+        if (event.target.closest('button,a,input,select,textarea,label')) return;
+        setActiveStrategyRequest(card.getAttribute('data-strategy-card'));
+      });
+      card.addEventListener('keydown', event => {
+        if (event.key !== 'Enter') return;
+        if (event.target.closest('button,a,input,select,textarea,label')) return;
+        event.preventDefault();
+        setActiveStrategyRequest(card.getAttribute('data-strategy-card'));
+      });
+    });
     board.querySelectorAll('[data-strategy-update]').forEach(btn => {
       btn.addEventListener('click', () => updateStrategyStatus(btn.dataset.strategyUpdate, btn.dataset.strategyStatus));
     });
@@ -13232,13 +13095,14 @@
         navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
       });
     });
+    renderStrategyContextRail();
   }
 
   function renderStrategyCard(row) {
     if (row.isArchived) return renderArchivedStrategyCard(row);
     const availableMoves = row.isArchived ? [] : STRATEGY_STATUSES.filter(status => status !== row.status);
     return `
-      <article class="strategy-card">
+      <article class="strategy-card ${strategyActiveId === row.id ? 'is-active-strategy' : ''}" data-strategy-card="${escapeHtml(row.id)}" tabindex="0">
         <div class="strategy-card-head">
           <strong>${escapeHtml(row.requestType || 'Miscellaneous')}</strong>
           <span>
@@ -13289,7 +13153,7 @@
   function renderArchivedStrategyCard(row) {
     const notes = row.comments || 'No notes added.';
     return `
-      <article class="strategy-card strategy-card-archived">
+      <article class="strategy-card strategy-card-archived ${strategyActiveId === row.id ? 'is-active-strategy' : ''}" data-strategy-card="${escapeHtml(row.id)}" tabindex="0">
         <button type="button" class="strategy-archive-summary" data-strategy-edit="${escapeHtml(row.id)}">
           <span class="strategy-archive-summary-head">
             <strong>${escapeHtml(row.displayName || 'Bank')}</strong>
@@ -14318,6 +14182,37 @@
       });
   }
 
+  async function uploadBankOneOffBondAccounting(input) {
+    if (!requireAdminAction('Admin permission is required to upload portfolio files.')) {
+      if (input) input.value = '';
+      return;
+    }
+    const bank = selectedBank && selectedBank.bank ? selectedBank.bank : null;
+    const bankId = bank && bank.id;
+    const file = input && input.files ? input.files[0] : null;
+    if (!bankId || !file) return;
+    try {
+      const formData = new FormData();
+      formData.append('portfolio', file, file.name);
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/bond-accounting/upload`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await readBankJson(res);
+      bondAccountingManifest = data.manifest || bondAccountingManifest;
+      showToast(`Added Thomas Ho portfolio for ${bank.summary && (bank.summary.displayName || bank.summary.name) || 'bank'}`);
+      await Promise.all([
+        loadBankStatus(),
+        loadBank(bankId, { collapseResults: false }),
+        bondAccountingManifest ? Promise.resolve() : loadBondAccountingManifest()
+      ]);
+    } catch (err) {
+      showToast('Portfolio upload failed: ' + (err.message || err), true);
+    } finally {
+      if (input) input.value = '';
+    }
+  }
+
   function uploadAveragedSeriesWorkbook(file, options = {}) {
     if (!requireAdminAction('Admin permission is required to import peer averages.')) return;
     const status = document.getElementById(options.statusId || 'averagedSeriesImportStatus');
@@ -14471,6 +14366,8 @@
     if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
     if (ownerInput) ownerInput.addEventListener('input', updateTearSheetCoverageSignal);
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
+    const oneOffBondInput = document.getElementById('bankOneOffBondAccountingInput');
+    if (oneOffBondInput) oneOffBondInput.addEventListener('change', () => uploadBankOneOffBondAccounting(oneOffBondInput));
     const fitsBtn = document.getElementById('bankOfferingFitsBtn');
     if (fitsBtn) fitsBtn.addEventListener('click', () => openOfferingFitsDrawer(bank.id));
     const thcUpdateBtn = document.getElementById('bankThcUpdateBtn');
@@ -15242,14 +15139,22 @@
     const bondAccounting = bank && bank.bondAccounting;
     const portfolios = bondAccounting && Array.isArray(bondAccounting.portfolios) ? bondAccounting.portfolios : [];
     const title = `Uploaded Files${bondAccounting && bondAccounting.latestReportDate ? ` · latest bond report ${formatShortDate(bondAccounting.latestReportDate)}` : ''}`;
+    const uploadControl = `
+      <label class="small-btn bank-upload-btn bank-oneoff-upload-btn">
+        Add Thomas Ho Portfolio
+        <input type="file" id="bankOneOffBondAccountingInput" accept=".xlsm,.xlsx,.xls" hidden>
+      </label>`;
     if (!portfolios.length) {
       return `
         <section class="bank-section bank-uploaded-files-section">
           <div class="bank-section-title">${escapeHtml(title)}</div>
           <div class="bank-uploaded-file-group">
             <div class="bank-uploaded-file-head">
-              <strong>Bond Accounting Reports</strong>
-              <span>Matched from the Reports workspace import.</span>
+              <div>
+                <strong>Bond Accounting Reports</strong>
+                <span>Matched from the Reports workspace import or a one-off tear-sheet upload.</span>
+              </div>
+              ${uploadControl}
             </div>
             <div class="bank-search-empty">
               No monthly bond accounting report has been matched to this bank yet.
@@ -15264,14 +15169,17 @@
         <div class="bank-section-title">${escapeHtml(title)}</div>
         <div class="bank-uploaded-file-group">
           <div class="bank-uploaded-file-head">
-            <strong>Bond Accounting Reports</strong>
-            <span>${escapeHtml(formatNumber(portfolios.length))} matched monthly report${portfolios.length === 1 ? '' : 's'}</span>
+            <div>
+              <strong>Bond Accounting Reports</strong>
+              <span>${escapeHtml(formatNumber(portfolios.length))} matched report${portfolios.length === 1 ? '' : 's'}</span>
+            </div>
+            ${uploadControl}
           </div>
           <div class="bank-bond-list">
             ${portfolios.map(row => `
               <div class="bank-bond-item">
                 <div>
-                  <small class="bank-uploaded-file-kind">Monthly Bond Accounting Report</small>
+                  <small class="bank-uploaded-file-kind">${escapeHtml(row.sourceLabel || (row.sourceType === 'one-off-thomas-ho' ? 'One-off Thomas Ho Portfolio' : 'Monthly Bond Accounting Report'))}</small>
                   <strong>${escapeHtml(row.filename || 'Portfolio workbook')}</strong>
                   <span>${escapeHtml([row.pCode, row.reportDate ? formatShortDate(row.reportDate) : '', row.account ? `Account ${row.account}` : '', row.matchedBy].filter(Boolean).join(' · '))}</span>
                 </div>
@@ -16480,7 +16388,7 @@
         <li class="bank-pershing-account">
           <span class="bank-pershing-number">${escapeHtml(account.pershingAccountNumber)}</span>
           <span>${escapeHtml(account.mostRecentTradeDate ? formatActivityDate(account.mostRecentTradeDate) : 'No account trade date')}</span>
-          <span>${escapeHtml(account.primaryOwnerName || account.primaryOwnerId || 'Unassigned')}</span>
+          <span>${escapeHtml(pershingAccountOwnerLabel(account))}</span>
         </li>
       `).join('');
       const extra = (data.accounts || []).length > 8 ? `<p class="bank-pershing-foot">Showing 8 of ${escapeHtml(formatNumber(data.accounts.length))} linked accounts.</p>` : '';
@@ -16501,6 +16409,17 @@
         ${body}
       </section>
     `;
+  }
+
+  function pershingAccountOwnerLabel(account) {
+    return (account && (
+      account.primaryOwnerName ||
+      account.accountOwnerName ||
+      account.secondaryOwnerName ||
+      account.primaryOwnerId ||
+      account.accountOwnerId ||
+      account.secondaryOwnerId
+    )) || 'Unassigned';
   }
 
   function refreshBankPershingPanel() {
@@ -18185,6 +18104,7 @@
 
   function slotAcceptExtensions(slot) {
     if (slot === 'treasuryNotes') return ['.xlsx', '.xlsm', '.xls'];
+    if (slot === 'mmd') return ['.pdf', '.xlsx', '.xlsm', '.xls'];
     if (slot === 'cdoffers') return ['.pdf'];
     if (slot === 'cdoffersCost') return ['.xlsx', '.xlsm', '.xls'];
     if (slot === 'bairdSyndicate') return ['.xlsx', '.xlsm', '.xls'];
@@ -19116,10 +19036,14 @@
   let allOfferingsSavedSearchId = '';
   let allOfferingsCrmTarget = { bank: null, rows: [] };
   let allOfferingsActionFocusRelease = null;
+  let allOfferingsActiveKey = sessionStorage.getItem('fbbs.ao.activeKey') || '';
+  let allOfferingsContextTimer = null;
+  let allOfferingsBuyerRequest = null;
+  const allOfferingsBuyerCache = new Map();
   const AO_SAVED_SEARCH_KEY = 'fbbs.ao.savedSearches.v1';
   const AO_ATTR_FILTERS = [
     { key: 'callable', label: 'Callable', test: row => Boolean(row.callDate) },
-    { key: 'bq', label: 'BQ muni', test: row => row.type === 'muni' && /\bbq\b|bank.?qualified/i.test([row.sector, row.description].join(' ')) },
+    { key: 'bq', label: 'BQ muni', test: row => row.type === 'muni' && (row.bq === true || /\bbq\b|bank.?qualified/i.test([row.taxStatus, row.sector, row.description].join(' '))) },
     { key: 'insured', label: 'Insured/enhanced', test: row => Boolean(row.creditEnhancement) },
     { key: 'rated', label: 'Rated', test: row => Boolean(row.moody || row.sp) }
   ];
@@ -19131,6 +19055,7 @@
       const res = await fetch('/api/offerings/all', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       allOfferingsData = await res.json();
+      allOfferingsBuyerCache.clear();
     } catch (e) {
       body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--danger)">Failed to load offerings: ${escapeHtml(e.message)}</td></tr>`;
       return;
@@ -19140,6 +19065,7 @@
       allOfferingsFilters.search = params.get('q');
       setControlValue('ao-search', allOfferingsFilters.search);
     }
+    hydrateAllOfferingsActiveFromHash();
     wireAllOfferingsControls();
     renderAllOfferingsClasses();
     renderAllOfferingsTriFilters();
@@ -19147,89 +19073,6 @@
     renderAllOfferingsSavedSearches();
     syncAllOfferingsDensity();
     renderAllOfferings();
-    loadDailyPicksCard(); // AI pick of the day (dormant without an Anthropic key)
-  }
-
-  // AI "Pick of the day" card: Claude curates a handful of today's offerings.
-  // The card only appears when an Anthropic key is configured. GET is read-only
-  // (cached); the button POSTs an explicit, billable refresh. Numbers shown are
-  // the desk's own — Claude only ranks and writes the one-line rationale.
-  function renderDailyPicks(data) {
-    const card = document.getElementById('dailyPicksCard');
-    const body = document.getElementById('dailyPicksBody');
-    const meta = document.getElementById('dailyPicksMeta');
-    const btn = document.getElementById('dailyPicksBtn');
-    if (!card || !body) return;
-    if (!data || !data.configured) { card.hidden = true; return; }
-    card.hidden = false;
-    const num = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
-    const stale = data.picksDate && data.packageDate && data.picksDate !== data.packageDate;
-    if (stale) {
-      body.innerHTML = '<p class="daily-summary-error">Pick of the Day is from ' + escapeHtml(data.picksDate) + ', but the current package is ' + escapeHtml(data.packageDate) + '. Update before using these recommendations.</p>';
-      if (meta) meta.textContent = 'Stale AI cache';
-      if (btn) btn.textContent = 'Update';
-      return;
-    }
-    if (Array.isArray(data.picks) && data.picks.length) {
-      body.innerHTML = data.picks.map(p => `
-        <div class="daily-pick">
-          <div class="daily-pick-main">
-            <div class="daily-pick-head">
-              <span class="ao-class-pill ao-class-${escapeHtml(p.type || '')}">${escapeHtml(p.assetClass || '')}</span>
-              <span class="daily-pick-headline">${escapeHtml(p.headline || p.description || '')}</span>
-            </div>
-            <div class="daily-pick-desc">${escapeHtml(p.description || '')}</div>
-            <div class="daily-pick-rationale">${escapeHtml(p.rationale || '')}</div>
-          </div>
-          <div class="daily-pick-stats">
-            <span title="Yield"><strong>${num(p.yield)}</strong>% yld</span>
-            <span title="Coupon">${num(p.coupon, 3)}% cpn</span>
-            <span title="Maturity">${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'}</span>
-            <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
-          </div>
-        </div>`).join('');
-      meta.textContent = data.generatedAt ? `Generated ${new Date(data.generatedAt).toLocaleString()}` : '';
-      if (btn) btn.textContent = data.current ? 'Refresh' : 'Update';
-    } else {
-      body.innerHTML = '<p class="daily-summary-empty">No picks yet for today’s package. Generate a Claude-curated shortlist of the best relative value on offer.</p>';
-      meta.textContent = '';
-      if (btn) btn.textContent = 'Generate';
-    }
-    applyAdminActionUi();
-  }
-
-  async function generateDailyPicks() {
-    if (!requireAdminAction('Admin permission is required to refresh AI-generated content.')) return;
-    const btn = document.getElementById('dailyPicksBtn');
-    const body = document.getElementById('dailyPicksBody');
-    if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
-    try {
-      const res = await fetch('/api/offerings-pick/refresh', { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + res.status);
-      await loadDailyPicksCard();
-    } catch (e) {
-      if (body) body.innerHTML = `<p class="daily-summary-error">${escapeHtml(e.message || 'Picks failed')}</p>`;
-    } finally {
-      if (btn) btn.disabled = false;
-    }
-  }
-
-  async function loadDailyPicksCard() {
-    const card = document.getElementById('dailyPicksCard');
-    const btn = document.getElementById('dailyPicksBtn');
-    if (!card) return;
-    if (btn && !btn.dataset.bound) {
-      btn.dataset.bound = '1';
-      btn.addEventListener('click', generateDailyPicks);
-    }
-    try {
-      const res = await fetch('/api/offerings-pick', { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      renderDailyPicks(await res.json());
-    } catch (_) {
-      card.hidden = true;
-    }
   }
 
   // ===== Sales Dashboard (#sales-dashboard) =====
@@ -19577,6 +19420,7 @@
             ${(p.rv && p.rv.enhanced) ? `<div><dt>Enhanced</dt><dd>${escapeHtml(p.rv.enhanced.label)} — ${p.rv.enhanced.spreadBps >= 0 ? '+' : ''}${p.rv.enhanced.spreadBps}bp vs the ${p.rv.enhanced.type === 'insured' ? 'insured' : 'AA'} MMD scale</dd></div>` : ''}
             ${p.caveat ? `<div><dt>Watch</dt><dd>${escapeHtml(p.caveat)}</dd></div>` : ''}
             ${p.buyer ? `<div><dt>Buyer</dt><dd>${escapeHtml(p.buyer)}</dd></div>` : ''}
+            ${p.buyerFit ? `<div><dt>Buyer fit</dt><dd>${escapeHtml(p.buyerFit)}</dd></div>` : ''}
             ${p.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(p.talkingPoint)}</dd></div>` : ''}
           </dl>
         </div>
@@ -19699,7 +19543,47 @@
 
     const sections = [];
 
-    // 0 — Today's Standouts hero (read first; top RV across all classes).
+    // 0 — One canonical daily bond pick. Keep this first so the portal does
+    // not present several competing "pick of the day" surfaces.
+    const botd = dash.botd;
+    const botdHtml = botd ? `
+      <div class="sd-botd">
+        <div class="sd-botd-tag">Daily Bond Pick${botd.source === 'backfill' && aiRead ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
+        <div class="sd-botd-body">
+          <div class="sd-botd-main">
+            <div class="sd-pick-head">
+              <span class="ao-class-pill ao-class-${sdClassSlug(botd.assetClass)}">${escapeHtml(botd.assetClass || '')}</span>
+              ${botd.state ? `<span class="sd-pick-state">${escapeHtml(botd.state)}</span>` : ''}
+              ${sdScoreBadge(botd.rv)} ${sdTrendChip(botd.rv)}
+              ${botd.bq ? '<span class="demin-chip ok">BQ</span>' : ''}
+              ${botd.deepDiscount ? '<span class="demin-chip breach">deep disc</span>' : ''}
+            </div>
+            <div class="sd-botd-headline">${escapeHtml(botd.headline || botd.description || '')}</div>
+            ${botd.description && botd.headline ? `<div class="sd-pick-state">${escapeHtml(botd.description)}</div>` : ''}
+            ${botd.rationale ? `<div class="sd-pick-rationale">${escapeHtml(botd.rationale)}</div>` : ''}
+            ${botd.benchmark ? `<div class="sd-botd-bench">${escapeHtml(botd.benchmark)}</div>` : ''}
+            ${botd.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(botd.talkingPoint)}</dd></div>` : ''}
+          </div>
+          <div class="sd-botd-stats">
+            <span class="sd-eff"><strong>${(function () { const e = sdEff(botd, 'ccorp'); return e.val == null ? '—' : Number(e.val).toFixed(2); })()}</strong>% ${escapeHtml(botd.exemptMuni ? 'TEY' : 'yld')}</span>
+            <span class="sd-sub">${SD_TILE(botd.coupon, 3)}% cpn · ${botd.maturity ? escapeHtml(formatNumericDate(String(botd.maturity).slice(0, 10))) : '—'}</span>
+            <button type="button" class="small-btn" data-goto="${escapeHtml(botd.page || 'all-offerings')}"${botd.cusip ? ` data-cusip="${escapeHtml(botd.cusip)}"` : ''}>Open</button>
+          </div>
+        </div>
+      </div>` : '';
+    if (botdHtml) sections.push(`<div class="sd-feature sd-feature-single">${botdHtml}</div>`);
+
+    // 0a — Picks by client type. The desk's "who should I call and what do I pitch
+    // them" surface: for each tax structure (C-Corp / S-Corp / RIA), the best
+    // relative value ACROSS THE MATURITY CURVE — short, belly and long — weighted
+    // by what that account type has actually bought (FBBS Pershing trade history).
+    if (audiences.length && dash.picks) {
+      sections.push(sdSection('Picks by client type',
+        'Best relative value across the curve for each client tax structure — short, belly and long, weighted by what that account type actually buys (FBBS trade history)',
+        `<div class="sd-board-grid sd-aud-grid">${sdAudienceColumns(audiences, dash.picks, dash.connector)}</div>`));
+    }
+
+    // 1 — Today's Standouts hero (supporting research; top RV across all classes).
     if (rv && rv.standouts && rv.standouts.length) {
       sections.push(sdSection('Today\'s Standouts', 'The cheapest risk-adjusted names across every asset class — read these first', sdStandouts(rv.standouts)));
     }
@@ -19732,58 +19616,12 @@
       sections.push(boards);
     }
 
-    // 4 — Bond of the Day + Strategy of the Day (merit = best relative value).
-    const botd = dash.botd;
-    const botdHtml = botd ? `
-      <div class="sd-botd">
-        <div class="sd-botd-tag">Bond of the Day${botd.source === 'backfill' && aiRead ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
-        <div class="sd-botd-body">
-          <div class="sd-botd-main">
-            <div class="sd-pick-head">
-              <span class="ao-class-pill ao-class-${sdClassSlug(botd.assetClass)}">${escapeHtml(botd.assetClass || '')}</span>
-              ${botd.state ? `<span class="sd-pick-state">${escapeHtml(botd.state)}</span>` : ''}
-              ${sdScoreBadge(botd.rv)} ${sdTrendChip(botd.rv)}
-              ${botd.bq ? '<span class="demin-chip ok">BQ</span>' : ''}
-              ${botd.deepDiscount ? '<span class="demin-chip breach">deep disc</span>' : ''}
-            </div>
-            <div class="sd-botd-headline">${escapeHtml(botd.headline || botd.description || '')}</div>
-            ${botd.description && botd.headline ? `<div class="sd-pick-state">${escapeHtml(botd.description)}</div>` : ''}
-            ${botd.rationale ? `<div class="sd-pick-rationale">${escapeHtml(botd.rationale)}</div>` : ''}
-            ${botd.benchmark ? `<div class="sd-botd-bench">${escapeHtml(botd.benchmark)}</div>` : ''}
-            ${botd.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(botd.talkingPoint)}</dd></div>` : ''}
-          </div>
-          <div class="sd-botd-stats">
-            <span class="sd-eff"><strong>${(function () { const e = sdEff(botd, 'ccorp'); return e.val == null ? '—' : Number(e.val).toFixed(2); })()}</strong>% ${escapeHtml(botd.exemptMuni ? 'TEY' : 'yld')}</span>
-            <span class="sd-sub">${SD_TILE(botd.coupon, 3)}% cpn · ${botd.maturity ? escapeHtml(formatNumericDate(String(botd.maturity).slice(0, 10))) : '—'}</span>
-            <button type="button" class="small-btn" data-goto="${escapeHtml(botd.page || 'all-offerings')}"${botd.cusip ? ` data-cusip="${escapeHtml(botd.cusip)}"` : ''}>Open</button>
-          </div>
-        </div>
-      </div>` : '';
-    const sod = dash.sod;
-    const sodHtml = sod ? `
-      <div class="sd-sod">
-        <div class="sd-sod-tag">Strategy of the Day${sod.source === 'backfill' && aiRead ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
-        <h4 class="sd-sod-title">${escapeHtml(sod.title || '')}</h4>
-        <p class="sd-sod-narrative">${escapeHtml(sod.narrative || '')}</p>
-        <div class="sd-sod-secs">${(sod.securities || []).map(s => `
-          <span class="sd-sod-sec">
-            <span class="ao-class-pill ao-class-${sdClassSlug(s.assetClass)}">${escapeHtml(s.assetClass || '')}</span>
-            <span class="sd-sod-sec-name">${escapeHtml(s.description || s.cusip || '')}</span>
-            <button type="button" class="small-btn" data-goto="${escapeHtml(s.page || 'all-offerings')}"${s.cusip ? ` data-cusip="${escapeHtml(s.cusip)}"` : ''}>Open</button>
-          </span>`).join('')}</div>
-      </div>` : '';
-    if (botdHtml || sodHtml) sections.push(`<div class="sd-feature">${botdHtml}${sodHtml}</div>`);
-
     // 5 — What changed (archive-fed cross-day movers; snapshot trends fallback).
     if (rv && (rv.movers || rv.trends)) {
       const regimeHtml = (rv.strategist && rv.strategist.regime) ? sdRegime(rv.strategist.regime) : '';
       const inner = regimeHtml + (rv.movers ? sdMovers(rv.movers) : sdTrends(rv.trends));
       sections.push(sdSection('What changed vs the prior package', 'New, cheapened (after stripping the parallel curve move), richened, and rolled-off names', inner));
     }
-
-    // 6 — Audience fit (re-ranked by the tax-aware spread each client earns).
-    sections.push(sdSection('Audience fit — ranked by relative value', 'Each client\'s picks ordered by the spread THAT buyer earns over Treasury after tax',
-      `<div class="sd-matrix exec-three-col">${sdAudienceColumns(audiences, dash.picks, dash.connector)}</div>`));
 
     const briefHtml = rv ? sdMorningBrief(rv, dash) : '';
     const kpiHtml = (rv && rv.strategist) ? sdKpiStrip(rv.strategist) : '';
@@ -19845,6 +19683,7 @@
   async function loadSalesDashboard() {
     const card = document.getElementById('salesDashboardCard');
     if (!card) return;
+    renderSalesSourceDocs();
     const btn = document.getElementById('salesDashboardBtn');
     if (btn && !btn.dataset.bound) {
       btn.dataset.bound = '1';
@@ -19897,6 +19736,66 @@
 
   function aoRowKey(row) {
     return String(row.cusip || [row.type, row.description, row.maturity, row.yield].join('|')).trim();
+  }
+
+  function allOfferingsRowByKey(key) {
+    if (!key || !allOfferingsData || !Array.isArray(allOfferingsData.rows)) return null;
+    return allOfferingsData.rows.find(row => aoRowKey(row) === key) || null;
+  }
+
+  function aoProductType(row) {
+    const type = String(row && (row.type || row.assetClass) || '').toLowerCase();
+    if (type.includes('treas')) return 'treasury';
+    if (type.includes('cd')) return 'cd';
+    if (type.includes('muni')) return 'muni';
+    if (type.includes('agency')) return 'agency';
+    if (type.includes('corp')) return 'corporate';
+    if (type.includes('mbs') || type.includes('cmo')) return 'mbs';
+    return '';
+  }
+
+  function syncAllOfferingsActiveClass(prevKey, nextKey) {
+    const body = document.getElementById('allOfferingsBody');
+    if (!body) return;
+    [prevKey, nextKey].filter(Boolean).forEach(key => {
+      Array.from(body.querySelectorAll('[data-ao-row]'))
+        .filter(tr => tr.getAttribute('data-ao-row') === key)
+        .forEach(tr => tr.classList.toggle('is-active-offering', key === nextKey));
+    });
+  }
+
+  function scheduleAllOfferingsContextRender(delay = 140) {
+    clearTimeout(allOfferingsContextTimer);
+    if (delay <= 0) {
+      renderAllOfferingsContext();
+      return;
+    }
+    allOfferingsContextTimer = setTimeout(() => {
+      allOfferingsContextTimer = null;
+      renderAllOfferingsContext();
+    }, delay);
+  }
+
+  function setAllOfferingsActiveRow(row, opts = {}) {
+    const key = row ? aoRowKey(row) : '';
+    const previousKey = allOfferingsActiveKey;
+    allOfferingsActiveKey = key;
+    if (key) sessionStorage.setItem('fbbs.ao.activeKey', key);
+    else sessionStorage.removeItem('fbbs.ao.activeKey');
+    syncAllOfferingsActiveClass(previousKey, key);
+    if (opts.render) renderAllOfferings();
+    else scheduleAllOfferingsContextRender(opts.contextDelay == null ? 140 : opts.contextDelay);
+    if (row && opts.openDrawer !== false) openWorkspaceContextRail(document.getElementById('aoContextRail'));
+  }
+
+  function hydrateAllOfferingsActiveFromHash() {
+    if (!allOfferingsData || !Array.isArray(allOfferingsData.rows)) return;
+    const params = hashParamsForPage('all-offerings');
+    const q = String(params.get('q') || '').replace(/[^0-9a-z]/gi, '').toUpperCase();
+    if (!q) return;
+    const match = allOfferingsData.rows.find(row => String(row.cusip || '').replace(/[^0-9a-z]/gi, '').toUpperCase() === q)
+      || allOfferingsData.rows.find(row => String(row.cusip || '').replace(/[^0-9a-z]/gi, '').toUpperCase().includes(q));
+    if (match) setAllOfferingsActiveRow(match, { render: false });
   }
 
   function defaultAllOfferingsFilters() {
@@ -20191,6 +20090,245 @@
     </td></tr>`;
   }
 
+  function aoContextMetric(label, value, sub) {
+    const displayValue = value === null || value === undefined || value === '' ? '—' : value;
+    return `<span><strong>${escapeHtml(displayValue)}</strong>${escapeHtml(label)}${sub ? `<em>${escapeHtml(sub)}</em>` : ''}</span>`;
+  }
+
+  function aoContextBuyerCacheKey(row, productType, owner) {
+    return [productType || 'none', aoRowKey(row), owner || 'all'].join('|');
+  }
+
+  function aoContextBuyerForBank(bankId) {
+    const row = allOfferingsRowByKey(allOfferingsActiveKey);
+    const productType = aoProductType(row);
+    const owner = repCoverageOwner();
+    const cached = allOfferingsBuyerCache.get(aoContextBuyerCacheKey(row, productType, owner));
+    const buyers = cached && cached.data && Array.isArray(cached.data.buyers) ? cached.data.buyers : [];
+    return buyers.find(b => String(b.bankId) === String(bankId)) || null;
+  }
+
+  function aoBuyerCrmNote(buyer) {
+    const crm = buyer && buyer.crm || {};
+    const bits = [
+      `Fit rationale: ${(buyer.rationale || []).slice(0, 4).join('; ')}`,
+      buyer.suitability && buyer.suitability.detail ? `Suitability: ${buyer.suitability.detail}` : '',
+      crm.lastTouchLabel ? `CRM: ${crm.lastTouchLabel}` : '',
+      crm.nextTask ? `Open task: ${crm.nextTask.title}${crm.nextTask.dueDate ? ` due ${crm.nextTask.dueDate}` : ''}` : '',
+      crm.openOpportunityCount ? `Open opportunities: ${crm.openOpportunityCount}` : ''
+    ].filter(Boolean);
+    return bits.join('\n');
+  }
+
+  function aoBuyerCrmLine(buyer) {
+    const crm = buyer && buyer.crm || {};
+    const bits = [crm.lastTouchLabel];
+    if (crm.crmDegraded) bits.push('CRM context unavailable');
+    if (crm.nextTask) bits.push(`Task: ${crm.nextTask.title}${crm.nextTask.dueDate ? ` (${formatNumericDate(crm.nextTask.dueDate)})` : ''}`);
+    if (crm.openOpportunityCount) {
+      bits.push(`${formatNumber(crm.openOpportunityCount)} open opp${crm.openOpportunityCount === 1 ? '' : 's'}${crm.openOpportunityValue ? ` · ${formatMoney(crm.openOpportunityValue, 0)}` : ''}`);
+    }
+    return bits.filter(Boolean).join(' · ');
+  }
+
+  function aoBuyerSuitabilityChip(buyer) {
+    const s = buyer && buyer.suitability;
+    if (!s || !s.label) return '';
+    const tone = ['good', 'warn', 'neutral'].includes(s.tone) ? s.tone : 'neutral';
+    return `<span class="buyer-chip ao-suitability-chip ${tone}" title="${escapeHtml(s.detail || '')}">${escapeHtml(s.label)}</span>`;
+  }
+
+  function renderAoContextBuyers(row, productType) {
+    if (!productType) {
+      return `<div class="ao-context-section">
+        <h4>Matching Banks</h4>
+        <p class="ao-context-note">Buyer scoring is not available for this asset class yet.</p>
+      </div>`;
+    }
+    const owner = repCoverageOwner();
+    const cacheKey = aoContextBuyerCacheKey(row, productType, owner);
+    const cached = allOfferingsBuyerCache.get(cacheKey);
+    if (!cached) {
+      fetchAoContextBuyers(row, productType, owner, cacheKey);
+      return `<div class="ao-context-section">
+        <h4>Matching Banks</h4>
+        <div class="ao-context-loading">Scoring ${owner ? 'your covered banks' : 'covered banks'}...</div>
+      </div>`;
+    }
+    if (cached.state === 'loading') {
+      return `<div class="ao-context-section">
+        <h4>Matching Banks</h4>
+        <div class="ao-context-loading">Scoring ${owner ? 'your covered banks' : 'covered banks'}...</div>
+      </div>`;
+    }
+    if (cached.state === 'error') {
+      return `<div class="ao-context-section">
+        <h4>Matching Banks</h4>
+        <p class="ao-context-note">${escapeHtml(cached.error || 'Buyer scoring failed.')}</p>
+      </div>`;
+    }
+    const data = cached.data || {};
+    const buyers = Array.isArray(data.buyers) ? data.buyers.slice(0, 5) : [];
+    if (!buyers.length) {
+      const msg = data.notice || 'No covered banks matched this offering.';
+      return `<div class="ao-context-section">
+        <h4>Matching Banks</h4>
+        <p class="ao-context-note">${escapeHtml(msg)}</p>
+        <div class="ao-context-buyer-actions"><button type="button" class="small-btn" data-ao-context-action="buyers">Open buyer drawer</button></div>
+      </div>`;
+    }
+    const poolLabel = data.scopedOwner
+      ? `${formatNumber(data.scopedCount)} bank${data.scopedCount === 1 ? '' : 's'} you cover`
+      : `${formatNumber(data.coverageCount)} covered banks`;
+    return `<div class="ao-context-section">
+      <h4>Matching Banks</h4>
+      <p class="ao-context-meta">${escapeHtml(buyers.length)} of ${escapeHtml(poolLabel)} ranked.</p>
+      <div class="ao-context-buyer-list">
+        ${buyers.map(b => {
+          const crmLine = aoBuyerCrmLine(b);
+          const leadSignals = b.crm && Array.isArray(b.crm.leadSignals) ? b.crm.leadSignals : [];
+          return `<div class="ao-context-buyer">
+          <div class="ao-context-buyer-head">
+            <button type="button" class="linklike" data-ao-context-bank="${escapeHtml(b.bankId)}">${escapeHtml(b.displayName)}</button>
+            <span class="ao-context-buyer-score">${escapeHtml(b.score)}</span>
+          </div>
+          <div class="buyer-meta">${escapeHtml([b.location, b.status, b.owner ? `Owner: ${b.owner}` : ''].filter(Boolean).join(' · '))}</div>
+          ${crmLine ? `<div class="ao-context-crm-line">${escapeHtml(crmLine)}</div>` : ''}
+          <div class="buyer-rationale">
+            ${(b.rationale || []).slice(0, 3).map(r => `<span class="buyer-chip">${escapeHtml(r)}</span>`).join('')}
+            ${aoBuyerSuitabilityChip(b)}
+            ${leadSignals.slice(0, 3).map(s => `<span class="buyer-chip ao-lead-chip">${escapeHtml(s)}</span>`).join('')}
+          </div>
+          <div class="ao-context-buyer-row-actions">
+            <button type="button" class="small-btn" data-ao-context-buyer-crm="${escapeHtml(b.bankId)}">CRM Action</button>
+          </div>
+        </div>`;
+        }).join('')}
+      </div>
+      <div class="ao-context-buyer-actions"><button type="button" class="small-btn" data-ao-context-action="buyers">Open full buyer drawer</button></div>
+    </div>`;
+  }
+
+  async function fetchAoContextBuyers(row, productType, owner, cacheKey) {
+    if (allOfferingsBuyerRequest && allOfferingsBuyerRequest.controller) {
+      allOfferingsBuyerRequest.controller.abort();
+      const prior = allOfferingsBuyerCache.get(allOfferingsBuyerRequest.cacheKey);
+      if (prior && prior.state === 'loading') allOfferingsBuyerCache.delete(allOfferingsBuyerRequest.cacheKey);
+    }
+    const controller = new AbortController();
+    allOfferingsBuyerRequest = { controller, cacheKey };
+    allOfferingsBuyerCache.set(cacheKey, { state: 'loading' });
+    const load = async (scopeOwner, triedFallback) => {
+      const res = await fetch('/api/assistant/buyers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({ productType, offering: row, limit: 5, owner: scopeOwner || '' })
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (scopeOwner && data.scopedOwner && data.scopedCount === 0 && data.coverageCount > 0 && !triedFallback) {
+        return load('', true);
+      }
+      return data;
+    };
+    try {
+      const data = await load(owner, false);
+      allOfferingsBuyerCache.set(cacheKey, { state: 'ready', data });
+    } catch (err) {
+      if (err && err.name === 'AbortError') return;
+      allOfferingsBuyerCache.set(cacheKey, { state: 'error', error: err.message || 'Buyer scoring failed.' });
+    } finally {
+      if (allOfferingsBuyerRequest && allOfferingsBuyerRequest.cacheKey === cacheKey) {
+        allOfferingsBuyerRequest = null;
+      }
+    }
+    if (allOfferingsActiveKey === aoRowKey(row)) {
+      renderAllOfferingsContext();
+    }
+  }
+
+  function renderAllOfferingsContext() {
+    const rail = document.getElementById('aoContextRail');
+    if (!rail) return;
+    const row = allOfferingsRowByKey(allOfferingsActiveKey);
+    if (!row) {
+      rail.innerHTML = `<div class="ao-context-empty">
+        <div class="ao-context-kicker">Selected Offering</div>
+        <h3>Pick a row</h3>
+        <p>Click a security to see its details, matching banks, and next actions.</p>
+      </div>`;
+      decorateWorkspaceContextRail(rail);
+      return;
+    }
+    const productType = aoProductType(row);
+    const line = formatOfferingLine(row);
+    rail.innerHTML = `<div class="ao-context-card">
+      <div class="ao-context-top">
+        <div>
+          <div class="ao-context-kicker">Selected Offering</div>
+          <h3>${escapeHtml(row.description || row.cusip || 'Offering')}</h3>
+        </div>
+        <span class="ao-class-pill ao-class-${escapeHtml(row.type || 'other')}">${escapeHtml(row.assetClass || '')}</span>
+      </div>
+      <p class="ao-context-note">${escapeHtml(line)}</p>
+      <div class="ao-context-price-grid">
+        ${aoContextMetric('Yield', row.yield == null ? '—' : `${Number(row.yield).toFixed(3)}%`)}
+        ${aoContextMetric('Coupon', row.coupon == null ? '—' : `${Number(row.coupon).toFixed(3)}%`)}
+        ${aoContextMetric('Maturity', row.maturity ? formatNumericDate(String(row.maturity).slice(0, 10)) : '—')}
+        ${aoContextMetric('Price', row.price == null ? '—' : Number(row.price).toFixed(3))}
+        ${aoContextMetric('Size', row.availabilityK ? formatMoney(Number(row.availabilityK) * 1000, 0) : '—')}
+        ${aoContextMetric('Ratings', [row.moody, row.sp].filter(Boolean).join(' / ') || '—')}
+      </div>
+      <div class="ao-detail-sub">${aoAttrChips(row) || '<span class="no-restrict">No extra attributes parsed</span>'}</div>
+      <div class="ao-context-actions">
+        ${row.cusip ? `<button type="button" class="small-btn" data-ao-context-action="watch">Watch</button>` : ''}
+        <button type="button" class="small-btn" data-goto="${escapeHtml(row.page || 'all-offerings')}"${row.cusip ? ` data-cusip="${escapeHtml(row.cusip)}"` : ''}>Open</button>
+        <button type="button" class="small-btn" data-ao-context-action="compare">Compare</button>
+        <button type="button" class="small-btn" data-ao-context-action="crm">CRM Action</button>
+      </div>
+      ${renderAoContextBuyers(row, productType)}
+    </div>`;
+    rail.querySelectorAll('[data-ao-context-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.getAttribute('data-ao-context-action');
+        if (action === 'watch') {
+          return addToWatchlist({
+            kind: 'security',
+            refId: row.cusip,
+            label: row.description,
+            assetClass: row.assetClass,
+            page: row.page
+          }, btn);
+        }
+        if (action === 'compare') return openAllOfferingsComparables([row]);
+        if (action === 'crm') return openAllOfferingsCrmAction([row]);
+        if (action === 'buyers' && productType) return openBuyersDrawer(productType, row);
+      });
+    });
+    rail.querySelectorAll('[data-ao-context-bank]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigateToHash(bankDeepLinkHash(btn.getAttribute('data-ao-context-bank'), {
+          openStrategyRequest: true,
+          cusip: row.cusip || '',
+          security: row.description || row.cusip || '',
+          source: row.assetClass || ''
+        }), loadBankFromHashRoute);
+      });
+    });
+    rail.querySelectorAll('[data-ao-context-buyer-crm]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const buyer = aoContextBuyerForBank(btn.getAttribute('data-ao-context-buyer-crm'));
+        if (!buyer) return openAllOfferingsCrmAction([row]);
+        return openAllOfferingsCrmAction([row], {
+          bank: { id: buyer.bankId, label: buyer.displayName },
+          contextNote: aoBuyerCrmNote(buyer)
+        });
+      });
+    });
+    decorateWorkspaceContextRail(rail);
+  }
+
   function renderAllOfferings() {
     const body = document.getElementById('allOfferingsBody');
     if (!body || !allOfferingsData) return;
@@ -20204,21 +20342,16 @@
       `${(allOfferingsData.rows || []).length.toLocaleString()} securities across ${new Set((allOfferingsData.rows || []).map(r => r.assetClass)).size} asset classes${shownParK ? ` · ${formatMoney(shownParK * 1000, 0)} shown size` : ''}`;
 
     const num = (v, digits = 2) => (v == null ? '—' : Number(v).toFixed(digits));
-    const buyerProductFor = row => {
-      const type = String(row.type || row.assetClass || '').toLowerCase();
-      if (type.includes('treas')) return 'treasury';
-      if (type.includes('cd')) return 'cd';
-      if (type.includes('muni')) return 'muni';
-      if (type.includes('agency')) return 'agency';
-      if (type.includes('corp')) return 'corporate';
-      if (type.includes('mbs') || type.includes('cmo')) return 'mbs';
-      return '';
-    };
     body.innerHTML = allOfferingsVisibleRows.map((r, idx) => {
       const key = aoRowKey(r);
       const expanded = allOfferingsExpanded.has(key);
+      const productType = aoProductType(r);
+      const rowClasses = [
+        allOfferingsSelected.has(key) ? 'is-selected' : '',
+        allOfferingsActiveKey === key ? 'is-active-offering' : ''
+      ].filter(Boolean).join(' ');
       return `
-      <tr class="${allOfferingsSelected.has(key) ? 'is-selected' : ''}">
+      <tr class="${rowClasses}" data-ao-row="${escapeHtml(key)}" tabindex="0">
         <td class="ao-select-col"><input type="checkbox" data-ao-select="${escapeHtml(key)}" aria-label="Select ${escapeHtml(r.description || r.cusip || 'offering')}" ${allOfferingsSelected.has(key) ? 'checked' : ''}></td>
         <td class="ao-expand-col"><button type="button" class="text-btn ao-expand-btn" data-ao-expand="${escapeHtml(key)}" aria-label="${expanded ? 'Collapse details' : 'Expand details'}">${expanded ? '&minus;' : '+'}</button></td>
         <td><span class="ao-class-pill ao-class-${escapeHtml(r.type)}">${escapeHtml(r.assetClass)}</span></td>
@@ -20230,9 +20363,36 @@
         <td style="text-align:right">${num(r.price, 3)}</td>
         <td>${escapeHtml(r.state || '—')}</td>
         <td>${escapeHtml(r.sector || '—')}</td>
-        <td><span class="ao-row-actions">${r.cusip ? `<button type="button" class="text-btn ao-watch-btn" data-ao-watch="${escapeHtml(r.cusip)}" data-ao-watch-label="${escapeHtml(r.description)}" data-ao-watch-class="${escapeHtml(r.assetClass)}" data-ao-watch-page="${escapeHtml(r.page)}" title="Add to my watchlist">&#9734;</button>` : ''}${buyerProductFor(r) ? `<button type="button" class="small-btn buyers-btn" data-buyers-product="${escapeHtml(buyerProductFor(r))}" data-buyers-idx="${idx}">Find buyers</button>` : ''}<button type="button" class="small-btn" data-goto="${escapeHtml(r.page)}"${r.cusip ? ` data-cusip="${escapeHtml(r.cusip)}"` : ''}>Open</button></span></td>
+        <td><span class="ao-row-actions">${r.cusip ? `<button type="button" class="text-btn ao-watch-btn" data-ao-watch="${escapeHtml(r.cusip)}" data-ao-watch-label="${escapeHtml(r.description)}" data-ao-watch-class="${escapeHtml(r.assetClass)}" data-ao-watch-page="${escapeHtml(r.page)}" title="Add to my watchlist">&#9734;</button>` : ''}${productType ? `<button type="button" class="small-btn buyers-btn" data-buyers-product="${escapeHtml(productType)}" data-buyers-idx="${idx}">Find buyers</button>` : ''}<button type="button" class="small-btn" data-goto="${escapeHtml(r.page)}"${r.cusip ? ` data-cusip="${escapeHtml(r.cusip)}"` : ''}>Open</button></span></td>
       </tr>${expanded ? renderAllOfferingsDetail(r) : ''}`;
     }).join('') || `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--text3)">Nothing matches these filters.</td></tr>`;
+    body.querySelectorAll('[data-ao-row]').forEach(tr => {
+      tr.addEventListener('click', evt => {
+        if (evt.target.closest('button,input,a,select,label')) return;
+        const row = allOfferingsVisibleRows.find(r => aoRowKey(r) === tr.getAttribute('data-ao-row'));
+        if (row) setAllOfferingsActiveRow(row);
+      });
+      tr.addEventListener('keydown', evt => {
+        const currentKey = tr.getAttribute('data-ao-row');
+        const idx = allOfferingsVisibleRows.findIndex(r => aoRowKey(r) === currentKey);
+        if (idx < 0) return;
+        let nextIdx = idx;
+        if (evt.key === 'ArrowDown' || evt.key.toLowerCase() === 'j') nextIdx = Math.min(allOfferingsVisibleRows.length - 1, idx + 1);
+        else if (evt.key === 'ArrowUp' || evt.key.toLowerCase() === 'k') nextIdx = Math.max(0, idx - 1);
+        else if (evt.key === 'Enter') {
+          const row = allOfferingsVisibleRows[idx];
+          if (row) setAllOfferingsActiveRow(row);
+          return;
+        } else return;
+        evt.preventDefault();
+        const row = allOfferingsVisibleRows[nextIdx];
+        if (row) {
+          setAllOfferingsActiveRow(row);
+          const next = Array.from(body.querySelectorAll('[data-ao-row]')).find(el => el.getAttribute('data-ao-row') === aoRowKey(row));
+          if (next) next.focus();
+        }
+      });
+    });
     body.querySelectorAll('[data-ao-watch]').forEach(btn => {
       btn.addEventListener('click', () => addToWatchlist({
         kind: 'security',
@@ -20261,6 +20421,7 @@
     });
     wireBuyersButtons(body, filtered);
     updateAllOfferingsSelectionBar();
+    renderAllOfferingsContext();
   }
 
   async function addToWatchlist(item, btn) {
@@ -20532,28 +20693,35 @@
     showAllOfferingsActionModal('Compare offering', target.cusip || target.assetClass || '', body, footer);
   }
 
-  function openAllOfferingsCrmAction(rows) {
+  function openAllOfferingsCrmAction(rows, options = {}) {
     const selected = selectedRowsOrToast(rows);
     if (!selected) return;
-    allOfferingsCrmTarget = { bank: null, rows: selected };
+    allOfferingsCrmTarget = {
+      bank: options.bank || null,
+      rows: selected,
+      contextNote: options.contextNote || ''
+    };
     const body = `
       <div class="ao-crm-grid">
         <div>
           <label class="ef-field">Find bank
             <input type="text" id="aoCrmBankSearch" placeholder="Bank name, city, state, FDIC cert..." autocomplete="off">
           </label>
-          <div class="ao-crm-results" id="aoCrmBankResults"><div class="bank-search-empty">Type at least two characters to search banks.</div></div>
+          <div class="ao-crm-results" id="aoCrmBankResults">${options.bank
+            ? `<button type="button" class="ao-crm-bank is-active" data-ao-crm-bank="${escapeHtml(options.bank.id)}" data-ao-crm-label="${escapeHtml(options.bank.label)}"><strong>${escapeHtml(options.bank.label)}</strong><span>Selected from buyer rail</span></button>`
+            : '<div class="bank-search-empty">Type at least two characters to search banks.</div>'}</div>
         </div>
         <div>
           <div class="ao-offer-kicker">Selected securities</div>
           ${offeringRowsTable(selected, { limit: 8 })}
+          ${options.contextNote ? `<p class="ao-context-note ao-crm-prefill-note">${escapeHtml(options.contextNote)}</p>` : ''}
           ${selected.length > 8 ? `<p class="reports-muted">Showing 8 of ${escapeHtml(formatNumber(selected.length))} selected rows.</p>` : ''}
         </div>
       </div>`;
     const footer = `
-      <span class="buyers-drawer-disclaimer" id="aoCrmTargetLabel">Choose a bank to enable CRM actions.</span>
-      <button type="button" class="small-btn" id="aoCrmCreateOpp" disabled>Create opportunity</button>
-      <button type="button" class="small-btn" id="aoCrmLogPitch" disabled>Log pitch note</button>
+      <span class="buyers-drawer-disclaimer" id="aoCrmTargetLabel">${options.bank ? `Target bank: ${escapeHtml(options.bank.label)}` : 'Choose a bank to enable CRM actions.'}</span>
+      <button type="button" class="small-btn" id="aoCrmCreateOpp" ${options.bank ? '' : 'disabled'}>Create opportunity</button>
+      <button type="button" class="small-btn" id="aoCrmLogPitch" ${options.bank ? '' : 'disabled'}>Log pitch note</button>
       <button type="button" class="small-btn" data-ao-modal-close>Close</button>`;
     const backdrop = showAllOfferingsActionModal('CRM action', `${selected.length} selected securities`, body, footer);
     const search = backdrop.querySelector('#aoCrmBankSearch');
@@ -20603,7 +20771,9 @@
 
   function allOfferingsCrmBody() {
     const rows = allOfferingsCrmTarget.rows || [];
-    return rows.map(formatOfferingLine).join('\n');
+    return [allOfferingsCrmTarget.contextNote || '', rows.map(formatOfferingLine).join('\n')]
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   async function createAllOfferingsCrmOpportunity() {
@@ -23290,8 +23460,7 @@
     if (rates && rates.spread2s10sBp != null) cards.push(marketWireCard('2s10s', rates.spread2s10sBp + 'bp', 'As of ' + (rates.asOfDate || '')));
     if (ind && ind.cpiYoY) cards.push(marketWireCard('CPI YoY', ind.cpiYoY.value.toFixed(1) + '%', ind.cpiYoY.period));
     if (ind && ind.unemployment) cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
-    // The hub shows the full FRED complex; Home keeps the core five.
-    cards.push(...fredWireCards(fred, HOME_FRED_KEYS.concat(EXTENDED_FRED_KEYS)));
+    cards.push(...fredWireCards(fred, CORE_FRED_KEYS.concat(EXTENDED_FRED_KEYS)));
     cardsEl.innerHTML = cards.join('') || '<div class="home-wire-card"><p class="home-wire-card-sub">Live numbers unavailable.</p></div>';
 
     const headlinesEl = document.getElementById('mcHeadlines');
@@ -24698,7 +24867,6 @@
   // package without a manual browser refresh. Inactive pages reload anyway
   // the next time goTo() opens them.
   const PACKAGE_PAGE_LOADERS = {
-    'signals': () => loadSignalInbox(true),
     'sales-dashboard': () => loadSalesDashboard(),
     'all-offerings': () => loadAllOfferings(),
     'watchlist': () => loadWatchlistPage(),
@@ -24740,19 +24908,8 @@
 
   // ============ Market Wire (live headlines + economic numbers) ============
 
-  const MARKET_WIRE_REFRESH_MS = 15 * 60 * 1000;
-
-  function setupMarketWire() {
-    if (!document.getElementById('homeWireSection')) return;
-    loadMarketWire();
-    setInterval(() => {
-      // Skip refreshes while the tab is backgrounded; the next visible tick picks up.
-      if (document.visibilityState === 'visible') loadMarketWire();
-    }, MARKET_WIRE_REFRESH_MS);
-  }
-
-  // Short client-side cache so the Home wire, Market Color hub, CD explorer
-  // strip, and rollover wall don't each hammer /api/market/wire (the server
+  // Short client-side cache so the Market Color hub, CD explorer strip, and
+  // rollover wall don't each hammer /api/market/wire (the server
   // caches upstream anyway; this just dedups per-page fetches).
   let marketWireClientCache = null;
 
@@ -24765,15 +24922,6 @@
     const data = await res.json();
     marketWireClientCache = { data, at: Date.now() };
     return data;
-  }
-
-  async function loadMarketWire() {
-    try {
-      marketWireClientCache = null; // the 15-min poll should always refresh
-      renderMarketWire(await fetchMarketWire());
-    } catch (e) {
-      console.error('Failed to load market wire:', e);
-    }
   }
 
   function wireSparkline(history) {
@@ -24805,7 +24953,7 @@
     return { value: fmt(entry.value), sub, spark: wireSparkline(entry.history) };
   }
 
-  const HOME_FRED_KEYS = ['sofr', 'fedFunds', 'breakeven10Y', 'igOas', 'hyOas'];
+  const CORE_FRED_KEYS = ['sofr', 'fedFunds', 'breakeven10Y', 'igOas', 'hyOas'];
   const EXTENDED_FRED_KEYS = ['sofr30', 'sofr90', 'iorb', 'prime', 'breakeven5Y', 'fwd5y5y'];
   const FDIC_NDR_KEYS = ['ndr3m', 'ndr6m', 'ndr12m', 'ndr24m', 'ndr36m', 'ndr60m'];
 
@@ -24883,79 +25031,6 @@
     return `${n > 0 ? '+' : ''}${n}bp on the day`;
   }
 
-  function renderMarketWire(data) {
-    const section = document.getElementById('homeWireSection');
-    if (!section) return;
-    const rates = data.rates || null;
-    const ind = data.indicators || null;
-    const wire = data.headlines || null;
-    const auctions = data.auctions || null;
-    const headlines = wire && Array.isArray(wire.headlines) ? wire.headlines : [];
-    if (!rates && !ind && !auctions && !headlines.length) {
-      section.hidden = true;
-      return;
-    }
-    section.hidden = false;
-
-    const cards = [];
-    if (rates && rates.tenYear != null) {
-      cards.push(marketWireCard('10Y Treasury', rates.tenYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['10Y'])));
-    }
-    if (rates && rates.twoYear != null) {
-      cards.push(marketWireCard('2Y Treasury', rates.twoYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['2Y'])));
-    }
-    if (rates && rates.spread2s10sBp != null) {
-      cards.push(marketWireCard('2s10s', rates.spread2s10sBp + 'bp', 'As of ' + (rates.asOfDate || '')));
-    }
-    if (ind && ind.cpiYoY) {
-      cards.push(marketWireCard('CPI YoY', ind.cpiYoY.value.toFixed(1) + '%', ind.cpiYoY.period));
-    }
-    if (ind && ind.unemployment) {
-      cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
-    }
-    // FRED benchmarks ride along once a FRED key is configured server-side.
-    cards.push(...fredWireCards(data.fred || null, HOME_FRED_KEYS));
-    let auctionsCard = '';
-    if (auctions && ((auctions.results || []).length || (auctions.upcoming || []).length)) {
-      const resultRows = (auctions.results || []).slice(0, 3).map(a => `<div class="home-wire-auction-row">
-        <span>${escapeHtml(a.term)} ${escapeHtml(a.type)}</span>
-        <span>${escapeHtml(a.stopYield.toFixed(3))}%${a.bidToCover != null ? ' · ' + escapeHtml(a.bidToCover.toFixed(2)) + 'x' : ''}</span>
-      </div>`).join('');
-      const upcomingRows = (auctions.upcoming || []).slice(0, 3).map(a => `<div class="home-wire-auction-row">
-        <span>${escapeHtml(a.term)} ${escapeHtml(a.type)}</span>
-        <span>${escapeHtml(a.auctionDate || '')}</span>
-      </div>`).join('');
-      auctionsCard = `<div class="home-wire-card home-wire-auctions">
-        <p class="home-wire-card-label">Treasury Auctions</p>
-        ${resultRows ? `<p class="home-wire-auction-head">Latest stops · bid-to-cover</p>${resultRows}` : ''}
-        ${upcomingRows ? `<p class="home-wire-auction-head">Coming up</p>${upcomingRows}` : ''}
-      </div>`;
-    }
-
-    const indicatorsEl = document.getElementById('homeWireIndicators');
-    if (indicatorsEl) {
-      indicatorsEl.innerHTML = (cards.join('') + auctionsCard) || '<div class="home-wire-card"><p class="home-wire-card-sub">Live numbers unavailable.</p></div>';
-    }
-
-    const listEl = document.getElementById('homeWireList');
-    if (listEl) {
-      listEl.innerHTML = headlines.slice(0, 8).map(h => `<li class="home-wire-item">
-        <span class="home-wire-source">${escapeHtml(h.source || '')}</span>
-        <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener">${escapeHtml(h.title)}</a>
-        <span class="home-wire-time">${escapeHtml(h.publishedAt ? formatRelativeAt(h.publishedAt) : '')}</span>
-      </li>`).join('') || '<li class="home-wire-item home-wire-empty">No headlines right now.</li>';
-    }
-
-    const updatedEl = document.getElementById('homeWireUpdated');
-    if (updatedEl) {
-      const at = (wire && wire.fetchedAt) || (ind && ind.fetchedAt) || null;
-      const stale = Boolean(wire && wire.stale);
-      updatedEl.textContent = at
-        ? `Fed · FDIC · SEC · BLS · TreasuryDirect — updated ${formatRelativeAt(at)}${stale ? ' (showing cached)' : ''}`
-        : 'Fed · FDIC · SEC · BLS · TreasuryDirect';
-    }
-  }
-
   function setupGlobalErrorLogging() {
     if (window.__fbbsGlobalErrorLoggingBound) return;
     window.__fbbsGlobalErrorLoggingBound = true;
@@ -24980,12 +25055,12 @@
     loadMe();
     setupHome();
     setupHomePolish();
-    setupMarketWire();
     setupLivePolling();
     setupUpload();
     setupCdCostCalculator();
     setupCdOpportunityTool();
     setupEconomicMarketTool();
+    renderSidebarNav();
     setupNavSearch();
     setupMarketNav();
     setupChartTooltips();

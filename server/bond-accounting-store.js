@@ -203,6 +203,20 @@ function portfolioTargetPath(rootDir, match) {
   return path.join(rootDir, 'unmatched', sanitizePathSegment(match.pCode || 'unknown'), dateDir, sanitizePathSegment(match.filename));
 }
 
+function oneOffPortfolioTargetPath(rootDir, match) {
+  const dateDir = sanitizePathSegment(match.reportDate || 'undated');
+  return path.join(rootDir, 'matched', sanitizePathSegment(match.bankId), 'one-off', dateDir, sanitizePathSegment(match.filename));
+}
+
+function recomputeManifestCounts(manifest) {
+  const matches = Array.isArray(manifest && manifest.matches) ? manifest.matches : [];
+  manifest.portfolioFileCount = matches.length;
+  manifest.matchedCount = matches.filter(row => row.status === 'matched').length;
+  manifest.pCodeMatchedCount = matches.filter(row => row.status === 'needs-bank-data-match').length;
+  manifest.unmatchedCount = matches.filter(row => row.status !== 'matched').length;
+  return manifest;
+}
+
 function importBondAccountingFolder(bankReportsDir, bankListPath, portfolioFolderPath, options = {}) {
   const rootDir = bondAccountingDirForReportsDir(bankReportsDir);
   fs.mkdirSync(rootDir, { recursive: true });
@@ -279,6 +293,79 @@ function importBondAccountingFolder(bankReportsDir, bankListPath, portfolioFolde
   return manifest;
 }
 
+function importOneOffPortfolioForBank(bankReportsDir, bankSummary, sourceFilePath, options = {}) {
+  if (!bankSummary || !bankSummary.id) throw new Error('bankSummary.id is required');
+  if (!sourceFilePath || !fs.existsSync(sourceFilePath) || !fs.statSync(sourceFilePath).isFile()) {
+    throw new Error('sourceFilePath is required');
+  }
+
+  const rootDir = bondAccountingDirForReportsDir(bankReportsDir);
+  fs.mkdirSync(rootDir, { recursive: true });
+  const manifest = loadBondAccountingManifest(bankReportsDir) || {
+    schemaVersion: 1,
+    importedAt: '',
+    sourceFolder: '',
+    bankListSourceFile: '',
+    bankListMode: 'none',
+    portfolioFileCount: 0,
+    matchedCount: 0,
+    pCodeMatchedCount: 0,
+    unmatchedCount: 0,
+    bankList: {
+      sourceFile: '',
+      sheetName: '',
+      rowCount: 0,
+      pCodeCount: 0
+    },
+    matches: []
+  };
+
+  const parsed = parsePortfolioFilename(path.basename(sourceFilePath));
+  const reportDate = cleanText(options.reportDate) || parsed.reportDate || new Date().toISOString().slice(0, 10);
+  const bankId = cleanText(bankSummary.id);
+  const previous = (manifest.matches || []).filter(row =>
+    String(row.bankId || '') === bankId && row.sourceType === 'one-off-thomas-ho');
+  for (const row of previous) {
+    if (!row || !row.storedPath) continue;
+    const fullPath = resolveBondAccountingStoredFile(bankReportsDir, row.storedPath);
+    if (fullPath) {
+      try { fs.rmSync(fullPath, { force: true }); } catch (_) {}
+    }
+  }
+
+  const match = {
+    id: `ONEOFF-${bankId}-${reportDate}-${sanitizePathSegment(parsed.filename)}`,
+    filename: parsed.filename,
+    originalPath: sourceFilePath,
+    account: cleanText(options.account) || parsed.account,
+    reportDate,
+    pCode: parsed.pCode,
+    portfolioClientName: parsed.clientName || cleanText(bankSummary.displayName || bankSummary.name),
+    bankList: null,
+    bankId,
+    bankDisplayName: cleanText(bankSummary.displayName || bankSummary.name),
+    certNumber: cleanDigits(bankSummary.certNumber),
+    matchedBy: 'bank-tear-sheet',
+    status: 'matched',
+    sourceType: 'one-off-thomas-ho',
+    sourceLabel: 'One-off Thomas Ho portfolio',
+    importedAt: new Date().toISOString()
+  };
+  const targetPath = oneOffPortfolioTargetPath(rootDir, match);
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.copyFileSync(sourceFilePath, targetPath);
+  match.storedPath = path.relative(rootDir, targetPath);
+  match.sizeBytes = fs.statSync(targetPath).size;
+
+  manifest.matches = (manifest.matches || [])
+    .filter(row => !(String(row.bankId || '') === bankId && row.sourceType === 'one-off-thomas-ho'));
+  manifest.matches.unshift(match);
+  manifest.importedAt = new Date().toISOString();
+  recomputeManifestCounts(manifest);
+  writeJsonAtomic(bondAccountingManifestPathForReportsDir(bankReportsDir), manifest, 2);
+  return { manifest, match };
+}
+
 function getBondAccountingForBank(bankReportsDir, bankId) {
   const manifest = loadBondAccountingManifest(bankReportsDir);
   if (!manifest || !bankId) return null;
@@ -343,6 +430,7 @@ module.exports = {
   getBondAccountingForBank,
   getBondAccountingStatus,
   importBondAccountingFolder,
+  importOneOffPortfolioForBank,
   loadBondAccountingBankList,
   loadBondAccountingManifest,
   parseBankListWorkbook,
@@ -353,6 +441,8 @@ module.exports = {
   chooseBankSummary,
   cleanDigits,
   normalizePCode,
+  oneOffPortfolioTargetPath,
   portfolioTargetPath,
+  recomputeManifestCounts,
   sanitizePathSegment
 };

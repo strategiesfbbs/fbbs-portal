@@ -676,7 +676,8 @@ function buildRollup(accounts, asOfDate) {
   const latestTradeDate = dated.map(a => a.mostRecentTradeDate).sort().pop() || '';
   const ownerCounts = new Map();
   live.forEach(a => {
-    const owner = a.primaryOwnerName || a.primaryOwnerId || '';
+    const owner = a.primaryOwnerName || a.accountOwnerName || a.secondaryOwnerName ||
+      a.primaryOwnerId || a.accountOwnerId || a.secondaryOwnerId || '';
     if (owner) ownerCounts.set(owner, (ownerCounts.get(owner) || 0) + 1);
   });
   const owners = [...ownerCounts.entries()]

@@ -647,9 +647,9 @@ const MAP_FIELD_KEYS = [
   'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio', 'leverageRatio',
   'nonInterestBearingDeposits', 'wholesaleFundingReliance',
   'liquidAssetsToAssets', 'tier1RiskBasedRatio', 'texasRatio', 'nplsToLoans', 'longTermAssetsToAssets',
-  // Signal Inbox: the AFS muni book (muni-afs-book signal) + Sub-S election
-  // (BQ context). Additive per CLAUDE.md "Adding a metric to the map" — projected
-  // here so the cached map dataset carries them; no other change needed.
+  // AFS muni book + Sub-S election (BQ context). Additive per CLAUDE.md
+  // "Adding a metric to the map" — projected here so the cached map dataset
+  // carries them for maps, tear sheets, and future coverage screens.
   'afsMunis', 'subchapterS'
 ];
 

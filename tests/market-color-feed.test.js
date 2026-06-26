@@ -62,6 +62,18 @@ function testTagFallback() {
   console.log('  ✓ inferTags: default + keyword');
 }
 
+function testPersonalFinanceFilter() {
+  const xml = rssFixture([
+    { title: 'Treasury yields rise as Fed path shifts', link: 'https://www.cnbc.com/markets.html', desc: 'Bond yields moved higher.', pubDate: 'Wed, 18 Jun 2026 14:00:00 GMT' },
+    { title: 'How to manage your 401(k) when markets fall', link: 'https://www.cnbc.com/personal-finance/retirement.html', desc: 'Retirement planning tips for your money.', pubDate: 'Wed, 18 Jun 2026 13:00:00 GMT' },
+    { title: 'Mortgage rates fall for homebuyers', link: 'https://www.marketwatch.com/story/mortgage.html', desc: 'What it means for your wallet.', pubDate: 'Wed, 18 Jun 2026 12:00:00 GMT' },
+  ]);
+  const items = feed.parseFeedItems(xml);
+  assert.deepStrictEqual(items.map(i => i.title), ['Treasury yields rise as Fed path shifts']);
+  assert.ok(feed.isPersonalFinanceArticle({ title: 'Credit card debt hits consumers', url: 'https://example.com/x', summary: '' }));
+  console.log('  ✓ parseFeedItems: drops personal-finance articles');
+}
+
 // ---------- getMarketColorFeed: dedup + sort + cache ----------
 
 async function testFetchDedupSortCache() {
@@ -101,6 +113,24 @@ async function testFetchDedupSortCache() {
   console.log('  ✓ getMarketColorFeed: dedup + newest-first + TTL cache');
 }
 
+function testCachedPersonalFinanceFilter() {
+  const cache = {
+    fetchedAt: '2026-06-18T15:00:00.000Z',
+    feeds: {
+      'cnbc-markets': {
+        fetchedAt: '2026-06-18T15:00:00.000Z',
+        items: [
+          { title: 'Fed officials debate rate cuts', url: 'https://www.cnbc.com/fed.html', summary: 'Treasury yields moved.', publishedAt: '2026-06-18T14:00:00.000Z', tags: ['rates'] },
+          { title: 'Best savings accounts for your money', url: 'https://www.cnbc.com/personal-finance/savings.html', summary: 'Personal finance advice.', publishedAt: '2026-06-18T13:00:00.000Z', tags: ['market color'] },
+        ],
+      },
+    },
+  };
+  const res = feed.buildResponse(cache);
+  assert.deepStrictEqual(res.items.map(i => i.title), ['Fed officials debate rate cuts']);
+  console.log('  ✓ buildResponse: filters personal finance from cache');
+}
+
 // ---------- stale-on-failure ----------
 
 async function testStaleOnFailure() {
@@ -133,7 +163,9 @@ async function testNoCacheNoThrow() {
 (async function main() {
   testParse();
   testTagFallback();
+  testPersonalFinanceFilter();
   await testFetchDedupSortCache();
+  testCachedPersonalFinanceFilter();
   await testStaleOnFailure();
   await testNoCacheNoThrow();
   console.log('market-color-feed tests passed');

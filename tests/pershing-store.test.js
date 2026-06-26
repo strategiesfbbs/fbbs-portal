@@ -80,7 +80,6 @@ try {
       Account__c: '001BANKTWO000000BBB',
       Name: '7R8000003',
       Most_Recent_Trade_Date__c: '2025-01-01',
-      Owner_1__c: '005PRIMARYOWNERAAA',
       IsDeleted: 'false'
     },
     {
@@ -143,6 +142,7 @@ try {
   const rollups = pershing.getPershingRollupsForBanks(tmpDir, ['B-1', 'B-2'], { asOfDate: '2026-06-24' });
   ok('rollups map has two banks', rollups.size === 2);
   ok('rollups b2 latest', rollups.get('B-2').latestTradeDate === '2025-01-01');
+  ok('rollup falls back to account owner', rollups.get('B-2').owners[0].name === 'Account Owner');
 
   const dormant = pershing.listDormantPershingBanks(tmpDir, { asOfDate: '2026-06-24', dormantDays: 180 });
   ok('dormant includes old-trade bank', dormant.some(row => row.bankId === 'B-2'));

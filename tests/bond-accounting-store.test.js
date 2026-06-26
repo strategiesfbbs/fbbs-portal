@@ -7,6 +7,8 @@
 // locks down the logic that decides WHERE files land and HOW they're matched.
 
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const b = require('../server/bond-accounting-store');
 
@@ -115,6 +117,59 @@ test('portfolioTargetPath cannot escape the root even with traversal-laden input
   const rel = path.relative(root, out);
   assert.ok(!rel.startsWith('..') && !path.isAbsolute(rel), `stays under root: ${rel}`);
   assert.ok(!rel.split(path.sep).includes('..'), `no '..' path segment: ${rel}`);
+});
+
+test('importOneOffPortfolioForBank replaces only that bank one-off row', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-bond-oneoff-'));
+  try {
+    const reportsDir = path.join(tmp, 'reports');
+    const root = b.bondAccountingDirForReportsDir(reportsDir);
+    fs.mkdirSync(root, { recursive: true });
+    const manifestPath = path.join(root, b.BOND_ACCOUNTING_MANIFEST_FILENAME);
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      schemaVersion: 1,
+      importedAt: '2026-05-01T00:00:00.000Z',
+      sourceFolder: 'monthly',
+      bankListSourceFile: 'BankList.xlsx',
+      bankListMode: 'saved',
+      portfolioFileCount: 1,
+      matchedCount: 1,
+      pCodeMatchedCount: 0,
+      unmatchedCount: 0,
+      bankList: { sourceFile: 'BankList.xlsx', sheetName: 'Banks', rowCount: 1, pCodeCount: 1 },
+      matches: [{
+        id: 'monthly',
+        filename: 'monthly.xlsx',
+        reportDate: '2026-05-31',
+        bankId: 'bank-1',
+        bankDisplayName: 'First Bank',
+        status: 'matched',
+        storedPath: path.join('matched', 'bank-1', '2026-05-31', 'monthly.xlsx')
+      }]
+    }, null, 2));
+    const file1 = path.join(tmp, 'First(Account)_First Bank_20260601_P1.xlsx');
+    const file2 = path.join(tmp, 'rerun.xlsx');
+    fs.writeFileSync(file1, 'one');
+    fs.writeFileSync(file2, 'two');
+
+    b.importOneOffPortfolioForBank(reportsDir, { id: 'bank-1', displayName: 'First Bank', certNumber: '123' }, file1);
+    const afterFirst = b.loadBondAccountingManifest(reportsDir);
+    assert.strictEqual(afterFirst.matches.length, 2);
+    assert.strictEqual(afterFirst.matches[0].sourceType, 'one-off-thomas-ho');
+    assert.strictEqual(afterFirst.matches[1].id, 'monthly');
+
+    b.importOneOffPortfolioForBank(reportsDir, { id: 'bank-1', displayName: 'First Bank', certNumber: '123' }, file2, { reportDate: '2026-06-15' });
+    const afterSecond = b.loadBondAccountingManifest(reportsDir);
+    assert.strictEqual(afterSecond.matches.length, 2);
+    assert.strictEqual(afterSecond.matches.filter(row => row.sourceType === 'one-off-thomas-ho').length, 1);
+    assert.strictEqual(afterSecond.matches[0].filename, 'rerun.xlsx');
+    assert.strictEqual(afterSecond.matches[0].reportDate, '2026-06-15');
+    assert.strictEqual(afterSecond.matches[1].id, 'monthly');
+    assert.strictEqual(afterSecond.portfolioFileCount, 2);
+    assert.strictEqual(afterSecond.matchedCount, 2);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 console.log(`bond-accounting-store tests: ${passed} passed.`);
