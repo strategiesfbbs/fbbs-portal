@@ -2476,6 +2476,7 @@ async function buildDailyIntelligence() {
       marketRates: economicUpdate && Array.isArray(economicUpdate.marketRates) ? economicUpdate.marketRates : [],
       marketData: economicUpdate && Array.isArray(economicUpdate.marketData) ? economicUpdate.marketData : [],
       bondIndices: economicUpdate && Array.isArray(economicUpdate.bondIndices) ? economicUpdate.bondIndices : [],
+      headlines: economicUpdate && Array.isArray(economicUpdate.headlines) ? economicUpdate.headlines : [],
       releases: economicUpdate && Array.isArray(economicUpdate.releases) ? economicUpdate.releases : [],
       salesCues: mergeSalesCues(extractedSalesCues, generatedSalesCues)
     },

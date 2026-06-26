@@ -24,6 +24,7 @@
   let mmdData = null;
   let economicUpdateData = null;
   let selectedMarketSection = 'rates';
+  let selectedDailyMarketSection = 'rates';
   let selectedCdCalcTerm = 3;
   let wirpStatusData = null;
   let cdOpportunityAnalysis = null;
@@ -3465,13 +3466,15 @@
     return '/current/' + encodeURIComponent(file) + (download ? '?download=1' : '');
   }
 
-  function sourceDocCard(slot, title, body, canonicalPage) {
+  function sourceDocCard(slot, title, body, canonicalPage, options = {}) {
     const file = currentPackage && currentPackage[slot];
     const label = file || 'Not uploaded';
     const ready = !!file;
-    const view = ready ? `<a class="small-btn secondary" href="${escapeHtml(currentFileUrl(slot, false))}" target="_blank" rel="noopener">View PDF</a>` : '';
-    const download = ready ? `<a class="small-btn" href="${escapeHtml(currentFileUrl(slot, true))}">Download</a>` : '<button type="button" class="small-btn" data-goto="upload">Upload</button>';
+    const showPdfActions = options.showPdfActions !== false;
+    const view = showPdfActions && ready ? `<a class="small-btn secondary" href="${escapeHtml(currentFileUrl(slot, false))}" target="_blank" rel="noopener">View PDF</a>` : '';
+    const download = showPdfActions && ready ? `<a class="small-btn" href="${escapeHtml(currentFileUrl(slot, true))}">Download</a>` : (!ready ? '<button type="button" class="small-btn" data-goto="upload">Upload</button>' : '');
     const canonical = canonicalPage ? `<button type="button" class="text-btn" data-goto="${escapeHtml(canonicalPage)}">Open digital view</button>` : '';
+    const actions = `${canonical}${view}${download}`;
     return `<article class="source-doc-card source-doc-${ready ? 'ready' : 'missing'}">
       <div class="source-doc-copy">
         <span class="source-doc-status">${ready ? 'Loaded' : 'Missing'}</span>
@@ -3479,7 +3482,7 @@
         <p>${escapeHtml(body)}</p>
         <small>${escapeHtml(label)}</small>
       </div>
-      <div class="source-doc-actions">${canonical}${view}${download}</div>
+      ${actions ? `<div class="source-doc-actions">${actions}</div>` : ''}
     </article>`;
   }
 
@@ -3487,17 +3490,8 @@
     const el = document.getElementById('dailyIntelSourceDocs');
     if (!el) return;
     el.innerHTML = [
-      sourceDocCard('econ', 'Digital Economic Update', 'Rates, curve, releases, and market data extracted from the daily Economic Update.', 'econ'),
-      sourceDocCard('relativeValue', 'Digital CD Relative Value', 'CD, Treasury, agency, muni, and corporate comparisons extracted from the CD Relative Value sheet.', 'relativeValue')
-    ].join('');
-  }
-
-  function renderSalesSourceDocs() {
-    const el = document.getElementById('salesDashSourceDocs');
-    if (!el) return;
-    el.innerHTML = [
-      sourceDocCard('relativeValue', 'Relative Value PDF', 'Original daily rate-comparison sheet for audit and download.', null),
-      sourceDocCard('econ', 'Economic Update PDF', 'Market backdrop feeding the Sales Dashboard benchmarks.', 'daily-intelligence')
+      sourceDocCard('econ', 'Digital Economic Update', 'Rates, curve, releases, and market data extracted from the daily Economic Update.', null, { showPdfActions: false }),
+      sourceDocCard('relativeValue', 'Digital CD Relative Value', 'CD, Treasury, agency, muni, and corporate comparisons extracted from the CD Relative Value sheet.', null, { showPdfActions: false })
     ].join('');
   }
 
@@ -3718,6 +3712,47 @@
       : '<div class="market-empty small">No market rates extracted.</div>';
   }
 
+  function renderDailyEconomicDetail() {
+    const detail = document.getElementById('dailyEconMarketDetail');
+    if (!detail) return;
+    const market = dailyIntelData && dailyIntelData.market ? dailyIntelData.market : null;
+    if (!market) {
+      detail.innerHTML = '<div class="market-empty small">Upload the Economic Update to populate the digital market detail.</div>';
+      return;
+    }
+    const data = {
+      marketRates: market.marketRates || [],
+      bondIndices: market.bondIndices || [],
+      marketData: market.marketData || [],
+      headlines: market.headlines || [],
+      releases: market.releases || []
+    };
+    if (selectedDailyMarketSection === 'risk') {
+      detail.innerHTML = (data.marketData || []).length
+        ? `<div class="market-data-list">${data.marketData.map(economicRowHtml).join('')}</div>`
+        : '<div class="market-empty small">No futures or volatility rows extracted.</div>';
+      return;
+    }
+    if (selectedDailyMarketSection === 'headlines') {
+      const items = data.headlines || [];
+      detail.innerHTML = items.length
+        ? `<div class="headline-list">${items.map(item => `<p>${escapeHtml(item)}</p>`).join('')}</div>`
+        : '<div class="market-empty small">No headlines extracted from the Economic Update.</div>';
+      return;
+    }
+    if (selectedDailyMarketSection === 'calendar') {
+      detail.innerHTML = economicCalendarHtml(data.releases || []);
+      return;
+    }
+    const rows = [
+      ...(data.marketRates || []),
+      ...(data.bondIndices || [])
+    ];
+    detail.innerHTML = rows.length
+      ? `<div class="market-data-list">${rows.map(economicRowHtml).join('')}</div>`
+      : '<div class="market-empty small">No market-rate rows extracted.</div>';
+  }
+
   function setupEconomicMarketTool() {
     document.querySelectorAll('[data-market-section]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -3726,6 +3761,15 @@
           item.classList.toggle('active', item === btn);
         });
         renderEconomicDetail();
+      });
+    });
+    document.querySelectorAll('[data-daily-market-section]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        selectedDailyMarketSection = btn.dataset.dailyMarketSection || 'rates';
+        document.querySelectorAll('[data-daily-market-section]').forEach(item => {
+          item.classList.toggle('active', item === btn);
+        });
+        renderDailyEconomicDetail();
       });
     });
   }
@@ -3965,6 +4009,7 @@
     const rvEl = document.getElementById('dailyIntelRelativeValue');
     const rvCount = document.getElementById('dailyIntelRvCount');
     const gapsEl = document.getElementById('dailyIntelGaps');
+    const econKicker = document.getElementById('dailyEconDigitalKicker');
     if (!sub || !stat || !kicker || !status || !summary || !slopeEl || !cues || !cueCount || !rvEl || !rvCount || !gapsEl) return;
 
     const data = dailyIntelData;
@@ -3978,6 +4023,8 @@
       rvCount.textContent = '—';
       gapsEl.innerHTML = '';
       renderDailyCurveChart([]);
+      renderDailyEconomicDetail();
+      renderDailyRelativeValueDigital(null);
       return;
     }
 
@@ -4007,6 +4054,7 @@
       ? `Auto-generated from the ${formatShortDate(data.asOfDate)} uploaded package.`
       : 'Auto-generated from the current uploaded package.';
     kicker.textContent = data.publishedAt ? `Published ${formatFullTimestamp(data.publishedAt)}` : 'Current package';
+    if (econKicker) econKicker.textContent = data.package && data.package.econ ? data.package.econ : 'Economic Update';
     slopeEl.textContent = two && ten ? `2s/10s ${(ten.yield - two.yield).toFixed(3)}%` : '2s/10s —';
 
     status.innerHTML = `
@@ -4041,6 +4089,8 @@
     `).join('') : '<div class="market-empty small">No sales cues extracted.</div>';
 
     renderDailyRelativeValue(rv);
+    renderDailyEconomicDetail();
+    renderDailyRelativeValueDigital(rv);
 
     gapsEl.innerHTML = gaps.length
       ? gaps.map(gap => `<div class="daily-gap-item">${escapeHtml(gap)}</div>`).join('')
@@ -4333,8 +4383,8 @@
     `;
   }
 
-  function renderRelativeValueChart(rows) {
-    const el = document.getElementById('rvRateSnapshotChart');
+  function renderRelativeValueChart(rows, targetId = 'rvRateSnapshotChart') {
+    const el = document.getElementById(targetId);
     if (!el) return;
     if (!rows.length) {
       el.innerHTML = '<div class="market-empty small">Rate snapshot table unavailable.</div>';
@@ -4418,6 +4468,36 @@
     `;
   }
 
+  function renderRelativeValueTable(rows, bodyId = 'rvRateSnapshotTableBody') {
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    const loadFailed = relativeValueData === null && bodyId === 'rvRateSnapshotTableBody';
+    body.innerHTML = rows.length ? rows.map(row => `
+      <tr>
+        <td><strong>${escapeHtml(row.term)}</strong></td>
+        ${bodyId === 'dailyRvRateSnapshotTableBody' ? `<td>${escapeHtml(rvRateValue(row.cd))}</td>` : ''}
+        <td>${escapeHtml(rvRateValue(row.ust))}</td>
+        ${bodyId === 'dailyRvRateSnapshotTableBody' ? `<td>${escapeHtml(rvSpreadValue(row.cdSpread))}</td>` : ''}
+        <td>${escapeHtml(rvRateValue(row.agency))}</td>
+        <td>${escapeHtml(rvSpreadValue(row.agencySpread))}</td>
+        ${bodyId === 'rvRateSnapshotTableBody' ? `<td>${escapeHtml(rvRateValue(row.muni))}</td>` : ''}
+        <td>${escapeHtml(rvRateValue(row.muniTey296))}</td>
+        <td>${escapeHtml(rvRateValue(row.muniTey21))}</td>
+        <td>${escapeHtml(rvRateValue(row.corp))}</td>
+        <td>${escapeHtml(rvSpreadValue(row.corpSpread))}</td>
+      </tr>
+    `).join('') : `<tr><td colspan="${bodyId === 'dailyRvRateSnapshotTableBody' ? '10' : '9'}">${loadFailed ? 'Could not load /api/relative-value. Restart the portal server after this update.' : 'Rate snapshot table unavailable.'}</td></tr>`;
+  }
+
+  function renderDailyRelativeValueDigital(rv) {
+    const rows = rv && Array.isArray(rv.rows) ? rv.rows : [];
+    setText('dailyRvDigitalKicker', rv && rv.asOfDate ? formatShortDate(rv.asOfDate) : 'Current package');
+    setText('dailyRvRateChartLabel', rv && rv.sourceFile ? rv.sourceFile : (rows.length ? 'CD Relative Value' : 'Snapshot unavailable'));
+    setText('dailyRvRateTableLabel', rows.length ? `${rows.length} terms` : '—');
+    renderRelativeValueChart(rows, 'dailyRvRateSnapshotChart');
+    renderRelativeValueTable(rows, 'dailyRvRateSnapshotTableBody');
+  }
+
   function renderRelativeValueNative() {
     const tool = document.getElementById('relativeValueTool');
     if (!tool) return;
@@ -4440,23 +4520,7 @@
       { label: 'Top Muni TEY 29.6%', value: topMuni ? rvRateValue(topMuni.muniTey296) : '—' }
     ]);
     renderRelativeValueChart(rows);
-
-    const body = document.getElementById('rvRateSnapshotTableBody');
-    if (body) {
-      body.innerHTML = rows.length ? rows.map(row => `
-        <tr>
-          <td><strong>${escapeHtml(row.term)}</strong></td>
-          <td>${escapeHtml(rvRateValue(row.ust))}</td>
-          <td>${escapeHtml(rvRateValue(row.agency))}</td>
-          <td>${escapeHtml(rvSpreadValue(row.agencySpread))}</td>
-          <td>${escapeHtml(rvRateValue(row.muni))}</td>
-          <td>${escapeHtml(rvRateValue(row.muniTey296))}</td>
-          <td>${escapeHtml(rvRateValue(row.muniTey21))}</td>
-          <td>${escapeHtml(rvRateValue(row.corp))}</td>
-          <td>${escapeHtml(rvSpreadValue(row.corpSpread))}</td>
-        </tr>
-      `).join('') : `<tr><td colspan="9">${loadFailed ? 'Could not load /api/relative-value. Restart the portal server after this update.' : 'Rate snapshot table unavailable.'}</td></tr>`;
-    }
+    renderRelativeValueTable(rows);
   }
 
   // ============ Brokered CD Cost Calculator ============
@@ -19683,7 +19747,6 @@
   async function loadSalesDashboard() {
     const card = document.getElementById('salesDashboardCard');
     if (!card) return;
-    renderSalesSourceDocs();
     const btn = document.getElementById('salesDashboardBtn');
     if (btn && !btn.dataset.bound) {
       btn.dataset.bound = '1';

@@ -859,6 +859,61 @@
           <div class="daily-rv-list" id="dailyIntelRelativeValue"></div>
         </section>
       </div>
+
+      <section class="daily-digital-panel" aria-label="Digital Economic Update">
+        <div class="section-title-bar">
+          <h3>Digital Economic Update</h3>
+          <div class="kicker" id="dailyEconDigitalKicker">&mdash;</div>
+        </div>
+        <div class="market-tabs daily-market-tabs" role="tablist" aria-label="Daily Economic Update sections">
+          <button type="button" class="active" data-daily-market-section="rates">Market Rates</button>
+          <button type="button" data-daily-market-section="risk">Futures &amp; Volatility</button>
+          <button type="button" data-daily-market-section="headlines">Headlines</button>
+          <button type="button" data-daily-market-section="calendar">Calendar</button>
+        </div>
+        <div class="market-detail-panel" id="dailyEconMarketDetail"></div>
+      </section>
+
+      <section class="daily-digital-panel" aria-label="Digital CD Relative Value">
+        <div class="section-title-bar">
+          <h3>Digital CD Relative Value</h3>
+          <div class="kicker" id="dailyRvDigitalKicker">&mdash;</div>
+        </div>
+        <div class="relative-value-grid daily-rv-digital-grid">
+          <section class="market-panel rv-chart-panel">
+            <div class="market-panel-head">
+              <span>Rate snapshot curve</span>
+              <strong id="dailyRvRateChartLabel">&mdash;</strong>
+            </div>
+            <div class="rv-line-chart" id="dailyRvRateSnapshotChart"></div>
+          </section>
+          <section class="market-panel rv-table-panel">
+            <div class="market-panel-head">
+              <span>Relative value table</span>
+              <strong id="dailyRvRateTableLabel">&mdash;</strong>
+            </div>
+            <div class="rv-table-wrap">
+              <table class="rate-comparison-table">
+                <thead>
+                  <tr>
+                    <th>Term</th>
+                    <th>CD</th>
+                    <th>UST</th>
+                    <th>CD vs UST</th>
+                    <th>US AGY</th>
+                    <th>Agency vs UST</th>
+                    <th>TEY 29.6%</th>
+                    <th>TEY 21%</th>
+                    <th>AA Corp</th>
+                    <th>Corp vs UST</th>
+                  </tr>
+                </thead>
+                <tbody id="dailyRvRateSnapshotTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
     </section>
 
     <section class="daily-intel-shell">
@@ -2070,7 +2125,6 @@
 
   <div class="container">
     <div class="market-snapshot-strip" id="salesDashSnapshotStrip" hidden></div>
-    <div class="source-doc-grid source-doc-grid-compact" id="salesDashSourceDocs" aria-label="Sales Dashboard source documents"></div>
 
     <section class="daily-picks-card" id="salesDashboardCard" hidden>
       <div class="daily-picks-head">
