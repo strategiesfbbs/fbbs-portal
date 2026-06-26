@@ -2105,75 +2105,6 @@ summary:focus-visible,
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.source-doc-grid {
-  display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 0 0 14px;
-}
-
-.source-doc-grid-compact {
-  margin-bottom: 12px;
-}
-
-.source-doc-card {
-  align-items: center;
-  background: var(--surface-2);
-  border: 1px solid var(--border-light);
-  border-radius: 8px;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-  padding: 12px;
-}
-
-.source-doc-card h4 {
-  color: var(--text);
-  font-size: 14px;
-  margin: 2px 0 3px;
-}
-
-.source-doc-card p {
-  color: var(--text2);
-  font-size: 12px;
-  line-height: 1.35;
-  margin: 0;
-}
-
-.source-doc-card small {
-  color: var(--text3);
-  display: block;
-  font-size: 11px;
-  margin-top: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.source-doc-status {
-  color: var(--racing-green);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-}
-
-.source-doc-missing .source-doc-status {
-  color: var(--danger);
-}
-
-.source-doc-copy {
-  min-width: 0;
-}
-
-.source-doc-actions {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 7px;
-  justify-content: flex-end;
-}
-
 .daily-intel-layout {
   display: grid;
   gap: 14px;
@@ -6161,7 +6092,6 @@ body {
   .cd-opportunity-columns { grid-template-columns: 1fr; }
   .market-summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .market-workspace { grid-template-columns: 1fr; }
-  .source-doc-grid { grid-template-columns: 1fr; }
   .daily-intel-layout { grid-template-columns: 1fr; }
   .daily-picks-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .daily-intel-gaps { grid-template-columns: 1fr; }

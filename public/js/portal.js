@@ -2207,7 +2207,6 @@
     renderViewer('cd');
     renderViewer('cdoffers');
     renderViewer('munioffers');
-    renderDailySourceDocs();
     renderCdCostCalculator();
     if (document.getElementById('p-relativeValue')?.classList.contains('active')) {
       loadRelativeValueSnapshot();
@@ -3465,35 +3464,6 @@
     return '/current/' + encodeURIComponent(file) + (download ? '?download=1' : '');
   }
 
-  function sourceDocCard(slot, title, body, canonicalPage, options = {}) {
-    const file = currentPackage && currentPackage[slot];
-    const label = file || 'Not uploaded';
-    const ready = !!file;
-    const showPdfActions = options.showPdfActions !== false;
-    const view = showPdfActions && ready ? `<a class="small-btn secondary" href="${escapeHtml(currentFileUrl(slot, false))}" target="_blank" rel="noopener">View PDF</a>` : '';
-    const download = showPdfActions && ready ? `<a class="small-btn" href="${escapeHtml(currentFileUrl(slot, true))}">Download</a>` : (!ready ? '<button type="button" class="small-btn" data-goto="upload">Upload</button>' : '');
-    const canonical = canonicalPage ? `<button type="button" class="text-btn" data-goto="${escapeHtml(canonicalPage)}">Open digital view</button>` : '';
-    const actions = `${canonical}${view}${download}`;
-    return `<article class="source-doc-card source-doc-${ready ? 'ready' : 'missing'}">
-      <div class="source-doc-copy">
-        <span class="source-doc-status">${ready ? 'Loaded' : 'Missing'}</span>
-        <h4>${escapeHtml(title)}</h4>
-        <p>${escapeHtml(body)}</p>
-        <small>${escapeHtml(label)}</small>
-      </div>
-      ${actions ? `<div class="source-doc-actions">${actions}</div>` : ''}
-    </article>`;
-  }
-
-  function renderDailySourceDocs() {
-    const el = document.getElementById('dailyIntelSourceDocs');
-    if (!el) return;
-    el.innerHTML = [
-      sourceDocCard('econ', 'Digital Economic Update', 'Rates, curve, releases, and market data extracted from the daily Economic Update.', null, { showPdfActions: false }),
-      sourceDocCard('relativeValue', 'Digital CD Relative Value', 'CD, Treasury, agency, muni, and corporate comparisons extracted from the CD Relative Value sheet.', null, { showPdfActions: false })
-    ].join('');
-  }
-
   // ============ Economic Update Tool ============
 
   async function loadEconomicUpdate() {
@@ -3779,7 +3749,6 @@
     const curveEl = document.getElementById('dailyIntelCurveChart');
     const summaryEl = document.getElementById('dailyIntelSummary');
     const rvEl = document.getElementById('dailyIntelRelativeValue');
-    renderDailySourceDocs();
     if (curveEl) curveEl.innerHTML = '<div class="market-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading Treasury curve&hellip;</span></div>';
     if (summaryEl) summaryEl.innerHTML = marketSkeletonCards(4);
     if (rvEl) rvEl.innerHTML = '<div class="market-empty small">Loading CD relative value&hellip;</div>';
