@@ -2208,7 +2208,6 @@
     renderViewer('cdoffers');
     renderViewer('munioffers');
     renderDailySourceDocs();
-    renderSalesSourceDocs();
     renderCdCostCalculator();
     if (document.getElementById('p-relativeValue')?.classList.contains('active')) {
       loadRelativeValueSnapshot();
