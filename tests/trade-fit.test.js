@@ -42,9 +42,20 @@ test('stateFromIssuer parses the state out of muni issuer text', () => {
 const SYNTH_PROFILE = {
   generatedAt: 'x', asOf: '2026-06-20', totalBuys: 1000,
   audiences: {
-    ccorp: { trades: 400, byClass: { cd: 0.5, muni: 0.3, govt: 0.2 }, byBucket: { '0-1y': 0.4, '1-3y': 0.3, '3-5y': 0.3 }, byState: { MO: 0.6, KS: 0.4 }, topIssuers: ['FEDERAL HOME LN'], topStates: ['MO', 'KS'] },
+    ccorp: {
+      trades: 400,
+      byClass: { cd: 0.5, muni: 0.3, govt: 0.2 },
+      byBucket: { '0-1y': 0.4, '1-3y': 0.3, '3-5y': 0.3 },
+      byRecentBucket: { '3-5y': 0.7, '0-1y': 0.3 },
+      byStyle: { 'agency-callable-deep-discount': 0.7, 'agency-bullet': 0.3, 'cd-0-1y': 0.4 },
+      bySize: { '250-500k': 0.7, '1m+': 0.3 },
+      byPrice: { 'deep-discount': 0.7, par: 0.3 },
+      byState: { MO: 0.6, KS: 0.4 },
+      topIssuers: ['FEDERAL HOME LN'],
+      topStates: ['MO', 'KS']
+    },
     scorp: { trades: 300, byClass: { muni: 0.6, cd: 0.2, govt: 0.2 }, byBucket: { '7-10y': 0.5, '3-5y': 0.5 }, byState: { MO: 1.0 }, topIssuers: [], topStates: ['MO'] },
-    ria: { trades: 300, byClass: { corp: 0.5, cd: 0.4, muni: 0.1 }, byBucket: { '3-5y': 0.6, '5-7y': 0.4 }, byState: {}, topIssuers: ['CAPITAL ONE'], topStates: [] },
+    ria: { trades: 300, byClass: { corp: 0.5, cd: 0.4, muni: 0.1 }, byBucket: { '3-5y': 0.6, '5-7y': 0.4 }, byStyle: { 'corp-3-5y': 0.7 }, byState: {}, topIssuers: ['CAPITAL ONE'], topStates: [] },
   },
 };
 
@@ -76,6 +87,30 @@ test('scoreCandidate adds in-state muni demand + issuer match; null when no sign
   assert.strictEqual(tf.scoreCandidate(cdLike(), null, 'ccorp', '0-1y'), null);
 });
 
+test('scoreCandidate nudges toward recent product appetite', () => {
+  const deepCallable = {
+    assetClass: 'Agency',
+    description: 'FHLB callable',
+    price: 92.5,
+    callDate: '2027-06-01',
+    maturity: '2030-06-01',
+    availabilityK: 300,
+    rv: { statedYears: 4.0 }
+  };
+  const bullet = {
+    assetClass: 'Agency',
+    description: 'FHLB bullet',
+    price: 100.0,
+    maturity: '2030-06-01',
+    availabilityK: 300,
+    rv: { statedYears: 4.0 }
+  };
+  const s1 = tf.scoreCandidate(deepCallable, SYNTH_PROFILE, 'ccorp', '3-5y');
+  const s2 = tf.scoreCandidate(bullet, SYNTH_PROFILE, 'ccorp', '3-5y');
+  assert.ok(s1.score > s2.score, 'recent deep-discount callable appetite should beat bullet appetite');
+  assert.ok(s1.reasons.some(r => /recent/i.test(r) && /deep-discount callable agencies/i.test(r)));
+});
+
 function cdLike() { return { assetClass: 'CD Offering', description: 'X', state: '' }; }
 
 test('tradeFitForCandidate only scores audiences the candidate is eligible for', () => {
@@ -99,19 +134,23 @@ function buildFixtureDbs(dir) {
 
   // pershing-accounts.sqlite: customer BUY rows for each audience.
   const pdb = new Database(path.join(dir, tf.PERSHING_DB));
-  pdb.exec('CREATE TABLE pershing_trades (bank_id TEXT, side TEXT, cusip TEXT, security_type TEXT, issuer TEXT, maturity_date TEXT, trade_date TEXT);');
-  const ins = pdb.prepare('INSERT INTO pershing_trades (bank_id, side, cusip, security_type, issuer, maturity_date, trade_date) VALUES (?,?,?,?,?,?,?)');
+  pdb.exec('CREATE TABLE pershing_trades (bank_id TEXT, side TEXT, cusip TEXT, security_type TEXT, issuer TEXT, security_description TEXT, maturity_date TEXT, trade_date TEXT, price REAL, coupon REAL, quantity_or_par REAL);');
+  const ins = pdb.prepare('INSERT INTO pershing_trades (bank_id, side, cusip, security_type, issuer, security_description, maturity_date, trade_date, price, coupon, quantity_or_par) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
   // C-corp bank (100): mostly CDs, short.
-  for (let i = 0; i < 8; i++) ins.run('100', 'BUY', 'CD' + i, 'MONEYMKT', 'SOME BANK', '2026-12-01', '2026-06-01');
-  ins.run('100', 'BUY', 'M1', 'MUNIDEBT', 'STATE OF, MISSOURI', '2030-06-01', '2026-06-01');
+  for (let i = 0; i < 8; i++) ins.run('100', 'BUY', 'CD' + i, 'MONEYMKT', 'SOME BANK', 'SOME BANK CD', '2026-12-01', '2026-06-01', 100, 4.5, 250000);
+  ins.run('100', 'BUY', 'M1', 'MUNIDEBT', 'STATE OF, MISSOURI', 'STATE OF MISSOURI', '2030-06-01', '2026-06-01', 101, 4, 250000);
+  // Same audience, very recent deep-discount callable agency flow.
+  for (let i = 0; i < 3; i++) ins.run('100', 'BUY', 'A' + i, 'GOVTSEC', 'FEDERAL HOME LN BKS', 'FEDERAL HOME LN BKS 1.820% CLB', '2030-11-27', '2026-06-20', 92.3, 1.82, 500000);
+  // An older bullet agency should count less in the recency-weighted style profile.
+  for (let i = 0; i < 3; i++) ins.run('100', 'BUY', 'B' + i, 'GOVTSEC', 'FEDERAL HOME LN BKS', 'FEDERAL HOME LN BKS BULLET', '2030-11-27', '2021-06-20', 100.0, 4.0, 500000);
   // S-corp bank (200): mostly munis, MO, longer.
-  for (let i = 0; i < 6; i++) ins.run('200', 'BUY', 'MU' + i, 'MUNIDEBT', 'STATE OF, MISSOURI', '2035-06-01', '2026-06-01');
-  ins.run('200', 'BUY', 'G1', 'GOVTSEC', 'UNITED STATES TREAS', '2031-06-01', '2026-06-01');
+  for (let i = 0; i < 6; i++) ins.run('200', 'BUY', 'MU' + i, 'MUNIDEBT', 'STATE OF, MISSOURI', 'STATE OF MISSOURI', '2035-06-01', '2026-06-01', 102, 5, 250000);
+  ins.run('200', 'BUY', 'G1', 'GOVTSEC', 'UNITED STATES TREAS', 'UNITED STATES TREAS NTS', '2031-06-01', '2026-06-01', 99, 4, 1000000);
   // Non-bank accounts → RIA: corporates.
-  for (let i = 0; i < 7; i++) ins.run('', 'BUY', 'C' + i, 'CORPDEBT', 'CAPITAL ONE NATL ASSN', '2031-06-01', '2026-06-01');
+  for (let i = 0; i < 7; i++) ins.run('', 'BUY', 'C' + i, 'CORPDEBT', 'CAPITAL ONE NATL ASSN', 'CAPITAL ONE NATL ASSN', '2031-06-01', '2026-06-01', 98, 5, 100000);
   // A SELL row and an EQUITY row that must be ignored.
-  ins.run('100', 'SELL', 'X1', 'MONEYMKT', 'SOME BANK', '2026-12-01', '2026-06-01');
-  ins.run('', 'BUY', 'E1', 'EQUITY', 'ACME', '', '2026-06-01');
+  ins.run('100', 'SELL', 'X1', 'MONEYMKT', 'SOME BANK', 'SOME BANK CD', '2026-12-01', '2026-06-01', 100, 4.5, 250000);
+  ins.run('', 'BUY', 'E1', 'EQUITY', 'ACME', 'ACME', '', '2026-06-01', 10, null, 1);
   pdb.close();
 }
 
@@ -129,9 +168,11 @@ test('buildTradeFitProfile segments by Subchapter-S + non-bank and rolls demand'
   // RIA (non-bank): corporate-dominant.
   assert.ok(p.audiences.ria.byClass.corp >= 0.9);
   assert.ok((p.audiences.ria.topIssuers || []).some(s => /CAPITAL ONE/.test(s)));
+  assert.ok(p.audiences.ccorp.byStyle['agency-callable-deep-discount'] > p.audiences.ccorp.byStyle['agency-bullet'], 'recent agency callable flow should outweigh stale bullets');
+  assert.ok(p.audiences.ccorp.byRecentBucket['3-5y'] > 0, 'recent bucket profile is populated');
 
   // SELL + EQUITY rows excluded → totals are the BUY fixed-income rows only.
-  assert.strictEqual(p.totalBuys, 8 + 1 + 6 + 1 + 7); // 23
+  assert.strictEqual(p.totalBuys, 8 + 1 + 3 + 3 + 6 + 1 + 7); // 29
   // Shares per audience sum to ~1.
   for (const k of ['ccorp', 'scorp', 'ria']) {
     const sum = Object.values(p.audiences[k].byClass).reduce((a, b) => a + b, 0);

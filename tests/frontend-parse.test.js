@@ -82,6 +82,23 @@ function testNavModelUsesValidPages() {
 
 testNavModelUsesValidPages();
 
+function testPlotlyIsLazyLoaded() {
+  const indexSource = fs.readFileSync(path.join(__dirname, '..', 'public/index.html'), 'utf8');
+  const portalSource = fs.readFileSync(path.join(__dirname, '..', 'public/js/portal.js'), 'utf8');
+  try {
+    assert.ok(!/<script\s+src="\/vendor\/plotly-2\.27\.0\.min\.js"/.test(indexSource), 'Plotly should not be loaded globally');
+    assert.ok(portalSource.includes("const PLOTLY_SRC = '/vendor/plotly-2.27.0.min.js'"), 'Plotly lazy loader source not found');
+    assert.ok(/function\s+ensurePlotlyLoaded\s*\(/.test(portalSource), 'ensurePlotlyLoaded missing');
+    assert.ok(/ensurePlotlyLoaded\(\)\s*\n\s*\.then\(\(\)\s*=>\s*renderMapsMarkerMap/.test(portalSource), 'map render should trigger lazy Plotly load');
+    passed++;
+  } catch (err) {
+    failed++;
+    console.error(`FAIL Plotly lazy-load contract — ${err.message}`);
+  }
+}
+
+testPlotlyIsLazyLoaded();
+
 const modulesDir = path.join(__dirname, '..', 'public', 'js', 'modules');
 if (fs.existsSync(modulesDir)) {
   fs.readdirSync(modulesDir)

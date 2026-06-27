@@ -188,6 +188,7 @@ const swapStore = require('./swap-store');
 const reportStore = require('./report-store');
 const { renderProposalHtml } = require('./swap-render');
 const { renderPortfolioReviewHtml } = require('./portfolio-review-render');
+const { renderOfferingSheetHtml } = require('./offering-sheet-render');
 const { rotateFileIfNeeded } = require('./log-rotation');
 const peerGroupStore = require('./peer-group-store');
 const peerAverages = require('./peer-averages');
@@ -8708,6 +8709,13 @@ function buildAllOfferingsRows() {
   return rows;
 }
 
+function parseCusipList(raw) {
+  return String(raw || '')
+    .split(/[,\s]+/)
+    .map(s => s.replace(/[^0-9a-z]/gi, '').toUpperCase())
+    .filter(Boolean);
+}
+
 function buildSalesDashboardSourceStatus(rows) {
   const pkg = getCurrentPackage() || {};
   const counts = {};
@@ -11721,6 +11729,23 @@ const server = http.createServer(async (req, res) => {
         date: pkg.date || null,
         rows: buildAllOfferingsRows(),
       });
+    }
+
+    if (pathname === '/api/offering-sheet/render' && req.method === 'GET') {
+      const pkg = getCurrentPackage() || {};
+      const requested = parseCusipList(query.get('cusip') || query.get('cusips'));
+      if (!requested.length) return sendText(res, 400, 'cusip is required');
+      const wanted = new Set(requested);
+      const rows = buildAllOfferingsRows()
+        .filter(row => row.cusip && wanted.has(String(row.cusip).replace(/[^0-9a-z]/gi, '').toUpperCase()))
+        .slice(0, 25);
+      if (!rows.length) return sendText(res, 404, 'Offering not found in current inventory');
+      const html = renderOfferingSheetHtml({
+        packageDate: pkg.date || null,
+        audience: query.get('audience') || '',
+        offerings: rows
+      });
+      return sendPrintableHtml(res, html);
     }
 
     if (pathname === '/api/crm/dashboard' && req.method === 'GET') {

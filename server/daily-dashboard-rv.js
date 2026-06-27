@@ -954,7 +954,8 @@ function buildAudienceOrdering(pool, audienceKey, profile) {
 
   const bandDemand = b => {
     if (!profile || !profile.audiences || !profile.audiences[audienceKey]) return 0;
-    return profile.audiences[audienceKey].byBucket[b] || 0;
+    const aud = profile.audiences[audienceKey];
+    return (aud.byRecentBucket && aud.byRecentBucket[b]) || aud.byBucket[b] || 0;
   };
   // Visit bands by how much this audience trades them, then by best in-band value.
   const bandOrder = [...byBucket.keys()].sort((a, b) =>

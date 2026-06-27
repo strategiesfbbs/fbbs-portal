@@ -849,14 +849,6 @@
           </div>
           <div class="sales-cue-list" id="dailyIntelSalesCues"></div>
         </section>
-
-        <section class="market-panel">
-          <div class="market-panel-head">
-            <span>CD Relative Value</span>
-            <strong id="dailyIntelRvCount">&mdash;</strong>
-          </div>
-          <div class="daily-rv-list" id="dailyIntelRelativeValue"></div>
-        </section>
       </div>
 
       <section class="daily-digital-panel" aria-label="Digital Economic Update">
@@ -2097,7 +2089,7 @@
         </div>
       </section>
 
-      <aside class="workspace-context-rail ao-context-rail" id="aoContextRail" aria-live="polite" aria-label="Selected offering context">
+      <aside class="workspace-context-rail ao-context-rail" id="aoContextRail" aria-live="polite" aria-label="Selected offering context" hidden>
         <div class="ao-context-empty">
           <div class="ao-context-kicker">Selected Offering</div>
           <h3>Pick a row</h3>
@@ -2113,22 +2105,14 @@
     <div class="page-hero-inner">
       <div>
         <h2>Sales <strong>Dashboard</strong></h2>
-        <p class="hero-sub" id="salesDashSub">A morning relative-value sheet &mdash; what's cheap to benchmark, what changed, who should care, and what to say.</p>
+        <p class="hero-sub" id="salesDashSub">The front-page idea sheet: what to pitch, who it fits, why it screens, and what changed.</p>
       </div>
-      <div class="hero-stat">
-        <div class="num" id="salesDashStat">&mdash;</div>
-        <div class="lbl">RV Leaders</div>
-      </div>
-    </div>
-  </section>
-
-  <div class="container">
-    <div class="market-snapshot-strip" id="salesDashSnapshotStrip" hidden></div>
-
-    <section class="daily-picks-card" id="salesDashboardCard" hidden>
-      <div class="daily-picks-head">
-        <h3 class="daily-picks-title">Daily Bond Pick <span class="daily-summary-badge">AI</span></h3>
-        <div class="daily-picks-controls">
+      <div class="sales-dashboard-hero-tools">
+        <div class="hero-stat">
+          <div class="num" id="salesDashStat">&mdash;</div>
+          <div class="lbl">RV Leaders</div>
+        </div>
+        <div class="sales-dashboard-controls">
           <span class="daily-summary-meta" id="salesDashboardMeta"></span>
           <label class="sd-tax-toggle">Tax lens
             <select id="salesDashTaxSelect" aria-label="Tax-rate lens for taxable-equivalent yield and ranking">
@@ -2143,7 +2127,11 @@
           <button type="button" class="small-btn" id="salesDashboardBtn">Generate</button>
         </div>
       </div>
-      <p class="daily-picks-note">One canonical desk pick for the day. The supporting relative-value boards still show the math, but this is the single bond to lead with. Not investment advice. For Institutional Use Only.</p>
+    </div>
+  </section>
+
+  <div class="container">
+    <section class="daily-picks-card" id="salesDashboardCard" hidden>
       <div class="daily-picks-body" id="salesDashboardBody"></div>
     </section>
   </div>
@@ -2977,22 +2965,16 @@
     </div>
     <div class="home-wire-indicators mc-wire-band" id="mcWireCards" aria-label="Live economic indicators"></div>
 
-    <div class="mc-hub-grid">
-      <div class="mc-articles">
+    <div class="workspace-3col mc-workspace">
+      <aside class="workspace-filter-rail mc-filter-rail">
         <div class="section-title-bar">
-          <h3>Desk Color</h3>
+          <h3>Filter</h3>
           <div class="kicker" id="marketColorKicker">&mdash;</div>
         </div>
         <div class="mc-filter-row">
           <div class="mc-chips" id="mcTagChips"></div>
           <input type="search" id="mcSearch" class="mc-search" placeholder="Search market color&hellip;" aria-label="Search market color">
         </div>
-        <div id="mcLead"></div>
-        <div class="mc-article-list" id="mcArticleList">
-          <div class="mc-empty">Loading market color&hellip;</div>
-        </div>
-      </div>
-      <aside class="mc-rail">
         <div class="section-title-bar">
           <h3>Official Headlines</h3>
         </div>
@@ -3000,6 +2982,24 @@
           <li class="home-wire-item home-wire-empty">Loading headlines&hellip;</li>
         </ul>
         <div id="mcAuctions"></div>
+      </aside>
+
+      <section class="workspace-main mc-articles">
+        <div class="section-title-bar">
+          <h3>Desk Color</h3>
+        </div>
+        <div id="mcLead"></div>
+        <div class="mc-article-list" id="mcArticleList">
+          <div class="mc-empty">Loading market color&hellip;</div>
+        </div>
+      </section>
+
+      <aside class="workspace-context-rail mc-context-rail" id="mcContextRail" aria-live="polite" aria-label="Selected market color context">
+        <div class="mc-context-empty">
+          <div class="ao-context-kicker">Selected Story</div>
+          <h3>Pick a headline</h3>
+          <p>Click a market-color item to see source, tags, live-rate context, and the publisher link.</p>
+        </div>
       </aside>
     </div>
   </div>
@@ -3317,7 +3317,6 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite">Action completed</div>
 
-<script src="/vendor/plotly-2.27.0.min.js"></script>
 <script src="/js/modules/muni-tax.js?v=2026-06-01a"></script>
 <script src="/js/modules/report-logic.js?v=2026-06-10a"></script>
 <script src="/js/portal.js?v=report-builder-2026-06-10"></script>

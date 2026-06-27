@@ -98,6 +98,7 @@
   let structuredNotesFilters = { search: '', structure: '' };
   let marketColorData = null;
   let marketColorWire = null;
+  let marketColorActiveId = '';
   const marketColorFilters = { tag: 'all', search: '' };
   let cdInternalData = null;
   let bondAccountingManifest = null;
@@ -3748,10 +3749,8 @@
   async function loadDailyIntelligence() {
     const curveEl = document.getElementById('dailyIntelCurveChart');
     const summaryEl = document.getElementById('dailyIntelSummary');
-    const rvEl = document.getElementById('dailyIntelRelativeValue');
     if (curveEl) curveEl.innerHTML = '<div class="market-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading Treasury curve&hellip;</span></div>';
     if (summaryEl) summaryEl.innerHTML = marketSkeletonCards(4);
-    if (rvEl) rvEl.innerHTML = '<div class="market-empty small">Loading CD relative value&hellip;</div>';
     try {
       const res = await fetch('/api/daily-intelligence', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -3931,40 +3930,6 @@
     `;
   }
 
-  function dailyRelativeValueRow(row) {
-    const cdSpread = Number(row && row.cdSpread);
-    const spreadTone = Number.isFinite(cdSpread) && cdSpread >= 20 ? 'good' : (Number.isFinite(cdSpread) && cdSpread < 10 ? 'warn' : '');
-    return `
-      <div class="daily-rv-row">
-        <strong>${escapeHtml(row.term || 'Term')}</strong>
-        <span>CD ${escapeHtml(rvRateValue(row.cd))}</span>
-        <span>UST ${escapeHtml(rvRateValue(row.ust))}</span>
-        <em class="${escapeHtml(spreadTone)}">${escapeHtml(rvSpreadValue(row.cdSpread))} bp</em>
-      </div>
-    `;
-  }
-
-  function renderDailyRelativeValue(rv) {
-    const el = document.getElementById('dailyIntelRelativeValue');
-    const count = document.getElementById('dailyIntelRvCount');
-    if (!el || !count) return;
-    const rows = rv && Array.isArray(rv.rows) ? rv.rows : [];
-    count.textContent = rows.length ? `${rows.length} terms` : '—';
-    if (!rows.length) {
-      el.innerHTML = '<div class="market-empty small">CD Relative Value data is not loaded.</div>';
-      return;
-    }
-    const leaders = rows
-      .filter(row => Number.isFinite(Number(row.cd)) || Number.isFinite(Number(row.cdSpread)))
-      .slice(0, 6);
-    const bestCd = rows
-      .filter(row => Number.isFinite(Number(row.cdSpread)))
-      .sort((a, b) => Number(b.cdSpread) - Number(a.cdSpread))[0];
-    const source = rv.sourceFile ? `<p class="daily-rv-source">${escapeHtml(rv.sourceFile)}</p>` : '';
-    const best = bestCd ? `<p class="daily-rv-source">Best CD spread: ${escapeHtml(bestCd.term || 'term')} at ${escapeHtml(rvSpreadValue(bestCd.cdSpread))} bp to UST.</p>` : '';
-    el.innerHTML = leaders.map(dailyRelativeValueRow).join('') + best + source;
-  }
-
   function renderDailyIntelligence() {
     const sub = document.getElementById('dailyIntelSub');
     const stat = document.getElementById('dailyIntelStat');
@@ -3974,11 +3939,9 @@
     const slopeEl = document.getElementById('dailyIntelCurveSlope');
     const cues = document.getElementById('dailyIntelSalesCues');
     const cueCount = document.getElementById('dailyIntelCueCount');
-    const rvEl = document.getElementById('dailyIntelRelativeValue');
-    const rvCount = document.getElementById('dailyIntelRvCount');
     const gapsEl = document.getElementById('dailyIntelGaps');
     const econKicker = document.getElementById('dailyEconDigitalKicker');
-    if (!sub || !stat || !kicker || !status || !summary || !slopeEl || !cues || !cueCount || !rvEl || !rvCount || !gapsEl) return;
+    if (!sub || !stat || !kicker || !status || !summary || !slopeEl || !cues || !cueCount || !gapsEl) return;
 
     const data = dailyIntelData;
     if (!data) {
@@ -3987,8 +3950,6 @@
       kicker.textContent = 'Error';
       status.innerHTML = '<div class="daily-intel-alert">Could not load the daily intelligence endpoint.</div>';
       summary.innerHTML = '';
-      rvEl.innerHTML = '<div class="market-empty small">CD Relative Value data is not loaded.</div>';
-      rvCount.textContent = '—';
       gapsEl.innerHTML = '';
       renderDailyCurveChart([]);
       renderDailyEconomicDetail();
@@ -4056,7 +4017,6 @@
       </div>
     `).join('') : '<div class="market-empty small">No sales cues extracted.</div>';
 
-    renderDailyRelativeValue(rv);
     renderDailyEconomicDetail();
     renderDailyRelativeValueDigital(rv);
 
@@ -15892,6 +15852,7 @@
       <div class="fits-pick-yield">${escapeHtml(yieldText)}</div>
       <div class="fits-pick-actions">
         ${openBtn}
+        ${offeringSheetLink(pick.cusip, 'Sheet')}
         <button type="button" class="small-btn" data-fits-opp="${pickIdx}" data-fits-cls="${clsIdx}" title="Create a pipeline opportunity for this pick">+ Opp</button>
         <button type="button" class="small-btn" data-fits-log="${pickIdx}" data-fits-cls="${clsIdx}" title="Log a 'pitched this' note on the bank timeline">Log pitch</button>
       </div>
@@ -19115,6 +19076,7 @@
   // docked). The deterministic RV read is FREE on load; Claude (Generate) layers
   // the prose/talking points. Numbers are always the desk's own.
   let salesDashboardData = null;
+  let salesDashboardPitchMap = new Map();
 
   const SD_TILE = (v, d = 2) => (v == null ? '—' : Number(v).toFixed(d));
   function sdNum(v, d = 2) { return (v == null || v === '' || isNaN(v)) ? '—' : Number(v).toFixed(d); }
@@ -19401,6 +19363,60 @@
     return `<span class="sd-trend sd-trend-${rv.trend}" title="${escapeHtml(rv.trendDetail || title)}">${escapeHtml(lbl)}</span>`;
   }
 
+  function sdAudienceLabel(audKey) {
+    const dash = salesDashboardData && salesDashboardData.dashboard;
+    const aud = dash && Array.isArray(dash.audiences) ? dash.audiences.find(a => a.key === audKey) : null;
+    return aud && aud.label ? aud.label : '';
+  }
+
+  function sdPitchLine(label, value) {
+    const text = String(value == null ? '' : value).trim();
+    return text ? `${label}: ${text}` : '';
+  }
+
+  function sdPitchText(p, audKey) {
+    const e = sdEff(p, audKey);
+    const audience = sdAudienceLabel(audKey);
+    const lines = [
+      `FBBS idea${audience ? ` for ${audience}` : ''}`,
+      [
+        p.assetClass,
+        p.description || p.headline,
+        p.cusip ? `CUSIP ${p.cusip}` : '',
+        p.coupon != null ? `${Number(p.coupon).toFixed(3)}% coupon` : '',
+        p.maturity ? `maturity ${String(p.maturity).slice(0, 10)}` : ''
+      ].filter(Boolean).join(' · '),
+      e.val == null ? '' : `Yield context: ${Number(e.val).toFixed(2)}% ${e.basis || 'yield'}`,
+      sdPitchLine('Relative value', p.benchmark),
+      sdPitchLine('Why it screens', p.rationale),
+      sdPitchLine('Buyer fit', p.buyerFit || p.buyer),
+      sdPitchLine('Watch', p.caveat),
+      sdPitchLine('Say', p.talkingPoint),
+      'For institutional use only. Subject to availability and change. Not investment advice.'
+    ];
+    return lines.filter(Boolean).join('\n');
+  }
+
+  function sdRegisterPitch(p, audKey) {
+    const key = [audKey || 'daily', p.cusip || '', p.page || '', p.description || p.headline || 'idea'].join('|');
+    salesDashboardPitchMap.set(key, sdPitchText(p, audKey));
+    return key;
+  }
+
+  function offeringSheetHref(cusip, audience) {
+    const clean = String(cusip || '').trim();
+    if (!clean) return '';
+    const params = new URLSearchParams({ cusip: clean });
+    if (audience) params.set('audience', audience);
+    return `/api/offering-sheet/render?${params.toString()}`;
+  }
+
+  function offeringSheetLink(cusip, label, audience) {
+    const href = offeringSheetHref(cusip, audience);
+    if (!href) return '';
+    return `<a class="small-btn subtle" href="${escapeHtml(href)}" target="_blank" rel="noopener">${escapeHtml(label || 'Sheet')}</a>`;
+  }
+
   // A scannable board table (Relative Value Leaders + per-class boards). The
   // "Benchmark" column is the desk-computed comparison string already on the row.
   function sdBoardTable(rows, kind) {
@@ -19427,6 +19443,7 @@
   // benchmark comparison, risk/structure caveat, best buyer type, talking point.
   function sdPickCard(p, audKey) {
     const e = sdEff(p, audKey);
+    const pitchKey = sdRegisterPitch(p, audKey);
     const chips = [];
     if (p.bq) chips.push('<span class="demin-chip ok">BQ</span>');
     if (p.deepDiscount) chips.push('<span class="demin-chip breach">deep disc</span>');
@@ -19435,31 +19452,50 @@
     // suppress it there.
     const aiRead = salesDashboardData && (salesDashboardData.aiGenerated || salesDashboardData.cached);
     if (p.source === 'backfill' && aiRead) chips.push('<span class="exec-flag warn" title="Auto-selected to keep the slot filled">auto</span>');
+    const cueLine = p.talkingPoint || p.buyerFit || p.buyer || p.rationale || '';
     return `
       <div class="sd-pick">
         <div class="sd-pick-main">
-          <div class="sd-pick-head">
-            <span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span>
-            ${p.state ? `<span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}
-            ${sdScoreBadge(p.rv)} ${sdTrendChip(p.rv)} ${chips.join('')}
+          <div class="sd-pick-top">
+            <div class="sd-pick-head">
+              <span class="ao-class-pill ao-class-${sdClassSlug(p.assetClass)}">${escapeHtml(p.assetClass || '')}</span>
+              ${p.state ? `<span class="sd-pick-state">${escapeHtml(p.state)}</span>` : ''}
+              ${sdScoreBadge(p.rv)} ${sdTrendChip(p.rv)} ${chips.join('')}
+            </div>
+            <div class="sd-pick-yield">
+              <span class="sd-eff" title="${escapeHtml(e.basis)}"><strong>${e.val == null ? '—' : Number(e.val).toFixed(2)}</strong>%</span>
+              <span class="sd-sub">${escapeHtml(e.basis || 'yield')}</span>
+            </div>
           </div>
           <div class="sd-pick-headline">${escapeHtml(p.headline || p.description || '')}</div>
+          <div class="sd-pick-meta">
+            <span>${SD_TILE(p.coupon, 3)}% cpn</span>
+            <span>${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'}</span>
+            ${p.cusip ? `<span class="cusip-cell">${escapeHtml(p.cusip)}</span>` : ''}
+          </div>
+          ${p.benchmark ? `<div class="sd-pick-benchmark">${escapeHtml(p.benchmark)}</div>` : ''}
           ${p.rationale ? `<div class="sd-pick-rationale">${escapeHtml(p.rationale)}</div>` : ''}
-          ${sdChips(p.rv)}
-          <dl class="sd-facts">
-            ${p.benchmark ? `<div><dt>Benchmark</dt><dd>${escapeHtml(p.benchmark)}</dd></div>` : ''}
-            ${(p.exemptMuni && p.rv && p.rv.netTey && p.rv.netTey[audKey] != null) ? `<div><dt>Net TEY</dt><dd>${sdNum(p.rv.netTey[audKey])}% after the TEFRA carry cost${p.rv.tefraBp && p.rv.tefraBp[audKey] != null ? ` (−${p.rv.tefraBp[audKey]}bp)` : ''}${p.bq && p.rv.bqAdvantageBp > 0 ? ` · BQ worth +${p.rv.bqAdvantageBp}bp vs non-BQ` : ''}</dd></div>` : ''}
-            ${(p.rv && p.rv.enhanced) ? `<div><dt>Enhanced</dt><dd>${escapeHtml(p.rv.enhanced.label)} — ${p.rv.enhanced.spreadBps >= 0 ? '+' : ''}${p.rv.enhanced.spreadBps}bp vs the ${p.rv.enhanced.type === 'insured' ? 'insured' : 'AA'} MMD scale</dd></div>` : ''}
-            ${p.caveat ? `<div><dt>Watch</dt><dd>${escapeHtml(p.caveat)}</dd></div>` : ''}
-            ${p.buyer ? `<div><dt>Buyer</dt><dd>${escapeHtml(p.buyer)}</dd></div>` : ''}
-            ${p.buyerFit ? `<div><dt>Buyer fit</dt><dd>${escapeHtml(p.buyerFit)}</dd></div>` : ''}
-            ${p.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(p.talkingPoint)}</dd></div>` : ''}
-          </dl>
-        </div>
-        <div class="sd-pick-stats">
-          <span class="sd-eff" title="${escapeHtml(e.basis)}"><strong>${e.val == null ? '—' : Number(e.val).toFixed(2)}</strong>%</span>
-          <span class="sd-sub">${SD_TILE(p.coupon, 3)}% cpn · ${p.maturity ? escapeHtml(formatNumericDate(String(p.maturity).slice(0, 10))) : '—'}</span>
-          <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
+          ${cueLine ? `<div class="sd-pick-cue">${escapeHtml(cueLine)}</div>` : ''}
+          <div class="sd-pick-footer">
+            ${sdChips(p.rv)}
+            <span class="sd-pick-actions">
+              <button type="button" class="small-btn" data-goto="${escapeHtml(p.page || 'all-offerings')}"${p.cusip ? ` data-cusip="${escapeHtml(p.cusip)}"` : ''}>Open</button>
+              ${offeringSheetLink(p.cusip, 'Print sheet', audKey)}
+              <button type="button" class="small-btn subtle" data-sd-copy-pitch="${escapeHtml(pitchKey)}">Copy pitch</button>
+            </span>
+          </div>
+          <details class="sd-pick-details">
+            <summary>Details</summary>
+            <dl class="sd-facts">
+              ${p.benchmark ? `<div><dt>Benchmark</dt><dd>${escapeHtml(p.benchmark)}</dd></div>` : ''}
+              ${(p.exemptMuni && p.rv && p.rv.netTey && p.rv.netTey[audKey] != null) ? `<div><dt>Net TEY</dt><dd>${sdNum(p.rv.netTey[audKey])}% after the TEFRA carry cost${p.rv.tefraBp && p.rv.tefraBp[audKey] != null ? ` (−${p.rv.tefraBp[audKey]}bp)` : ''}${p.bq && p.rv.bqAdvantageBp > 0 ? ` · BQ worth +${p.rv.bqAdvantageBp}bp vs non-BQ` : ''}</dd></div>` : ''}
+              ${(p.rv && p.rv.enhanced) ? `<div><dt>Enhanced</dt><dd>${escapeHtml(p.rv.enhanced.label)} — ${p.rv.enhanced.spreadBps >= 0 ? '+' : ''}${p.rv.enhanced.spreadBps}bp vs the ${p.rv.enhanced.type === 'insured' ? 'insured' : 'AA'} MMD scale</dd></div>` : ''}
+              ${p.caveat ? `<div><dt>Watch</dt><dd>${escapeHtml(p.caveat)}</dd></div>` : ''}
+              ${p.buyer ? `<div><dt>Buyer</dt><dd>${escapeHtml(p.buyer)}</dd></div>` : ''}
+              ${p.buyerFit ? `<div><dt>Buyer fit</dt><dd>${escapeHtml(p.buyerFit)}</dd></div>` : ''}
+              ${p.talkingPoint ? `<div class="sd-talk"><dt>Say</dt><dd>${escapeHtml(p.talkingPoint)}</dd></div>` : ''}
+            </dl>
+          </details>
         </div>
       </div>`;
   }
@@ -19552,6 +19588,7 @@
       return;
     }
     card.hidden = false;
+    salesDashboardPitchMap = new Map();
 
     const audiences = dash.audiences || [];
     const rv = dash.rv || null;
@@ -19578,6 +19615,7 @@
     // 0 — One canonical daily bond pick. Keep this first so the portal does
     // not present several competing "pick of the day" surfaces.
     const botd = dash.botd;
+    const botdPitchKey = botd ? sdRegisterPitch(botd, 'ccorp') : '';
     const botdHtml = botd ? `
       <div class="sd-botd">
         <div class="sd-botd-tag">Daily Bond Pick${botd.source === 'backfill' && aiRead ? ' <span class="exec-flag warn">auto</span>' : ''}</div>
@@ -19600,6 +19638,8 @@
             <span class="sd-eff"><strong>${(function () { const e = sdEff(botd, 'ccorp'); return e.val == null ? '—' : Number(e.val).toFixed(2); })()}</strong>% ${escapeHtml(botd.exemptMuni ? 'TEY' : 'yld')}</span>
             <span class="sd-sub">${SD_TILE(botd.coupon, 3)}% cpn · ${botd.maturity ? escapeHtml(formatNumericDate(String(botd.maturity).slice(0, 10))) : '—'}</span>
             <button type="button" class="small-btn" data-goto="${escapeHtml(botd.page || 'all-offerings')}"${botd.cusip ? ` data-cusip="${escapeHtml(botd.cusip)}"` : ''}>Open</button>
+            ${offeringSheetLink(botd.cusip, 'Print sheet', 'ccorp')}
+            <button type="button" class="small-btn subtle" data-sd-copy-pitch="${escapeHtml(botdPitchKey)}">Copy pitch</button>
           </div>
         </div>
       </div>` : '';
@@ -19659,7 +19699,19 @@
     const kpiHtml = (rv && rv.strategist) ? sdKpiStrip(rv.strategist) : '';
     const sourceHtml = sdSourceChecklist(data.sources);
     const catalystHtml = sdCatalysts(data.catalysts);
-    body.innerHTML = banners.join('') + briefHtml + kpiHtml + catalystHtml + legend + sections.join('') + sourceHtml;
+    body.innerHTML = briefHtml + banners.join('') + kpiHtml + catalystHtml + legend + sections.join('') + sourceHtml;
+    body.querySelectorAll('[data-sd-copy-pitch]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = salesDashboardPitchMap.get(btn.getAttribute('data-sd-copy-pitch'));
+        if (!text) return showToast('No pitch text available', true);
+        try {
+          await navigator.clipboard.writeText(text);
+          showToast('Pitch copied');
+        } catch (_) {
+          showToast('Copy failed; select the card text instead', true);
+        }
+      });
+    });
 
     if (stat) stat.textContent = (rv && rv.leaders) ? rv.leaders.length : audiences.reduce((n, a) => n + (((dash.coverage || {})[a.key]) || 0), 0);
     if (metaEl) {
@@ -19731,7 +19783,6 @@
         custom.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => loadSalesDashboard(), 450); });
       }
     }
-    loadMarketSnapshotStrip('salesDashSnapshotStrip');
     try {
       const res = await fetch('/api/sales-dashboard' + sdTaxParams(), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -20074,6 +20125,25 @@
     });
   }
 
+  function syncAllOfferingsTableHeight() {
+    const page = document.getElementById('p-all-offerings');
+    if (!page) return;
+    const filterRail = page.querySelector('.ao-filter-rail');
+    const tableWrap = page.querySelector('.ao-main-pane > .explorer-table-wrap');
+    if (!filterRail || !tableWrap) return;
+    if (window.matchMedia && window.matchMedia('(max-width: 980px)').matches) {
+      tableWrap.style.removeProperty('--ao-table-height');
+      return;
+    }
+    const height = Math.max(420, Math.round(filterRail.getBoundingClientRect().height));
+    tableWrap.style.setProperty('--ao-table-height', `${height}px`);
+  }
+
+  function scheduleAllOfferingsTableHeightSync() {
+    if (window.requestAnimationFrame) window.requestAnimationFrame(syncAllOfferingsTableHeight);
+    else syncAllOfferingsTableHeight();
+  }
+
   function updateAllOfferingsSelectionBar() {
     const bar = document.getElementById('aoSelectionBar');
     if (!bar) return;
@@ -20282,16 +20352,17 @@
   function renderAllOfferingsContext() {
     const rail = document.getElementById('aoContextRail');
     if (!rail) return;
+    const root = workspaceContextRoot(rail);
     const row = allOfferingsRowByKey(allOfferingsActiveKey);
     if (!row) {
-      rail.innerHTML = `<div class="ao-context-empty">
-        <div class="ao-context-kicker">Selected Offering</div>
-        <h3>Pick a row</h3>
-        <p>Click a security to see its details, matching banks, and next actions.</p>
-      </div>`;
-      decorateWorkspaceContextRail(rail);
+      if (root) root.classList.remove('ao-has-context', 'context-open');
+      rail.hidden = true;
+      rail.innerHTML = '';
+      if (workspaceContextRailActive === rail) closeWorkspaceContextRail(rail);
       return;
     }
+    rail.hidden = false;
+    if (root) root.classList.add('ao-has-context');
     const productType = aoProductType(row);
     const line = formatOfferingLine(row);
     rail.innerHTML = `<div class="ao-context-card">
@@ -20315,6 +20386,7 @@
       <div class="ao-context-actions">
         ${row.cusip ? `<button type="button" class="small-btn" data-ao-context-action="watch">Watch</button>` : ''}
         <button type="button" class="small-btn" data-goto="${escapeHtml(row.page || 'all-offerings')}"${row.cusip ? ` data-cusip="${escapeHtml(row.cusip)}"` : ''}>Open</button>
+        ${offeringSheetLink(row.cusip, 'Print sheet')}
         <button type="button" class="small-btn" data-ao-context-action="compare">Compare</button>
         <button type="button" class="small-btn" data-ao-context-action="crm">CRM Action</button>
       </div>
@@ -20453,6 +20525,7 @@
     wireBuyersButtons(body, filtered);
     updateAllOfferingsSelectionBar();
     renderAllOfferingsContext();
+    scheduleAllOfferingsTableHeightSync();
   }
 
   async function addToWatchlist(item, btn) {
@@ -20977,6 +21050,7 @@
         allOfferingsDensity = btn.getAttribute('data-ao-density') || 'comfortable';
         localStorage.setItem('fbbs.ao.density', allOfferingsDensity);
         syncAllOfferingsDensity();
+        scheduleAllOfferingsTableHeightSync();
       });
     });
     document.querySelectorAll('#allOfferingsTable th[data-aosort]').forEach(th => {
@@ -20988,6 +21062,7 @@
         renderAllOfferings();
       });
     });
+    window.addEventListener('resize', scheduleAllOfferingsTableHeightSync);
   }
 
   function exportAllOfferingsCsv(inputRows, suffix) {
@@ -23546,6 +23621,52 @@
     });
   }
 
+  function marketColorItemKey(item, idx) {
+    return String((item && (item.id || item.url || item.title)) || idx || '').slice(0, 180);
+  }
+
+  function marketColorFindActiveItem() {
+    const items = marketColorData && Array.isArray(marketColorData.items) ? marketColorData.items : [];
+    return items.find((item, idx) => marketColorItemKey(item, idx) === marketColorActiveId) || null;
+  }
+
+  function renderMarketColorContext() {
+    const rail = document.getElementById('mcContextRail');
+    if (!rail) return;
+    const item = marketColorFindActiveItem();
+    if (!item) {
+      rail.innerHTML = `<div class="mc-context-empty">
+        <div class="ao-context-kicker">Selected Story</div>
+        <h3>Pick a headline</h3>
+        <p>Click a market-color item to see source, tags, live-rate context, and the publisher link.</p>
+      </div>`;
+      decorateWorkspaceContextRail(rail);
+      return;
+    }
+    const rates = (marketColorWire && marketColorWire.rates) || {};
+    const indicators = (marketColorWire && marketColorWire.indicators) || {};
+    const metric = (label, value, sub) => `<span><strong>${escapeHtml(value || '—')}</strong><em>${escapeHtml(label)}${sub ? ` · ${escapeHtml(sub)}` : ''}</em></span>`;
+    const tags = (item.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ') || '<span class="no-restrict">untagged</span>';
+    rail.innerHTML = `<div class="mc-context-card">
+      <div class="ao-context-kicker">Selected Story</div>
+      <h3>${escapeHtml(item.title || item.subject || 'Market color')}</h3>
+      <p class="ao-context-note">${escapeHtml(marketColorPreviewText(item.summary || item.preview))}</p>
+      <div class="ao-context-price-grid">
+        ${metric('Source', marketColorSenderName(item) || '—')}
+        ${metric('Published', marketColorEmailWhen(item) || '—')}
+        ${metric('10Y Treasury', rates.tenYear != null ? rates.tenYear.toFixed(2) + '%' : '—', rates.changes && rates.changes['10Y'] ? marketWireChange(rates.changes['10Y']) : '')}
+        ${metric('2s10s', rates.spread2s10sBp != null ? rates.spread2s10sBp + 'bp' : '—', rates.asOfDate || '')}
+        ${metric('CPI YoY', indicators.cpiYoY && indicators.cpiYoY.value != null ? indicators.cpiYoY.value.toFixed(1) + '%' : '—', indicators.cpiYoY && indicators.cpiYoY.period)}
+        ${metric('Unemployment', indicators.unemployment && indicators.unemployment.value != null ? indicators.unemployment.value.toFixed(1) + '%' : '—', indicators.unemployment && indicators.unemployment.period)}
+      </div>
+      <div class="ao-detail-sub">${tags}</div>
+      <div class="ao-context-actions">
+        ${item.url ? `<a class="small-btn" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">Open publisher</a>` : ''}
+      </div>
+    </div>`;
+    decorateWorkspaceContextRail(rail);
+  }
+
   // Email previews carry bracketed link annotations — often enormous
   // security-proxy (safe-link) URLs that drown out the actual text. Strip
   // URLs from the preview; the full body stays available in the reading pane.
@@ -23590,9 +23711,14 @@
       return;
     }
 
+    if (!filtered.some((item, idx) => marketColorItemKey(item, idx) === marketColorActiveId)) {
+      marketColorActiveId = marketColorItemKey(filtered[0], 0);
+    }
+
     const [lead, ...rest] = filtered;
     if (leadEl) {
-      leadEl.innerHTML = `<article class="mc-lead">
+      const leadKey = marketColorItemKey(lead, 0);
+      leadEl.innerHTML = `<article class="mc-lead${marketColorActiveId === leadKey ? ' is-active' : ''}" data-mc-item="${escapeHtml(leadKey)}" tabindex="0">
         <div class="mc-lead-meta">
           <span class="mc-article-from">${escapeHtml(marketColorSenderName(lead))}</span>
           <span class="mc-article-when">${escapeHtml(marketColorEmailWhen(lead))}</span>
@@ -23606,7 +23732,10 @@
       </article>`;
     }
 
-    list.innerHTML = rest.map(item => `<article class="mc-article-row">
+    list.innerHTML = rest.map((item, restIdx) => {
+      const idx = restIdx + 1;
+      const key = marketColorItemKey(item, idx);
+      return `<article class="mc-article-row${marketColorActiveId === key ? ' is-active' : ''}" data-mc-item="${escapeHtml(key)}" tabindex="0">
       <div class="mc-article-main">
         <div class="mc-lead-meta">
           <span class="mc-article-from">${escapeHtml(marketColorSenderName(item))}</span>
@@ -23619,7 +23748,9 @@
         <span class="mc-article-tags">${(item.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ')}</span>
         <span class="mc-article-actions">${marketColorItemActions(item)}</span>
       </div>
-    </article>`).join('') || '<div class="mc-empty">That’s everything for today.</div>';
+    </article>`;
+    }).join('') || '<div class="mc-empty">That’s everything for today.</div>';
+    renderMarketColorContext();
   }
 
   function setupMarketColor() {
@@ -23629,13 +23760,29 @@
       const chip = e.target.closest('[data-mc-tag]');
       if (chip) {
         marketColorFilters.tag = chip.dataset.mcTag;
+        marketColorActiveId = '';
         renderMarketColor();
       }
+      const item = e.target.closest('[data-mc-item]');
+      if (item && !e.target.closest('a,button')) {
+        marketColorActiveId = item.getAttribute('data-mc-item') || '';
+        renderMarketColor();
+        openWorkspaceContextRail(document.getElementById('mcContextRail'));
+      }
+    });
+    page.addEventListener('keydown', e => {
+      const item = e.target.closest('[data-mc-item]');
+      if (!item || (e.key !== 'Enter' && e.key !== ' ')) return;
+      e.preventDefault();
+      marketColorActiveId = item.getAttribute('data-mc-item') || '';
+      renderMarketColor();
+      openWorkspaceContextRail(document.getElementById('mcContextRail'));
     });
     const search = document.getElementById('mcSearch');
     if (search) {
       search.addEventListener('input', () => {
         marketColorFilters.search = search.value.trim();
+        marketColorActiveId = '';
         renderMarketColor();
       });
     }
@@ -25215,6 +25362,41 @@
   // Explorer). Carries the full offering so an archived deal that isn't in the
   // map's current inventory can still be anchored; consumed by mapsApplyHashDeal.
   let mapsPendingDeal = null;
+  const PLOTLY_SRC = '/vendor/plotly-2.27.0.min.js';
+  let plotlyLoadPromise = null;
+
+  function ensurePlotlyLoaded() {
+    if (typeof Plotly !== 'undefined') return Promise.resolve(Plotly);
+    if (plotlyLoadPromise) return plotlyLoadPromise;
+    plotlyLoadPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector('script[data-fbbs-plotly], script[src="/vendor/plotly-2.27.0.min.js"]');
+      const script = existing || document.createElement('script');
+      script.dataset.fbbsPlotly = '1';
+      const cleanup = () => {
+        script.onload = null;
+        script.onerror = null;
+      };
+      script.onload = () => {
+        cleanup();
+        if (typeof Plotly !== 'undefined') resolve(Plotly);
+        else {
+          plotlyLoadPromise = null;
+          reject(new Error('Plotly loaded without exposing a global'));
+        }
+      };
+      script.onerror = () => {
+        cleanup();
+        plotlyLoadPromise = null;
+        reject(new Error('Plotly failed to load'));
+      };
+      if (!existing) {
+        script.src = PLOTLY_SRC;
+        script.async = true;
+        document.head.appendChild(script);
+      }
+    });
+    return plotlyLoadPromise;
+  }
 
   function mapsFieldFilterType(def) {
     if (!def) return 'text';
@@ -26128,9 +26310,12 @@
     const el = document.getElementById(plotId);
     if (!el) return;
     if (typeof Plotly === 'undefined') {
-      // Vendored Plotly didn't load — don't leave a blank square; the filterable
-      // bank list below is still fully usable.
-      el.innerHTML = '<div class="bank-search-empty">The map library could not be loaded. The bank list below is still available — reload the page to retry the map.</div>';
+      el.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading bank map&hellip;</span></div>';
+      ensurePlotlyLoaded()
+        .then(() => renderMapsMarkerMap(rows, options))
+        .catch(() => {
+          el.innerHTML = '<div class="bank-search-empty">The map library could not be loaded. The bank list below is still available — reload the page to retry the map.</div>';
+        });
       return;
     }
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
@@ -26758,10 +26943,10 @@
     backdrop.hidden = false;
     renderMapsFullView();
     setTimeout(() => {
-      if (typeof Plotly !== 'undefined') {
+      ensurePlotlyLoaded().then(() => {
         const el = document.getElementById('mapsFullPlot');
         if (el && Plotly.Plots && Plotly.Plots.resize) Plotly.Plots.resize(el);
-      }
+      }).catch(() => {});
     }, 50);
   }
 

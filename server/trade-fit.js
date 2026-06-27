@@ -10,10 +10,11 @@
  * Two halves:
  *   1. buildTradeFitProfile(...) — the I/O half. Reads pershing_trades (customer
  *      BUY rows = "bought by a client"), segments every buy into an audience, and
- *      rolls the history into a small, normalized demand profile per audience
- *      (share of buys by asset class, by maturity band, by state, plus the top
- *      issuers). One pass, cached by the caller; never throws — a missing DB or
- *      column degrades to null and the dashboard simply runs without the nudge.
+ *      rolls the history into a small, normalized demand profile per audience:
+ *      long-run asset class / maturity demand plus RECENCY-WEIGHTED structure,
+ *      size, and price appetite. One pass, cached by the caller; never throws —
+ *      a missing DB or column degrades to null and the dashboard simply runs
+ *      without the nudge.
  *   2. scoreCandidate(...) — the PURE half. Given that profile and one offering,
  *      returns { score (0–25), reasons[] } describing how well the offering fits
  *      an audience's historical buying. Imported by the relative-value engine so
@@ -54,6 +55,12 @@ const PROFILE_CLASSES = ['cd', 'muni', 'govt', 'corp', 'mbs'];
 // candidate's rv.bucket lines up with the audience's by-band demand.
 const BUCKET_KEYS = ['0-1y', '1-3y', '3-5y', '5-7y', '7-10y', '10y+'];
 
+// Recent appetite should matter more than ancient history, but not erase the
+// long-run sales memory. A 540-day half-life keeps the current-cycle product mix
+// visible while still letting older trades contribute a small stabilizing signal.
+const RECENCY_HALF_LIFE_DAYS = 540;
+const MIN_RECENCY_WEIGHT = 0.08;
+
 // Audience-label demand verbs for the qualitative reasons (no numbers).
 const AUD_NAME = { ccorp: 'C-corp banks', scorp: 'S-corp banks', ria: 'RIAs' };
 
@@ -71,6 +78,36 @@ function coarseClassOf(c) {
   return null;
 }
 
+function num(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function yearsBetween(startDate, endDate) {
+  const a = Date.parse(String(startDate || '').slice(0, 10));
+  const b = Date.parse(String(endDate || '').slice(0, 10));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return (b - a) / (365.25 * 86400000);
+}
+
+function bucketForYears(y) {
+  if (y == null) return null;
+  if (y <= 1) return '0-1y';
+  if (y <= 3) return '1-3y';
+  if (y <= 5) return '3-5y';
+  if (y <= 7) return '5-7y';
+  if (y <= 10) return '7-10y';
+  return '10y+';
+}
+
+function recencyWeight(tradeDate, asOfDate) {
+  const age = yearsBetween(tradeDate, asOfDate);
+  if (age == null || age < 0) return 1;
+  const days = age * 365.25;
+  return Math.max(MIN_RECENCY_WEIGHT, Math.pow(0.5, days / RECENCY_HALF_LIFE_DAYS));
+}
+
 /** Normalize an issuer/description string to a comparable keyword (leading tokens). */
 function issuerKeyword(s) {
   const u = String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -78,6 +115,134 @@ function issuerKeyword(s) {
   // Drop a leading geographic qualifier that doesn't identify the obligor.
   const tokens = u.split(' ').filter(Boolean);
   return tokens.slice(0, 3).join(' ');
+}
+
+function isTreasuryText(text) {
+  return /\bUNITED STATES TREAS|\bTREAS(URY)?\b|\bUST\b/.test(String(text || '').toUpperCase());
+}
+
+function isAgencyText(text) {
+  return /\bFEDERAL HOME LN|\bFHLB\b|\bFEDERAL FARM CR|\bFFCB\b|\bFEDERAL NATL MTG|\bFNMA\b|\bFEDERAL HOME LN MTG|\bFHLMC\b|\bFREDDIE\b|\bFANNIE\b/.test(String(text || '').toUpperCase());
+}
+
+function isCallableText(text) {
+  return /\bCLB\b|\bCALL|\bCALLABLE\b/.test(String(text || '').toUpperCase());
+}
+
+function isCmoText(text) {
+  return /\bCMO\b|\bREMIC\b|\bMULTICLASS\b|\bMULTIFAMILYREMIC\b/.test(String(text || '').toUpperCase());
+}
+
+function priceBand(price) {
+  const p = num(price);
+  if (p == null) return null;
+  if (p < 95) return 'deep-discount';
+  if (p < 99) return 'discount';
+  if (p <= 101) return 'par';
+  if (p <= 105) return 'premium';
+  return 'high-premium';
+}
+
+function sizeBand(parOrK, isCandidate) {
+  const raw = num(parOrK);
+  if (raw == null || raw <= 0) return null;
+  const par = isCandidate ? raw * 1000 : Math.abs(raw);
+  if (par < 100000) return '<100k';
+  if (par < 250000) return '100-250k';
+  if (par < 500000) return '250-500k';
+  if (par < 1000000) return '500k-1m';
+  return '1m+';
+}
+
+function finalBucketFromYears(y) {
+  if (y == null) return null;
+  if (y <= 5.5) return '0-5y';
+  if (y <= 10.5) return '5-10y';
+  if (y <= 20.5) return '10-20y';
+  return '20y+';
+}
+
+function productStyleFromParts(parts) {
+  const p = parts || {};
+  const cls = p.cls || null;
+  const text = String(p.text || '').toUpperCase();
+  const price = num(p.price);
+  const years = p.years;
+
+  if (cls === 'govt') {
+    if (isTreasuryText(text)) return 'treasury';
+    const agency = isAgencyText(text) || /agency/i.test(String(p.assetClass || ''));
+    if (agency || /agency/i.test(text)) {
+      const callable = p.callable || isCallableText(text);
+      if (callable && price != null && price < 95) return 'agency-callable-deep-discount';
+      if (callable && price != null && price < 99) return 'agency-callable-discount';
+      if (callable) return 'agency-callable-par-premium';
+      return 'agency-bullet';
+    }
+    return 'government-other';
+  }
+
+  if (cls === 'mbs') {
+    const finalBucket = finalBucketFromYears(years) || 'unknown';
+    if (isCmoText(text) || /cmo/i.test(String(p.assetClass || ''))) return `cmo-${finalBucket}-final`;
+    return `mbs-${finalBucket}-final`;
+  }
+
+  if (cls === 'cd') return `cd-${bucketForYears(years) || 'unknown'}`;
+  if (cls === 'corp') return `corp-${bucketForYears(years) || 'unknown'}`;
+  if (cls === 'muni') return `muni-${bucketForYears(years) || 'unknown'}`;
+  return cls;
+}
+
+function productStyleForTradeRow(row) {
+  const st = row && row.st;
+  const cls = SECTYPE_CLASS[st];
+  if (!cls) return null;
+  const text = [row.issuer, row.description].filter(Boolean).join(' ');
+  return productStyleFromParts({
+    cls,
+    text,
+    price: row.price,
+    years: yearsBetween(row.trade_date, row.maturity_date)
+  });
+}
+
+function productStyleForCandidate(c) {
+  const cls = coarseClassOf(c);
+  if (!cls) return null;
+  const text = [c && c.assetClass, c && c.sector, c && c.description].filter(Boolean).join(' ');
+  const years = c && c.rv && c.rv.statedYears != null ? c.rv.statedYears : null;
+  return productStyleFromParts({
+    cls,
+    text,
+    assetClass: c && c.assetClass,
+    callable: !!(c && c.callDate),
+    price: c && c.price,
+    years
+  });
+}
+
+const STYLE_LABELS = {
+  'treasury': 'Treasuries',
+  'agency-bullet': 'agency bullets',
+  'agency-callable-deep-discount': 'deep-discount callable agencies',
+  'agency-callable-discount': 'discount callable agencies',
+  'agency-callable-par-premium': 'par/premium callable agencies',
+  'government-other': 'government/agency paper',
+  'cmo-0-5y-final': 'short-final CMOs',
+  'cmo-5-10y-final': '5-10y final CMOs',
+  'cmo-10-20y-final': '10-20y final CMOs',
+  'cmo-20y+-final': 'long-final CMOs',
+  'mbs-0-5y-final': 'short-final MBS',
+  'mbs-5-10y-final': '5-10y final MBS',
+  'mbs-10-20y-final': '10-20y final MBS',
+  'mbs-20y+-final': '20y+ final MBS',
+};
+
+function styleLabel(key) {
+  if (!key) return '';
+  if (STYLE_LABELS[key]) return STYLE_LABELS[key];
+  return key.replace(/-/g, ' ');
 }
 
 // US state / territory name → postal abbreviation, for parsing muni issuer text
@@ -157,7 +322,19 @@ function subchapterAudienceMap(bankDbPath, bankIds) {
 }
 
 function emptyAudience() {
-  return { trades: 0, _class: {}, _bucket: {}, _state: {}, _issuer: {} };
+  return {
+    trades: 0,
+    weightedTrades: 0,
+    _class: {},
+    _bucket: {},
+    _recentClass: {},
+    _recentBucket: {},
+    _style: {},
+    _size: {},
+    _price: {},
+    _state: {},
+    _issuer: {}
+  };
 }
 
 function bump(map, key, n) { if (key) map[key] = (map[key] || 0) + n; }
@@ -181,63 +358,49 @@ function buildTradeFitProfile(opts) {
 
     const sectypeList = Object.keys(SECTYPE_CLASS);
     const inList = sectypeList.map(() => '?').join(',');
-    // Class × maturity-band counts per bank id (or '' for non-bank/RIA accounts).
-    const bucketCase =
-      `CASE WHEN maturity_date IS NULL OR maturity_date='' OR trade_date IS NULL OR trade_date='' THEN 'na' ` +
-      `WHEN (julianday(maturity_date)-julianday(trade_date))/365.25 <= 1 THEN '0-1y' ` +
-      `WHEN (julianday(maturity_date)-julianday(trade_date))/365.25 <= 3 THEN '1-3y' ` +
-      `WHEN (julianday(maturity_date)-julianday(trade_date))/365.25 <= 5 THEN '3-5y' ` +
-      `WHEN (julianday(maturity_date)-julianday(trade_date))/365.25 <= 7 THEN '5-7y' ` +
-      `WHEN (julianday(maturity_date)-julianday(trade_date))/365.25 <= 10 THEN '7-10y' ` +
-      `ELSE '10y+' END`;
-
-    let classRows = [];
-    let issuerRows = [];
+    let tradeRows = [];
     let asOf = null;
     try {
-      classRows = sqliteDb.querySqliteJson(pershingDbPath,
-        `SELECT COALESCE(bank_id,'') AS bid, security_type AS st, ${bucketCase} AS bucket, COUNT(*) AS c ` +
-        `FROM pershing_trades WHERE side='BUY' AND security_type IN (${inList}) ` +
-        `GROUP BY bid, st, bucket;`, sectypeList);
-      // Issuer / state demand (bounded — grouped, not row-level).
-      issuerRows = sqliteDb.querySqliteJson(pershingDbPath,
-        `SELECT COALESCE(bank_id,'') AS bid, security_type AS st, COALESCE(issuer,'') AS issuer, COUNT(*) AS c ` +
-        `FROM pershing_trades WHERE side='BUY' AND security_type IN (${inList}) AND issuer IS NOT NULL AND issuer<>'' ` +
-        `GROUP BY bid, st, issuer;`, sectypeList);
       const asOfRow = sqliteDb.querySqliteJson(pershingDbPath, `SELECT MAX(trade_date) AS d FROM pershing_trades WHERE side='BUY';`);
       asOf = asOfRow && asOfRow[0] ? asOfRow[0].d : null;
+      tradeRows = sqliteDb.querySqliteJson(pershingDbPath,
+        `SELECT COALESCE(bank_id,'') AS bid, security_type AS st, COALESCE(issuer,'') AS issuer, ` +
+        `COALESCE(security_description,'') AS description, maturity_date, trade_date, price, coupon, quantity_or_par ` +
+        `FROM pershing_trades WHERE side='BUY' AND security_type IN (${inList});`, sectypeList);
     } catch (err) {
       log('warn', `trade-fit: trade query failed (${err && err.message}); skipping nudge`);
       return null;
     }
-    if (!classRows.length) return null;
+    if (!tradeRows.length) return null;
 
     // Resolve the C-corp / S-corp split for every bank id that actually traded.
-    const bankIds = [...new Set(classRows.map(r => r.bid).filter(Boolean))];
+    const bankIds = [...new Set(tradeRows.map(r => r.bid).filter(Boolean))];
     const audByBank = subchapterAudienceMap(bankDbPath, bankIds);
     const audienceFor = bid => (bid ? (audByBank.get(String(bid)) || 'ccorp') : 'ria');
 
     const audiences = { ccorp: emptyAudience(), scorp: emptyAudience(), ria: emptyAudience() };
     let totalBuys = 0;
-    for (const r of classRows) {
+    for (const r of tradeRows) {
       const aud = audiences[audienceFor(r.bid)];
       const cls = SECTYPE_CLASS[r.st];
-      const n = Number(r.c) || 0;
-      aud.trades += n;
-      totalBuys += n;
-      bump(aud._class, cls, n);
-      if (r.bucket && r.bucket !== 'na') bump(aud._bucket, r.bucket, n);
-    }
-
-    for (const r of issuerRows) {
-      const aud = audiences[audienceFor(r.bid)];
-      const n = Number(r.c) || 0;
+      const w = recencyWeight(r.trade_date, asOf);
+      const bucket = bucketForYears(yearsBetween(r.trade_date, r.maturity_date));
+      aud.trades += 1;
+      aud.weightedTrades += w;
+      totalBuys += 1;
+      bump(aud._class, cls, 1);
+      bump(aud._recentClass, cls, w);
+      bump(aud._bucket, bucket, 1);
+      bump(aud._recentBucket, bucket, w);
+      bump(aud._style, productStyleForTradeRow(r), w);
+      bump(aud._size, sizeBand(r.quantity_or_par, false), w);
+      bump(aud._price, priceBand(r.price), w);
       if (r.st === 'MUNIDEBT') {
         const st = stateFromIssuer(r.issuer);
-        if (st) bump(aud._state, st, n);
+        if (st) bump(aud._state, st, 1);
       }
       const kw = issuerKeyword(r.issuer);
-      if (kw) bump(aud._issuer, kw, n);
+      if (kw) bump(aud._issuer, kw, 1);
     }
 
     // Finalize: normalized shares + top lists.
@@ -252,8 +415,14 @@ function buildTradeFitProfile(opts) {
         .map(([st]) => st);
       out[k] = {
         trades: a.trades,
+        weightedTrades: Math.round(a.weightedTrades * 100) / 100,
         byClass: normalizeShares(a._class),
+        byRecentClass: normalizeShares(a._recentClass),
         byBucket: normalizeShares(a._bucket),
+        byRecentBucket: normalizeShares(a._recentBucket),
+        byStyle: normalizeShares(a._style),
+        bySize: normalizeShares(a._size),
+        byPrice: normalizeShares(a._price),
         byState: normalizeShares(a._state),
         topIssuers,
         topStates,
@@ -289,10 +458,12 @@ function topShare(shares) {
  * @returns { score: 0–25, reasons: string[] } or null when there is no signal.
  *
  * Components (capped at 25 total):
- *   - asset class   up to 14 — the audience's class demand, relative to its top class
- *   - maturity band up to  7 — the audience's band demand, relative to its top band
- *   - in-state muni      +4 — a muni in a state the audience has favored
- *   - issuer match       +3 — description matches a top-bought issuer keyword
+ *   - asset class       up to 12 — long-run class demand
+ *   - maturity band     up to  5 — long-run band demand
+ *   - recent structure  up to  6 — recency-weighted product appetite
+ *   - size / price      up to  3 — recency-weighted ticket/price comfort
+ *   - in-state muni          +4 — a muni in a state the audience has favored
+ *   - issuer match           +3 — description matches a top-bought issuer keyword
  */
 function scoreCandidate(c, profile, audienceKey, bucketKey) {
   if (!profile || !profile.audiences) return null;
@@ -313,7 +484,7 @@ function scoreCandidate(c, profile, audienceKey, bucketKey) {
   const name = AUD_NAME[audienceKey] || audienceKey;
 
   // Asset-class demand (the dominant component).
-  const classPts = Math.round((classShare / classTop) * 14);
+  const classPts = Math.round((classShare / classTop) * 12);
   if (classPts > 0) {
     score += classPts;
     const clsLabel = cls === 'cd' ? 'CDs' : cls === 'muni' ? 'munis' : cls === 'govt' ? 'government/agency paper' : cls === 'corp' ? 'corporate credit' : 'MBS/CMO';
@@ -326,12 +497,47 @@ function scoreCandidate(c, profile, audienceKey, bucketKey) {
     const bShare = ap.byBucket[bucketKey] || 0;
     const bTop = topShare(ap.byBucket);
     if (bShare > 0 && bTop > 0) {
-      const pts = Math.round((bShare / bTop) * 7);
+      const pts = Math.round((bShare / bTop) * 5);
       if (pts > 0) {
         score += pts;
         if (bShare >= bTop * 0.7) reasons.push(`heavy ${name} demand in the ${bucketKey} band`);
       }
     }
+  }
+
+  // Recency-weighted structure appetite: this is the nuance layer. If recent
+  // trades favor deep-discount callable agencies over bullets, or short-final
+  // CMOs over longer MBS, this nudges the close RV calls toward what buyers are
+  // actually doing now.
+  const style = productStyleForCandidate(c);
+  const styleShare = style ? (ap.byStyle && ap.byStyle[style]) || 0 : 0;
+  const styleTop = topShare(ap.byStyle);
+  if (styleShare > 0 && styleTop > 0) {
+    const pts = Math.round((styleShare / styleTop) * 6);
+    if (pts > 0) {
+      score += pts;
+      if (styleShare >= styleTop * 0.65) reasons.push(`recent ${name} flow favors ${styleLabel(style)}`);
+      else if (pts >= 3) reasons.push(`recent ${name} flow includes ${styleLabel(style)}`);
+    }
+  }
+
+  const sz = sizeBand(c && c.availabilityK, true);
+  const szShare = sz ? (ap.bySize && ap.bySize[sz]) || 0 : 0;
+  const szTop = topShare(ap.bySize);
+  if (szShare > 0 && szTop > 0) {
+    const pts = Math.min(2, Math.round((szShare / szTop) * 2));
+    if (pts > 0) {
+      score += pts;
+      if (szShare >= szTop * 0.75) reasons.push(`block size fits recent ${name} ticket patterns`);
+    }
+  }
+
+  const pb = priceBand(c && c.price);
+  const pbShare = pb ? (ap.byPrice && ap.byPrice[pb]) || 0 : 0;
+  const pbTop = topShare(ap.byPrice);
+  if (pbShare > 0 && pbTop > 0) {
+    const pts = Math.min(1, Math.round((pbShare / pbTop) * 1));
+    if (pts > 0) score += pts;
   }
 
   // In-state muni demand.
@@ -376,6 +582,11 @@ module.exports = {
   coarseClassOf,
   stateFromIssuer,
   issuerKeyword,
+  productStyleForCandidate,
+  productStyleForTradeRow,
+  priceBand,
+  sizeBand,
+  recencyWeight,
   SECTYPE_CLASS,
   PROFILE_CLASSES,
   BUCKET_KEYS,
