@@ -39,6 +39,42 @@ Windows Authentication, trusted network/VPN access, and no client-facing traffic
 - Confirm each sales rep's Windows username matches the owner names used in the
   account-status workbook closely enough for My Work and saved views.
 
+## IIS Smoke Commands
+
+Run this block on the IIS server after the App Pool has the production
+environment variables and Windows Authentication is enabled. Use the real
+internal URL in place of `https://portal.example.local`.
+
+1. As an approved admin Windows user, open:
+   - `GET /api/me`
+   - Expected: `rep.source` is `"iis"`, `rep.username` is the normalized Windows
+     username, `auth.mode` is `"iis"`, `auth.requireAuth` is `true`,
+     `auth.allowRepOverride` is `false`, and `auth.isAdmin` is `true`.
+2. As a non-admin Windows user, open:
+   - `GET /api/me`
+   - Expected: same IIS identity fields, but `auth.isAdmin` is `false`.
+3. As an admin, open:
+   - `GET /api/admin/go-live-status`
+   - Expected checks:
+     - `auth-mode` is `ok`
+     - `admin-users` is `ok`
+     - `data-dir` is `ok` when `DATA_DIR` is outside the app folder
+     - `upload-temp` is `ok` unless stale crash leftovers remain
+   - The response intentionally reports the number of admin users, not the
+     `FBBS_ADMIN_USERS` list.
+4. Confirm anonymous/API lockout from a machine or tool that does not send
+   Windows credentials:
+   - `GET /api/health` should return `200`
+   - `GET /api/crm/dashboard` should return `401`
+5. Confirm admin publish:
+   - Publish a small known-good daily package from **Operations → Upload**.
+   - Expected: publish succeeds and audit log actor matches the admin Windows
+     identity.
+6. Confirm non-admin publish denial:
+   - From a non-admin Windows session, attempt the same publish or `POST
+     /api/upload`.
+   - Expected: `403 Admin permission is required for this action.`
+
 ## Admin Allowlist
 
 - Confirm an admin can publish the daily package.
@@ -86,6 +122,12 @@ Windows Authentication, trusted network/VPN access, and no client-facing traffic
 
 - Set `DATA_DIR` outside the app folder.
 - Confirm App Pool identity has read/write access to `DATA_DIR`.
+- Confirm **Operations → Admin → Go-live status** or
+  `GET /api/admin/go-live-status` shows:
+  - `process.authMode: "iis"`
+  - `data.dataDirExternal: true`
+  - `data.uploadTemp.staleCleanupHours: 24`
+  - `data.uploadTemp.staleEntries: 0` after a clean restart
 - Confirm `AUDIT_LOG_MAX_MB` and `AUDIT_LOG_KEEP` match retention expectations.
 - Confirm app restarts cleanly after an IIS App Pool recycle.
 - Back up `DATA_DIR` safely and test one restore copy before launch:
@@ -98,6 +140,10 @@ Windows Authentication, trusted network/VPN access, and no client-facing traffic
   - Restore test means opening the restored copy with the portal or a SQLite
     integrity check, not just confirming files exist.
 - Confirm disk-space monitoring exists for the data volume.
+- `_uploads` under `DATA_DIR` is scratch space for streaming multipart uploads.
+  The app removes completed request temp files immediately and, on startup,
+  removes stale `_uploads` entries older than 24 hours. Do not include `_uploads`
+  in restore validation except to confirm stale entries are not accumulating.
 
 ## Known Boundaries For Internal Launch
 

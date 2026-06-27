@@ -14,11 +14,13 @@
 | ✓ | Step | How to check | Expected |
 |---|------|--------------|----------|
 | ☐ | App is up | Browse `/api/health` | `200 OK` / healthy JSON |
-| ☐ | Windows Auth working | Open the portal; look at the header | Shows **"Signed in"** + your name (not "Acting as", no picker caret) |
-| ☐ | You're an admin | Header / try opening **Operations → Upload** | Upload tools are available (you're in `FBBS_ADMIN_USERS`) |
-| ☐ | A non-admin is *not* | Have a rep try a publish (or simulate) | Blocked / Upload action not available |
+| ☐ | Windows Auth working | Browse `/api/me` as the signed-in user | `rep.source="iis"`, `auth.mode="iis"`, `auth.requireAuth=true`, `auth.allowRepOverride=false` |
+| ☐ | You're an admin | Browse `/api/me` and open **Operations → Upload** | `auth.isAdmin=true`; Upload tools are available (you're in `FBBS_ADMIN_USERS`) |
+| ☐ | A non-admin is *not* | Have a rep browse `/api/me`, then try a publish (or simulate) | `auth.isAdmin=false`; publish returns 403 / Upload action not available |
+| ☐ | Admin readiness endpoint | Browse `/api/admin/go-live-status` as admin | `auth-mode`, `admin-users`, `data-dir`, and `upload-temp` checks are OK or explicitly accepted |
 | ☐ | Bank data present | **Banks → Bank Tear Sheets**, search a known bank | Tear sheet loads with call-report data |
-| ☐ | Data dir + backup | Confirm `DATA_DIR=D:\FBBSPortalData` and it's in the backup job | Both true |
+| ☐ | Data dir + backup | Confirm `DATA_DIR=D:\FBBSPortalData`, Go-live status says `dataDirExternal=true`, and the folder is in the backup job | All true |
+| ☐ | Upload temp area | Go-live status `data.uploadTemp` | `staleCleanupHours=24`; `staleEntries=0` after a clean restart |
 
 > If any Phase 0 row fails, **stop** and fix before launch — these are the 🔴 required items.
 

@@ -26,6 +26,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const { AsyncLocalStorage } = require('async_hooks');
 const { extractPdfText } = require('./pdf-text');
 
@@ -231,7 +232,9 @@ const MARKET_COLOR_DIR = path.join(DATA_DIR, 'market-color');
 const CD_INTERNAL_DIR = path.join(DATA_DIR, 'cd-internal');
 const EXEC_SUMMARY_DIR = path.join(DATA_DIR, 'exec-summary');
 const MARKET_DIR = path.join(DATA_DIR, 'market');
+const UPLOAD_TMP_DIR = path.join(DATA_DIR, '_uploads');
 const AUDIT_LOG_PATH = path.join(DATA_DIR, 'audit.log');
+const UPLOAD_TMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // FRED API key: env var wins; otherwise a one-line key file under data/
 // (gitignored, travels with DATA_DIR) so the double-click launchers don't
 // need env-var setup. fred-series.js stays dormant when neither is present.
@@ -317,6 +320,97 @@ function log(level, ...args) {
 
 // ---------- Setup ----------
 
+function cleanupStaleUploadTemps(rootDir = UPLOAD_TMP_DIR, maxAgeMs = UPLOAD_TMP_MAX_AGE_MS, now = Date.now()) {
+  if (!fs.existsSync(rootDir)) return;
+  const cutoff = now - maxAgeMs;
+
+  function visit(target, isRoot = false) {
+    let stat;
+    try {
+      stat = fs.lstatSync(target);
+    } catch (err) {
+      log('warn', 'Upload temp cleanup stat failed:', target, err.message);
+      return false;
+    }
+
+    if (stat.isDirectory()) {
+      let names = [];
+      try {
+        names = fs.readdirSync(target);
+      } catch (err) {
+        log('warn', 'Upload temp cleanup readdir failed:', target, err.message);
+        return false;
+      }
+      for (const name of names) visit(path.join(target, name), false);
+
+      if (!isRoot && stat.mtimeMs < cutoff) {
+        try {
+          fs.rmdirSync(target);
+          log('info', 'Removed stale upload temp directory:', target);
+          return true;
+        } catch (err) {
+          if (err && err.code !== 'ENOTEMPTY') {
+            log('warn', 'Upload temp cleanup directory remove failed:', target, err.message);
+          }
+        }
+      }
+      return false;
+    }
+
+    if (stat.mtimeMs < cutoff) {
+      try {
+        fs.rmSync(target, { force: true });
+        log('info', 'Removed stale upload temp file:', target);
+        return true;
+      } catch (err) {
+        log('warn', 'Upload temp cleanup file remove failed:', target, err.message);
+      }
+    }
+    return false;
+  }
+
+  visit(rootDir, true);
+}
+
+function uploadTempStatus(rootDir = UPLOAD_TMP_DIR, maxAgeMs = UPLOAD_TMP_MAX_AGE_MS, now = Date.now()) {
+  const status = {
+    exists: false,
+    staleCleanupHours: Math.round(maxAgeMs / 3600000),
+    totalEntries: 0,
+    staleEntries: 0,
+    errors: []
+  };
+  if (!fs.existsSync(rootDir)) return status;
+  status.exists = true;
+  const cutoff = now - maxAgeMs;
+
+  function visit(target) {
+    let stat;
+    try {
+      stat = fs.lstatSync(target);
+    } catch (err) {
+      status.errors.push(err.message);
+      return;
+    }
+    if (target !== rootDir) {
+      status.totalEntries += 1;
+      if (stat.mtimeMs < cutoff) status.staleEntries += 1;
+    }
+    if (!stat.isDirectory()) return;
+    let names = [];
+    try {
+      names = fs.readdirSync(target);
+    } catch (err) {
+      status.errors.push(err.message);
+      return;
+    }
+    for (const name of names) visit(path.join(target, name));
+  }
+
+  visit(rootDir);
+  return status;
+}
+
 [DATA_DIR, CURRENT_DIR, ARCHIVE_DIR, DROPBOX_DIR, CD_HISTORY_DIR, BANK_REPORTS_DIR, MBS_CMO_DIR, STRUCTURED_NOTES_DIR, MARKET_COLOR_DIR, CD_INTERNAL_DIR, EXEC_SUMMARY_DIR].forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -324,6 +418,11 @@ function log(level, ...args) {
   }
 });
 ensureCdHistoryDir(CD_HISTORY_DIR);
+try {
+  cleanupStaleUploadTemps();
+} catch (err) {
+  log('warn', 'Upload temp cleanup failed:', err.message);
+}
 
 // ---------- Constants ----------
 
@@ -937,6 +1036,35 @@ function looksLikeJpeg(buffer) {
   return Buffer.isBuffer(buffer) && hasBytes(buffer, [0xff, 0xd8, 0xff]);
 }
 
+function readUploadHead(file, bytes = 2048) {
+  if (!file) return Buffer.alloc(0);
+  if (file.path) {
+    const fd = fs.openSync(file.path, 'r');
+    try {
+      const stat = fs.fstatSync(fd);
+      const length = Math.min(bytes, stat.size);
+      const out = Buffer.alloc(length);
+      fs.readSync(fd, out, 0, length, 0);
+      return out;
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+  return Buffer.isBuffer(file.data) ? file.data.slice(0, bytes) : Buffer.alloc(0);
+}
+
+function uploadHasContent(file) {
+  return Boolean(file && ((Number(file.size) || 0) > 0 || (Buffer.isBuffer(file.data) && file.data.length > 0)));
+}
+
+function looksLikeExcelUpload(file) {
+  return looksLikeExcel(readUploadHead(file, 8));
+}
+
+function looksLikePlainTextUpload(file) {
+  return readUploadHead(file, 2048).indexOf(0) === -1;
+}
+
 function validateMbsCmoFileSignature(file) {
   if (!file || !file.data) return 'Upload is missing file data.';
   const ext = path.extname(file.filename || '').toLowerCase();
@@ -1097,100 +1225,240 @@ function uploadSlotFromFieldName(fieldName) {
   return SLOT_NAMES.find(slot => slot.toLowerCase() === normalized.toLowerCase()) || null;
 }
 
+function tempUploadName(filename) {
+  const base = path.basename(String(filename || 'upload.bin'))
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 120) || 'upload.bin';
+  return `${process.pid}-${Date.now()}-${crypto.randomUUID()}-${base}`;
+}
+
+function createMultipartFile(fieldName, filename) {
+  fs.mkdirSync(UPLOAD_TMP_DIR, { recursive: true });
+  const tmpPath = path.join(UPLOAD_TMP_DIR, tempUploadName(filename));
+  let fd = fs.openSync(tmpPath, 'w');
+  let cachedData = null;
+  const file = {
+    fieldName,
+    filename,
+    path: tmpPath,
+    tmpPath,
+    size: 0,
+    explicitSlot: null,
+    companionRole: null
+  };
+  Object.defineProperty(file, 'data', {
+    enumerable: true,
+    get() {
+      if (cachedData === null) cachedData = fs.readFileSync(tmpPath);
+      return cachedData;
+    }
+  });
+  Object.defineProperty(file, '_writeUploadChunk', {
+    value(chunk) {
+      if (!chunk || !chunk.length) return;
+      if (fd === null) throw new Error('Upload temp file is already closed');
+      fs.writeSync(fd, chunk);
+      file.size += chunk.length;
+    }
+  });
+  Object.defineProperty(file, '_closeUploadFile', {
+    value() {
+      if (fd !== null) {
+        fs.closeSync(fd);
+        fd = null;
+      }
+    }
+  });
+  return file;
+}
+
+function closeMultipartFile(file) {
+  if (file && typeof file._closeUploadFile === 'function') {
+    try { file._closeUploadFile(); } catch (_) {}
+  }
+}
+
+function cleanupMultipartFiles(parsed) {
+  const files = parsed && Array.isArray(parsed.files) ? parsed.files : [];
+  for (const file of files) {
+    closeMultipartFile(file);
+    if (file && file.tmpPath) {
+      try { fs.rmSync(file.tmpPath, { force: true }); } catch (_) {}
+    }
+  }
+}
+
+function parseMultipartDisposition(headerStr) {
+  const disposition = String(headerStr || '').split(/\r\n/).find(line => /^content-disposition:/i.test(line)) || '';
+  const nameMatch = disposition.match(/(?:^|[;\s])name="([^"]+)"/i);
+  const filenameMatch = disposition.match(/filename="([^"]*)"/i);
+  return {
+    fieldName: nameMatch ? nameMatch[1] : '',
+    filename: filenameMatch ? filenameMatch[1] : null
+  };
+}
+
 function parseMultipart(req, boundary, limit) {
   return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks = [];
-    let aborted = false;
+    const declaredLength = Number(req.headers['content-length']);
+    if (Number.isFinite(declaredLength) && declaredLength > limit) {
+      const err = new Error('Upload exceeds maximum allowed size');
+      err.statusCode = 413;
+      reject(err);
+      return;
+    }
 
-    req.on('data', chunk => {
-      if (aborted) return;
-      size += chunk.length;
-      if (size > limit) {
-        aborted = true;
-        const err = new Error('Upload exceeds maximum allowed size');
-        err.statusCode = 413;
-        reject(err);
-        try { req.destroy(); } catch (_) {}
+    const firstBoundary = Buffer.from('--' + boundary);
+    const delimiter = Buffer.from('\r\n--' + boundary);
+    const headerSeparator = Buffer.from('\r\n\r\n');
+    const files = [];
+    const fields = {};
+    let buffer = Buffer.alloc(0);
+    let state = 'preamble';
+    let current = null;
+    let size = 0;
+    let settled = false;
+
+    function fail(err) {
+      if (settled) return;
+      settled = true;
+      if (current && current.file) closeMultipartFile(current.file);
+      cleanupMultipartFiles({ files });
+      reject(err);
+    }
+
+    function beginPart(headerStr) {
+      const { fieldName, filename } = parseMultipartDisposition(headerStr);
+      if (!fieldName) {
+        current = { type: 'skip' };
         return;
       }
-      chunks.push(chunk);
+      if (filename) {
+        const file = createMultipartFile(fieldName, filename);
+        if (CD_COST_FIELD_NAMES.has(fieldName)) {
+          file.explicitSlot = 'cdoffers';
+          file.companionRole = 'cdCostWorkbook';
+        } else {
+          file.explicitSlot = uploadSlotFromFieldName(fieldName);
+        }
+        files.push(file);
+        current = { type: 'file', file };
+      } else {
+        current = { type: 'field', fieldName, chunks: [] };
+      }
+    }
+
+    function writeCurrent(chunk) {
+      if (!current || !chunk || !chunk.length) return;
+      if (current.type === 'file') current.file._writeUploadChunk(chunk);
+      else if (current.type === 'field') current.chunks.push(Buffer.from(chunk));
+    }
+
+    function finishCurrent() {
+      if (!current) return;
+      if (current.type === 'file') closeMultipartFile(current.file);
+      else if (current.type === 'field') fields[current.fieldName] = Buffer.concat(current.chunks).toString('utf-8');
+      current = null;
+    }
+
+    function processBuffer(flush = false) {
+      while (!settled) {
+        if (state === 'preamble') {
+          const idx = buffer.indexOf(firstBoundary);
+          if (idx === -1) {
+            const keep = Math.min(buffer.length, firstBoundary.length + 4);
+            buffer = buffer.slice(buffer.length - keep);
+            return;
+          }
+          const after = idx + firstBoundary.length;
+          if (buffer.length < after + 2 && !flush) return;
+          const marker = buffer.slice(after, after + 2).toString('latin1');
+          if (marker === '--') {
+            buffer = buffer.slice(after + 2);
+            state = 'done';
+            return;
+          }
+          if (marker !== '\r\n') throw new Error('Malformed multipart boundary');
+          buffer = buffer.slice(after + 2);
+          state = 'headers';
+          continue;
+        }
+
+        if (state === 'headers') {
+          const idx = buffer.indexOf(headerSeparator);
+          if (idx === -1) return;
+          const headerStr = buffer.slice(0, idx).toString('utf-8');
+          buffer = buffer.slice(idx + headerSeparator.length);
+          beginPart(headerStr);
+          state = 'body';
+          continue;
+        }
+
+        if (state === 'body') {
+          const idx = buffer.indexOf(delimiter);
+          if (idx === -1) {
+            const keep = delimiter.length + 4;
+            if (buffer.length > keep) {
+              writeCurrent(buffer.slice(0, buffer.length - keep));
+              buffer = buffer.slice(buffer.length - keep);
+            }
+            return;
+          }
+          const after = idx + delimiter.length;
+          if (buffer.length < after + 2 && !flush) return;
+          writeCurrent(buffer.slice(0, idx));
+          finishCurrent();
+          const marker = buffer.slice(after, after + 2).toString('latin1');
+          if (marker === '--') {
+            buffer = buffer.slice(after + 2);
+            state = 'done';
+            return;
+          }
+          if (marker !== '\r\n') throw new Error('Malformed multipart boundary');
+          buffer = buffer.slice(after + 2);
+          state = 'headers';
+          continue;
+        }
+
+        return;
+      }
+    }
+
+    req.on('data', chunk => {
+      if (settled) return;
+      size += chunk.length;
+      if (size > limit) {
+        const err = new Error('Upload exceeds maximum allowed size');
+        err.statusCode = 413;
+        req.resume();
+        fail(err);
+        return;
+      }
+      try {
+        buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk;
+        processBuffer(false);
+      } catch (err) {
+        fail(err);
+      }
     });
 
-    req.on('error', err => { if (!aborted) reject(err); });
+    req.on('aborted', () => {
+      const err = new Error('Upload aborted');
+      err.statusCode = 400;
+      fail(err);
+    });
+    req.on('error', err => fail(err));
 
     req.on('end', () => {
-      if (aborted) return;
+      if (settled) return;
       try {
-        const buffer = Buffer.concat(chunks);
-        const boundaryBuf = Buffer.from('--' + boundary);
-        const parts = [];
-        let cursor = 0;
-
-        while (cursor < buffer.length) {
-          const boundaryIdx = buffer.indexOf(boundaryBuf, cursor);
-          if (boundaryIdx === -1) break;
-
-          if (cursor > 0) {
-            let end = boundaryIdx;
-            if (end >= 2 &&
-                buffer[end - 2] === 0x0d &&
-                buffer[end - 1] === 0x0a) {
-              end -= 2;
-            }
-            parts.push(buffer.slice(cursor, end));
-          }
-
-          let next = boundaryIdx + boundaryBuf.length;
-          if (buffer[next] === 0x2d && buffer[next + 1] === 0x2d) break;
-          if (buffer[next] === 0x0d && buffer[next + 1] === 0x0a) next += 2;
-          cursor = next;
-        }
-
-        const files = [];
-        const fields = {};
-
-        for (const part of parts) {
-          if (!part || part.length === 0) continue;
-          const headerEnd = part.indexOf('\r\n\r\n');
-          if (headerEnd === -1) continue;
-
-          const headerStr = part.slice(0, headerEnd).toString('utf-8');
-          const body = part.slice(headerEnd + 4);
-
-          // Anchor the field-name capture on a boundary so it can't match the
-          // `name="…"` substring inside `filename="…"` (e.g. a part that carries
-          // only filename= and no real name=).
-          const nameMatch = headerStr.match(/(?:^|[;\s])name="([^"]+)"/i);
-          const filenameMatch = headerStr.match(/filename="([^"]*)"/i);
-          if (!nameMatch) continue;
-
-          const fieldName = nameMatch[1];
-
-          if (filenameMatch && filenameMatch[1]) {
-            let explicitSlot = null;
-            let companionRole = null;
-            if (CD_COST_FIELD_NAMES.has(fieldName)) {
-              explicitSlot = 'cdoffers';
-              companionRole = 'cdCostWorkbook';
-            } else {
-              explicitSlot = uploadSlotFromFieldName(fieldName);
-            }
-            files.push({
-              fieldName,
-              filename: filenameMatch[1],
-              data: body,
-              explicitSlot,
-              companionRole
-            });
-          } else {
-            fields[fieldName] = body.toString('utf-8');
-          }
-        }
-
+        processBuffer(true);
+        if (state !== 'done') throw new Error('Incomplete multipart upload');
+        settled = true;
         resolve({ files, fields });
       } catch (err) {
-        reject(err);
+        fail(err);
       }
     });
   });
@@ -2832,6 +3100,7 @@ function buildGoLiveStatus(req) {
   const marketWarnCount = marketCaches.filter(c => c.state !== 'ok').length;
   const aiCaches = [dailySummaryCache, salesDashboardCache];
   const aiWarnCount = aiCaches.filter(c => c.state !== 'ok').length;
+  const uploadTemp = uploadTempStatus();
 
   const checks = [
     statusCheck(
@@ -2851,6 +3120,16 @@ function buildGoLiveStatus(req) {
       'External data folder',
       isDataDirExternal() ? 'ok' : 'warn',
       isDataDirExternal() ? 'DATA_DIR is outside the app folder.' : 'DATA_DIR is using the app-local data folder.'
+    ),
+    statusCheck(
+      'upload-temp',
+      'Upload temp cleanup',
+      uploadTemp.errors.length || uploadTemp.staleEntries ? 'warn' : 'ok',
+      uploadTemp.errors.length
+        ? 'Could not inspect DATA_DIR/_uploads; check App Pool filesystem permissions.'
+        : uploadTemp.staleEntries
+          ? `${uploadTemp.staleEntries} stale upload temp entr${uploadTemp.staleEntries === 1 ? 'y' : 'ies'} remain.`
+          : `No stale upload temp entries older than ${uploadTemp.staleCleanupHours} hours.`
     ),
     statusCheck(
       'daily-package',
@@ -2965,6 +3244,7 @@ function buildGoLiveStatus(req) {
     data: {
       dataDir: DATA_DIR,
       dataDirExternal: isDataDirExternal(),
+      uploadTemp,
       maxUploadMb: Math.round(MAX_UPLOAD_BYTES / (1024 * 1024)),
       bankUploadMaxMb: Math.round(BANK_UPLOAD_MAX_BYTES / (1024 * 1024)),
       bankData,
@@ -5460,8 +5740,10 @@ async function handleUploadStrategyRequestFile(req, res, id) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
+  let parsed;
   try {
-    const { files, fields } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const { files, fields } = parsed;
     const file = files.find(row => row.fieldName === 'strategyFile') || files[0];
     if (!file) return sendJSON(res, 400, { error: 'Choose a strategy deliverable to upload' });
 
@@ -5484,6 +5766,8 @@ async function handleUploadStrategyRequestFile(req, res, id) {
   } catch (err) {
     log('error', 'Strategy file upload failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not upload strategy file' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8048,8 +8332,10 @@ async function handleMbsCmoUpload(req, res) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const { files } = parsed;
     if (!files.length) return sendJSON(res, 400, { error: 'Choose at least one MBS/CMO source file' });
 
     for (const file of files) {
@@ -8082,6 +8368,8 @@ async function handleMbsCmoUpload(req, res) {
   } catch (err) {
     log('error', 'MBS/CMO upload failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not upload MBS/CMO files' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8090,17 +8378,19 @@ async function handleBankDataUpload(req, res) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const { files } = parsed;
     const file = files.find(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename));
     if (!file) return sendJSON(res, 400, { error: 'Upload a bank workbook (.xlsm, .xlsx, or .xls).' });
-    if (!looksLikeExcel(file.data)) {
+    if (!looksLikeExcelUpload(file)) {
       return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
     }
 
     const target = path.join(BANK_REPORTS_DIR, BANK_WORKBOOK_FILENAME);
     const tmpTarget = path.join(BANK_REPORTS_DIR, `${BANK_WORKBOOK_FILENAME}.tmp-${process.pid}-${Date.now()}`);
-    fs.writeFileSync(tmpTarget, file.data);
+    fs.copyFileSync(file.path, tmpTarget);
     const metadata = await importBankWorkbook(tmpTarget, BANK_REPORTS_DIR, {
       sourceFile: sanitizeFilename(file.filename)
     });
@@ -8123,6 +8413,8 @@ async function handleBankDataUpload(req, res) {
     } catch (_) {}
     log('error', 'Bank workbook upload failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Bank workbook import failed' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8131,11 +8423,13 @@ async function handleBankStatusUpload(req, res) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const { files } = parsed;
     const file = files.find(f => /\.(xlsb|xlsm|xlsx|xls)$/i.test(f.filename));
     if (!file) return sendJSON(res, 400, { error: 'Upload an account status workbook (.xlsb, .xlsm, .xlsx, or .xls).' });
-    if (!looksLikeExcel(file.data)) {
+    if (!looksLikeExcelUpload(file)) {
       return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
     }
 
@@ -8144,7 +8438,7 @@ async function handleBankStatusUpload(req, res) {
       return sendJSON(res, 400, { error: 'Import bank call report data before importing account statuses.' });
     }
 
-    const metadata = importBankAccountStatusWorkbook(BANK_REPORTS_DIR, file.data, bankSummaries, {
+    const metadata = importBankAccountStatusWorkbook(BANK_REPORTS_DIR, file.path, bankSummaries, {
       sourceFile: sanitizeFilename(file.filename)
     });
     const hasServicesData = Boolean(
@@ -8157,7 +8451,7 @@ async function handleBankStatusUpload(req, res) {
       BANK_REPORTS_DIR,
       hasServicesData ? BANK_SERVICES_WORKBOOK_FILENAME : BANK_STATUS_WORKBOOK_FILENAME
     );
-    fs.writeFileSync(target, file.data);
+    fs.copyFileSync(file.path, target);
     appendAuditLog({
       event: 'bank-account-status-import',
       sourceFile: sanitizeFilename(file.filename),
@@ -8173,6 +8467,8 @@ async function handleBankStatusUpload(req, res) {
   } catch (err) {
     log('error', 'Bank account status upload failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Bank account status import failed' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8181,17 +8477,19 @@ async function handleAveragedSeriesUpload(req, res) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const { files } = parsed;
     const file = files.find(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename));
     if (!file) return sendJSON(res, 400, { error: 'Upload an averaged-series workbook (.xlsm, .xlsx, or .xls).' });
-    if (!looksLikeExcel(file.data)) {
+    if (!looksLikeExcelUpload(file)) {
       return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
     }
 
     fs.mkdirSync(BANK_REPORTS_DIR, { recursive: true });
     const tmpTarget = path.join(BANK_REPORTS_DIR, `averaged-series-upload.tmp-${process.pid}-${Date.now()}${path.extname(file.filename || '.xlsm') || '.xlsm'}`);
-    fs.writeFileSync(tmpTarget, file.data);
+    fs.copyFileSync(file.path, tmpTarget);
     const metadata = saveAveragedSeriesWorkbook(BANK_REPORTS_DIR, tmpTarget, {
       sourceFile: sanitizeFilename(file.filename)
     });
@@ -8214,6 +8512,8 @@ async function handleAveragedSeriesUpload(req, res) {
     } catch (_) {}
     log('error', 'Averaged-series workbook upload failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Averaged-series workbook import failed' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8772,8 +9072,10 @@ async function handleContactsImport(req, res, dryRun) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const { files } = parsed;
     const csv = files.find(f => /\.csv$/i.test(f.filename || '')) || files[0];
     if (!csv || !csv.data) return sendJSON(res, 400, { error: 'Upload a Salesforce contact-export CSV.' });
     const result = importSalesforceContacts(csv.data.toString('utf-8'), { dryRun });
@@ -8785,6 +9087,8 @@ async function handleContactsImport(req, res, dryRun) {
   } catch (err) {
     log('error', 'Contacts import failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Contacts import failed' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8812,7 +9116,23 @@ function classifyExecSummaryBuffer(buffer) {
 }
 
 function classifyExecSummaryFile(file) {
-  return classifyExecSummaryBuffer(file && file.data);
+  if (!file) return null;
+  if (file.path) {
+    try {
+      const wb = XLSX.readFile(file.path, { raw: false });
+      const names = wb.SheetNames || [];
+      if (names.includes('MAIN') && names.includes('TOTAL_HAIRCUTS')) return 'margin';
+      const ws = wb.Sheets[names[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
+      const hdr = (rows[0] || []).map(h => String(h || '').toLowerCase());
+      const has = s => hdr.some(h => h.includes(s));
+      if (has('industry sector') && has('market sector')) return 'sector';
+      if (has('salesperson') && has('customer type')) return 'activity';
+      if (has('cusip(s)') && (has('p & l') || has('bidprice'))) return 'inventory';
+    } catch (_) { /* fall through to null */ }
+    return null;
+  }
+  return classifyExecSummaryBuffer(file.data);
 }
 
 // Human labels for exec-summary slots (folder-drop scan + UI). The three
@@ -8836,12 +9156,14 @@ async function handleExecSummaryUpload(req, res) {
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
   const tmpPaths = [];
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const { files } = parsed;
     const excel = files.filter(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename || ''));
     if (!excel.length) return sendJSON(res, 400, { error: 'Upload the three Executive Summary files (.xlsx / .xlsm).' });
     for (const f of excel) {
-      if (!looksLikeExcel(f.data)) return sendJSON(res, 400, { error: `${f.filename} does not look like an Excel workbook.` });
+      if (!looksLikeExcelUpload(f)) return sendJSON(res, 400, { error: `${f.filename} does not look like an Excel workbook.` });
     }
 
     const slots = { inventory: null, activity: null, sector: null, margin: null };
@@ -8859,7 +9181,7 @@ async function handleExecSummaryUpload(req, res) {
     const writeTmp = (f, tag) => {
       const ext = path.extname(f.filename || '') || '.xlsx';
       const p = path.join(EXEC_SUMMARY_DIR, `exec-upload.tmp-${tag}-${process.pid}-${Date.now()}${ext}`);
-      fs.writeFileSync(p, f.data);
+      fs.copyFileSync(f.path, p);
       tmpPaths.push(p);
       return p;
     };
@@ -8897,6 +9219,7 @@ async function handleExecSummaryUpload(req, res) {
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Executive summary import failed' });
   } finally {
     for (const p of tmpPaths) { try { fs.rmSync(p, { force: true }); } catch (_) {} }
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8906,17 +9229,19 @@ async function handleBondAccountingUpload(req, res) {
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
   let tmpDir = '';
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const { files } = parsed;
     const bankListFile = files.find(f => f.fieldName === 'bondBankList' || /bank.*list/i.test(f.filename || ''));
     const portfolioFiles = files.filter(f => f !== bankListFile && /\.(xlsm|xlsx|xls)$/i.test(f.filename || ''));
 
     if (!portfolioFiles.length) return sendJSON(res, 400, { error: 'Choose the portfolio folder or upload at least one portfolio workbook.' });
-    if (bankListFile && !looksLikeExcel(bankListFile.data)) {
+    if (bankListFile && !looksLikeExcelUpload(bankListFile)) {
       return sendJSON(res, 400, { error: `${bankListFile.filename} does not look like an Excel workbook.` });
     }
     for (const file of portfolioFiles) {
-      if (!looksLikeExcel(file.data)) {
+      if (!looksLikeExcelUpload(file)) {
         return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
       }
     }
@@ -8937,10 +9262,10 @@ async function handleBondAccountingUpload(req, res) {
     let bankListPath = '';
     if (bankListFile) {
       bankListPath = path.join(tmpDir, sanitizeFilename(bankListFile.filename || 'bond-accounting-bank-list.xlsx'));
-      fs.writeFileSync(bankListPath, bankListFile.data);
+      fs.copyFileSync(bankListFile.path, bankListPath);
     }
     for (const file of portfolioFiles) {
-      fs.writeFileSync(path.join(portfolioDir, sanitizeFilename(file.filename)), file.data);
+      fs.copyFileSync(file.path, path.join(portfolioDir, sanitizeFilename(file.filename)));
     }
 
     const manifest = importBondAccountingFolder(BANK_REPORTS_DIR, bankListPath, portfolioDir, {
@@ -8966,6 +9291,7 @@ async function handleBondAccountingUpload(req, res) {
     if (tmpDir) {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     }
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -8975,19 +9301,21 @@ async function handleBankOneOffBondAccountingUpload(req, res, bankId) {
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
   let tmpDir = '';
+  let parsed;
   try {
     const summary = getBankSummaryForCoverage(bankId);
     if (!summary) return sendJSON(res, 404, { error: 'Bank not found' });
 
-    const { files, fields } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), BANK_UPLOAD_MAX_BYTES);
+    const { files, fields } = parsed;
     const file = files.find(f => /\.(xlsm|xlsx|xls)$/i.test(f.filename || '')) || files[0];
-    if (!file || !file.data) return sendJSON(res, 400, { error: 'Upload a Thomas Ho portfolio workbook.' });
-    if (!looksLikeExcel(file.data)) return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
+    if (!uploadHasContent(file)) return sendJSON(res, 400, { error: 'Upload a Thomas Ho portfolio workbook.' });
+    if (!looksLikeExcelUpload(file)) return sendJSON(res, 400, { error: `${file.filename} does not look like an Excel workbook.` });
 
     fs.mkdirSync(BANK_REPORTS_DIR, { recursive: true });
     tmpDir = fs.mkdtempSync(path.join(BANK_REPORTS_DIR, 'bond-accounting-oneoff-'));
     const tmpPath = path.join(tmpDir, sanitizeFilename(file.filename || 'thomas-ho-portfolio.xlsx'));
-    fs.writeFileSync(tmpPath, file.data);
+    fs.copyFileSync(file.path, tmpPath);
 
     const result = importOneOffPortfolioForBank(BANK_REPORTS_DIR, summary, tmpPath, {
       reportDate: fields && fields.reportDate ? fields.reportDate : ''
@@ -9009,6 +9337,7 @@ async function handleBankOneOffBondAccountingUpload(req, res, bankId) {
     if (tmpDir) {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
     }
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -9017,8 +9346,10 @@ async function handleThcSummaryUpload(req, res) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const { files } = parsed;
     const file = files.find(f => /\.(json|txt)$/i.test(f.filename || '')) || files[0];
     if (!file || !file.data || !file.data.length) return sendJSON(res, 400, { error: 'Upload a THC summary JSON file.' });
     const text = file.data.toString('utf8').replace(/^\uFEFF/, '');
@@ -9048,6 +9379,8 @@ async function handleThcSummaryUpload(req, res) {
   } catch (err) {
     log('error', 'THC summary import failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'THC summary import failed' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -9056,12 +9389,14 @@ async function handleWirpUpload(req, res) {
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
 
+  let parsed;
   try {
-    const { files } = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    parsed = await parseMultipart(req, (boundaryMatch[1] || boundaryMatch[2]).trim(), MAX_UPLOAD_BYTES);
+    const { files } = parsed;
     const file = files.find(f => /\.(xlsm|xlsx|xls|csv)$/i.test(f.filename || ''));
     if (!file) return sendJSON(res, 400, { error: 'Upload a WIRP export (.xlsx, .xlsm, .xls, or .csv).' });
     const ext = path.extname(file.filename || '').toLowerCase();
-    const validSignature = ext === '.csv' ? looksLikePlainText(file.data) : looksLikeExcel(file.data);
+    const validSignature = ext === '.csv' ? looksLikePlainTextUpload(file) : looksLikeExcelUpload(file);
     if (!validSignature) {
       return sendJSON(res, 400, { error: `${file.filename} does not look like a ${ext === '.csv' ? 'CSV' : 'workbook'} file.` });
     }
@@ -9080,6 +9415,8 @@ async function handleWirpUpload(req, res) {
   } catch (err) {
     log('error', 'WIRP upload failed:', err.message);
     return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not import WIRP export' });
+  } finally {
+    cleanupMultipartFiles(parsed);
   }
 }
 
@@ -9670,9 +10007,13 @@ async function handleUpload(req, res) {
   }
 
   const { files } = parsed;
-  if (!files.length) return sendJSON(res, 400, { error: 'No files in upload' });
+  try {
+    if (!files.length) return sendJSON(res, 400, { error: 'No files in upload' });
 
-  return await publishPackageFiles(files, res);
+    return await publishPackageFiles(files, res);
+  } finally {
+    cleanupMultipartFiles(parsed);
+  }
 }
 
 // One publish at a time, manual or automatic: the snapshot/rollback dance in

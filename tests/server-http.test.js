@@ -53,6 +53,30 @@ function request(port, { method = 'GET', path: requestPath = '/', headers = {}, 
   });
 }
 
+function requestChunked(port, { method = 'POST', path: requestPath = '/', headers = {}, chunks = [] } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      method,
+      path: requestPath,
+      headers
+    }, res => {
+      const responseChunks = [];
+      res.on('data', chunk => responseChunks.push(chunk));
+      res.on('end', () => {
+        const text = Buffer.concat(responseChunks).toString('utf8');
+        let json = null;
+        try { json = text ? JSON.parse(text) : null; } catch (_) {}
+        resolve({ status: res.statusCode, headers: res.headers, text, json });
+      });
+    });
+    req.once('error', reject);
+    for (const chunk of chunks) req.write(chunk);
+    req.end();
+  });
+}
+
 function multipartFile(fieldName, filename, content) {
   const boundary = `----fbbs-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const body = Buffer.concat([
@@ -70,6 +94,11 @@ function multipartFile(fieldName, filename, content) {
 
 function testPdf(marker) {
   return Buffer.from(`%PDF-1.4\n% ${marker}\n`);
+}
+
+function uploadTmpEntries(dataDir) {
+  const dir = path.join(dataDir, '_uploads');
+  return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
 }
 
 function writeJson(filePath, value) {
@@ -95,9 +124,10 @@ async function waitForHealth(port, child) {
   throw lastError || new Error('server did not become healthy');
 }
 
-async function withServer(extraEnv, fn) {
+async function withServer(extraEnv, fn, options = {}) {
   const port = await getFreePort();
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-http-test-'));
+  if (options.setupDataDir) options.setupDataDir(dataDir);
   const child = spawn(process.execPath, ['server/server.js'], {
     cwd: path.join(__dirname, '..'),
     env: {
@@ -122,6 +152,17 @@ async function withServer(extraEnv, fn) {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
   return output;
+}
+
+function makeUploadTemp(dataDir, relPath, ageMs = 0) {
+  const filePath = path.join(dataDir, '_uploads', relPath);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, 'temp');
+  if (ageMs) {
+    const when = new Date(Date.now() - ageMs);
+    fs.utimesSync(filePath, when, when);
+  }
+  return filePath;
 }
 
 test('same-day corrupt replacement preserves existing current slot', async () => {
@@ -224,6 +265,139 @@ test('iis upload fails closed when admin allowlist is empty', async () => {
     });
     assert.strictEqual(res.status, 403, res.text);
   });
+});
+
+test('multipart upload rejects declared oversized bodies before parsing', async () => {
+  await withServer({}, async ({ port, dataDir }) => {
+    const boundary = '----fbbs-too-large';
+    const res = await request(port, {
+      method: 'POST',
+      path: '/api/upload',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String((50 * 1024 * 1024) + 1)
+      }
+    });
+    assert.strictEqual(res.status, 413, res.text);
+    assert.ok(/Upload exceeds maximum allowed size/.test(res.text), res.text);
+    assert.deepStrictEqual(uploadTmpEntries(dataDir), []);
+  });
+});
+
+test('multipart upload rejects oversized chunked bodies and removes temp files', async () => {
+  await withServer({ MAX_UPLOAD_MB: '1' }, async ({ port, dataDir }) => {
+    const upload = multipartFile('econ', 'economic-update.pdf', Buffer.alloc(1024 * 1024, 0x61));
+    const chunks = [];
+    for (let offset = 0; offset < upload.body.length; offset += 65536) {
+      chunks.push(upload.body.slice(offset, offset + 65536));
+    }
+    const res = await requestChunked(port, {
+      method: 'POST',
+      path: '/api/upload',
+      headers: upload.headers,
+      chunks
+    });
+    assert.strictEqual(res.status, 413, res.text);
+    assert.ok(/Upload exceeds maximum allowed size/.test(res.text), res.text);
+    assert.deepStrictEqual(uploadTmpEntries(dataDir), []);
+  });
+});
+
+test('multipart upload removes temp files after successful publish', async () => {
+  await withServer({}, async ({ port, dataDir }) => {
+    const upload = multipartFile('econ', 'economic-update.pdf', testPdf('streamed econ'));
+    const res = await request(port, {
+      method: 'POST',
+      path: '/api/upload',
+      headers: upload.headers,
+      body: upload.body
+    });
+    assert.strictEqual(res.status, 200, res.text);
+    assert.deepStrictEqual(uploadTmpEntries(dataDir), []);
+  });
+});
+
+test('multipart upload removes temp files after validation failure', async () => {
+  await withServer({}, async ({ port, dataDir }) => {
+    const upload = multipartFile('econ', 'economic-update.pdf', 'not a pdf');
+    const res = await request(port, {
+      method: 'POST',
+      path: '/api/upload',
+      headers: upload.headers,
+      body: upload.body
+    });
+    assert.strictEqual(res.status, 400, res.text);
+    assert.deepStrictEqual(uploadTmpEntries(dataDir), []);
+  });
+});
+
+test('multipart upload removes temp files after thrown import handler error', async () => {
+  await withServer({}, async ({ port, dataDir }) => {
+    const fakeZip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00]);
+    const upload = multipartFile('bankWorkbook', 'banks.xlsx', fakeZip);
+    const res = await request(port, {
+      method: 'POST',
+      path: '/api/banks/upload',
+      headers: upload.headers,
+      body: upload.body
+    });
+    assert.ok(res.status >= 400, res.text);
+    assert.deepStrictEqual(uploadTmpEntries(dataDir), []);
+  });
+});
+
+test('startup removes stale upload temp files and nested stale directories', async () => {
+  const oldMs = 48 * 60 * 60 * 1000;
+  await withServer({}, async ({ dataDir }) => {
+    assert.strictEqual(fs.existsSync(path.join(dataDir, '_uploads', 'stale.tmp')), false);
+    assert.strictEqual(fs.existsSync(path.join(dataDir, '_uploads', 'nested')), false);
+    assert.ok(fs.existsSync(path.join(dataDir, '_uploads')), '_uploads root should be preserved');
+  }, {
+    setupDataDir(dataDir) {
+      makeUploadTemp(dataDir, 'stale.tmp', oldMs);
+      const nested = makeUploadTemp(dataDir, path.join('nested', 'child.tmp'), oldMs);
+      const when = new Date(Date.now() - oldMs);
+      fs.utimesSync(path.dirname(nested), when, when);
+    }
+  });
+});
+
+test('startup preserves fresh upload temp files', async () => {
+  await withServer({}, async ({ dataDir }) => {
+    assert.ok(fs.existsSync(path.join(dataDir, '_uploads', 'fresh.tmp')));
+  }, {
+    setupDataDir(dataDir) {
+      makeUploadTemp(dataDir, 'fresh.tmp');
+    }
+  });
+});
+
+test('startup tolerates missing upload temp directory', async () => {
+  await withServer({}, async ({ dataDir }) => {
+    assert.strictEqual(fs.existsSync(path.join(dataDir, '_uploads')), false);
+  });
+});
+
+test('startup upload temp cleanup failure does not prevent health', async () => {
+  if (process.platform === 'win32') return;
+  const oldMs = 48 * 60 * 60 * 1000;
+  let stalePreserved = false;
+  const output = await withServer({ LOG_LEVEL: 'warn' }, async ({ dataDir }) => {
+    const uploadDir = path.join(dataDir, '_uploads');
+    const stale = path.join(uploadDir, 'stale-locked.tmp');
+    stalePreserved = fs.existsSync(stale);
+    fs.chmodSync(uploadDir, 0o755);
+    assert.ok(stalePreserved, 'stale file should remain when cleanup cannot remove it');
+  }, {
+    setupDataDir(dataDir) {
+      const stale = makeUploadTemp(dataDir, 'stale-locked.tmp', oldMs);
+      const uploadDir = path.dirname(stale);
+      fs.chmodSync(uploadDir, 0o555);
+    }
+  });
+  if (stalePreserved) {
+    assert.match(output, /Upload temp cleanup file remove failed/, output);
+  }
 });
 
 test('iis crm rollups collapse non-admin all/other-rep scope to self', async () => {
@@ -451,6 +625,10 @@ test('go-live status includes AI, integration, and process readiness sections', 
     assert.ok(res.json.ai && Array.isArray(res.json.ai.caches), 'AI cache detail present');
     assert.ok(res.json.integrations && Array.isArray(res.json.integrations.marketCaches), 'integration cache detail present');
     assert.ok(res.json.process && res.json.process.build && res.json.process.node, 'process detail present');
+    assert.ok(res.json.checks.some(check => check.id === 'upload-temp'), 'upload temp check present');
+    assert.ok(res.json.data && res.json.data.uploadTemp, 'upload temp detail present');
+    assert.strictEqual(res.json.data.uploadTemp.staleCleanupHours, 24, 'upload temp cleanup age documented');
+    assert.ok(!Array.isArray(res.json.data.uploadTemp.files), 'upload temp details should not expose filenames');
   });
 });
 
