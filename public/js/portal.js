@@ -12887,14 +12887,18 @@
     const board = document.getElementById('strategyBoard');
     const countsEl = document.getElementById('strategyCounts');
     const openCount = document.getElementById('strategiesOpenCount');
+    const countLabel = document.getElementById('strategiesCountLabel');
     const sub = document.getElementById('strategiesSub');
     const archive = document.getElementById('strategyArchiveFilter');
     const archivedMode = archive ? archive.value : '';
     if (!board) return;
-    if (openCount) openCount.textContent = formatNumber(archivedMode === 'only' ? (strategyCounts.Archived || 0) : (strategyCounts.Open || 0));
+    const total = strategyRequests.length;
+    const scope = archivedMode === 'only' ? 'archived' : archivedMode === 'all' ? 'total' : 'active';
+    // Hero number, its label, and the subtitle all describe the same scope so
+    // the big stat never reads as "0 Open" next to a "1 active request" subtitle.
+    if (openCount) openCount.textContent = formatNumber(total);
+    if (countLabel) countLabel.textContent = scope.charAt(0).toUpperCase() + scope.slice(1);
     if (sub) {
-      const total = strategyRequests.length;
-      const scope = archivedMode === 'only' ? 'archived' : archivedMode === 'all' ? 'total' : 'active';
       sub.textContent = `${formatNumber(total)} ${scope} ${total === 1 ? 'request' : 'requests'} across the Strategies workflow`;
     }
     if (countsEl) {
@@ -24585,6 +24589,12 @@
       uirevision: `maps-${mapsState.mapRevision}`
     };
     Plotly.react(el, figData, layout, { responsive: true, displaylogo: false, scrollZoom: true, modeBarButtonsToRemove: ['select2d', 'lasso2d'] }).then(() => {
+      // The inline plot can draw before its flex container has its final size
+      // (page just became visible), leaving it clipped to a stale box. Re-measure
+      // after layout settles — the same fix openMapsFullView() already applies.
+      if (Plotly.Plots && Plotly.Plots.resize) {
+        setTimeout(() => { try { Plotly.Plots.resize(el); } catch (e) {} }, 60);
+      }
       if (el.dataset.mapsClickBound) return;
       el.dataset.mapsClickBound = '1';
       el.on('plotly_click', (data) => {

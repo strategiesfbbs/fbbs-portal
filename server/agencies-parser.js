@@ -162,7 +162,7 @@ const YIELD_BAND_MAX = 25;
 function warnYieldBand(value, field, structure, rowNum, warnings) {
   if (value == null) return;
   if (value < YIELD_BAND_MIN || value > YIELD_BAND_MAX) {
-    warnings.push(`${structure} row ${rowNum}: ${field} ${value}% is outside the expected ${YIELD_BAND_MIN}–${YIELD_BAND_MAX}% band — check the source column for a decimal/percent or column-alignment slip`);
+    warnings.push(`${structure} row ${rowNum}: ${field} ${+value.toFixed(2)}% is outside the expected ${YIELD_BAND_MIN}–${YIELD_BAND_MAX}% band — check the source column for a decimal/percent or column-alignment slip`);
   }
 }
 
