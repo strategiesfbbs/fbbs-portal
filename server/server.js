@@ -199,6 +199,7 @@ const {
   getPershingRollupsForBanks,
   listDormantPershingBanks
 } = require('./pershing-store');
+const { getTradesForBank, getTradeImportStatus } = require('./trade-store');
 
 // ---------- Config ----------
 
@@ -11733,6 +11734,22 @@ const server = http.createServer(async (req, res) => {
         ...getPershingForBank(BANK_REPORTS_DIR, bankId, {
           asOfDate: todayStamp(),
           limit: query.get('limit')
+        })
+      });
+    }
+
+    // Per-bank line-item trade blotter from the Salesforce Trade__c export —
+    // the trade history the portal didn't have until the trade store landed.
+    // Empty (total 0) until scripts/import-trade-export.js --apply is run.
+    const bankTradesMatch = pathname.match(/^\/api\/banks\/([^/]+)\/trades$/);
+    if (bankTradesMatch && req.method === 'GET') {
+      const bankId = safeDecodeURIComponent(bankTradesMatch[1]);
+      if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
+      return sendJSON(res, 200, {
+        status: getTradeImportStatus(BANK_REPORTS_DIR),
+        ...getTradesForBank(BANK_REPORTS_DIR, bankId, {
+          limit: query.get('limit'),
+          offset: query.get('offset')
         })
       });
     }
