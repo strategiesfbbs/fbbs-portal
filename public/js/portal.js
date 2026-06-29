@@ -25042,6 +25042,7 @@
   // package without a manual browser refresh. Inactive pages reload anyway
   // the next time goTo() opens them.
   const PACKAGE_PAGE_LOADERS = {
+    'daily-intelligence': () => loadDailyIntelligence(),
     'sales-dashboard': () => loadSalesDashboard(),
     'all-offerings': () => loadAllOfferings(),
     'watchlist': () => loadWatchlistPage(),
