@@ -104,61 +104,6 @@
   </section>
 
   <div class="container">
-    <section class="my-work" id="myWorkSection" aria-label="My work">
-      <header class="my-work-head">
-        <div>
-          <p class="my-work-kicker">My Work</p>
-          <h3 id="myWorkHeading">Pick a rep to personalize.</h3>
-        </div>
-        <p class="my-work-sub" id="myWorkSub">Choose your name in the top bar (&ldquo;Acting as&rdquo;) to surface your accounts, prospects, open strategies, and overdue follow-ups.</p>
-      </header>
-      <div class="my-work-grid" id="myWorkGrid" hidden>
-        <article class="my-work-tile" data-mywork="clients">
-          <p class="my-work-tile-kicker">My Clients</p>
-          <p class="my-work-tile-num" data-mywork-num="clients">&mdash;</p>
-          <ul class="my-work-tile-list" data-mywork-list="clients"></ul>
-        </article>
-        <article class="my-work-tile" data-mywork="prospects">
-          <p class="my-work-tile-kicker">My Prospects</p>
-          <p class="my-work-tile-num" data-mywork-num="prospects">&mdash;</p>
-          <ul class="my-work-tile-list" data-mywork-list="prospects"></ul>
-        </article>
-        <article class="my-work-tile" data-mywork="strategies">
-          <p class="my-work-tile-kicker">My Open Strategies</p>
-          <p class="my-work-tile-num" data-mywork-num="strategies">&mdash;</p>
-          <p class="my-work-tile-detail" data-mywork-detail="strategies"></p>
-          <ul class="my-work-tile-list" data-mywork-list="strategies"></ul>
-        </article>
-        <article class="my-work-tile" data-mywork="tasks">
-          <p class="my-work-tile-kicker">My Tasks</p>
-          <p class="my-work-tile-num" data-mywork-num="tasks">&mdash;</p>
-          <p class="my-work-tile-detail" data-mywork-detail="tasks"></p>
-          <ul class="my-work-tile-list" data-mywork-list="tasks"></ul>
-        </article>
-        <article class="my-work-tile my-work-tile-warn" data-mywork="overdue">
-          <p class="my-work-tile-kicker">Overdue Follow-ups</p>
-          <p class="my-work-tile-num" data-mywork-num="overdue">&mdash;</p>
-          <ul class="my-work-tile-list" data-mywork-list="overdue"></ul>
-        </article>
-        <article class="my-work-tile my-work-tile-warn" data-mywork="cold">
-          <p class="my-work-tile-kicker">No Recent Activity</p>
-          <p class="my-work-tile-num" data-mywork-num="cold">&mdash;</p>
-          <p class="my-work-tile-detail" data-mywork-detail="cold"></p>
-          <ul class="my-work-tile-list" data-mywork-list="cold"></ul>
-        </article>
-        <article class="my-work-tile my-work-tile-warn" data-mywork="pershing">
-          <p class="my-work-tile-kicker">No Recent Trades</p>
-          <p class="my-work-tile-num" data-mywork-num="pershing">&mdash;</p>
-          <p class="my-work-tile-detail" data-mywork-detail="pershing"></p>
-          <ul class="my-work-tile-list" data-mywork-list="pershing"></ul>
-        </article>
-      </div>
-      <div class="my-work-recents" id="myWorkRecents" hidden>
-        <h4>Recently touched</h4>
-        <ul class="my-work-recent-list" id="myWorkRecentList"></ul>
-      </div>
-    </section>
-
     <section class="home-tile-grid" aria-label="Home sections">
       <article class="home-tile" data-tile="accounts" data-reveal>
         <header class="home-tile-head">
@@ -222,6 +167,57 @@
         </div>
         <div class="home-strategy-results" id="homeStrategyBankResults"></div>
       </article>
+    </section>
+
+    <section class="my-work" id="myWorkSection" aria-label="My work">
+      <header class="my-work-head">
+        <div>
+          <p class="my-work-kicker">My Work</p>
+          <h3 id="myWorkHeading">Pick a rep to personalize.</h3>
+        </div>
+        <p class="my-work-sub" id="myWorkSub">Choose your name in the top bar (&ldquo;Acting as&rdquo;) to surface your accounts, prospects, open strategies, and overdue follow-ups.</p>
+      </header>
+      <div class="my-work-grid" id="myWorkGrid" hidden>
+        <article class="my-work-tile" data-mywork="clients">
+          <p class="my-work-tile-kicker">My Clients</p>
+          <p class="my-work-tile-num" data-mywork-num="clients">&mdash;</p>
+          <ul class="my-work-tile-list" data-mywork-list="clients"></ul>
+        </article>
+        <article class="my-work-tile" data-mywork="prospects">
+          <p class="my-work-tile-kicker">My Prospects</p>
+          <p class="my-work-tile-num" data-mywork-num="prospects">&mdash;</p>
+          <ul class="my-work-tile-list" data-mywork-list="prospects"></ul>
+        </article>
+        <article class="my-work-tile" data-mywork="strategies">
+          <p class="my-work-tile-kicker">My Open Strategies</p>
+          <p class="my-work-tile-num" data-mywork-num="strategies">&mdash;</p>
+          <p class="my-work-tile-detail" data-mywork-detail="strategies"></p>
+          <ul class="my-work-tile-list" data-mywork-list="strategies"></ul>
+        </article>
+        <article class="my-work-tile" data-mywork="tasks">
+          <p class="my-work-tile-kicker">My Tasks</p>
+          <p class="my-work-tile-num" data-mywork-num="tasks">&mdash;</p>
+          <p class="my-work-tile-detail" data-mywork-detail="tasks"></p>
+          <ul class="my-work-tile-list" data-mywork-list="tasks"></ul>
+        </article>
+        <article class="my-work-tile my-work-tile-warn" data-mywork="overdue">
+          <p class="my-work-tile-kicker">Overdue Follow-ups</p>
+          <p class="my-work-tile-num" data-mywork-num="overdue">&mdash;</p>
+          <ul class="my-work-tile-list" data-mywork-list="overdue"></ul>
+        </article>
+        <article class="my-work-tile my-work-tile-warn" data-mywork="cold">
+          <p class="my-work-tile-kicker">No Recent Activity</p>
+          <p class="my-work-tile-num" data-mywork-num="cold">&mdash;</p>
+          <p class="my-work-tile-detail" data-mywork-detail="cold"></p>
+          <ul class="my-work-tile-list" data-mywork-list="cold"></ul>
+        </article>
+        <article class="my-work-tile my-work-tile-warn" data-mywork="pershing">
+          <p class="my-work-tile-kicker">No Recent Trades</p>
+          <p class="my-work-tile-num" data-mywork-num="pershing">&mdash;</p>
+          <p class="my-work-tile-detail" data-mywork-detail="pershing"></p>
+          <ul class="my-work-tile-list" data-mywork-list="pershing"></ul>
+        </article>
+      </div>
     </section>
   </div>
 
