@@ -426,9 +426,11 @@ This portal is still designed for a trusted internal network, but it now has pro
 - **Admin data writes:** in `iis` mode, publishing/import endpoints require `FBBS_ADMIN_USERS` and the signed-in user must be in that allowlist. This covers daily package publish, folder-drop publish, MBS/CMO upload, bank workbook import, account-status import, averaged-series import, bond-accounting import, and WIRP import.
 - **Admin internal reads:** when IIS auth or an admin allowlist is configured, the audit log, go-live status, and Executive Summary endpoints require an admin user.
 - **Write origin checks:** mutating API requests reject cross-site origins; in IIS/auth/admin-enforced mode, writes also need a verifiable same-origin browser signal (`Origin`, `Referer`, or `Sec-Fetch-Site`).
+- **IIS launch smoke:** before first use, run `docs/internal-go-live-engineering-checklist.md` and `docs/archive/go-live/launch-day-script.md`. Minimum proof: `/api/me` shows `rep.source="iis"` and the expected `auth.isAdmin` value for both an admin and non-admin user; `/api/admin/go-live-status` shows `auth-mode`, `admin-users`, `data-dir`, and `upload-temp` checks as OK or explicitly accepted.
 - Security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: same-origin`) are set on every response.
 - Path traversal is blocked for both `/current/` and `/archive/` file serving, and the static-asset handler stays inside `public/`.
 - Uploads are capped (default 50 MB per request). Filenames are sanitized before being written to disk.
+- Streaming multipart uploads use `DATA_DIR/_uploads` as scratch space. Completed request temp files are removed immediately; startup removes stale entries older than 24 hours.
 
 ---
 

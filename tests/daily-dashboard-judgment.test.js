@@ -12,6 +12,10 @@ const path = require('path');
 
 const ddj = require('../server/daily-dashboard-judgment');
 const dd = require('../server/daily-dashboard');
+const rvEngine = require('../server/daily-dashboard-rv');
+
+// Minimal par curve for the RV grounding-set tests (tenor label → percent).
+const CURVE_FIXTURE = { asOfDate: '2026-06-20', tenors: { '3M': 4.35, '6M': 4.25, '1Y': 4.00, '2Y': 3.80, '3Y': 3.75, '5Y': 3.85, '7Y': 4.00, '10Y': 4.20, '30Y': 4.55 } };
 
 // A realistic mixed package: exempt+taxable munis (some BQ), agencies incl. ONE
 // oversized block (for the BOTD-exclusion test), CDs, corporates, structured.
@@ -101,10 +105,11 @@ test('compactCandidate keeps cusip/cls/eff, pre-computes deep, drops undefined',
 test('compactCandidate prefers net TEY when RV supplied it', () => {
   const set = dd.buildCandidateSet(makeRows());
   const c = { ...set.candidates.find(x => x.cusip === '111111AA1') };
-  c.rv = { netTey: { ccorp: 4.73 } };
+  c.rv = { netTey: { ccorp: 4.73 }, tradeFit: { ccorp: { score: 19, reasons: ['history favored munis'] } } };
   const cc = ddj.compactCandidate(c);
   assert.strictEqual(cc.eff.ccorp.y, 4.73);
   assert.strictEqual(cc.eff.ccorp.b, 'net TEY');
+  assert.strictEqual(cc.tradeFit.ccorp.score, 19);
 });
 
 test('buildDashboardPrompt embeds rules, macro, byAudience, securities; no econ quad leak', () => {
@@ -112,7 +117,7 @@ test('buildDashboardPrompt embeds rules, macro, byAudience, securities; no econ 
   const { system, messages } = ddj.buildDashboardPrompt(set, MACRO, META);
   assert.strictEqual(system, ddj.SYSTEM_PROMPT);
   const u = messages[0].content;
-  for (const needle of [' -> ', '3 to 5', 'more than 3', '99.00', 'botd', 'sod', 'SECURITIES', 'BY-AUDIENCE', 'MACRO']) {
+  for (const needle of [' -> ', '3 to 5', 'more than 3', '99.00', 'botd', 'sod', 'tradeFit', 'tie-breaker', 'SECURITIES', 'BY-AUDIENCE', 'MACRO']) {
     assert.ok(u.includes(needle), `prompt missing ${needle}`);
   }
   assert.ok(!u.includes('taxEquivalent'), 'should not leak the full econ quad');
@@ -255,6 +260,53 @@ test('backfill to MIN with composed rationale + source=backfill', () => {
   assert.ok(added.length >= 2);
   for (const p of added) assert.ok(p.rationale && p.rationale.length > 0);
   assert.ok(g.degraded);
+});
+
+test('picks SPAN THE MATURITY CURVE when the RV grounding set carries bands', () => {
+  // The whole fix: with band-aware candidates, the deterministic picks must cover
+  // multiple maturity bands (incl. the short end) instead of clustering long.
+  const candidateSet = dd.buildCandidateSet(makeRows(), { asOf: '2026-06-22' });
+  const rvAnalysis = rvEngine.buildRelativeValue({ candidateSet, curve: CURVE_FIXTURE, asOf: '2026-06-22' });
+  const groundingSet = ddj.buildGroundingSet(candidateSet, rvAnalysis);
+  const g = ddj.groundDashboard({}, groundingSet, MACRO); // no model reply → deterministic curve-spanning picks
+
+  for (const k of ['ccorp', 'scorp', 'ria']) {
+    const bands = new Set(g.picks[k].map(p => p.rv && p.rv.bucket).filter(Boolean));
+    assert.ok(g.picks[k].length >= 3, `${k} has at least the floor of picks`);
+    assert.ok(bands.size >= 3, `${k} picks should span >=3 maturity bands, got ${[...bands]}`);
+  }
+  // ccorp (banks) buy across the curve — a short-end idea must be present, not just long.
+  const ccorpBands = new Set(g.picks.ccorp.map(p => p.rv && p.rv.bucket));
+  assert.ok([...ccorpBands].some(b => b === '0-1y' || b === '1-3y'), 'ccorp picks must include a short-end idea');
+  assert.ok([...ccorpBands].some(b => b === '5-7y' || b === '7-10y' || b === '10y+'), 'ccorp picks must include a belly/long idea');
+  // Curve breadth above the floor is intentional, NOT a degradation.
+  assert.ok(!g.flags.includes('coverage-short'));
+});
+
+test('curve-coverage backfill above the floor does not mark the read degraded', () => {
+  const candidateSet = dd.buildCandidateSet(makeRows(), { asOf: '2026-06-22' });
+  const rvAnalysis = rvEngine.buildRelativeValue({ candidateSet, curve: CURVE_FIXTURE, asOf: '2026-06-22' });
+  const groundingSet = ddj.buildGroundingSet(candidateSet, rvAnalysis);
+  // A model reply that already meets the floor for every audience; the engine then
+  // tops up for curve breadth. Those top-ups must use 'curve-filled' (not degrading).
+  const reply = {
+    picks: {
+      ccorp: [{ cusip: '111111AA1' }, { cusip: '333333AA1' }, { cusip: '222222AA1' }],
+      scorp: [{ cusip: '111111AA1' }, { cusip: '111111CC3' }, { cusip: '333333AA1' }],
+      ria: [{ cusip: '444444AA1' }, { cusip: '555555AA1' }, { cusip: '222222BB2' }],
+    },
+    connector: {
+      ccorp: 'Rates steady -> banks add across the curve.',
+      scorp: 'Rates steady -> S-corps ladder munis.',
+      ria: 'Rates steady -> RIAs reach for carry.',
+    },
+    botd: { cusip: '111111AA1', headline: 'BOTD', rationale: 'Best value.' },
+    sod: { title: 'Theme', narrative: 'A clean curve play.', cusips: ['333333AA1', '222222BB2'] },
+  };
+  const g = ddj.groundDashboard(reply, groundingSet, MACRO);
+  assert.ok(g.flags.includes('curve-filled'), 'curve breadth should be flagged curve-filled');
+  assert.ok(!g.flags.includes('backfilled'), 'no below-floor backfill expected');
+  assert.strictEqual(g.degraded, false, 'curve breadth is intended, not degraded');
 });
 
 test('BOTD valid model pick re-attached + deepDiscount from OUR price', () => {
@@ -420,12 +472,12 @@ test('getCachedDashboard shape guard rejects partial cache', () => {
 // ---------- review-fix regressions ----------
 
 test('eligibility gate uses true aud tagging, not the truncated byAudience top-N', () => {
-  // 11 ccorp/scorp CDs crowd the agency out of byAudience.ccorp's top-10, but the
+  // 30 ccorp/scorp CDs crowd the agency out of byAudience.ccorp's top-N, but the
   // agency is genuinely ccorp-eligible (aud tagging) and present in the flat set
   // (via ria). A model ccorp pick of it must SURVIVE, not be dropped as ineligible.
   const rows = [];
-  for (let i = 0; i < 11; i++) {
-    rows.push({ assetClass: 'CD Offering', cusip: `CD0000${i}A${i}`, description: `CD ${i}`, sector: 'CD', state: 'NY', coupon: null, yield: 5.5 - i * 0.05, price: null, maturity: '2027-06-16', callDate: null, availabilityK: null });
+  for (let i = 0; i < 30; i++) {
+    rows.push({ assetClass: 'CD Offering', cusip: `CD000${String(i).padStart(2, '0')}A`, description: `CD ${i}`, sector: 'CD', state: 'NY', coupon: null, yield: 5.5 - i * 0.05, price: null, maturity: '2027-06-16', callDate: null, availabilityK: null });
   }
   rows.push({ assetClass: 'Agency', cusip: '222222ZZ9', description: 'FHLB low-yield', sector: 'Bullet', coupon: 4.0, yield: 4.0, ytm: 4.0, ytnc: null, price: 99.5, maturity: '2030-01-01', callDate: null, availabilityK: 1000 });
   const set = dd.buildCandidateSet(rows);

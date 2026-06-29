@@ -36,6 +36,19 @@ const MMD = {
   ],
 };
 
+// A deterministic Pershing buyer-pattern profile (trade-fit.js shape) for the
+// trade-fit / audience-ordering tests: C-corps buy CDs most, S-corps buy munis
+// most (MO-heavy), RIAs buy CDs + corporate credit. Bands cover the whole curve.
+const FULL_BUCKETS = { '0-1y': 0.20, '1-3y': 0.22, '3-5y': 0.20, '5-7y': 0.15, '7-10y': 0.13, '10y+': 0.10 };
+const TRADE_PROFILE = {
+  generatedAt: '2026-06-24T00:00:00.000Z', asOf: '2026-06-23', totalBuys: 1000,
+  audiences: {
+    ccorp: { trades: 400, byClass: { cd: 0.45, muni: 0.30, govt: 0.20, corp: 0.05 }, byBucket: FULL_BUCKETS, byState: { MO: 0.5, KS: 0.3, TX: 0.2 }, topIssuers: ['FEDERAL HOME LN'], topStates: ['MO', 'KS', 'TX'] },
+    scorp: { trades: 250, byClass: { muni: 0.50, govt: 0.25, cd: 0.20, corp: 0.05 }, byBucket: FULL_BUCKETS, byState: { MO: 0.6, KS: 0.4 }, topIssuers: ['UNITED STATES TREAS'], topStates: ['MO', 'KS'] },
+    ria: { trades: 350, byClass: { cd: 0.40, corp: 0.35, muni: 0.20, mbs: 0.05 }, byBucket: FULL_BUCKETS, byState: { TX: 0.5, MO: 0.3 }, topIssuers: ['FIRST CITIZENS'], topStates: ['TX', 'MO'] },
+  },
+};
+
 const ROWS = [
   // BQ exempt muni, callable, premium → priced to call. moody Aa3.
   { assetClass: 'Muni', type: 'muni', page: 'muni-explorer', cusip: '157399BW5', description: 'Chaffee MO SD', sector: 'BQ', state: 'MO', coupon: 5.0, yield: 3.80, price: 105.12, maturity: '2042-03-01', callDate: '2031-03-01', availabilityK: 275, moody: 'Aa3' },
@@ -151,6 +164,19 @@ test('best-by-bucket spreads ideas across the curve (long end cannot sweep)', ()
   for (const b of populated) assert.ok(b.top.length >= 1 && b.top.length <= 3);
 });
 
+test('best-by-bucket covers populated bands even when they are not global leaders', () => {
+  const treasuryOnly = [
+    { assetClass: 'Treasury', type: 'treasury', page: 'treasury-explorer', cusip: '91282CSH1', description: 'UST short bill', sector: 'Treasury', coupon: 0, yield: 4.25, price: 99.7, maturity: '2027-03-15', availabilityK: null },
+    { assetClass: 'Treasury', type: 'treasury', page: 'treasury-explorer', cusip: '91282CSV5', description: 'UST 5-7Y note', sector: 'Treasury', coupon: 4.0, yield: 3.95, price: 100.1, maturity: '2032-01-15', availabilityK: null },
+  ];
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(treasuryOnly), curve: CURVE, asOf: ASOF });
+  assert.strictEqual(set.leaders.length, 0, 'Treasuries are excluded from global RV leaders');
+  assert.strictEqual(set.byBucket['0-1y'].count, 1);
+  assert.strictEqual(set.byBucket['0-1y'].top[0].cusip, '91282CSH1');
+  assert.strictEqual(set.byBucket['5-7y'].count, 1);
+  assert.strictEqual(set.byBucket['5-7y'].top[0].cusip, '91282CSV5');
+});
+
 test('sales-dashboard coverage exposes inventory strip plus RIA and bank-capital boards', () => {
   const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF });
   const labels = set.inventory.map(b => b.label);
@@ -165,14 +191,31 @@ test('sales-dashboard coverage exposes inventory strip plus RIA and bank-capital
   assert.ok(set.bankCapital.every(c => /agency|treasur|mbs|cmo/i.test(c.assetClass || c.type || '')));
 });
 
-test('audience lists re-rank by the tax-aware spread that audience earns', () => {
-  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF });
+test('audience lists span the maturity curve, lead with best-in-band value, respect eligibility', () => {
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF, tradeProfile: TRADE_PROFILE });
   for (const k of dd.AUDIENCE_KEYS) {
     const list = set.byAudience[k];
-    const sp = list.map(cu => set.byCusip.get(cu).rv.audSpreadBps[k]).filter(v => v != null);
-    for (let i = 1; i < sp.length; i++) assert.ok(sp[i - 1] >= sp[i], `${k} not sorted by tax-aware spread`);
+    if (list.length < 2) continue;
+    const buckets = list.map(cu => set.byCusip.get(cu).rv.bucket);
+    const populated = new Set(buckets.filter(Boolean));
+    // The leading picks each come from a DIFFERENT maturity band (curve coverage
+    // up front) — the whole point of the fix, so short/belly are never buried.
+    const lead = buckets.slice(0, populated.size);
+    assert.strictEqual(new Set(lead).size, lead.length, `${k} leading picks should each be a different band`);
+    // Within a band, the best (highest) audience spread leads.
+    const byBucket = {};
+    for (const cu of list) {
+      const c = set.byCusip.get(cu);
+      const b = c.rv.bucket;
+      if (!byBucket[b]) byBucket[b] = [];
+      byBucket[b].push(c.rv.audSpreadBps[k]);
+    }
+    for (const b in byBucket) {
+      const sp = byBucket[b].filter(v => v != null);
+      for (let i = 1; i < sp.length; i++) assert.ok(sp[i - 1] >= sp[i], `${k} band ${b} not best-value-first`);
+    }
   }
-  // RIA never sees bank-only CDs / exempt munis.
+  // RIA never sees bank-only CDs / exempt munis (eligibility is unchanged).
   assert.ok(!set.byAudience.ria.includes('06251FET2'));
   assert.ok(!set.byAudience.ria.includes('157399BW5'));
 });
@@ -186,6 +229,33 @@ test('caveats and buyer types are populated and grounded', () => {
   const bbb = find(set, '319626AA5');
   assert.ok(bbb.rv.caveats.some(s => /credit/i.test(s)));
   assert.deepStrictEqual(bbb.rv.buyerTypes, ['RIAs / money managers (not bank-eligible)']);
+});
+
+test('data-backed trade-fit reflects demand without adding eligibility', () => {
+  const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF, tradeProfile: TRADE_PROFILE });
+
+  // CD is bank-only — trade history NEVER grants it an RIA audience.
+  const cd = find(set, '06251FET2');
+  assert.strictEqual(cd.rv.tradeFit.ria, undefined, 'bank-only CD should not gain RIA eligibility');
+  assert.ok(cd.rv.tradeFit.ccorp.score > 0 && cd.rv.tradeFit.scorp.score > 0);
+  // C-corps buy CDs most (45%) vs S-corps (20%) → ccorp scores the CD higher.
+  assert.ok(cd.rv.tradeFit.ccorp.score > cd.rv.tradeFit.scorp.score);
+  assert.ok(cd.rv.tradeFit.ccorp.reasons.some(s => /CD/i.test(s)));
+
+  // S-corps buy munis most; the MO obligor triggers the in-state demand reason.
+  const muni = find(set, '157399BW5');
+  assert.ok(muni.rv.tradeFit.scorp.reasons.some(s => /muni/i.test(s)));
+  assert.ok(muni.rv.tradeFit.ccorp.reasons.some(s => /MO/i.test(s) || /muni/i.test(s)));
+
+  // Corporate stays RIA-only — trade history scores ria, never the banks.
+  const corp = find(set, '319626AA5');
+  assert.ok(corp.rv.tradeFit.ria.score > 0);
+  assert.strictEqual(corp.rv.tradeFit.ccorp, undefined, 'corporate is still not bank-eligible');
+  assert.strictEqual(corp.rv.tradeFit.scorp, undefined, 'corporate is still not bank-eligible');
+
+  // No profile injected → no nudge at all (pure, graceful degrade).
+  const noProfile = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF });
+  assert.strictEqual(find(noProfile, '06251FET2').rv.tradeFit, null);
 });
 
 test('trend detection classifies new / wider / improved vs the prior snapshot', () => {

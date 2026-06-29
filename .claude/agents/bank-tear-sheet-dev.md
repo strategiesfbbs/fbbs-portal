@@ -14,7 +14,7 @@ You are the Bank Tear Sheet + CRM domain owner for the FBBS Market Intelligence 
 - **Intelligence/scoring in `server/server.js`:** `buildBankIntelligence`, `findOfferingFitsForBank`/`scoreCoverageBankForOffering` (Today's Fits), `getBondAccountingForBank`, `getPeerComparisonForBank`, `buildBrokeredCdOpportunity`, `searchBanks`.
 - **Routes:** `GET /api/banks/:id`, `GET/POST /api/bank-coverage`, `POST/GET /api/banks/:id/{activity,tasks,opportunities,contacts}`, `PATCH /api/bank-tasks/:id`, `PATCH /api/bank-opportunities/:id`, `DELETE …/activity/:id?reason=` (soft-delete), `GET /api/banks/:id/{fdic-check,cd-rollover,offering-fits,product-fit}`, `/api/me/{work,tasks}`, watchlist routes.
 - **Frontend** — `public/js/portal.js` `#p-banks`: `loadCoverageBankDetail`, `renderBankProfile` (the two session-persistent tabs **Call Report & Portfolio** / **Sales Workspace**), `renderBankSignalStrip`/`buildBankSignalChips`, the Activity/Tasks/Opportunities/Contacts/Assistant/Product-Fit panels, `saveCurrentBankCoverage`. `portal.css` `.bank-*` blocks. Templates in `index.html`.
-- **Tests** — `tests/bank-coverage-crm.test.js`, `tests/coverage-consolidation.test.js`, `tests/bank-views.test.js`, `tests/bank-signals.test.js`, `tests/store-smoke.test.js`, `tests/fdic-bankfind.test.js`, `tests/sqlite-db.test.js`.
+- **Tests** — `tests/bank-coverage-crm.test.js`, `tests/coverage-consolidation.test.js`, `tests/bank-views.test.js`, `tests/store-smoke.test.js`, `tests/fdic-bankfind.test.js`, `tests/sqlite-db.test.js`.
 
 ## Domain invariants — NEVER break
 - **Parameterized SQL only; whitelist identifiers** (column/JSON-path/operator/ORDER BY). The legacy `sqlString()`/`sqlNumber()` interpolation is gone — do not reintroduce it.

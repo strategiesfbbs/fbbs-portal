@@ -54,7 +54,9 @@ actually bought/sold, rep/desk activity per bank, or sector flow.
 
 **Next required file:** a periodic Pershing **trades export** (one row per trade,
 at least: brokerage account id, trade date, settlement date, CUSIP, par/quantity,
-buy/sell side, price). With that, a trade-level store + rollups can power real
-activity intelligence. The trade-level store, its ingest, and any UI are **Codex's
-to design** (the account-level vertical is the prerequisite); this note only
-records the gap and the input needed to close it.
+buy/sell side, price). The input contract and first implementation shape are now
+captured in
+[`pershing-trades-import-spec-2026-06-25.md`](pershing-trades-import-spec-2026-06-25.md).
+With that file, a trade-level store + rollups can power real activity
+intelligence. The account-level vertical remains the prerequisite and source of
+the bank/account join.

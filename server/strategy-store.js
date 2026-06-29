@@ -51,6 +51,11 @@ function ensureStrategyDatabase(outputDir) {
       requested_by TEXT,
       assigned_to TEXT,
       invoice_contact TEXT,
+      thc_strategy_id TEXT,
+      thc_trade_simulation_id TEXT,
+      thc_cycle TEXT,
+      thc_status TEXT,
+      thc_summary TEXT,
       summary TEXT NOT NULL,
       comments TEXT,
       created_at TEXT NOT NULL,
@@ -81,6 +86,21 @@ function ensureStrategyDatabase(outputDir) {
   }
   if (!columns.includes('archived_by')) {
     runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN archived_by TEXT;');
+  }
+  if (!columns.includes('thc_strategy_id')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN thc_strategy_id TEXT;');
+  }
+  if (!columns.includes('thc_trade_simulation_id')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN thc_trade_simulation_id TEXT;');
+  }
+  if (!columns.includes('thc_cycle')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN thc_cycle TEXT;');
+  }
+  if (!columns.includes('thc_status')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN thc_status TEXT;');
+  }
+  if (!columns.includes('thc_summary')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN thc_summary TEXT;');
   }
   runSqlite(dbPath, 'CREATE INDEX IF NOT EXISTS idx_strategy_archive ON strategy_requests(archived_at, updated_at DESC);');
   return dbPath;
@@ -156,6 +176,11 @@ function strategySelectSql(where = '1 = 1') {
       requested_by AS requestedBy,
       assigned_to AS assignedTo,
       invoice_contact AS invoiceContact,
+      thc_strategy_id AS thcStrategyId,
+      thc_trade_simulation_id AS thcTradeSimulationId,
+      thc_cycle AS thcCycle,
+      thc_status AS thcStatus,
+      thc_summary AS thcSummary,
       summary AS summary,
       comments AS comments,
       created_at AS createdAt,
@@ -185,6 +210,11 @@ function mapStrategyRow(row) {
     requestedBy: row.requestedBy || '',
     assignedTo: row.assignedTo || '',
     invoiceContact: row.invoiceContact || '',
+    thcStrategyId: row.thcStrategyId || '',
+    thcTradeSimulationId: row.thcTradeSimulationId || '',
+    thcCycle: row.thcCycle || '',
+    thcStatus: row.thcStatus || '',
+    thcSummary: row.thcSummary || '',
     summary: row.summary || '',
     comments: row.comments || '',
     createdAt: row.createdAt || '',
@@ -334,8 +364,9 @@ function createStrategyRequest(outputDir, bankSummary, input = {}) {
     INSERT INTO strategy_requests (
       id, bank_id, display_name, legal_name, city, state, cert_number,
       request_type, status, priority, requested_by, assigned_to, invoice_contact,
+      thc_strategy_id, thc_trade_simulation_id, thc_cycle, thc_status, thc_summary,
       summary, comments, created_at, updated_at, completed_at, billed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
   `, [
     id,
     bank.bankId,
@@ -350,6 +381,11 @@ function createStrategyRequest(outputDir, bankSummary, input = {}) {
     cleanText(input.requestedBy, 120),
     cleanText(input.assignedTo, 120),
     cleanText(input.invoiceContact, 180),
+    cleanText(input.thcStrategyId, 120),
+    cleanText(input.thcTradeSimulationId, 120),
+    cleanText(input.thcCycle, 80),
+    cleanText(input.thcStatus, 80),
+    cleanMultilineText(input.thcSummary, 2000),
     summary,
     cleanMultilineText(input.comments),
     now,
@@ -396,6 +432,11 @@ function updateStrategyRequest(outputDir, id, input = {}) {
       requested_by = ?,
       assigned_to = ?,
       invoice_contact = ?,
+      thc_strategy_id = ?,
+      thc_trade_simulation_id = ?,
+      thc_cycle = ?,
+      thc_status = ?,
+      thc_summary = ?,
       summary = ?,
       comments = ?,
       updated_at = ?,
@@ -411,6 +452,11 @@ function updateStrategyRequest(outputDir, id, input = {}) {
     input.requestedBy !== undefined ? cleanText(input.requestedBy, 120) : existing.requestedBy,
     input.assignedTo !== undefined ? cleanText(input.assignedTo, 120) : existing.assignedTo,
     input.invoiceContact !== undefined ? cleanText(input.invoiceContact, 180) : existing.invoiceContact,
+    input.thcStrategyId !== undefined ? cleanText(input.thcStrategyId, 120) : existing.thcStrategyId,
+    input.thcTradeSimulationId !== undefined ? cleanText(input.thcTradeSimulationId, 120) : existing.thcTradeSimulationId,
+    input.thcCycle !== undefined ? cleanText(input.thcCycle, 80) : existing.thcCycle,
+    input.thcStatus !== undefined ? cleanText(input.thcStatus, 80) : existing.thcStatus,
+    input.thcSummary !== undefined ? cleanMultilineText(input.thcSummary, 2000) : existing.thcSummary,
     input.summary !== undefined ? (cleanText(input.summary, 500) || existing.summary) : existing.summary,
     input.comments !== undefined ? cleanMultilineText(input.comments) : existing.comments,
     now,

@@ -349,6 +349,9 @@ function renderProposalHtml(record, opts = {}) {
   }
 
   const taxRate = proposal.taxRate;
+  const taxLabel = proposal.isSubchapterS
+    ? ' (Sub-S)'
+    : (proposal.isSubchapterS === false ? ' (C-corp)' : (Number(proposal.taxRate) === 0 ? ' (RIA/taxable)' : ''));
   const isDraft = proposal.status === 'draft';
   const watermark = isDraft ? '<div class="watermark" aria-hidden="true">DRAFT</div>' : '';
   const subjectBank = opts.bankName || record.bankName || '';
@@ -437,7 +440,7 @@ footer.foot .disclosure { margin-top: 6px; }
     <div><dt>Prepared by</dt><dd>${escapeHtml(proposal.preparedBy || 'FBBS')}</dd></div>
     <div><dt>Trade date</dt><dd>${escapeHtml(shortDate(proposal.proposalDate))}</dd></div>
     <div><dt>Settle date</dt><dd>${escapeHtml(shortDate(proposal.settleDate))}</dd></div>
-    <div><dt>Tax rate</dt><dd>${proposal.taxRate == null ? '—' : pct3(proposal.taxRate)}${proposal.isSubchapterS ? ' (Sub-S)' : (proposal.isSubchapterS === false ? ' (C-corp)' : '')}</dd></div>
+    <div><dt>Tax rate</dt><dd>${proposal.taxRate == null ? '—' : pct3(proposal.taxRate)}${escapeHtml(taxLabel)}</dd></div>
     <div><dt>Status</dt><dd>${escapeHtml(proposal.status)}</dd></div>
     <div><dt>Sells / Buys</dt><dd>${sells.length} / ${buys.length}</dd></div>
     <div><dt>Notes</dt><dd>${escapeHtml(proposal.notes || '—')}</dd></div>

@@ -4,10 +4,11 @@
  * FBBS Portal — Portfolio Review printable view
  *
  * Renders the /api/portfolio-review payload as a standalone, branded HTML
- * artifact suitable for `Save as PDF` from any modern browser — a client-ready
- * portfolio handout. Layout mirrors the swap proposal print view
- * (server/swap-render.js): FBBS header, a summary meta grid, the full holdings
- * table, a sector-mix table, and the institutional footer.
+ * artifact suitable for `Save as PDF` from any modern browser. Layout mirrors
+ * the swap proposal print view (server/swap-render.js): FBBS header, a summary
+ * meta grid, a sector-mix table, and the institutional footer. Admin payloads
+ * may include a holdings table; rep-facing payloads are intentionally summary
+ * only.
  *
  * Pure render — takes the same object buildPortfolioReview() already returns,
  * so there is no extra data assembly. No I/O.
@@ -132,6 +133,15 @@ function renderHoldingsTable(holdings) {
   </section>`;
 }
 
+function renderSummaryOnlyNotice(review) {
+  if (!review || !review.summaryOnly) return '';
+  return `
+  <section class="block">
+    <h3>THC summary guardrail</h3>
+    <p class="empty">${escapeHtml(review.summaryOnlyReason || 'Raw portfolio holdings are admin-only. This report shows aggregate THC-derived summary fields only.')}</p>
+  </section>`;
+}
+
 function renderSectorTable(sectors) {
   if (!sectors || !sectors.length) return '';
   const body = sectors.map(se => `<tr>
@@ -148,6 +158,48 @@ function renderSectorTable(sectors) {
       <thead><tr><th>Sector</th><th class="r">Count</th><th class="r">Par</th><th class="r">Mkt Val</th><th class="r">% Mkt</th></tr></thead>
       <tbody>${body}</tbody>
     </table>
+  </section>`;
+}
+
+function renderCashFlowWall(wall) {
+  const rows = wall && Array.isArray(wall.rows) ? wall.rows : [];
+  if (!rows.length) return '';
+  const body = rows.map(row => `<tr>
+    <td>${escapeHtml(row.bucket || '')}</td>
+    <td class="r">${money0(row.maturityPar)}</td>
+    <td class="r">${row.maturityCount != null ? row.maturityCount : '—'}</td>
+    <td class="r">${money0(row.callPar)}</td>
+    <td class="r">${row.callCount != null ? row.callCount : '—'}</td>
+    <td class="r">${money0(row.totalPar)}</td>
+  </tr>`).join('');
+  return `
+  <section class="block">
+    <h3>Maturity &amp; call wall</h3>
+    <table class="grid">
+      <thead><tr><th>Bucket</th><th class="r">Maturity Par</th><th class="r">Mat Cnt</th><th class="r">Call Par</th><th class="r">Call Cnt</th><th class="r">Total Par</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <p class="empty">${escapeHtml(wall.basis || 'Maturities are certain runoff; calls are potential runoff.')}</p>
+  </section>`;
+}
+
+function renderRateShockProxy(proxy) {
+  if (!proxy || proxy.available === false || !Array.isArray(proxy.shocks) || !proxy.shocks.length) return '';
+  const shockLabel = value => Number(value) === 0 ? 'Base' : `${Number(value) > 0 ? '+' : ''}${value} bp`;
+  const body = proxy.shocks.map(row => `<tr>
+    <td>${escapeHtml(shockLabel(row.shockBp))}</td>
+    <td class="r">${money0(row.estimatedMarketValue)}</td>
+    <td class="r">${money0(row.estimatedChange)}</td>
+    <td class="r">${pct2(row.priceChangePct)}</td>
+  </tr>`).join('');
+  return `
+  <section class="block">
+    <h3>Standard rate-shock proxy</h3>
+    <table class="grid">
+      <thead><tr><th>Shock</th><th class="r">Est. Mkt Val</th><th class="r">Change</th><th class="r">Price Chg</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <p class="empty">${escapeHtml(proxy.basis || '')}</p>
   </section>`;
 }
 
@@ -218,8 +270,11 @@ footer.foot .disclosure { margin-top: 6px; }
   </header>
 
   ${renderSummaryGrid(review)}
-  ${renderHoldingsTable(review.holdings)}
+  ${renderSummaryOnlyNotice(review)}
+  ${review.summaryOnly ? '' : renderHoldingsTable(review.holdings)}
   ${renderSectorTable(review.sectors)}
+  ${renderCashFlowWall(review.cashFlowWall)}
+  ${renderRateShockProxy(review.rateShockProxy)}
 
   <footer class="foot">
     <div class="badges">FINRA · MEMBER SIPC · MSRB</div>

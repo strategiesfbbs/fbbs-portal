@@ -1164,6 +1164,23 @@ function assertBondAccountingStore() {
     assert(resolvedStoredPath);
     assert(fs.existsSync(resolvedStoredPath));
     assert.strictEqual(resolveBondAccountingStoredFile(tmp, '../bank-data.sqlite'), null);
+
+    const monthlyDir = path.join(tmp, 'monthly-portfolios');
+    fs.mkdirSync(monthlyDir, { recursive: true });
+    const monthlyName = '13239(Account)_Sample Bank_20260531_P1455.xlsm';
+    fs.writeFileSync(path.join(monthlyDir, monthlyName), 'sample');
+    const monthlyManifest = importBondAccountingFolder(tmp, '', monthlyDir, {
+      bankSummaries: [{
+        id: 'bank-1',
+        displayName: 'Sample Bank, Springfield, IL',
+        certNumber: '12345'
+      }]
+    });
+    assert.strictEqual(monthlyManifest.bankListMode, 'saved');
+    assert.strictEqual(monthlyManifest.bankListSourceFile, 'BankList.xlsx');
+    assert.strictEqual(monthlyManifest.portfolioFileCount, 1);
+    assert.strictEqual(monthlyManifest.matchedCount, 1);
+    assert.strictEqual(monthlyManifest.matches[0].reportDate, '2026-05-31');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -1298,6 +1315,19 @@ function assertSwapHoldingDurationMapping() {
     effectiveDuration: 0
   }, 'Treasury');
   assert.strictEqual(zeroDuration.modifiedDuration, 0);
+
+  const outOfRange = mapSwapHoldingPosition({
+    cusip: '3133KRUX0',
+    effectiveDuration: -6.09,
+    averageLife: 0.21,
+    marketYieldYtw: -10.315,
+    marketYieldYtm: 4.2,
+    bookYieldYtw: 3.9
+  }, 'MBS');
+  assert.strictEqual(outOfRange.modifiedDuration, null);
+  assert.strictEqual(outOfRange.marketYieldYtw, null);
+  assert.strictEqual(outOfRange.averageLife, 0.21);
+  assert.strictEqual(outOfRange.marketYieldYtm, 4.2);
 }
 
 function assertCdHistoryWeeklyDedupe() {

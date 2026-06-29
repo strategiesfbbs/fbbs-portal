@@ -24,175 +24,7 @@
        where the top-strip links are hidden. See placeRepPicker() in portal.js. -->
   <div class="sidebar-rep-slot" id="sidebarRepSlot"></div>
 
-  <nav class="sidebar-nav">
-    <div class="nav-section">
-      <a class="nav-link" data-page="home" href="#home">
-        <span class="nav-icon">&#8962;</span>
-        <span class="nav-label">Home</span>
-      </a>
-    </div>
-
-    <div class="nav-section nav-group open" data-nav-group="fbbs">
-      <button class="nav-parent" type="button" aria-expanded="true" aria-controls="nav-sub-fbbs" data-nav-toggle="fbbs">
-        <span class="nav-icon">FB</span>
-        <span class="nav-label">FBBS</span>
-        <span class="nav-caret">&#8250;</span>
-      </button>
-      <div class="nav-sub" id="nav-sub-fbbs">
-        <a class="nav-link nav-minor" data-page="daily-intelligence" href="#daily-intelligence">
-          <span class="nav-label">Daily Intelligence</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="pulse" href="#pulse">
-          <span class="nav-label">CRM Pulse</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="signals" href="#signals">
-          <span class="nav-label">Signal Inbox</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="sales-dashboard" href="#sales-dashboard">
-          <span class="nav-label">Sales Dashboard</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="econ" href="#econ">
-          <span class="nav-label">Economic Update</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="market-color" href="#market-color">
-          <span class="nav-label">Market Color</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="mmd" href="#mmd">
-          <span class="nav-label">MMD Curve</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="nav-section nav-group open" data-nav-group="offerings">
-      <button class="nav-parent" type="button" aria-expanded="true" aria-controls="nav-sub-offerings" data-nav-toggle="offerings">
-        <span class="nav-icon">OF</span>
-        <span class="nav-label">Offerings</span>
-        <span class="nav-caret">&#8250;</span>
-      </button>
-      <div class="nav-sub" id="nav-sub-offerings">
-        <a class="nav-link nav-minor" data-page="all-offerings" href="#all-offerings">
-          <span class="nav-label">All Offerings</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="watchlist" href="#watchlist">
-          <span class="nav-label">My Watchlist</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="treasury-explorer" href="#treasury-explorer">
-          <span class="nav-label">Treasury Explorer</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="explorer" href="#explorer">
-          <span class="nav-label">CD Explorer</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="muni-explorer" href="#muni-explorer">
-          <span class="nav-label">Muni Explorer</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="agencies" href="#agencies">
-          <span class="nav-label">Agency Explorer</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="corporates" href="#corporates">
-          <span class="nav-label">Corporate Explorer</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="mbs-cmo" href="#mbs-cmo">
-          <span class="nav-label">MBS/CMO Explorer</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="structured-notes" href="#structured-notes">
-          <span class="nav-label">Structured Notes</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="nav-section nav-group" data-nav-group="cds">
-      <button class="nav-parent" type="button" aria-expanded="false" aria-controls="nav-sub-cds" data-nav-toggle="cds">
-        <span class="nav-icon">CD</span>
-        <span class="nav-label">CDs</span>
-        <span class="nav-caret">&#8250;</span>
-      </button>
-      <div class="nav-sub" id="nav-sub-cds">
-        <a class="nav-link nav-minor" data-page="relativeValue" href="#relativeValue">
-          <span class="nav-label">Relative Value</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="cd-recap" href="#cd-recap">
-          <span class="nav-label">Weekly CD Recap</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="cd" href="#cd">
-          <span class="nav-label">Brokered CD Sheet</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="nav-section nav-group" data-nav-group="banks">
-      <button class="nav-parent" type="button" aria-expanded="false" aria-controls="nav-sub-banks" data-nav-toggle="banks">
-        <span class="nav-icon">BK</span>
-        <span class="nav-label">Banks</span>
-        <span class="nav-caret">&#8250;</span>
-      </button>
-      <div class="nav-sub" id="nav-sub-banks">
-        <a class="nav-link nav-minor" data-page="banks" href="#banks">
-          <span class="nav-label">Bank Tear Sheets</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="contacts" href="#contacts">
-          <span class="nav-label">Contacts</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="views" href="#views">
-          <span class="nav-label">Saved Views</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="reports" href="#reports">
-          <span class="nav-label">Reports</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="peer-groups" href="#peer-groups">
-          <span class="nav-label">Peer Groups</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="maturity-calendar" href="#maturity-calendar">
-          <span class="nav-label">Maturity Calendar</span>
-        </a>
-        <a class="nav-link nav-minor" data-page="cd-rollover" href="#cd-rollover">
-          <span class="nav-label">CD Rollover Wall</span>
-        </a>
-      </div>
-    </div>
-
-    <div class="nav-section">
-      <div class="nav-section-title">Strategies</div>
-      <a class="nav-link" data-page="strategies" href="#strategies">
-        <span class="nav-icon">SQ</span>
-        <span class="nav-label">Strategies Queue</span>
-      </a>
-      <a class="nav-link" data-page="bond-swap" href="#bond-swap">
-        <span class="nav-icon">BS</span>
-        <span class="nav-label">Bond Swap</span>
-      </a>
-    </div>
-
-    <div class="nav-section">
-      <a class="nav-link" data-page="maps" href="#maps">
-        <span class="nav-icon">MP</span>
-        <span class="nav-label">Map</span>
-      </a>
-    </div>
-
-    <div class="nav-section">
-      <div class="nav-section-title">Operations</div>
-      <a class="nav-link" data-page="exec-summary" href="#exec-summary">
-        <span class="nav-icon">&#9733;</span>
-        <span class="nav-label">Exec Summary</span>
-      </a>
-      <a class="nav-link" data-page="archive" href="#archive">
-        <span class="nav-icon">&#9776;</span>
-        <span class="nav-label">Archive</span>
-      </a>
-      <a class="nav-link" data-page="upload" href="#upload">
-        <span class="nav-icon">&#8593;</span>
-        <span class="nav-label">Upload</span>
-      </a>
-      <a class="nav-link" data-page="package-qa" href="#package-qa">
-        <span class="nav-icon">&#10003;</span>
-        <span class="nav-label">Package QA</span>
-      </a>
-      <a class="nav-link" data-page="admin" href="#admin">
-        <span class="nav-icon">&#9881;</span>
-        <span class="nav-label">Admin</span>
-      </a>
-    </div>
-  </nav>
+  <nav class="sidebar-nav" id="sidebarNav" aria-label="Portal navigation"></nav>
 
   <div class="sidebar-footer">
     <a class="nav-link nav-cta" href="https://fbbsinc.com" target="_blank" rel="noopener">
@@ -367,8 +199,8 @@
         </div>
         <div class="home-tile-chips">
           <button type="button" data-goto="sales-dashboard">Sales</button>
-          <button type="button" data-goto="econ">Economic</button>
-          <button type="button" data-goto="relativeValue">Relative Value</button>
+          <button type="button" data-goto="daily-intelligence">Economic</button>
+          <button type="button" data-goto="sales-dashboard">Relative Value</button>
           <button type="button" data-goto="cd">CD Rates</button>
         </div>
       </article>
@@ -392,20 +224,6 @@
       </article>
     </section>
   </div>
-
-  <!-- ===== Market Wire: live official headlines + economic numbers ===== -->
-  <section class="home-wire" id="homeWireSection" hidden data-reveal>
-    <div class="container">
-      <div class="section-title-bar">
-        <h3>Market Wire</h3>
-        <div class="kicker" id="homeWireUpdated"></div>
-      </div>
-      <div class="home-wire-grid">
-        <div class="home-wire-indicators" id="homeWireIndicators" aria-label="Live economic indicators"></div>
-        <ul class="home-wire-list" id="homeWireList" aria-label="Official headlines"></ul>
-      </div>
-    </div>
-  </section>
 
   <!-- ===== Market Snapshot: daily package intelligence ===== -->
   <section class="home-showcase showcase-light" data-reveal>
@@ -445,7 +263,7 @@
           <h3>The curve and cash benchmarks set the tone.</h3>
           <p>Economic Update data frames the day with Treasury levels, SOFR, Prime, volatility, and the next calendar events.</p>
           <div class="snapshot-step-metrics" id="snapshotRatesMetrics"></div>
-          <button type="button" class="snapshot-step-link" data-goto="econ">Open Economic Update</button>
+          <button type="button" class="snapshot-step-link" data-goto="daily-intelligence">Open Daily Intelligence</button>
         </article>
         <article class="sticky-step" data-reveal>
           <p class="sticky-step-kicker">Funding</p>
@@ -473,7 +291,7 @@
           <h3>Relative value ties the market read together.</h3>
           <p>The Relative Value sheet sits alongside the daily market files so sales coverage can move from rates to account-specific ideas.</p>
           <div class="snapshot-step-metrics" id="snapshotContextMetrics"></div>
-          <button type="button" class="snapshot-step-link" data-goto="relativeValue">Open Relative Value</button>
+          <button type="button" class="snapshot-step-link" data-goto="sales-dashboard">Open Sales Dashboard</button>
         </article>
       </div>
     </div>
@@ -679,19 +497,39 @@
         </div>
       </section>
 
+      <section class="reports-import-panel" id="thcSummaryImportPanel">
+        <div class="reports-import-head">
+          <div>
+            <h3>THC Summary Import</h3>
+            <p>Upload a sales-safe THC summary JSON file with report dates, cycles, headline portfolio metrics, scenario summaries, and trade-simulation status. Raw holdings, account numbers, CUSIPs, pledged detail, and safekeeping fields are rejected.</p>
+          </div>
+          <button type="button" class="small-btn" id="thcSummaryImportBtn">Import THC Summary</button>
+        </div>
+        <div class="reports-import-grid reports-import-grid-single">
+          <label class="reports-picker" for="thcSummaryInput" id="thcSummaryPicker">
+            <span>THC Summary JSON</span>
+            <strong id="thcSummaryName">No JSON selected</strong>
+            <small>JSON array or { records: [...] } using the safe summary contract.</small>
+            <input type="file" id="thcSummaryInput" accept=".json,.txt,application/json" hidden>
+          </label>
+        </div>
+        <div class="reports-import-status" id="thcSummaryImportStatus">Ready for a safe THC summary JSON file.</div>
+        <div class="reports-match-list" id="thcSummaryMatchList"></div>
+      </section>
+
       <section class="reports-import-panel" id="bondAccountingImportPanel">
         <div class="reports-import-head">
           <div>
             <h3>Bond Accounting Import</h3>
-            <p>Upload the bank-list workbook, then choose the portfolio export folder. Files are matched by P-code and FDIC certificate to the imported bank tear sheet data.</p>
+            <p>Choose the monthly portfolio export folder. The saved BankList map is reused automatically; upload a new BankList only when the roster changes.</p>
           </div>
           <button type="button" class="small-btn" id="bondAccountingImportBtn">Import Portfolios</button>
         </div>
         <div class="reports-import-grid">
           <label class="reports-picker" for="bondAccountingBankListInput" id="bondAccountingBankListPicker">
             <span>Bank List Workbook</span>
-            <strong id="bondAccountingBankListName">No workbook selected</strong>
-            <small>.xls, .xlsx, or .xlsm</small>
+            <strong id="bondAccountingBankListName">Using saved BankList map</strong>
+            <small>Optional. Upload .xls, .xlsx, or .xlsm only when P-codes change.</small>
             <input type="file" id="bondAccountingBankListInput" accept=".xlsm,.xlsx,.xls" hidden>
           </label>
           <label class="reports-picker" for="bondAccountingPortfolioInput" id="bondAccountingPortfolioPicker">
@@ -701,7 +539,7 @@
             <input type="file" id="bondAccountingPortfolioInput" accept=".xlsm,.xlsx,.xls" multiple webkitdirectory directory hidden>
           </label>
         </div>
-        <div class="reports-import-status" id="bondAccountingImportStatus">Ready for the bank list and portfolio folder.</div>
+        <div class="reports-import-status" id="bondAccountingImportStatus">Ready for the monthly portfolio folder.</div>
         <div class="reports-review-tools" id="bondAccountingReviewTools">
           <input type="search" id="bondAccountingSearchInput" placeholder="Search bank, P-code, cert, file">
           <select id="bondAccountingStatusFilter" aria-label="Bond accounting match status">
@@ -810,50 +648,6 @@
   </div>
 </div>
 
-<!-- ========== SIGNAL INBOX PAGE ========== -->
-<div class="page" id="p-signals">
-  <section class="page-hero">
-    <div class="page-hero-inner">
-      <div>
-        <h2>Signal <strong>Inbox</strong></h2>
-        <p class="hero-sub" id="signalsSub">One screen of the highest-leverage reasons to act &mdash; cold accounts, funding pressure, offerings that fit your banks, and data going stale.</p>
-      </div>
-      <div class="hero-stat">
-        <span id="signalsHeroStat">&mdash;</span>
-        <small>Live signals</small>
-      </div>
-    </div>
-  </section>
-
-  <div class="container">
-    <div class="sig-controls" id="signalsControls">
-      <div class="sig-control sig-control-scope" id="signalsScopeControl" hidden>
-        <label for="signalsScope">Scope</label>
-        <select id="signalsScope">
-          <option value="me">My banks</option>
-          <option value="all">Firm-wide</option>
-        </select>
-      </div>
-      <div class="sig-control">
-        <label for="signalsState">State</label>
-        <select id="signalsState"><option value="">All states</option></select>
-      </div>
-      <div class="sig-control sig-control-search">
-        <label for="signalsSearch">Search</label>
-        <input type="search" id="signalsSearch" placeholder="Filter by bank name&hellip;" autocomplete="off">
-      </div>
-      <div class="sig-control sig-control-actions">
-        <button type="button" class="small-btn secondary" id="signalsRefresh">Refresh</button>
-        <button type="button" class="small-btn" id="signalsExport">Export CSV</button>
-      </div>
-    </div>
-    <div class="sig-chiprow" id="signalsCategoryChips" role="group" aria-label="Filter by category"></div>
-    <p class="sig-meta" id="signalsMeta"></p>
-    <div class="sig-warnings" id="signalsWarnings" hidden></div>
-    <section id="signalsBody" aria-label="Signal inbox"></section>
-  </div>
-</div>
-
 <!-- ========== STRATEGIES PAGE ========== -->
 <div class="page" id="p-strategies">
   <section class="page-hero">
@@ -871,29 +665,43 @@
 
   <div class="container">
     <div class="strategy-tab-panel" data-strategies-panel="queue">
-      <div class="strategy-toolbar">
-        <div class="strategy-filter-row">
-          <input type="search" id="strategySearchInput" placeholder="Search requests, banks, comments, invoice contacts..." autocomplete="off">
-          <select id="strategyTypeFilter" aria-label="Filter strategy type">
-            <option value="">All request types</option>
-            <option value="Bond Swap">Bond Swaps</option>
-            <option value="Muni BCIS">Muni BCIS</option>
-            <option value="THO Report">THO Report</option>
-            <option value="CECL Analysis">CECL Analysis</option>
-            <option value="Miscellaneous">Miscellaneous</option>
-          </select>
-          <select id="strategyArchiveFilter" aria-label="Filter archived requests">
-            <option value="">Active requests</option>
-            <option value="only">Archived requests</option>
-            <option value="all">All requests</option>
-          </select>
-          <button type="button" class="small-btn" id="strategyRefreshBtn">Refresh</button>
-        </div>
-        <div class="strategy-counts" id="strategyCounts"></div>
-      </div>
+      <div class="workspace-3col strategy-workspace">
+        <aside class="workspace-filter-rail strategy-filter-rail" aria-label="Strategies filters">
+          <div class="strategy-toolbar">
+            <div class="strategy-filter-row">
+              <input type="search" id="strategySearchInput" placeholder="Search requests, banks, comments, invoice contacts..." autocomplete="off">
+              <select id="strategyTypeFilter" aria-label="Filter strategy type">
+                <option value="">All request types</option>
+                <option value="Bond Swap">Bond Swaps</option>
+                <option value="Muni BCIS">Muni BCIS</option>
+                <option value="THO Report">THO Report</option>
+                <option value="CECL Analysis">CECL Analysis</option>
+                <option value="Miscellaneous">Miscellaneous</option>
+              </select>
+              <select id="strategyArchiveFilter" aria-label="Filter archived requests">
+                <option value="">Active requests</option>
+                <option value="only">Archived requests</option>
+                <option value="all">All requests</option>
+              </select>
+              <button type="button" class="small-btn" id="strategyRefreshBtn">Refresh</button>
+            </div>
+            <div class="strategy-counts" id="strategyCounts"></div>
+          </div>
+        </aside>
 
-      <div class="strategy-board" id="strategyBoard">
-        <div class="bank-search-empty">Loading strategy requests&hellip;</div>
+        <section class="workspace-main strategy-main-pane" aria-label="Strategies board">
+          <div class="strategy-board" id="strategyBoard">
+            <div class="bank-search-empty">Loading strategy requests&hellip;</div>
+          </div>
+        </section>
+
+        <aside class="workspace-context-rail strategy-context-rail" id="strategyContextRail" aria-live="polite" aria-label="Selected strategy context">
+          <div class="strategy-context-empty">
+            <div class="ao-context-kicker">Selected Request</div>
+            <h3>Pick a request</h3>
+            <p>Click a strategy card to see its details, bank link, status moves, billing action, files, and notes.</p>
+          </div>
+        </aside>
       </div>
     </div>
 
@@ -906,7 +714,7 @@
     <div class="page-hero-inner">
       <div>
         <h2>Bond <strong>Swap</strong></h2>
-        <p class="hero-sub">Portfolio Idea Engine and multi-leg swap-proposal builder for banks with a bond-accounting file on record.</p>
+        <p class="hero-sub">Portfolio Idea Engine and multi-leg swap-proposal builder for suggested or fully manual bank swaps.</p>
       </div>
     </div>
   </section>
@@ -915,25 +723,20 @@
     <div class="swap-builder-toolbar">
       <label class="swap-bank-picker">
         <span>Bank</span>
-        <select id="swapBankSelect">
-          <option value="">Choose a bank with a bond-accounting file…</option>
-        </select>
+        <input type="search" id="swapBankSearchInput" placeholder="Search any bank…" autocomplete="off">
+        <div class="swap-bank-results" id="swapBankResults" hidden></div>
       </label>
-      <span class="swap-bank-meta" id="swapBankMeta">Banks shown have a parsed portfolio on file. Suggested swaps come from holdings against today's offerings.</span>
+      <span class="swap-bank-meta" id="swapBankMeta">Search any bank to build a manual proposal. Suggested swaps appear when a parsed portfolio is on file.</span>
     </div>
     <div class="swap-builder-body" id="swapBuilderBody">
       <div class="empty-state">
         <div class="empty-state-icon" aria-hidden="true">⇄</div>
         <h3>No bank selected</h3>
-        <p>Choose a bank with a bond-accounting file on record to see suggested swaps, or build your own proposal by CUSIP.</p>
+        <p>Search any bank to build a manual proposal, or use suggested swaps when a portfolio is on file.</p>
         <div class="empty-state-action">
           <button type="button" class="small-btn" data-swap-pick-bank>Choose a bank</button>
         </div>
       </div>
-    </div>
-    <div class="swap-recent" id="swapRecentProposals" hidden>
-      <h3>Recent proposals</h3>
-      <ul id="swapRecentList"></ul>
     </div>
   </div>
 </div>
@@ -1005,7 +808,7 @@
       </div>
       <div class="hero-stat">
         <div class="num" id="dailyIntelStat">&mdash;</div>
-        <div class="lbl">Rule Picks</div>
+        <div class="lbl">Sources</div>
       </div>
     </div>
   </section>
@@ -1047,14 +850,61 @@
           <div class="sales-cue-list" id="dailyIntelSalesCues"></div>
         </section>
       </div>
-    </section>
 
-    <section class="daily-intel-shell">
-      <div class="section-title-bar">
-        <h3>Today&apos;s Rule-Based Picks</h3>
-        <div class="kicker">Transparent screens from parsed inventory</div>
-      </div>
-      <div class="daily-picks-grid" id="dailyIntelPicks"></div>
+      <section class="daily-digital-panel" aria-label="Digital Economic Update">
+        <div class="section-title-bar">
+          <h3>Digital Economic Update</h3>
+          <div class="kicker" id="dailyEconDigitalKicker">&mdash;</div>
+        </div>
+        <div class="market-tabs daily-market-tabs" role="tablist" aria-label="Daily Economic Update sections">
+          <button type="button" class="active" data-daily-market-section="rates">Market Rates</button>
+          <button type="button" data-daily-market-section="risk">Futures &amp; Volatility</button>
+          <button type="button" data-daily-market-section="headlines">Headlines</button>
+          <button type="button" data-daily-market-section="calendar">Calendar</button>
+        </div>
+        <div class="market-detail-panel" id="dailyEconMarketDetail"></div>
+      </section>
+
+      <section class="daily-digital-panel" aria-label="Digital CD Relative Value">
+        <div class="section-title-bar">
+          <h3>Digital CD Relative Value</h3>
+          <div class="kicker" id="dailyRvDigitalKicker">&mdash;</div>
+        </div>
+        <div class="relative-value-grid daily-rv-digital-grid">
+          <section class="market-panel rv-chart-panel">
+            <div class="market-panel-head">
+              <span>Rate snapshot curve</span>
+              <strong id="dailyRvRateChartLabel">&mdash;</strong>
+            </div>
+            <div class="rv-line-chart" id="dailyRvRateSnapshotChart"></div>
+          </section>
+          <section class="market-panel rv-table-panel">
+            <div class="market-panel-head">
+              <span>Relative value table</span>
+              <strong id="dailyRvRateTableLabel">&mdash;</strong>
+            </div>
+            <div class="rv-table-wrap">
+              <table class="rate-comparison-table">
+                <thead>
+                  <tr>
+                    <th>Term</th>
+                    <th>CD</th>
+                    <th>UST</th>
+                    <th>CD vs UST</th>
+                    <th>US AGY</th>
+                    <th>Agency vs UST</th>
+                    <th>TEY 29.6%</th>
+                    <th>TEY 21%</th>
+                    <th>AA Corp</th>
+                    <th>Corp vs UST</th>
+                  </tr>
+                </thead>
+                <tbody id="dailyRvRateSnapshotTableBody"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
     </section>
 
     <section class="daily-intel-shell">
@@ -1067,137 +917,9 @@
   </div>
 </div>
 
-<!-- ========== ECON UPDATE PAGE ========== -->
-<div class="page" id="p-econ">
-  <section class="page-hero">
-    <div class="page-hero-inner">
-      <div>
-        <h2>Economic <strong>Update</strong></h2>
-        <p class="hero-sub" id="econSub">Loading&hellip;</p>
-      </div>
-      <button class="publish-btn" id="econDownloadBtn">Download PDF &darr;</button>
-    </div>
-  </section>
-  <div class="container">
-    <section class="economic-tool" id="economicTool">
-      <div class="market-tool-head">
-        <div>
-          <span class="tool-eyebrow">Interactive Market Update</span>
-          <h3>Daily rate and risk snapshot</h3>
-          <p id="econToolSub">Reading the uploaded Economic Update&hellip;</p>
-        </div>
-        <div class="market-date-badge" id="econToolDate">Today</div>
-      </div>
-
-      <div class="market-snapshot-strip" id="econMarketSnapshotStrip" hidden></div>
-      <div class="market-summary-grid" id="econMarketSummary"></div>
-
-      <div class="market-workspace">
-        <div class="market-panel curve-panel">
-          <div class="market-panel-head">
-            <span>U.S. Treasury Curve</span>
-            <strong id="econCurveSlope">2s/10s &mdash;</strong>
-          </div>
-          <div class="curve-chart" id="econCurveChart"></div>
-        </div>
-
-        <div class="market-panel">
-          <div class="market-panel-head">
-            <span>Sales Cues</span>
-            <strong id="econCueCount">&mdash;</strong>
-          </div>
-          <div class="sales-cue-list" id="econSalesCues"></div>
-        </div>
-      </div>
-
-      <div class="market-tabs" role="tablist" aria-label="Economic Update sections">
-        <button type="button" class="active" data-market-section="rates">Market Rates</button>
-        <button type="button" data-market-section="risk">Futures &amp; Volatility</button>
-        <button type="button" data-market-section="headlines">Headlines</button>
-        <button type="button" data-market-section="calendar">Calendar</button>
-      </div>
-      <div class="market-detail-panel" id="econMarketDetail"></div>
-    </section>
-
-    <div class="viewer-wrap document-only-view">
-      <div class="viewer-frame" id="econFrame">
-        <div class="viewer-empty">
-          <div class="ff-kicker">No Document Loaded</div>
-          <h2>No Economic Update uploaded yet</h2>
-          <p>Go to the Upload page to publish today's Economic Update PDF.</p>
-          <button class="doc-btn" data-goto="upload">Go to Upload</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ========== RELATIVE VALUE PAGE ========== -->
-<div class="page" id="p-relativeValue">
-  <section class="page-hero">
-    <div class="page-hero-inner">
-      <div>
-        <h2>Relative <strong>Value</strong></h2>
-        <p class="hero-sub" id="relativeValueSub">Loading&hellip;</p>
-      </div>
-      <button class="publish-btn" id="relativeValueDownloadBtn">Download PDF &darr;</button>
-    </div>
-  </section>
-  <div class="container">
-    <section class="relative-value-tool" id="relativeValueTool">
-      <div class="section-title-bar">
-        <h3>Rate Snapshot</h3>
-        <div class="kicker" id="relativeValueNativeKicker">&mdash;</div>
-      </div>
-      <div class="market-snapshot-strip" id="rvMarketSnapshotStrip" hidden></div>
-      <div class="explorer-stats" id="relativeValueStatTiles"></div>
-      <div class="relative-value-grid">
-        <section class="market-panel rv-chart-panel">
-          <div class="market-panel-head">
-            <span>Rate snapshot curve</span>
-            <strong id="rvRateChartLabel">&mdash;</strong>
-          </div>
-          <div class="rv-line-chart" id="rvRateSnapshotChart"></div>
-        </section>
-        <section class="market-panel rv-table-panel">
-          <div class="market-panel-head">
-            <span>Relative value table</span>
-            <strong>CD column removed</strong>
-          </div>
-          <div class="rv-table-wrap">
-            <table class="rate-comparison-table">
-              <thead>
-                <tr>
-                  <th>Term</th>
-                  <th>UST</th>
-                  <th>US AGY</th>
-                  <th>vs UST</th>
-                  <th>Muni AA GO</th>
-                  <th>TEY 29.6%</th>
-                  <th>TEY 21%</th>
-                  <th>AA Corp</th>
-                  <th>vs UST</th>
-                </tr>
-              </thead>
-              <tbody id="rvRateSnapshotTableBody"></tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-    </section>
-
-    <div class="viewer-wrap document-only-view">
-      <div class="viewer-frame" id="relativeValueFrame">
-        <div class="viewer-empty">
-          <div class="ff-kicker">No Document Loaded</div>
-          <h2>No Relative Value sheet uploaded yet</h2>
-          <p>Go to the Upload page to publish today's Relative Value PDF.</p>
-          <button class="doc-btn" data-goto="upload">Go to Upload</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
+<!-- Economic Update + Relative Value standalone tabs retired: their digital
+     content now lives in the Daily Intelligence page; the raw PDFs remain
+     downloadable from Upload/Archive. -->
 
 <!-- ========== MMD PAGE ========== -->
 <div class="page" id="p-mmd">
@@ -1207,7 +929,7 @@
         <h2>MMD <strong>Curve</strong></h2>
         <p class="hero-sub" id="mmdSub">Loading&hellip;</p>
       </div>
-      <button class="publish-btn" id="mmdDownloadBtn">Download PDF &darr;</button>
+      <button class="publish-btn" id="mmdDownloadBtn">Download file &darr;</button>
     </div>
   </section>
   <div class="container">
@@ -1251,6 +973,8 @@
                   <th>Term</th>
                   <th>Year</th>
                   <th>AAA</th>
+                  <th>P/R</th>
+                  <th>INS'D</th>
                   <th>AA</th>
                   <th>A</th>
                   <th>BAA</th>
@@ -1848,20 +1572,20 @@
 
     <section class="bank-upload-panel">
       <div>
-        <h3>Bank call report workbook</h3>
+        <h3>Call report data</h3>
         <p id="bankImportStatus">Checking imported bank data&hellip;</p>
         <p id="bankStatusImportStatus">Account statuses default to Open until imported or edited.</p>
         <p id="averagedSeriesImportStatus">Averaged-series peer data has not been imported yet.</p>
-        <p id="fdicSyncStatus">FDIC quarterly sync: pulls the newest FDIC-filed quarter into every bank's tear sheet (headline fields) while waiting on the full workbook.</p>
+        <p id="fdicSyncStatus">FDIC call-report sync: pulls the newest public filed quarter into matching bank tear sheets; workbook upload remains available as fallback until parity is proven.</p>
         <p id="sfContactsImportStatus">Salesforce contacts: export Contacts to CSV in Salesforce, drop it here — rows match to banks by account name.</p>
       </div>
-      <button type="button" class="small-btn bank-upload-btn" id="fdicSyncBtn">Sync Latest Quarter from FDIC</button>
+      <button type="button" class="small-btn bank-upload-btn" id="fdicSyncBtn">Sync Call Reports from FDIC</button>
       <label class="small-btn bank-upload-btn">
         Import Salesforce Contacts
         <input type="file" id="sfContactsCsvInput" accept=".csv" hidden>
       </label>
       <label class="small-btn bank-upload-btn">
-        Upload Call Reports
+        Fallback Workbook Import
         <input type="file" id="bankWorkbookInput" accept=".xlsm,.xlsx,.xls" hidden>
       </label>
       <label class="small-btn bank-upload-btn">
@@ -2027,7 +1751,14 @@
   <div class="container">
     <div class="section-title-bar">
       <h3>Securities</h3>
-      <div class="kicker">Star rows in All Offerings to add</div>
+      <div class="kicker">Star rows in All Offerings or paste CUSIPs below</div>
+    </div>
+    <div class="watchlist-cusip-add">
+      <label class="ef-field">
+        <span>Add by CUSIP</span>
+        <textarea id="watchlistCusips" rows="2" placeholder="Paste one or more CUSIPs, separated by spaces, commas, or new lines"></textarea>
+      </label>
+      <button type="button" class="small-btn" id="watchlistAddCusips">Add CUSIPs</button>
     </div>
     <div class="explorer-table-wrap">
       <table class="explorer-table">
@@ -2116,62 +1847,127 @@
   </section>
 
   <div class="container">
-    <section class="daily-picks-card" id="dailyPicksCard" hidden>
-      <div class="daily-picks-head">
-        <h3 class="daily-picks-title">Pick of the day <span class="daily-summary-badge">AI</span></h3>
-        <div class="daily-picks-controls">
-          <span class="daily-summary-meta" id="dailyPicksMeta"></span>
-          <button type="button" class="btn btn-sm" id="dailyPicksBtn">Generate</button>
-        </div>
-      </div>
-      <p class="daily-picks-note">Internal desk aid &mdash; Claude curates from today's inventory; yields and prices are the desk's own. Not investment advice.</p>
-      <div class="daily-picks-body" id="dailyPicksBody"></div>
-    </section>
-
     <div class="section-title-bar">
       <h3>Every security in today's inventory &mdash; one screen</h3>
       <div class="kicker" id="allOfferingsKicker">&mdash;</div>
     </div>
 
-    <div class="all-offerings-classes" id="allOfferingsClasses" role="group" aria-label="Asset classes"></div>
+    <div class="workspace-3col ao-workbench-grid">
+      <aside class="workspace-filter-rail ao-filter-rail" aria-label="All Offerings filters">
+        <div class="ao-rail-section">
+          <div class="ao-rail-title">Asset Classes</div>
+          <div class="all-offerings-classes" id="allOfferingsClasses" role="group" aria-label="Asset classes"></div>
+        </div>
 
-    <div class="explorer-filters">
-      <label class="ef-field">
-        <span>Search</span>
-        <input type="text" id="ao-search" placeholder="Issuer, description, CUSIP&hellip;" autocomplete="off">
-      </label>
-      <label class="ef-field">
-        <span>Min yield %</span>
-        <input type="number" id="ao-minyield" step="0.05" min="0" max="20" placeholder="e.g. 5.00">
-      </label>
-      <label class="ef-field">
-        <span>Matures by</span>
-        <input type="date" id="ao-maxmaturity">
-      </label>
-      <div class="ef-field ef-actions">
-        <button type="button" class="small-btn" id="ao-clear">Clear</button>
-        <button type="button" class="small-btn" id="ao-export">Export CSV</button>
-      </div>
-    </div>
+        <div class="explorer-filters ao-filter-stack">
+          <label class="ef-field">
+            <span>Search</span>
+            <input type="text" id="ao-search" placeholder="Issuer, description, CUSIP&hellip;" autocomplete="off">
+          </label>
+          <label class="ef-field">
+            <span>Saved screen</span>
+            <select id="aoSavedSearch"><option value="">Load saved...</option></select>
+          </label>
+          <label class="ef-field">
+            <span>Min yield %</span>
+            <input type="number" id="ao-minyield" step="0.05" min="0" max="20" placeholder="e.g. 5.00">
+          </label>
+          <label class="ef-field">
+            <span>Matures after</span>
+            <input type="date" id="ao-minmaturity">
+          </label>
+          <label class="ef-field">
+            <span>Matures by</span>
+            <input type="date" id="ao-maxmaturity">
+          </label>
+          <div class="ef-field ef-actions">
+            <button type="button" class="small-btn" id="ao-save-search">Save Screen</button>
+            <button type="button" class="small-btn" id="ao-delete-search">Delete</button>
+            <button type="button" class="small-btn" id="ao-clear">Clear</button>
+            <button type="button" class="small-btn" id="ao-export">Export CSV</button>
+          </div>
+        </div>
 
-    <div class="explorer-table-wrap">
-      <table class="explorer-table" id="allOfferingsTable">
-        <thead>
-          <tr>
-            <th data-aosort="assetClass">Class</th>
-            <th data-aosort="description">Description</th>
-            <th data-aosort="cusip">CUSIP</th>
-            <th data-aosort="coupon" style="text-align:right">Coupon</th>
-            <th data-aosort="yield" style="text-align:right">Yield</th>
-            <th data-aosort="maturity">Maturity</th>
-            <th data-aosort="price" style="text-align:right">Price</th>
-            <th data-aosort="state">State</th>
-            <th data-aosort="sector">Sector</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="allOfferingsBody"></tbody>
-      </table>
+        <div class="ao-workbench-controls">
+          <div class="ao-tristate-wrap" id="aoTriFilters" aria-label="Attribute filters"></div>
+          <div class="ao-density-controls" aria-label="Grid density">
+            <span class="kicker">Density</span>
+            <button type="button" class="small-btn" data-ao-density="compact">Compact</button>
+            <button type="button" class="small-btn" data-ao-density="comfortable">Comfortable</button>
+          </div>
+        </div>
+
+        <div class="ao-facet-grid" id="aoFacetFilters">
+          <label class="ef-field">
+            <span>State</span>
+            <select id="ao-state"><option value="">All states</option></select>
+          </label>
+          <label class="ef-field">
+            <span>Sector / structure</span>
+            <select id="ao-sector"><option value="">All sectors</option></select>
+          </label>
+          <label class="ef-field">
+            <span>Rating</span>
+            <select id="ao-rating"><option value="">Any rating</option></select>
+          </label>
+          <label class="ef-field">
+            <span>Min size $</span>
+            <input type="number" id="ao-minsize" step="10000" min="0" placeholder="e.g. 250000">
+          </label>
+          <label class="ef-field">
+            <span>Max price</span>
+            <input type="number" id="ao-maxprice" step="0.001" min="0" placeholder="e.g. 102.000">
+          </label>
+        </div>
+      </aside>
+
+      <section class="workspace-main ao-main-pane" aria-label="All Offerings table">
+        <div class="ao-selection-bar" id="aoSelectionBar" hidden>
+          <div>
+            <strong id="aoSelectionCount">0 selected</strong>
+            <span id="aoSelectionMeta"></span>
+          </div>
+          <div class="ao-selection-actions">
+            <button type="button" class="small-btn" id="aoSelectVisible">Select visible</button>
+            <button type="button" class="small-btn" id="aoClearSelection">Clear</button>
+            <button type="button" class="small-btn" id="aoWatchSelected">Add to Watchlist</button>
+            <button type="button" class="small-btn" id="aoBuildOffer">Build Offer</button>
+            <button type="button" class="small-btn" id="aoCompareSelected">Compare</button>
+            <button type="button" class="small-btn" id="aoCrmSelected">CRM Action</button>
+            <button type="button" class="small-btn" id="aoExportSelected">Export selected</button>
+          </div>
+        </div>
+
+        <div class="explorer-table-wrap">
+          <table class="explorer-table" id="allOfferingsTable">
+            <thead>
+              <tr>
+                <th class="ao-select-col"><input type="checkbox" id="aoSelectPage" aria-label="Select visible offerings"></th>
+                <th class="ao-expand-col"></th>
+                <th data-aosort="assetClass">Class</th>
+                <th data-aosort="description">Description</th>
+                <th data-aosort="cusip">CUSIP</th>
+                <th data-aosort="coupon" style="text-align:right">Coupon</th>
+                <th data-aosort="yield" style="text-align:right">Yield</th>
+                <th data-aosort="maturity">Maturity</th>
+                <th data-aosort="price" style="text-align:right">Price</th>
+                <th data-aosort="state">State</th>
+                <th data-aosort="sector">Sector</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="allOfferingsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="workspace-context-rail ao-context-rail" id="aoContextRail" aria-live="polite" aria-label="Selected offering context" hidden>
+        <div class="ao-context-empty">
+          <div class="ao-context-kicker">Selected Offering</div>
+          <h3>Pick a row</h3>
+          <p>Click a security to see its details, matching banks, and next actions.</p>
+        </div>
+      </aside>
     </div>
   </div>
 </div>
@@ -2181,22 +1977,14 @@
     <div class="page-hero-inner">
       <div>
         <h2>Sales <strong>Dashboard</strong></h2>
-        <p class="hero-sub" id="salesDashSub">A morning relative-value sheet &mdash; what's cheap to benchmark, what changed, who should care, and what to say.</p>
+        <p class="hero-sub" id="salesDashSub">The front-page idea sheet: what to pitch, who it fits, why it screens, and what changed.</p>
       </div>
-      <div class="hero-stat">
-        <div class="num" id="salesDashStat">&mdash;</div>
-        <div class="lbl">RV Leaders</div>
-      </div>
-    </div>
-  </section>
-
-  <div class="container">
-    <div class="market-snapshot-strip" id="salesDashSnapshotStrip" hidden></div>
-
-    <section class="daily-picks-card" id="salesDashboardCard" hidden>
-      <div class="daily-picks-head">
-        <h3 class="daily-picks-title">Relative value &mdash; cheap to benchmark, not just high yield <span class="daily-summary-badge">AI</span></h3>
-        <div class="daily-picks-controls">
+      <div class="sales-dashboard-hero-tools">
+        <div class="hero-stat">
+          <div class="num" id="salesDashStat">&mdash;</div>
+          <div class="lbl">RV Leaders</div>
+        </div>
+        <div class="sales-dashboard-controls">
           <span class="daily-summary-meta" id="salesDashboardMeta"></span>
           <label class="sd-tax-toggle">Tax lens
             <select id="salesDashTaxSelect" aria-label="Tax-rate lens for taxable-equivalent yield and ranking">
@@ -2211,7 +1999,11 @@
           <button type="button" class="small-btn" id="salesDashboardBtn">Generate</button>
         </div>
       </div>
-      <p class="daily-picks-note">Internal desk aid &mdash; every security is scored against the matched Treasury, FDIC CD benchmarks and same-sector/maturity/rating peers, then risk-adjusted. The relative-value read is computed live from the desk's own yields; Claude only ranks and writes the talking points. Bank muni taxable-equivalent yields use the desk's BQ/TEFRA-correct net TEY when available; clients should consult their own tax/portfolio advisors. Not investment advice. For Institutional Use Only.</p>
+    </div>
+  </section>
+
+  <div class="container">
+    <section class="daily-picks-card" id="salesDashboardCard" hidden>
       <div class="daily-picks-body" id="salesDashboardBody"></div>
     </section>
   </div>
@@ -3045,22 +2837,16 @@
     </div>
     <div class="home-wire-indicators mc-wire-band" id="mcWireCards" aria-label="Live economic indicators"></div>
 
-    <div class="mc-hub-grid">
-      <div class="mc-articles">
+    <div class="workspace-3col mc-workspace">
+      <aside class="workspace-filter-rail mc-filter-rail">
         <div class="section-title-bar">
-          <h3>Desk Color</h3>
+          <h3>Filter</h3>
           <div class="kicker" id="marketColorKicker">&mdash;</div>
         </div>
         <div class="mc-filter-row">
           <div class="mc-chips" id="mcTagChips"></div>
           <input type="search" id="mcSearch" class="mc-search" placeholder="Search market color&hellip;" aria-label="Search market color">
         </div>
-        <div id="mcLead"></div>
-        <div class="mc-article-list" id="mcArticleList">
-          <div class="mc-empty">Loading market color&hellip;</div>
-        </div>
-      </div>
-      <aside class="mc-rail">
         <div class="section-title-bar">
           <h3>Official Headlines</h3>
         </div>
@@ -3068,6 +2854,24 @@
           <li class="home-wire-item home-wire-empty">Loading headlines&hellip;</li>
         </ul>
         <div id="mcAuctions"></div>
+      </aside>
+
+      <section class="workspace-main mc-articles">
+        <div class="section-title-bar">
+          <h3>Desk Color</h3>
+        </div>
+        <div id="mcLead"></div>
+        <div class="mc-article-list" id="mcArticleList">
+          <div class="mc-empty">Loading market color&hellip;</div>
+        </div>
+      </section>
+
+      <aside class="workspace-context-rail mc-context-rail" id="mcContextRail" aria-live="polite" aria-label="Selected market color context">
+        <div class="mc-context-empty">
+          <div class="ao-context-kicker">Selected Story</div>
+          <h3>Pick a headline</h3>
+          <p>Click a market-color item to see source, tags, live-rate context, and the publisher link.</p>
+        </div>
       </aside>
     </div>
   </div>
@@ -3111,7 +2915,6 @@
           </div>
         </div>
         <div id="mapsLegend" class="maps-legend" aria-label="Filter map and list by account status"></div>
-        <div id="mapsPlot" class="maps-plot"></div>
         <div class="maps-area-card">
           <div>
             <strong>Muni deal &amp; area search</strong>
@@ -3130,6 +2933,7 @@
           </div>
           <div id="mapsMuniResults" class="maps-muni-results" hidden></div>
         </div>
+        <div id="mapsPlot" class="maps-plot"></div>
         <div class="maps-tip">Drag or scroll the map freely. Use Add State or area search to filter, then click a pin for the bank's stats.</div>
       </section>
 
@@ -3385,7 +3189,6 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite">Action completed</div>
 
-<script src="/vendor/plotly-2.27.0.min.js"></script>
 <script src="/js/modules/muni-tax.js?v=2026-06-01a"></script>
 <script src="/js/modules/report-logic.js?v=2026-06-10a"></script>
 <script src="/js/portal.js?v=report-builder-2026-06-10"></script>

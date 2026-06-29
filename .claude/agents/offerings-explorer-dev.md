@@ -17,7 +17,7 @@ You are the Offerings & Explorers domain owner for the FBBS Market Intelligence 
 
 ## Domain invariants — NEVER break
 - **YTW = min(YTM, YTNC)** for callables — the registry `yield` (and `offerings-pick`/Sales Dashboard) resolve to YTW. Treasury/CD never carry YTNC. `pct()` returns **null** for empty strings (not 0) — a falsy yield is excluded, not zeroed.
-- **The `normalize()` field contract is load-bearing.** Downstream consumers — Sales Dashboard (`daily-dashboard`/`-rv`), Today's Fits (`findOfferingFitsForBank`), CD rollover, watchlists, Signal Inbox, daily-summary, offerings-pick — all read these rows. **Additive changes only**; if you add a field, add it to every source's `normalize()` and coordinate with the consumers (esp. `sales-dashboard-dev`).
+- **The `normalize()` field contract is load-bearing.** Downstream consumers — Sales Dashboard (`daily-dashboard`/`-rv`), Today's Fits (`findOfferingFitsForBank`), CD rollover, watchlists, daily-summary, offerings-pick — all read these rows. **Additive changes only**; if you add a field, add it to every source's `normalize()` and coordinate with the consumers (esp. `sales-dashboard-dev`).
 - **Adding an asset class = ONE registry entry** (+ a parser returning `{ asOfDate, warnings, offerings }`, + a `classifyFile`/`SLOT_NAMES` slot, + an explorer page). Every cross-asset feature then picks it up for free.
 - **`availabilityK` units:** agency = `availableSize × 1000` (MM→$000); muni = raw `quantity` ($000); CD/Treasury/MBS = null (unknown). The ≥$250K floor logic depends on this.
 - **`_`-prefixed slot JSON is never served** over `/current/` or `/archive/`. CSV exports include the package date. Muni CUSIPs link out to **MSRB EMMA**. Explorer subtitles show the freshness stamp.

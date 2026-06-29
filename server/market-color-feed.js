@@ -48,6 +48,10 @@ const TAG_RULES = [
   ['banks', /bank|deposit|loan|liquidit|lender|fdic/i],
 ];
 
+const PERSONAL_FINANCE_URL_RE = /\/(?:personal-finance|retirement|personalfinance|pf|select|make-it)\b/i;
+const PERSONAL_FINANCE_TEXT_RE = /\b(?:personal finance|retirement planning|retirees?|401\(k\)|401k|ira|roth ira|social security benefits?|medicare|student loans?|credit cards?|personal loans?|auto loans?|car insurance|home buyers?|homebuyers?|home equity|mortgage rates?|savings accounts?|checking accounts?|budgeting)\b/i;
+const PERSONAL_FINANCE_ADVICE_RE = /\b(?:how to|what to know|what it means for you|your money|your wallet|your taxes|financial advisor|financial planner)\b/i;
+
 // ---------- RSS parsing (pure, fixture-tested) ----------
 
 function decodeEntities(text) {
@@ -79,6 +83,16 @@ function inferTags(text) {
   return tags.length ? tags : ['market color'];
 }
 
+function isPersonalFinanceArticle(item) {
+  const title = String((item && item.title) || '');
+  const summary = String((item && item.summary) || '');
+  const url = String((item && item.url) || '');
+  const text = `${title} ${summary}`;
+  if (PERSONAL_FINANCE_URL_RE.test(url)) return true;
+  if (PERSONAL_FINANCE_TEXT_RE.test(text)) return true;
+  return PERSONAL_FINANCE_ADVICE_RE.test(text) && /\b(?:money|tax|retire|saving|debt|loan|mortgage|credit|household|consumer)\b/i.test(text);
+}
+
 /**
  * Parse RSS 2.0 <item> blocks into normalized articles. Items missing a title
  * or a parseable https link are dropped; title/summary are tag-stripped and
@@ -93,6 +107,7 @@ function parseFeedItems(xml) {
     const url = tagText(block, 'link');
     if (!title || !/^https:\/\//i.test(url)) continue;
     const summary = tagText(block, 'description').slice(0, SUMMARY_MAX);
+    if (isPersonalFinanceArticle({ title, url, summary })) continue;
     const pubDate = tagText(block, 'pubDate') || tagText(block, 'dc:date');
     const parsed = pubDate ? Date.parse(pubDate) : NaN;
     items.push({
@@ -166,6 +181,7 @@ function buildResponse(cache, { stale = false } = {}) {
   const items = [];
   for (const it of collected) {
     if (seenUrl.has(it.url)) continue;
+    if (isPersonalFinanceArticle(it)) continue;
     const tkey = normalizeTitleKey(it.title);
     if (tkey && seenTitle.has(tkey)) continue;
     seenUrl.add(it.url);
@@ -243,6 +259,7 @@ module.exports = {
   // exported for tests
   parseFeedItems,
   inferTags,
+  isPersonalFinanceArticle,
   buildResponse,
   FEEDS,
 };

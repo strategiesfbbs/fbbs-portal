@@ -28,8 +28,15 @@ const swapMath = require('./swap-math');
 
 const FLOOR_K = 250;            // ≥$250K offered to be a featured pick (§4.4)
 const MIN_PER_AUDIENCE = 3;     // audience-coverage target (§2)
-const MAX_PER_AUDIENCE = 10;    // cap per-audience candidate list fed downstream
+const MAX_PER_AUDIENCE = 24;    // cap per-audience candidate list fed downstream
 const MAX_CANDIDATES = 90;      // hard cap on the flattened prompt candidate set
+
+// Maturity bands for the curve-spanning candidate selection (the same spine the
+// relative-value engine buckets on). maxY is the inclusive upper edge in years.
+const SELECT_BUCKETS = [
+  { key: '0-1y', maxY: 1 }, { key: '1-3y', maxY: 3 }, { key: '3-5y', maxY: 5 },
+  { key: '5-7y', maxY: 7 }, { key: '7-10y', maxY: 10 }, { key: '10y+', maxY: Infinity },
+];
 
 // The three client tax structures. Default rates follow the desk convention
 // (C-corp 21%, Sub-S 29.6%); the interactive tax-rate selector can override
@@ -187,11 +194,85 @@ function toCandidate(row) {
   };
 }
 
+/** Coarse asset class for curve-spanning stratification. */
+function classKeyOf(c) {
+  const cls = String((c && c.assetClass) || '').toLowerCase();
+  if (/cd|certificate/.test(cls)) return 'cd';
+  if (/muni/.test(cls)) return 'muni';
+  if (/treasur|ust/.test(cls)) return 'treasury';
+  if (/agency/.test(cls)) return 'agency';
+  if (/corp/.test(cls)) return 'corp';
+  if (/mbs|cmo/.test(cls)) return 'mbs';
+  if (/structured|note/.test(cls)) return 'structured';
+  return 'other';
+}
+
+/** Maturity-band key for a candidate relative to asOf ('na' when undatable). */
+function maturityBucketKey(c, asOf) {
+  if (!asOf || !c || !c.maturity) return 'na';
+  const a = Date.parse(String(asOf).slice(0, 10));
+  const b = Date.parse(String(c.maturity).slice(0, 10));
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 'na';
+  const y = (b - a) / (365.25 * 24 * 3600 * 1000);
+  for (const bucket of SELECT_BUCKETS) if (y <= bucket.maxY) return bucket.key;
+  return '10y+';
+}
+
+/**
+ * Best effective yield a candidate earns across its eligible audiences — the
+ * within-stratum ranking key (so the cheapest names in each band/class win their
+ * slot). Pure.
+ */
+function bestEffOf(c) {
+  let best = 0;
+  for (const k of AUDIENCE_KEYS) {
+    const e = c.econ && c.econ[k];
+    if (e && e.effYield != null && e.effYield > best) best = e.effYield;
+  }
+  return best;
+}
+
+/**
+ * Curve/class-representative selection — the fix for a candidate set that used to
+ * collapse to the highest-yielding (and therefore longest) names. Stratifies by
+ * (asset class × maturity band) and round-robins the best of each stratum, so the
+ * short end (CDs, bills) and the belly (3–7y) are represented alongside the long
+ * end instead of being out-yielded out of the set entirely. Returns up to
+ * `maxCand` candidates; the whole list when it already fits. Pure.
+ */
+function selectRepresentative(cands, maxCand, asOf) {
+  if (cands.length <= maxCand) return cands.slice();
+  const groups = new Map();
+  for (const c of cands) {
+    const key = classKeyOf(c) + '|' + maturityBucketKey(c, asOf);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  for (const list of groups.values()) list.sort((a, b) => bestEffOf(b) - bestEffOf(a));
+  const keys = [...groups.keys()].sort();
+  const picked = [];
+  let round = 0, added = true;
+  while (picked.length < maxCand && added) {
+    added = false;
+    for (const key of keys) {
+      const list = groups.get(key);
+      if (round < list.length) {
+        picked.push(list[round]);
+        added = true;
+        if (picked.length >= maxCand) break;
+      }
+    }
+    round++;
+  }
+  return picked;
+}
+
 /**
  * Build the grounded, audience-segmented candidate set from live offering rows.
  *
- * opts: { floorK?, taxRates? (per-audience override), minPerAudience?,
- *         maxPerAudience?, maxCandidates? }
+ * opts: { asOf? (package date, for curve-spanning stratification), floorK?,
+ *         taxRates? (per-audience override), minPerAudience?, maxPerAudience?,
+ *         maxCandidates? }
  *
  * Returns:
  *   {
@@ -211,6 +292,7 @@ function buildCandidateSet(rows, opts) {
   const minPer = num(o.minPerAudience) != null ? num(o.minPerAudience) : MIN_PER_AUDIENCE;
   const maxPer = num(o.maxPerAudience) != null ? num(o.maxPerAudience) : MAX_PER_AUDIENCE;
   const maxCand = num(o.maxCandidates) != null ? num(o.maxCandidates) : MAX_CANDIDATES;
+  const asOf = o.asOf || null;
   const taxRates = o.taxRates || null;
 
   const list = Array.isArray(rows) ? rows : [];
@@ -225,36 +307,30 @@ function buildCandidateSet(rows, opts) {
     screened.push(row);
   }
 
-  // Per-audience lists, each row carrying its full per-audience economics so we
-  // can sort by the yield THAT audience actually earns (TEY for a bank buyer).
-  const byAudience = {};
+  // One candidate per CUSIP, carrying its full per-audience economics.
   const candById = new Map();
+  for (const row of screened) {
+    const cusip = cusipKey(row.cusip);
+    if (candById.has(cusip)) continue; // first occurrence wins (de-dupe by CUSIP)
+    const cand = toCandidate(row);
+    cand.econ = {};
+    for (const ak of cand.audiences) cand.econ[ak] = audienceEconomics(row, ak, taxRates);
+    candById.set(cusip, cand);
+  }
+
+  // The prompt/RV set is a curve-spanning, class-diverse REPRESENTATIVE sample —
+  // NOT the highest-yielding (longest) names. This is the change that lets the
+  // dashboard surface short CDs/bills and belly paper instead of an all-long set.
+  const flat = selectRepresentative([...candById.values()], maxCand, asOf);
+
+  // Per-audience lists for coverage + the downstream backfill, each row carrying
+  // its per-audience economics so we can sort by the yield THAT audience earns.
+  const byAudience = {};
   for (const key of AUDIENCE_KEYS) {
-    const tagged = [];
-    for (const row of screened) {
-      if (!audiencesForRow(row).includes(key)) continue;
-      const cusip = cusipKey(row.cusip);
-      let cand = candById.get(cusip);
-      if (!cand) {
-        cand = toCandidate(row);
-        cand.econ = {};
-        for (const ak of cand.audiences) cand.econ[ak] = audienceEconomics(row, ak, taxRates);
-        candById.set(cusip, cand);
-      }
-      tagged.push(cand);
-    }
+    const tagged = flat.filter(c => c.audiences.includes(key));
     tagged.sort((a, b) => ((b.econ[key] && b.econ[key].effYield) || 0) - ((a.econ[key] && a.econ[key].effYield) || 0));
     byAudience[key] = tagged.slice(0, maxPer);
   }
-
-  // Flatten to a de-duped prompt set: the union of every audience's top list,
-  // highest effective yield first (across whichever audience values it most),
-  // capped so the downstream prompt stays bounded.
-  const bestEff = c => Math.max(...AUDIENCE_KEYS.map(k => (c.econ[k] && c.econ[k].effYield) || 0));
-  const flat = Array.from(candById.values())
-    .filter(c => AUDIENCE_KEYS.some(k => (byAudience[k] || []).includes(c)))
-    .sort((a, b) => bestEff(b) - bestEff(a))
-    .slice(0, maxCand);
 
   const coverage = {};
   for (const key of AUDIENCE_KEYS) coverage[key] = (byAudience[key] || []).length;
@@ -291,5 +367,7 @@ module.exports = {
   audiencesForRow,
   audienceEconomics,
   toCandidate,
+  maturityBucketKey,
+  selectRepresentative,
   buildCandidateSet,
 };
