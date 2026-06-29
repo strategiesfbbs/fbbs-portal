@@ -3750,7 +3750,10 @@
       dailyIntelData = null;
     }
     renderDailyIntelligence();
-    loadMarketSnapshotStrip(); // shared canonical snapshot band, non-blocking
+    // Daily Intelligence is strictly FBBS-uploaded data: the parsed Economic
+    // Update + CD Relative Value digital panels and the desk read (grounded only
+    // in the uploaded Economic Update). The live market-snapshot strip (Treasury
+    // curve + FRED deltas) deliberately lives on Home / Market Color, not here.
     loadDailySummaryCard(); // AI desk read (dormant without an Anthropic key)
   }
 
