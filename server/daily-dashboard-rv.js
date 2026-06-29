@@ -73,6 +73,16 @@ const TREND_TIGHTER_BPS = 8;     // spread ≥8bp tighter → "richer"
 const TREND_PRICE_BPS = 0.25;    // dollar price improved ≥¼pt
 const STANDOUT_SCORE = 70;       // RV score ≥70 counts as a "standout"
 
+// Tenor-appetite gating in buildAudienceOrdering: a maturity band is "warm" (can
+// lead an audience card) only when the audience's own history shows real demand
+// for it — at least WARM_BAND_MIN_SHARE of their buys AND at least WARM_BAND_MIN_REL
+// of their most-traded band. Adaptive on purpose: an audience that buys evenly
+// across the curve keeps every band; one that concentrates short demotes the long
+// end. Cold bands trail at the tail (visible, never leading) — a strong
+// preference, not a hard filter, so the desk can still override.
+const WARM_BAND_MIN_SHARE = 0.05; // ≥5% of the audience's buys
+const WARM_BAND_MIN_REL = 0.18;   // and ≥18% of their most-traded band's share
+
 // Tenor label → years, for interpolating the par curve.
 const TENOR_YEARS = {
   '1M': 1 / 12, '2M': 2 / 12, '3M': 0.25, '4M': 4 / 12, '6M': 0.5,
@@ -952,27 +962,47 @@ function buildAudienceOrdering(pool, audienceKey, profile) {
   }
   for (const list of byBucket.values()) list.sort((a, b) => desir(b) - desir(a));
 
+  const aud = (profile && profile.audiences && profile.audiences[audienceKey]) || null;
+  const hasDemand = !!(aud && aud.trades);
   const bandDemand = b => {
-    if (!profile || !profile.audiences || !profile.audiences[audienceKey]) return 0;
-    const aud = profile.audiences[audienceKey];
-    return (aud.byRecentBucket && aud.byRecentBucket[b]) || aud.byBucket[b] || 0;
+    if (!aud) return 0;
+    return (aud.byRecentBucket && aud.byRecentBucket[b]) || (aud.byBucket && aud.byBucket[b]) || 0;
   };
   // Visit bands by how much this audience trades them, then by best in-band value.
   const bandOrder = [...byBucket.keys()].sort((a, b) =>
     (bandDemand(b) - bandDemand(a)) || (desir(byBucket.get(b)[0]) - desir(byBucket.get(a)[0])));
 
+  // Tenor appetite as a STRONG preference, not a hard filter. When we have this
+  // audience's history, split the bands into "warm" (tenors they actually buy)
+  // and "cold" (tenors they rarely go to, adaptively — a floor relative to their
+  // OWN most-traded band, so an audience that genuinely buys across the curve
+  // keeps every band). Warm bands round-robin first, so the top picks stay inside
+  // the audience's real curve range; cold bands trail at the very end — still
+  // present for a desk override, but they never lead a card. This is what stops a
+  // long high-yield bond from being recommended to a buyer who stays short.
+  const demandVals = bandOrder.map(bandDemand);
+  const maxDemand = demandVals.length ? Math.max(...demandVals) : 0;
+  const warmFloor = Math.max(WARM_BAND_MIN_SHARE, maxDemand * WARM_BAND_MIN_REL);
+  const isWarm = b => !hasDemand || bandDemand(b) >= warmFloor;
+  const warmBands = bandOrder.filter(isWarm);
+  const coldBands = bandOrder.filter(b => !isWarm(b));
+
   // Round-robin: the best idea in each band first (curve coverage up front), then
-  // the second-best in each band, etc.
+  // the second-best in each band, etc. Warm bands exhausted before any cold band.
   const out = [];
-  let round = 0, added = true;
-  while (added) {
-    added = false;
-    for (const b of bandOrder) {
-      const list = byBucket.get(b);
-      if (round < list.length) { out.push(list[round].cusip); added = true; }
+  const roundRobin = bands => {
+    let round = 0, added = true;
+    while (added) {
+      added = false;
+      for (const b of bands) {
+        const list = byBucket.get(b);
+        if (round < list.length) { out.push(list[round].cusip); added = true; }
+      }
+      round++;
     }
-    round++;
-  }
+  };
+  roundRobin(warmBands);
+  roundRobin(coldBands);
   return out;
 }
 

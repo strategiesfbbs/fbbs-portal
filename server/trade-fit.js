@@ -371,71 +371,93 @@ function buildTradeFitProfile(opts) {
       log('warn', `trade-fit: trade query failed (${err && err.message}); skipping nudge`);
       return null;
     }
-    if (!tradeRows.length) return null;
-
-    // Resolve the C-corp / S-corp split for every bank id that actually traded.
-    const bankIds = [...new Set(tradeRows.map(r => r.bid).filter(Boolean))];
-    const audByBank = subchapterAudienceMap(bankDbPath, bankIds);
-    const audienceFor = bid => (bid ? (audByBank.get(String(bid)) || 'ccorp') : 'ria');
-
-    const audiences = { ccorp: emptyAudience(), scorp: emptyAudience(), ria: emptyAudience() };
-    let totalBuys = 0;
-    for (const r of tradeRows) {
-      const aud = audiences[audienceFor(r.bid)];
-      const cls = SECTYPE_CLASS[r.st];
-      const w = recencyWeight(r.trade_date, asOf);
-      const bucket = bucketForYears(yearsBetween(r.trade_date, r.maturity_date));
-      aud.trades += 1;
-      aud.weightedTrades += w;
-      totalBuys += 1;
-      bump(aud._class, cls, 1);
-      bump(aud._recentClass, cls, w);
-      bump(aud._bucket, bucket, 1);
-      bump(aud._recentBucket, bucket, w);
-      bump(aud._style, productStyleForTradeRow(r), w);
-      bump(aud._size, sizeBand(r.quantity_or_par, false), w);
-      bump(aud._price, priceBand(r.price), w);
-      if (r.st === 'MUNIDEBT') {
-        const st = stateFromIssuer(r.issuer);
-        if (st) bump(aud._state, st, 1);
-      }
-      const kw = issuerKeyword(r.issuer);
-      if (kw) bump(aud._issuer, kw, 1);
-    }
-
-    // Finalize: normalized shares + top lists.
-    const out = {};
-    for (const k of ['ccorp', 'scorp', 'ria']) {
-      const a = audiences[k];
-      const topIssuers = Object.entries(a._issuer)
-        .sort((x, y) => y[1] - x[1]).slice(0, 12)
-        .map(([kw]) => kw);
-      const topStates = Object.entries(a._state)
-        .sort((x, y) => y[1] - x[1]).slice(0, 12)
-        .map(([st]) => st);
-      out[k] = {
-        trades: a.trades,
-        weightedTrades: Math.round(a.weightedTrades * 100) / 100,
-        byClass: normalizeShares(a._class),
-        byRecentClass: normalizeShares(a._recentClass),
-        byBucket: normalizeShares(a._bucket),
-        byRecentBucket: normalizeShares(a._recentBucket),
-        byStyle: normalizeShares(a._style),
-        bySize: normalizeShares(a._size),
-        byPrice: normalizeShares(a._price),
-        byState: normalizeShares(a._state),
-        topIssuers,
-        topStates,
-      };
-    }
-
-    const profile = { generatedAt: new Date().toISOString(), asOf: asOf || null, totalBuys, audiences: out };
-    log('info', `trade-fit profile built: ${totalBuys} buys (ccorp ${out.ccorp.trades} / scorp ${out.scorp.trades} / ria ${out.ria.trades})`);
-    return profile;
+    return buildProfileFromRows(tradeRows, { asOf, bankDbPath, log });
   } catch (err) {
     log('warn', `trade-fit: profile build failed (${err && err.message}); skipping nudge`);
     return null;
   }
+}
+
+/**
+ * Roll already-normalized buy rows into the per-audience demand profile. This is
+ * the source-agnostic core shared by buildTradeFitProfile (Pershing trade
+ * history) and trade-fit-bridge (the Salesforce Trade__c blotter): both readers
+ * map their own table into the common row shape and hand the rows here.
+ *
+ * Each row: { bid, st, issuer, description, maturity_date, trade_date, price,
+ *             coupon, quantity_or_par } where `st` is a SECTYPE_CLASS key.
+ * opts: { asOf? ('YYYY-MM-DD' recency anchor), bankDbPath? (C/S-corp split), log? }
+ * Returns the compact profile, or null when there are no usable rows. Pure-ish
+ * (reads bank-data.sqlite for the audience split via subchapterAudienceMap).
+ */
+function buildProfileFromRows(tradeRows, opts) {
+  const o = opts || {};
+  const log = o.log || (() => {});
+  const asOf = o.asOf || null;
+  const bankDbPath = o.bankDbPath || '';
+  if (!Array.isArray(tradeRows) || !tradeRows.length) return null;
+
+  // Resolve the C-corp / S-corp split for every bank id that actually traded.
+  const bankIds = [...new Set(tradeRows.map(r => r.bid).filter(Boolean))];
+  const audByBank = subchapterAudienceMap(bankDbPath, bankIds);
+  const audienceFor = bid => (bid ? (audByBank.get(String(bid)) || 'ccorp') : 'ria');
+
+  const audiences = { ccorp: emptyAudience(), scorp: emptyAudience(), ria: emptyAudience() };
+  let totalBuys = 0;
+  for (const r of tradeRows) {
+    const cls = SECTYPE_CLASS[r.st];
+    if (!cls) continue; // ignore rows whose security type isn't a tracked FI class
+    const aud = audiences[audienceFor(r.bid)];
+    const w = recencyWeight(r.trade_date, asOf);
+    const bucket = bucketForYears(yearsBetween(r.trade_date, r.maturity_date));
+    aud.trades += 1;
+    aud.weightedTrades += w;
+    totalBuys += 1;
+    bump(aud._class, cls, 1);
+    bump(aud._recentClass, cls, w);
+    bump(aud._bucket, bucket, 1);
+    bump(aud._recentBucket, bucket, w);
+    bump(aud._style, productStyleForTradeRow(r), w);
+    bump(aud._size, sizeBand(r.quantity_or_par, false), w);
+    bump(aud._price, priceBand(r.price), w);
+    if (r.st === 'MUNIDEBT') {
+      const st = stateFromIssuer(r.issuer);
+      if (st) bump(aud._state, st, 1);
+    }
+    const kw = issuerKeyword(r.issuer);
+    if (kw) bump(aud._issuer, kw, 1);
+  }
+  if (!totalBuys) return null;
+
+  // Finalize: normalized shares + top lists.
+  const out = {};
+  for (const k of ['ccorp', 'scorp', 'ria']) {
+    const a = audiences[k];
+    const topIssuers = Object.entries(a._issuer)
+      .sort((x, y) => y[1] - x[1]).slice(0, 12)
+      .map(([kw]) => kw);
+    const topStates = Object.entries(a._state)
+      .sort((x, y) => y[1] - x[1]).slice(0, 12)
+      .map(([st]) => st);
+    out[k] = {
+      trades: a.trades,
+      weightedTrades: Math.round(a.weightedTrades * 100) / 100,
+      byClass: normalizeShares(a._class),
+      byRecentClass: normalizeShares(a._recentClass),
+      byBucket: normalizeShares(a._bucket),
+      byRecentBucket: normalizeShares(a._recentBucket),
+      byStyle: normalizeShares(a._style),
+      bySize: normalizeShares(a._size),
+      byPrice: normalizeShares(a._price),
+      byState: normalizeShares(a._state),
+      topIssuers,
+      topStates,
+    };
+  }
+
+  const profile = { generatedAt: new Date().toISOString(), asOf: asOf || null, totalBuys, audiences: out };
+  log('info', `trade-fit profile built: ${totalBuys} buys (ccorp ${out.ccorp.trades} / scorp ${out.scorp.trades} / ria ${out.ria.trades})`);
+  return profile;
 }
 
 // ---------- scorer (pure) ----------
@@ -577,6 +599,7 @@ function tradeFitForCandidate(c, profile, bucketKey, audienceKeys) {
 
 module.exports = {
   buildTradeFitProfile,
+  buildProfileFromRows,
   scoreCandidate,
   tradeFitForCandidate,
   coarseClassOf,

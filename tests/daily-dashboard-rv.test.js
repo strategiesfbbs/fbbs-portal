@@ -449,6 +449,26 @@ test('regimeShift compares unrounded deltas to the threshold', () => {
   assert.strictEqual(rv.regimeShift(hit, prior).find(r => r.key === 'cd').direction, 'richened');
 });
 
+test('buildAudienceOrdering keeps audience picks within the tenors they actually buy', () => {
+  // A short bond (modest spread) and a long bond (fat spread/yield).
+  const pool = [
+    { cusip: 'SHORT1', rv: { bucket: '1-3y', audSpreadBps: { ccorp: 20 }, tradeFit: null } },
+    { cusip: 'LONG1', rv: { bucket: '10y+', audSpreadBps: { ccorp: 60 }, tradeFit: null } },
+  ];
+  // 80% of this audience's buys are short; the long end is near-zero ("cold").
+  const shortBuyer = { audiences: { ccorp: { trades: 100, byRecentBucket: { '1-3y': 0.8, '0-1y': 0.18, '10y+': 0.02 }, byBucket: {} } } };
+  // This audience genuinely buys across the curve, including the long end.
+  const curveBuyer = { audiences: { ccorp: { trades: 100, byRecentBucket: { '1-3y': 0.33, '10y+': 0.34, '0-1y': 0.33 }, byBucket: {} } } };
+
+  // No profile → pure relative value: the fatter-spread long bond leads.
+  assert.deepStrictEqual(rv.buildAudienceOrdering(pool, 'ccorp', null), ['LONG1', 'SHORT1']);
+  // Short buyer → the long bond is demoted to the tail despite the bigger spread
+  // (the owner's rule: don't go 20/30y for a 10-and-in buyer just for yield).
+  assert.deepStrictEqual(rv.buildAudienceOrdering(pool, 'ccorp', shortBuyer), ['SHORT1', 'LONG1']);
+  // A buyer who goes long keeps the long idea on top — the gate is adaptive.
+  assert.deepStrictEqual(rv.buildAudienceOrdering(pool, 'ccorp', curveBuyer), ['LONG1', 'SHORT1']);
+});
+
 (async () => {
   for (const { name, fn } of tests) {
     try { await fn(); passed++; }

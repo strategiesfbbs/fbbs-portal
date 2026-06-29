@@ -181,6 +181,32 @@ test('buildTradeFitProfile segments by Subchapter-S + non-bank and rolls demand'
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('buildProfileFromRows is equivalent to buildTradeFitProfile on the same rows', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-tf-eq-'));
+  buildFixtureDbs(dir);
+
+  // Way 1: the public Pershing reader.
+  const viaReader = tf.buildTradeFitProfile({ bankReportsDir: dir });
+
+  // Way 2: read the SAME buy rows and hand them to the extracted core directly.
+  const Db = new Database(path.join(dir, tf.PERSHING_DB), { readonly: true });
+  const sectypes = Object.keys(tf.SECTYPE_CLASS);
+  const asOf = Db.prepare("SELECT MAX(trade_date) d FROM pershing_trades WHERE side='BUY'").get().d;
+  const rows = Db.prepare(
+    `SELECT COALESCE(bank_id,'') bid, security_type st, COALESCE(issuer,'') issuer,
+            COALESCE(security_description,'') description, maturity_date, trade_date, price, coupon, quantity_or_par
+     FROM pershing_trades WHERE side='BUY' AND security_type IN (${sectypes.map(() => '?').join(',')})`
+  ).all(...sectypes);
+  Db.close();
+  const viaCore = tf.buildProfileFromRows(rows, { asOf, bankDbPath: path.join(dir, tf.BANK_DB) });
+
+  // Everything but the wall-clock generatedAt stamp must match exactly.
+  assert.ok(viaReader && viaCore);
+  delete viaReader.generatedAt; delete viaCore.generatedAt;
+  assert.deepStrictEqual(viaCore, viaReader, 'extracted core must reproduce the reader profile');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('buildTradeFitProfile returns null (never throws) when the trade DB is absent', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-tf-empty-'));
   assert.strictEqual(tf.buildTradeFitProfile({ bankReportsDir: dir }), null);

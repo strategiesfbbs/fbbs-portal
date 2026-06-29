@@ -202,6 +202,7 @@ const marketSnapshotTitle = require('./market-snapshot-title');
 const dailyDashboard = require('./daily-dashboard');                 // Phase 1: audience/tax candidate layer
 const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2: grounded Claude judgment layer
 const tradeFit = require('./trade-fit');                             // data-backed buyer-pattern profile (Pershing history)
+const tradeFitBridge = require('./trade-fit-bridge');                // same profile from the Salesforce Trade__c blotter when populated
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
 const {
@@ -8904,11 +8905,16 @@ function dashboardPriorPackage(packageDate) {
   return { priorRows, priorMeta: { priorDate, daysAgo } };
 }
 
-// Cached Pershing buyer-pattern profile for the Sales Dashboard trade-fit nudge.
+// Cached buyer-pattern profile for the Sales Dashboard trade-fit nudge.
 // Building it is a one-pass study over ~130K trade rows + the matched banks'
 // Subchapter-S election, so it's memoized and only rebuilt when the trade DB file
 // changes (an import rewrites it). Never throws — a missing/unreadable DB returns
 // null and the dashboard simply runs without the nudge.
+//
+// Source resolver: prefer the Salesforce Trade__c blotter (`trades`) when it's
+// populated — the canonical firm feed — else fall back to the Pershing trade
+// history (`pershing_trades`, ~130K rows). Both tables live in the SAME file
+// (pershing-accounts.sqlite), so one mtime key covers both.
 let _tradeFitProfileCache = { mtimeMs: null, profile: null };
 function loadTradeFitProfile() {
   try {
@@ -8916,7 +8922,14 @@ function loadTradeFitProfile() {
     let mtimeMs = null;
     try { mtimeMs = fs.statSync(dbPath).mtimeMs; } catch (_) { return null; }
     if (_tradeFitProfileCache.mtimeMs === mtimeMs) return _tradeFitProfileCache.profile;
-    const profile = tradeFit.buildTradeFitProfile({ bankReportsDir: BANK_REPORTS_DIR, log });
+
+    let profile = tradeFitBridge.buildTradeFitProfileFromTradeStore({ bankReportsDir: BANK_REPORTS_DIR, log });
+    let source = 'salesforce-trades';
+    if (!profile || !(profile.totalBuys > 0)) {
+      profile = tradeFit.buildTradeFitProfile({ bankReportsDir: BANK_REPORTS_DIR, log });
+      source = 'pershing-trades';
+    }
+    if (profile) profile.source = source;
     _tradeFitProfileCache = { mtimeMs, profile };
     return profile;
   } catch (err) {
