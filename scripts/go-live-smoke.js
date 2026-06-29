@@ -167,7 +167,7 @@ async function main() {
     assert.ok(sd.benchmarks && typeof sd.benchmarks.treasury === 'boolean', 'sales dashboard benchmarks block');
     checks.push('sales dashboard relative-value read');
 
-    for (const route of ['/api/daily-summary', '/api/offerings-pick', '/api/cd-rollover-wall?window=90', '/api/maturity-calendar?window=90']) {
+    for (const route of ['/api/daily-summary', '/api/cd-rollover-wall?window=90', '/api/maturity-calendar?window=90']) {
       const res = await request(port, route);
       assert.strictEqual(res.status, 200, `${route}: ${res.status} ${res.text}`);
       assert.ok(res.json && typeof res.json === 'object', `${route}: JSON response`);

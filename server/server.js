@@ -199,7 +199,6 @@ const { buildMarketSnapshot } = require('./market-snapshot');
 const claudeClient = require('./claude-client');
 const dailySummary = require('./daily-summary');
 const marketSnapshotTitle = require('./market-snapshot-title');
-const offeringsPick = require('./offerings-pick');
 const dailyDashboard = require('./daily-dashboard');                 // Phase 1: audience/tax candidate layer
 const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2: grounded Claude judgment layer
 const tradeFit = require('./trade-fit');                             // data-backed buyer-pattern profile (Pershing history)
@@ -813,7 +812,6 @@ function isAdminOnlyApiWrite(pathname, method) {
     pathname === '/api/contacts/import' ||
     pathname === '/api/daily-summary/refresh' ||
     pathname === '/api/market-snapshot/title/refresh' ||
-    pathname === '/api/offerings-pick/refresh' ||
     pathname === '/api/sales-dashboard/refresh'
   );
 }
@@ -3119,7 +3117,6 @@ function buildGoLiveStatus(req) {
   const claudeConfigured = claudeClient.isConfigured();
   const dailySummaryCache = aiCacheStatus('Daily Summary', dailySummary.getCachedSummary(MARKET_DIR), packageDate, claudeConfigured);
   const marketSnapshotTitleCache = aiCacheStatus('Market Snapshot Title', marketSnapshotTitle.getCachedTitle(MARKET_DIR), packageDate, claudeConfigured);
-  const dailyPicksCache = aiCacheStatus('Pick of Day', offeringsPick.getCachedPicks(MARKET_DIR), packageDate, claudeConfigured);
   const salesDashboardCache = aiCacheStatus('Daily Bond Pick', dailyDashboardJudgment.getCachedDashboard(MARKET_DIR), packageDate, claudeConfigured);
   const marketCaches = [
     cacheFileStatus('market-wire-headlines.json', 2 * 60 * 60 * 1000),
@@ -3130,7 +3127,7 @@ function buildGoLiveStatus(req) {
     cacheFileStatus('fred-indicators.json', 12 * 60 * 60 * 1000)
   ];
   const marketWarnCount = marketCaches.filter(c => c.state !== 'ok').length;
-  const aiCaches = [dailySummaryCache, marketSnapshotTitleCache, dailyPicksCache, salesDashboardCache];
+  const aiCaches = [dailySummaryCache, marketSnapshotTitleCache, salesDashboardCache];
   const aiWarnCount = aiCaches.filter(c => c.state !== 'ok').length;
   const uploadTemp = uploadTempStatus();
 
@@ -11572,43 +11569,6 @@ const server = http.createServer(async (req, res) => {
         log('error', 'Daily summary generation failed:', err.message);
         appendAuditLog({ event: 'daily-summary-refresh-failed', packageDate: meta.date || null, error: err.message || String(err) });
         return sendJSON(res, 502, { configured: true, error: 'Summary generation failed: ' + err.message });
-      }
-    }
-
-    // Legacy AI offerings shortlist (Claude). Same read/refresh split as the desk read:
-    // GET returns the cached picks (never billable); POST .../refresh generates.
-    if (pathname === '/api/offerings-pick' && req.method === 'GET') {
-      const configured = claudeClient.isConfigured();
-      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
-      const packageDate = meta.date || null;
-      const cached = offeringsPick.getCachedPicks(MARKET_DIR);
-      const current = Boolean(cached && packageDate && cached.packageDate === packageDate);
-      return sendJSON(res, 200, {
-        configured,
-        packageDate,
-        current,
-        picks: cached ? cached.picks : null,
-        picksDate: cached ? cached.packageDate : null,
-        generatedAt: cached ? cached.generatedAt : null,
-        model: cached ? cached.model : null,
-      });
-    }
-
-    if (pathname === '/api/offerings-pick/refresh' && req.method === 'POST') {
-      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
-      if (!claudeClient.isConfigured()) {
-        appendAuditLog({ event: 'daily-picks-refresh-skipped', packageDate: meta.date || null, reason: 'anthropic-not-configured' });
-        return sendJSON(res, 200, { configured: false, picks: null });
-      }
-      try {
-        const rows = buildAllOfferingsRows();
-        const result = await offeringsPick.generatePicks({ marketDir: MARKET_DIR, rows, meta, force: true, log });
-        appendAuditLog({ event: 'daily-picks-generated', packageDate: result.packageDate, count: result.picks.length, model: result.model, usage: result.usage || null, cacheError: result.cacheError || null, generatedAt: result.generatedAt || null });
-        return sendJSON(res, 200, { configured: true, ...result });
-      } catch (err) {
-        log('error', 'Daily picks generation failed:', err.message);
-        appendAuditLog({ event: 'daily-picks-refresh-failed', packageDate: meta.date || null, error: err.message || String(err) });
-        return sendJSON(res, 502, { configured: true, error: 'Pick generation failed: ' + err.message });
       }
     }
 

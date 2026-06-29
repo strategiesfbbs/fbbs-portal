@@ -46,3 +46,6 @@ Thumbs.db
 .agents/
 .codex/
 package-lock[ ]*.json
+
+# Generated scratch output (docs, exports, rendered pages) — never committed
+output/

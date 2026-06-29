@@ -227,7 +227,6 @@ test('iis admin ingest routes reject non-admins before parsing', async () => {
       '/api/exec-summary/upload',
       '/api/contacts/import',
       '/api/daily-summary/refresh',
-      '/api/offerings-pick/refresh',
       '/api/sales-dashboard/refresh'
     ];
     for (const route of ingestRoutes) {
@@ -579,7 +578,6 @@ test('new go-live read APIs return JSON envelopes without seeded data', async ()
     writeJson(path.join(dataDir, 'current', '_meta.json'), { date: '2026-06-22' });
     const routes = [
       '/api/daily-summary',
-      '/api/offerings-pick',
       '/api/sales-dashboard',
       '/api/cd-rollover-wall?window=90',
       '/api/maturity-calendar?window=90',
