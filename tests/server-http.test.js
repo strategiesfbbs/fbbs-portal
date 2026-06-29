@@ -213,6 +213,23 @@ test('iis exec summary reads reject non-admins', async () => {
   });
 });
 
+test('iis audit log reads reject non-admins', async () => {
+  await withServer({ FBBS_AUTH_MODE: 'iis', FBBS_ADMIN_USERS: 'adminuser' }, async ({ port }) => {
+    const denied = await request(port, {
+      path: '/api/audit-log',
+      headers: { 'x-iisnode-logon_user': 'FBBS\\ordinaryrep' }
+    });
+    assert.strictEqual(denied.status, 403, denied.text);
+
+    const allowed = await request(port, {
+      path: '/api/audit-log',
+      headers: { 'x-iisnode-logon_user': 'FBBS\\adminuser' }
+    });
+    assert.strictEqual(allowed.status, 200, allowed.text);
+    assert.ok(Array.isArray(allowed.json), allowed.text);
+  });
+});
+
 test('iis upload fails closed when admin allowlist is empty', async () => {
   await withServer({ FBBS_AUTH_MODE: 'iis', FBBS_ADMIN_USERS: '' }, async ({ port }) => {
     const res = await request(port, {
@@ -352,6 +369,33 @@ test('cross-site mutating writes are blocked; same-origin and header-absent pass
     // no origin signals at all -> default-allow (trusted-LAN posture)
     const bare = await post({});
     assert.ok(!blocked.test(bare.text), `header-absent should pass: ${bare.status} ${bare.text}`);
+  });
+});
+
+test('iis mode requires a same-origin signal for mutating writes', async () => {
+  await withServer({ FBBS_AUTH_MODE: 'iis', FBBS_ADMIN_USERS: 'adminuser' }, async ({ port }) => {
+    const blocked = /Cross-site write request blocked/;
+    const body = JSON.stringify({ kind: 'security', refId: '123456AB9', label: 'Test bond', assetClass: 'Muni', page: 'muni-explorer' });
+    const baseHeaders = {
+      'Content-Type': 'application/json',
+      'x-iisnode-logon_user': 'FBBS\\adminuser'
+    };
+    const bare = await request(port, {
+      method: 'POST',
+      path: '/api/me/watchlist',
+      headers: baseHeaders,
+      body
+    });
+    assert.strictEqual(bare.status, 403, bare.text);
+    assert.ok(blocked.test(bare.text), bare.text);
+
+    const sameOrigin = await request(port, {
+      method: 'POST',
+      path: '/api/me/watchlist',
+      headers: { ...baseHeaders, 'sec-fetch-site': 'same-origin' },
+      body
+    });
+    assert.strictEqual(sameOrigin.status, 200, sameOrigin.text);
   });
 });
 

@@ -212,7 +212,7 @@ Handy if the team ever wants to script publishing or pull data elsewhere.
 | `GET` | `/api/muni-offerings` | Structured Muni offerings from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/agencies` | Structured Agency offerings (bullets + callables unified) from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
 | `GET` | `/api/corporates` | Structured Corporate bond offerings from the current package (pass `?date=YYYY-MM-DD` for an archived day) |
-| `GET` | `/api/audit-log` | Publish history, newest first (pass `?limit=N`, default 200, max 1000) |
+| `GET` | `/api/audit-log` | Publish history, newest first (admin-only when IIS auth/admin allowlist is configured; pass `?limit=N`, default 200, max 1000) |
 | `POST` | `/api/upload` | Multipart/form-data upload — field names `dashboard`, `econ`, `relativeValue`, `treasuryNotes`, `cd`, `cdoffers`, `munioffers`, `agenciesBullets`, `agenciesCallables`, `corporates` |
 | `GET` | `/current/<file>` | Serves a file from the current package (`?download=1` to force download) |
 | `GET` | `/archive/<YYYY-MM-DD>/<file>` | Serves a file from that archived day |
@@ -424,6 +424,8 @@ This portal is still designed for a trusted internal network, but it now has pro
 - **Internal go-live path:** deploy on IIS, turn on Windows Authentication, disable anonymous access, and set `FBBS_AUTH_MODE=iis`.
 - **Rep identity:** in `local` mode, the header "Acting as" picker can set a rep override cookie for laptop testing. In `iis` mode, that cookie is ignored and the header shows the signed-in Windows user.
 - **Admin data writes:** in `iis` mode, publishing/import endpoints require `FBBS_ADMIN_USERS` and the signed-in user must be in that allowlist. This covers daily package publish, folder-drop publish, MBS/CMO upload, bank workbook import, account-status import, averaged-series import, bond-accounting import, and WIRP import.
+- **Admin internal reads:** when IIS auth or an admin allowlist is configured, the audit log, go-live status, and Executive Summary endpoints require an admin user.
+- **Write origin checks:** mutating API requests reject cross-site origins; in IIS/auth/admin-enforced mode, writes also need a verifiable same-origin browser signal (`Origin`, `Referer`, or `Sec-Fetch-Site`).
 - Security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: same-origin`) are set on every response.
 - Path traversal is blocked for both `/current/` and `/archive/` file serving, and the static-asset handler stays inside `public/`.
 - Uploads are capped (default 50 MB per request). Filenames are sanitized before being written to disk.

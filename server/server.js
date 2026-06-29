@@ -187,6 +187,7 @@ const fredSeries = require('./fred-series');
 const { buildMarketSnapshot } = require('./market-snapshot');
 const claudeClient = require('./claude-client');
 const dailySummary = require('./daily-summary');
+const marketSnapshotTitle = require('./market-snapshot-title');
 const offeringsPick = require('./offerings-pick');
 const dailyDashboard = require('./daily-dashboard');                 // Phase 1: audience/tax candidate layer
 const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2: grounded Claude judgment layer
@@ -566,7 +567,7 @@ function headerUrlHost(value) {
   }
 }
 
-function isSameOriginWrite(req) {
+function isSameOriginWrite(req, options = {}) {
   const fetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
   if (fetchSite === 'cross-site') return false;
 
@@ -577,12 +578,17 @@ function isSameOriginWrite(req) {
   const referer = req.headers.referer;
   if (referer) return Boolean(host && headerUrlHost(referer) === host);
 
-  return true;
+  if (fetchSite) return !options.requireHeaderSignal || fetchSite === 'same-origin' || fetchSite === 'none';
+  return !options.requireHeaderSignal;
 }
 
 function isMutatingApiRequest(req, pathname) {
   const method = String(req.method || 'GET').toUpperCase();
   return pathname.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(method);
+}
+
+function requireVerifiedWriteOrigin() {
+  return IS_IIS_AUTH_MODE || REQUIRE_AUTH || ADMIN_USERS.size > 0;
 }
 
 function resolveRequestRep(req) {
@@ -693,6 +699,7 @@ function isAdminOnlyApiWrite(pathname, method) {
     pathname === '/api/exec-summary/upload' ||
     pathname === '/api/contacts/import' ||
     pathname === '/api/daily-summary/refresh' ||
+    pathname === '/api/market-snapshot/title/refresh' ||
     pathname === '/api/offerings-pick/refresh' ||
     pathname === '/api/sales-dashboard/refresh'
   );
@@ -1640,6 +1647,27 @@ async function loadEconomicUpdateFromDir(dirPath) {
 
 function loadCurrentEconomicUpdate() {
   return loadEconomicUpdateFromDir(CURRENT_DIR);
+}
+
+async function loadCurrentMarketSnapshotBundle() {
+  const [econ, curve, fred, meta] = await Promise.all([
+    loadCurrentEconomicUpdate().catch(() => null),
+    marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
+    fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }).catch(() => null),
+    Promise.resolve(readCurrentSlotJson(META_FILENAME, 'meta') || {}),
+  ]);
+  let rates = null;
+  if (curve && curve.tenors) {
+    const t10 = curve.tenors['10Y'];
+    const t2 = curve.tenors['2Y'];
+    rates = {
+      asOfDate: curve.asOfDate,
+      tenYear: t10 != null ? t10 : null,
+      twoYear: t2 != null ? t2 : null,
+      spread2s10sBp: t10 != null && t2 != null ? Math.round((t10 - t2) * 100) : null,
+    };
+  }
+  return { econ, meta, snapshot: buildMarketSnapshot(econ, { rates, fred }) };
 }
 
 function loadArchivedEconomicUpdate(date) {
@@ -2771,6 +2799,7 @@ function buildGoLiveStatus(req) {
   const packageDate = pkg.date || '';
   const claudeConfigured = claudeClient.isConfigured();
   const dailySummaryCache = aiCacheStatus('Daily Summary', dailySummary.getCachedSummary(MARKET_DIR), packageDate, claudeConfigured);
+  const marketSnapshotTitleCache = aiCacheStatus('Market Snapshot Title', marketSnapshotTitle.getCachedTitle(MARKET_DIR), packageDate, claudeConfigured);
   const dailyPicksCache = aiCacheStatus('Pick of Day', offeringsPick.getCachedPicks(MARKET_DIR), packageDate, claudeConfigured);
   const salesDashboardCache = aiCacheStatus('Sales Dashboard', dailyDashboardJudgment.getCachedDashboard(MARKET_DIR), packageDate, claudeConfigured);
   const marketCaches = [
@@ -2782,7 +2811,7 @@ function buildGoLiveStatus(req) {
     cacheFileStatus('fred-indicators.json', 12 * 60 * 60 * 1000)
   ];
   const marketWarnCount = marketCaches.filter(c => c.state !== 'ok').length;
-  const aiCaches = [dailySummaryCache, dailyPicksCache, salesDashboardCache];
+  const aiCaches = [dailySummaryCache, marketSnapshotTitleCache, dailyPicksCache, salesDashboardCache];
   const aiWarnCount = aiCaches.filter(c => c.state !== 'ok').length;
 
   const checks = [
@@ -10103,13 +10132,12 @@ function listKnownReps() {
 // ---- Signal Inbox (#signals) ----
 // Gathers every input the PURE bank-signals engine needs, then hands it ONE
 // resolved object. Discipline (perf + scope):
-//   - The full-set numeric signals (large-no-owner, muni-afs pre-filter) read
-//     ONLY the cached map projection (getMapBankData), never a per-bank parse.
+//   - The cached map projection (getMapBankData) feeds lightweight owned-bank
+//     signals such as muni-afs-book; no per-bank parse is needed there.
 //   - The per-bank reads (funding score, CD-rollover slice, offering fits, FDIC
 //     freshness) loop ONLY over the rep's OWNED saved-bank set (hundreds max),
 //     so a page load never fans out across the ~4,400-bank table.
-//   - coverage-large-no-owner is firm-set (unowned rows shown to all reps); every
-//     other signal is rep-scoped here by ownerStringContainsRep before the engine.
+//   - Live signals are rep-scoped here by ownerStringContainsRep before the engine.
 // scopedRep === null means firm-wide (admin ?rep=all).
 function gatherSignalInputs(scopedRep, options = {}) {
   const today = todayStamp();
@@ -10153,28 +10181,10 @@ function gatherSignalInputs(scopedRep, options = {}) {
   const coverageIds = [...new Set([...ownedIds, ...overdueTasks.map(t => t.bankId)])];
   const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, coverageIds) || new Map();
 
-  // --- Firm-set numeric signals from the cached map projection only ---
-  // Coverage owner for every map bank above the floor (large-no-owner). Read the
-  // owner from coverage; the map projection itself doesn't carry owner.
-  const assetFloorK = Number.isFinite(Number(options.assetFloorK)) ? Number(options.assetFloorK) : bankSignals.DEFAULTS.assetFloorK;
-  let mapBanksForLarge = mapData.banks.filter(b => {
-    const a = Number(b.totalAssets);
-    return Number.isFinite(a) && a >= assetFloorK;
-  });
-  if (stateFilter) {
-    mapBanksForLarge = mapBanksForLarge.filter(b => String(b.state || '').toUpperCase() === stateFilter);
-  }
-  const largeIds = mapBanksForLarge.map(b => b.id);
-  const largeCoverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, largeIds) || new Map();
-  // Merge the two coverage maps so the engine can resolve owners for both sets.
-  const mergedCoverage = new Map(coverageMap);
-  for (const [k, v] of largeCoverageMap) mergedCoverage.set(k, v);
-
-  // The mapBanks the engine sees: union of (large-no-owner candidates) + (owned
-  // banks' map rows, for muni-afs). Keyed by id so we don't double-feed.
+  // The mapBanks the engine sees: owned banks' map rows, for lightweight
+  // balance-sheet signals like muni-afs-book.
   const mapById = new Map(mapData.banks.map(b => [String(b.id), b]));
   const mapBanksOut = new Map();
-  for (const b of mapBanksForLarge) mapBanksOut.set(String(b.id), b);
   for (const id of ownedIds) { const b = mapById.get(String(id)); if (b) mapBanksOut.set(String(id), b); }
 
   // --- Per-bank reads, OWNED set only ---
@@ -10253,7 +10263,7 @@ function gatherSignalInputs(scopedRep, options = {}) {
 
   return {
     today, packageDate, thresholds, stateFilter,
-    ownedBanks, mapBanksOut, mergedCoverage, lastTouchByBank, overdueTasks,
+    ownedBanks, mapBanksOut, coverageMap, lastTouchByBank, overdueTasks,
     fundingScoreByBank, cdRolloverByBank, fitsByBank, fdicFlagsByBank, pershingByBank,
   };
 }
@@ -10623,7 +10633,7 @@ const server = http.createServer(async (req, res) => {
 
   auditContext.enterWith({ actor: auditActorForRequest(req) });
 
-  if (isMutatingApiRequest(req, pathname) && !isSameOriginWrite(req)) {
+  if (isMutatingApiRequest(req, pathname) && !isSameOriginWrite(req, { requireHeaderSignal: requireVerifiedWriteOrigin() })) {
     return sendJSON(res, 403, { error: 'Cross-site write request blocked' });
   }
   const authRejection = rejectIfUnauthorized(req, res, pathname);
@@ -10700,23 +10710,44 @@ const server = http.createServer(async (req, res) => {
     // + the live wire as a delta, so every tab can show the SAME number with one
     // as-of instead of four sources disagreeing.
     if (pathname === '/api/market-snapshot' && req.method === 'GET') {
-      const [econ, curve, fred] = await Promise.all([
-        loadCurrentEconomicUpdate().catch(() => null),
-        marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
-        fredSeries.getFredIndicators({ marketDir: MARKET_DIR, log }).catch(() => null),
-      ]);
-      let rates = null;
-      if (curve && curve.tenors) {
-        const t10 = curve.tenors['10Y'];
-        const t2 = curve.tenors['2Y'];
-        rates = {
-          asOfDate: curve.asOfDate,
-          tenYear: t10 != null ? t10 : null,
-          twoYear: t2 != null ? t2 : null,
-          spread2s10sBp: t10 != null && t2 != null ? Math.round((t10 - t2) * 100) : null,
-        };
+      const bundle = await loadCurrentMarketSnapshotBundle();
+      return sendJSON(res, 200, bundle.snapshot);
+    }
+
+    // AI Home market snapshot title (Claude). GET is read-only and only returns
+    // a current cached title; POST .../refresh is the explicit billable generate.
+    if (pathname === '/api/market-snapshot/title' && req.method === 'GET') {
+      const configured = claudeClient.isConfigured();
+      const meta = readCurrentSlotJson(META_FILENAME, 'meta') || {};
+      const packageDate = meta.date || null;
+      const cached = marketSnapshotTitle.getCachedTitle(MARKET_DIR);
+      const current = Boolean(cached && packageDate && cached.packageDate === packageDate);
+      return sendJSON(res, 200, {
+        configured,
+        packageDate,
+        current,
+        title: current ? cached.title : null,
+        titleDate: cached ? cached.packageDate : null,
+        generatedAt: cached ? cached.generatedAt : null,
+        model: cached ? cached.model : null,
+      });
+    }
+
+    if (pathname === '/api/market-snapshot/title/refresh' && req.method === 'POST') {
+      const { econ, meta, snapshot } = await loadCurrentMarketSnapshotBundle();
+      if (!claudeClient.isConfigured()) {
+        appendAuditLog({ event: 'market-snapshot-title-refresh-skipped', packageDate: meta.date || null, reason: 'anthropic-not-configured' });
+        return sendJSON(res, 200, { configured: false, title: null });
       }
-      return sendJSON(res, 200, buildMarketSnapshot(econ, { rates, fred }));
+      try {
+        const result = await marketSnapshotTitle.generateTitle({ marketDir: MARKET_DIR, econ, meta, snapshot, force: true, log });
+        appendAuditLog({ event: 'market-snapshot-title-generated', packageDate: result.packageDate, title: result.title, model: result.model, usage: result.usage || null, cacheError: result.cacheError || null, generatedAt: result.generatedAt || null });
+        return sendJSON(res, 200, { configured: true, ...result });
+      } catch (err) {
+        log('error', 'Market snapshot title generation failed:', err.message);
+        appendAuditLog({ event: 'market-snapshot-title-refresh-failed', packageDate: meta.date || null, error: err.message || String(err) });
+        return sendJSON(res, 502, { configured: true, error: 'Market snapshot title generation failed: ' + err.message });
+      }
     }
 
     // AI daily-package summary (Claude). GET is read-only — it returns the
@@ -10750,8 +10781,18 @@ const server = http.createServer(async (req, res) => {
       }
       try {
         const result = await dailySummary.generateSummary({ marketDir: MARKET_DIR, econ, meta, force: true, log });
+        let snapshotTitle = null;
+        try {
+          const titleBundle = await loadCurrentMarketSnapshotBundle();
+          const titleResult = await marketSnapshotTitle.generateTitle({ marketDir: MARKET_DIR, ...titleBundle, force: true, log });
+          snapshotTitle = titleResult.title || null;
+          appendAuditLog({ event: 'market-snapshot-title-generated', trigger: 'daily-summary-refresh', packageDate: titleResult.packageDate, title: titleResult.title, model: titleResult.model, usage: titleResult.usage || null, cacheError: titleResult.cacheError || null, generatedAt: titleResult.generatedAt || null });
+        } catch (titleErr) {
+          log('warn', 'Market snapshot title generation failed after daily summary refresh:', titleErr.message);
+          appendAuditLog({ event: 'market-snapshot-title-refresh-failed', trigger: 'daily-summary-refresh', packageDate: meta.date || null, error: titleErr.message || String(titleErr) });
+        }
         appendAuditLog({ event: 'daily-summary-generated', packageDate: result.packageDate, model: result.model, usage: result.usage || null, cacheError: result.cacheError || null, generatedAt: result.generatedAt || null });
-        return sendJSON(res, 200, { configured: true, ...result });
+        return sendJSON(res, 200, { configured: true, ...result, marketSnapshotTitle: snapshotTitle });
       } catch (err) {
         log('error', 'Daily summary generation failed:', err.message);
         appendAuditLog({ event: 'daily-summary-refresh-failed', packageDate: meta.date || null, error: err.message || String(err) });
@@ -11003,7 +11044,7 @@ const server = http.createServer(async (req, res) => {
         thresholds: gathered.thresholds,
         dismissed: [], // dismissals are applied client-side (localStorage); see CLAUDE.md
         savedBanks: gathered.ownedBanks,
-        coverageByBank: gathered.mergedCoverage,
+        coverageByBank: gathered.coverageMap,
         lastTouchByBank: gathered.lastTouchByBank,
         overdueTasks: gathered.overdueTasks,
         mapBanks: Array.from(gathered.mapBanksOut.values()),
@@ -12068,6 +12109,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/audit-log' && req.method === 'GET') {
+      const { auth } = authInfoForRequest(req);
+      if ((IS_IIS_AUTH_MODE || ADMIN_USERS.size > 0) && !auth.isAdmin) {
+        return sendJSON(res, 403, { error: 'Admin permission is required for this view.' });
+      }
       const limit = Math.min(parseInt(query.get('limit'), 10) || 200, 1000);
       return sendJSON(res, 200, readAuditLog({ limit }));
     }

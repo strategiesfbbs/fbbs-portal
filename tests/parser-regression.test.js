@@ -185,6 +185,19 @@ function assertSecurityHelpers() {
     }
   }), false);
   assert.strictEqual(isSameOriginWrite({ headers: { host: 'portal.local:3000' } }), true);
+  assert.strictEqual(isSameOriginWrite({ headers: { host: 'portal.local:3000' } }, { requireHeaderSignal: true }), false);
+  assert.strictEqual(isSameOriginWrite({
+    headers: {
+      host: 'portal.local:3000',
+      'sec-fetch-site': 'same-origin'
+    }
+  }, { requireHeaderSignal: true }), true);
+  assert.strictEqual(isSameOriginWrite({
+    headers: {
+      host: 'portal.local:3000',
+      'sec-fetch-site': 'same-site'
+    }
+  }, { requireHeaderSignal: true }), false);
 }
 
 async function assertCdParser() {
