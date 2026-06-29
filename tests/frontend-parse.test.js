@@ -34,7 +34,7 @@ function testRoutePreservation() {
     assert.ok(match, 'VALID_PAGES constant not found');
     const actual = Array.from(match[1].matchAll(/'([^']+)'/g)).map(m => m[1]);
     const expected = [
-      'home', 'exec-summary', 'daily-intelligence', 'pulse', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+      'home', 'exec-summary', 'daily-intelligence', 'pulse', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
       'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
       'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'

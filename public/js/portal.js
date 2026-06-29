@@ -157,7 +157,7 @@
     corporates:        { label: 'Corporates', ext: 'XLSX', viewer: 'corporates' }
   };
 
-  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'econ', 'relativeValue', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
+  const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
                        'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
@@ -235,8 +235,6 @@
   ];
 
   const NAV_OFF_SIDEBAR_ITEMS = [
-    { page: 'econ', groupKey: 'today', label: 'Economic Update PDF', description: 'View or download the raw Economic Update PDF', aliases: 'economic update raw pdf document', searchable: false },
-    { page: 'relativeValue', groupKey: 'today', label: 'Relative Value PDF', description: 'View or download the raw Relative Value PDF', aliases: 'relative value raw pdf document', searchable: false },
     { page: 'treasuryNotes', groupKey: 'offerings', label: 'Treasury Notes Workbook', description: 'Raw Treasury Notes workbook route', aliases: 'treasury notes workbook raw document', searchable: false },
     { page: 'cdoffers', groupKey: 'offerings', label: 'Daily CD Offerings PDF', description: 'View or download the raw Daily CD Offerings PDF', aliases: 'daily cd offerings offers pdf raw document' },
     { page: 'munioffers', groupKey: 'offerings', label: 'Muni Offerings PDF', description: 'View or download the raw muni offerings PDF', aliases: 'municipal pdf munis muni offerings raw document' },
@@ -1708,9 +1706,6 @@
     }
     if (pageName === 'pulse') loadCrmPulse();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
-    if (pageName === 'relativeValue') {
-      loadRelativeValueSnapshot();
-    }
     if (pageName === 'mmd') {
       loadMmdCurve();
     }
@@ -2200,18 +2195,13 @@
     await loadQualitySummary();
     renderQualityStatus(packageUploadedCount(currentPackage));
     updateUploadStat();
-    await loadEconomicUpdate();
+    await loadEconomicUpdate(); // shared market data (Home snapshot, Daily Intelligence)
     renderHome();
-    renderViewer('econ');
-    renderViewer('relativeValue');
     renderViewer('treasuryNotes');
     renderViewer('cd');
     renderViewer('cdoffers');
     renderViewer('munioffers');
     renderCdCostCalculator();
-    if (document.getElementById('p-relativeValue')?.classList.contains('active')) {
-      loadRelativeValueSnapshot();
-    }
     if (document.getElementById('p-mmd')?.classList.contains('active')) {
       loadMmdCurve();
     }
