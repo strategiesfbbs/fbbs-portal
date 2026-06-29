@@ -3458,11 +3458,11 @@
   // ============ Economic Update Tool ============
 
   async function loadEconomicUpdate() {
-    const tool = document.getElementById('economicTool');
-    if (!tool) return;
+    // economicUpdateData is SHARED state (Home market snapshot + Daily
+    // Intelligence digital panels), not tied to any one page. The standalone
+    // Economic Update tab was retired, so load the data unconditionally here.
     if (!currentPackage || !currentPackage.econ) {
       economicUpdateData = null;
-      renderEconomicUpdate();
       return;
     }
     try {
@@ -3473,8 +3473,6 @@
       console.error('Failed to load economic update:', e);
       economicUpdateData = null;
     }
-    renderEconomicUpdate();
-    loadMarketSnapshotStrip('econMarketSnapshotStrip'); // canonical desk-vs-live band
   }
 
   function formatMarketValue(row) {
