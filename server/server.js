@@ -9609,6 +9609,11 @@ function scanFolderDrop(dateValue) {
         }
       }
       const reference = !slot && !execSlot && isReferenceDropFile(filename);
+      // A Pershing trade-history CSV rides in the same dropbox as the package but
+      // is NOT a package slot — it imports into trade history on its own track.
+      const tradeFile = !slot && !execSlot && !reference
+        && /\.csv$/i.test(filename) && !filename.startsWith('.') && !filename.startsWith('_')
+        && looksLikePershingTradeCsv(fullPath);
       return {
         filename,
         size: stat.size,
@@ -9617,11 +9622,13 @@ function scanFolderDrop(dateValue) {
         execSlot,
         label: slot ? (DOC_TYPES_LABELS[slot] || slot)
           : execSlot ? (EXEC_SUMMARY_SLOT_LABELS[execSlot] || execSlot)
+          : tradeFile ? 'Pershing trade history'
           : folderDropReferenceLabel(filename),
         companionRole: folderDropCompanionRole(filename),
         date: sniffDateFromFilename(filename),
         reference,
-        ignored: filename.startsWith('.') || filename.startsWith('_') || (!slot && !execSlot && !reference)
+        tradeFile,
+        ignored: filename.startsWith('.') || filename.startsWith('_') || (!slot && !execSlot && !reference && !tradeFile)
       };
     })
     .filter(row => !row.filename.startsWith('.') && row.filename !== '.DS_Store');
@@ -9629,7 +9636,8 @@ function scanFolderDrop(dateValue) {
   const publishable = entries.filter(row => row.slot && !row.ignored);
   const references = entries.filter(row => row.reference && !row.ignored);
   const execFiles = entries.filter(row => row.execSlot && !row.ignored);
-  const ignored = entries.filter(row => row.ignored || (!row.slot && !row.execSlot && !row.reference));
+  const tradeFiles = entries.filter(row => row.tradeFile && !row.ignored);
+  const ignored = entries.filter(row => row.ignored || (!row.slot && !row.execSlot && !row.reference && !row.tradeFile));
   const slots = {};
   publishable.forEach(row => {
     if (!slots[row.slot]) slots[row.slot] = [];
@@ -9669,6 +9677,7 @@ function scanFolderDrop(dateValue) {
   const dates = [...new Set(publishable.map(row => row.date).filter(Boolean))];
   if (dates.length > 1) warnings.push(`Files appear to reference multiple dates: ${dates.join(', ')}.`);
   if (references.length) warnings.push(`${references.length} reference/internal file${references.length === 1 ? '' : 's'} found. They will stay in the folder and will not replace package slots yet.`);
+  if (tradeFiles.length) warnings.push(`${tradeFiles.length} Pershing trade-history file${tradeFiles.length === 1 ? '' : 's'} detected. ${tradeFiles.length === 1 ? 'It' : 'They'} will import into trade history (not a package slot) and move to bank-reports/incoming/pershing-trades/processed/.`);
   if (execPresent.length && !execSummary.complete) {
     warnings.push(`Executive Summary: ${execRequiredPresent.length} of 3 required files detected (${execPresent.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')}). Missing ${execMissing.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')} — exec summary will not generate on publish until holdings, TBLT trades, and margin are in the folder.`);
   } else if (execSummary.complete) {
@@ -9682,6 +9691,7 @@ function scanFolderDrop(dateValue) {
     publishable,
     references,
     execFiles,
+    tradeFiles,
     execSummary,
     ignored,
     slots,
@@ -9884,6 +9894,7 @@ async function handleFolderDropPublish(req, res) {
       afterPublish: async () => {
         const result = ingestFolderDropReferences(scan);
         result.execSummary = await ingestFolderDropExecSummary(scan, req);
+        if (AUTO_PERSHING_TRADES_ENABLED) result.pershingTrades = importDropboxTradeFilesNow(scan);
         return result;
       }
     });
@@ -9955,6 +9966,18 @@ async function autoPublishTick() {
     autoPublishState.collisionAudited = false;
   }
 
+  // Side-car: import Pershing trade CSVs dropped alongside the package. Runs
+  // every tick regardless of package state (trade CSVs are excluded from the
+  // package fingerprint), so a trade-only drop still imports. Stability-gated
+  // and idempotent inside. FBBS_AUTO_PERSHING_TRADES=0 is the feature off-switch.
+  if (AUTO_PERSHING_TRADES_ENABLED) {
+    try {
+      importDropboxTradeFilesStable(scan);
+    } catch (err) {
+      log('warn', 'Dropbox Pershing trade side-car failed:', err.message);
+    }
+  }
+
   const fingerprint = dropFolderFingerprint(scan);
   if (!fingerprint || !scan.publishable.length) {
     autoPublishState.pendingFingerprint = fingerprint || null;
@@ -10017,8 +10040,11 @@ async function autoPublishTick() {
 // considered — the processed/ and failed/ subfolders are skipped.
 // Disable with FBBS_AUTO_PERSHING_TRADES=0.
 
-// filename -> "size|mtimeMs" seen on the previous tick (the stability gate).
-const pershingTradesDropState = { pending: new Map() };
+// file key -> "size|mtime" seen on the previous tick (the stability gate). Two
+// sources feed the same importer: the dedicated incoming/ folder and trade CSVs
+// dropped into the daily package dropbox. Keyed by full path so per-date dropbox
+// folders never collide.
+const pershingTradesDropState = { incoming: new Map(), dropbox: new Map() };
 let pershingTradesImportBusy = false;
 
 function pershingTradeDropDestPath(dir, name) {
@@ -10029,6 +10055,80 @@ function pershingTradeDropDestPath(dir, name) {
   let i = 1;
   while (fs.existsSync(dest)) { dest = path.join(dir, `${base}-${i}${ext}`); i += 1; }
   return dest;
+}
+
+// Header-signature sniff: a Pershing trade-history export's first row carries
+// Account Number / Buy/Sell / CUSIP / Trade Date columns (quotes + Excel text
+// guards stripped). Reads only the first 2 KB so it is cheap per scan.
+function looksLikePershingTradeCsv(fullPath) {
+  let head = '';
+  try {
+    const fd = fs.openSync(fullPath, 'r');
+    try {
+      const buf = Buffer.alloc(2048);
+      const n = fs.readSync(fd, buf, 0, buf.length, 0);
+      head = buf.slice(0, n).toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch (_) { return false; }
+  const firstLine = (head.split(/\r?\n/)[0] || '').toLowerCase().replace(/["'=]/g, '');
+  return firstLine.includes('account number') && firstLine.includes('buy/sell')
+    && firstLine.includes('cusip') && firstLine.includes('trade date');
+}
+
+// Import one trade CSV and archive it out of its drop folder so it is never
+// re-scanned: processed/<import-date>/ on success, failed/<import-date>/ on
+// error. Both end states are audited. Never throws.
+function importAndArchivePershingTradeFile(fullPath, filename) {
+  const importDate = new Date().toISOString().slice(0, 10);
+  try {
+    const stats = importPershingTradeFile(BANK_REPORTS_DIR, fullPath, { sourceFile: filename });
+    const destDir = path.join(PERSHING_TRADES_DROP_DIR, 'processed', importDate);
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.renameSync(fullPath, pershingTradeDropDestPath(destDir, filename));
+    log('info', `Pershing trade import: ${filename} → ${stats.importedCount} row(s) (${stats.matchedRows} bank-matched, ${stats.unmatchedRows} unmatched), trade dates ${stats.oldestTradeDate || '?'}..${stats.latestTradeDate || '?'}`);
+    appendAuditLog({
+      event: 'pershing-trades-auto-import',
+      file: filename,
+      importedCount: stats.importedCount,
+      matchedRows: stats.matchedRows,
+      unmatchedRows: stats.unmatchedRows,
+      oldestTradeDate: stats.oldestTradeDate,
+      latestTradeDate: stats.latestTradeDate
+    });
+    return { ok: true, file: filename, stats };
+  } catch (err) {
+    try {
+      const destDir = path.join(PERSHING_TRADES_DROP_DIR, 'failed', importDate);
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.renameSync(fullPath, pershingTradeDropDestPath(destDir, filename));
+    } catch (_) { /* leave the file in place if even the move fails */ }
+    log('error', `Pershing trade import failed for ${filename}:`, err.message);
+    appendAuditLog({ event: 'pershing-trades-auto-import-failed', file: filename, error: err.message });
+    return { ok: false, file: filename, error: err.message };
+  }
+}
+
+// Stability-gated runner shared by both watch sources. files: [{ key, full,
+// filename, fingerprint }]. A file imports only once its fingerprint is
+// byte-identical to the previous tick, so a half-copied file never imports.
+function runStablePershingTradeImport(files, stateMap) {
+  const present = new Set(files.map(f => f.key));
+  for (const key of [...stateMap.keys()]) {
+    if (!present.has(key)) stateMap.delete(key);   // forget files that moved/were removed
+  }
+  if (!files.length) return [];
+  const stable = [];
+  for (const f of files) {
+    const prev = stateMap.get(f.key);
+    stateMap.set(f.key, f.fingerprint);
+    if (prev === f.fingerprint) stable.push(f);
+  }
+  const results = [];
+  for (const f of stable) {
+    results.push(importAndArchivePershingTradeFile(f.full, f.filename));
+    stateMap.delete(f.key);                          // moved out of the folder now
+  }
+  return results;
 }
 
 function scanPershingTradeDrop() {
@@ -10048,71 +10148,54 @@ function scanPershingTradeDrop() {
     const full = path.join(PERSHING_TRADES_DROP_DIR, name);
     let st;
     try { st = fs.statSync(full); } catch (_) { continue; }
-    files.push({ name, full, fingerprint: `${st.size}|${st.mtimeMs}` });
+    // Same fingerprint encoding the dropbox side-car uses (size|ISO-mtime) so the
+    // two watch sources stay format-consistent.
+    files.push({ key: full, full, filename: name, fingerprint: `${st.size}|${st.mtime.toISOString()}` });
   }
   return files;
 }
 
+// Dedicated-folder watcher: data/bank-reports/incoming/pershing-trades/.
 async function autoPershingTradesTick() {
   if (pershingTradesImportBusy) return;
-  let files;
-  try {
-    files = scanPershingTradeDrop();
-  } catch (err) {
-    log('warn', 'Pershing trade auto-import scan failed:', err.message);
-    return;
-  }
-
-  // Forget files that have since been removed/moved.
-  const present = new Set(files.map(f => f.name));
-  for (const name of [...pershingTradesDropState.pending.keys()]) {
-    if (!present.has(name)) pershingTradesDropState.pending.delete(name);
-  }
-  if (!files.length) return;
-
-  // Import only files whose fingerprint is byte-identical to the previous tick.
-  const stable = [];
-  for (const f of files) {
-    const prev = pershingTradesDropState.pending.get(f.name);
-    pershingTradesDropState.pending.set(f.name, f.fingerprint);
-    if (prev === f.fingerprint) stable.push(f);
-  }
-  if (!stable.length) return;
-
   pershingTradesImportBusy = true;
   try {
-    const importDate = new Date().toISOString().slice(0, 10);
-    for (const f of stable) {
-      try {
-        const stats = importPershingTradeFile(BANK_REPORTS_DIR, f.full, { sourceFile: f.name });
-        const destDir = path.join(PERSHING_TRADES_DROP_DIR, 'processed', importDate);
-        fs.mkdirSync(destDir, { recursive: true });
-        fs.renameSync(f.full, pershingTradeDropDestPath(destDir, f.name));
-        pershingTradesDropState.pending.delete(f.name);
-        log('info', `Pershing trade auto-import: ${f.name} → ${stats.importedCount} row(s) (${stats.matchedRows} bank-matched, ${stats.unmatchedRows} unmatched), trade dates ${stats.oldestTradeDate || '?'}..${stats.latestTradeDate || '?'}`);
-        appendAuditLog({
-          event: 'pershing-trades-auto-import',
-          file: f.name,
-          importedCount: stats.importedCount,
-          matchedRows: stats.matchedRows,
-          unmatchedRows: stats.unmatchedRows,
-          oldestTradeDate: stats.oldestTradeDate,
-          latestTradeDate: stats.latestTradeDate
-        });
-      } catch (err) {
-        const destDir = path.join(PERSHING_TRADES_DROP_DIR, 'failed', importDate);
-        try {
-          fs.mkdirSync(destDir, { recursive: true });
-          fs.renameSync(f.full, pershingTradeDropDestPath(destDir, f.name));
-        } catch (_) { /* leave the file in place if the move fails */ }
-        pershingTradesDropState.pending.delete(f.name);
-        log('error', `Pershing trade auto-import failed for ${f.name}:`, err.message);
-        appendAuditLog({ event: 'pershing-trades-auto-import-failed', file: f.name, error: err.message });
-      }
+    let files = [];
+    try {
+      files = scanPershingTradeDrop();
+    } catch (err) {
+      log('warn', 'Pershing trade auto-import scan failed:', err.message);
+      return;
     }
+    runStablePershingTradeImport(files, pershingTradesDropState.incoming);
   } finally {
     pershingTradesImportBusy = false;
   }
+}
+
+// Side-car for the daily package dropbox: import Pershing trade CSVs that rode
+// in alongside the offerings/emails. Stability-gated like the dedicated folder;
+// runs every auto-publish tick, independent of whether a package publish
+// happens (so a trade-only drop still imports). Trade CSVs are kept out of the
+// package fingerprint, so importing/moving them never perturbs publishing.
+function importDropboxTradeFilesStable(scan) {
+  const files = (scan.tradeFiles || []).map(row => {
+    const full = path.join(scan.folderPath, row.filename);
+    return { key: full, full, filename: row.filename, fingerprint: `${row.size}|${row.modifiedAt}` };
+  });
+  return runStablePershingTradeImport(files, pershingTradesDropState.dropbox);
+}
+
+// Manual Folder-Drop publish: the admin pressed publish, so import any trade
+// CSVs in the folder immediately (no stability gate) alongside the package.
+function importDropboxTradeFilesNow(scan) {
+  const results = [];
+  for (const row of (scan.tradeFiles || [])) {
+    const full = path.join(scan.folderPath, row.filename);
+    if (!fs.existsSync(full)) continue;
+    results.push(importAndArchivePershingTradeFile(full, row.filename));
+  }
+  return results;
 }
 
 // ---------- FDIC weekly auto-sync ----------

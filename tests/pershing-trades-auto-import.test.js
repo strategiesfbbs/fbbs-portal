@@ -14,7 +14,7 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-pershing-auto-impor
 process.env.DATA_DIR = DATA_DIR;
 process.env.LOG_LEVEL = 'error';
 
-const { autoPershingTradesTick } = require('../server/server');
+const { autoPershingTradesTick, autoPublishTick } = require('../server/server');
 const pershing = require('../server/pershing-store');
 
 const BANK_REPORTS_DIR = path.join(DATA_DIR, 'bank-reports');
@@ -29,6 +29,8 @@ function tradeCsv(rows) {
 
 const ROW_625 = '"=""7R8000001""","BUY","DAN H","=""912828U24""",100000.00000,"US TREASURY","US TREASURY NOTE 2.500% 05/31/30","USTREAS","No",99.5,"06/25/2026","06/25/2026","06/26/2026","05/31/2030"';
 const ROW_626 = '"=""7R8000002""","SELL","JIM L","=""3130A1AA1""",-50000,"FHLB","FHLB 4.000% 06/30/28","AGENCY","Yes",101.25,"06/26/2026","06/26/2026","06/29/2026","06/30/2028"';
+// A distinct row used to prove the dropbox side-car actually imports (unique trade_key).
+const ROW_630 = '"=""7R8009999""","BUY","NEW REP","=""912828ZZ9""",100000.00000,"US TREASURY","US TREASURY NOTE 3.000% 06/30/31","GOVTSEC","No",99.0,"06/30/2026","06/30/2026","07/01/2026","06/30/2031"';
 
 function dropFile(name, body) {
   fs.mkdirSync(DROP_DIR, { recursive: true });
@@ -115,6 +117,49 @@ async function main() {
     await autoPershingTradesTick();   // stable → imports 0 rows, moves out
     assert.ok(!fs.existsSync(path.join(DROP_DIR, 'empty.csv')), 'empty file should leave the drop root');
     assert.strictEqual(tradeCount(), before, 'a zero-row file must not change the trade count');
+  });
+
+  // ---- Daily package dropbox side-car (drop trade CSVs alongside offerings/emails) ----
+  const { scanFolderDrop } = require('../server/server');
+  const today = new Date().toISOString().slice(0, 10);
+  const PKG_DROP = path.join(DATA_DIR, 'dropbox', today);
+  const PROCESSED = path.join(BANK_REPORTS_DIR, 'incoming', 'pershing-trades', 'processed');
+
+  function dropInPackageFolder(name, body) {
+    fs.mkdirSync(PKG_DROP, { recursive: true });
+    fs.writeFileSync(path.join(PKG_DROP, name), body, 'utf8');
+  }
+  function processedHas(name) {
+    if (!fs.existsSync(PROCESSED)) return false;
+    return fs.readdirSync(PROCESSED, { recursive: true }).some(p => String(p).endsWith(name));
+  }
+
+  await check('scanFolderDrop routes a Pershing trade CSV to tradeFiles, a junk CSV to ignored', async () => {
+    dropInPackageFolder('trades 6-30-2026.csv', tradeCsv([ROW_630]));
+    dropInPackageFolder('notes.csv', 'foo,bar\n1,2\n');   // a non-Pershing CSV
+    const scan = scanFolderDrop(null);
+    assert.ok((scan.tradeFiles || []).some(f => f.filename === 'trades 6-30-2026.csv'), 'trade CSV should be in tradeFiles');
+    assert.ok(!(scan.publishable || []).some(f => f.filename === 'trades 6-30-2026.csv'), 'trade CSV must not be a package slot');
+    assert.ok(!(scan.ignored || []).some(f => f.filename === 'trades 6-30-2026.csv'), 'trade CSV must not be ignored');
+    assert.ok(!(scan.tradeFiles || []).some(f => f.filename === 'notes.csv'), 'a non-Pershing CSV must not be a trade file');
+    assert.ok((scan.ignored || []).some(f => f.filename === 'notes.csv'), 'a non-Pershing CSV should be ignored');
+  });
+
+  await check('dropbox side-car imports a trade CSV (stability-gated) and moves it to processed/', async () => {
+    const before = tradeCount();
+    await autoPublishTick();   // first sighting → pending (no import)
+    assert.strictEqual(tradeCount(), before, 'trade CSV must not import on its first dropbox sighting');
+    await autoPublishTick();   // byte-stable → imports
+    assert.strictEqual(tradeCount(), before + 1, 'the stable dropbox trade CSV should import its one new row');
+    assert.ok(!fs.existsSync(path.join(PKG_DROP, 'trades 6-30-2026.csv')), 'imported trade CSV should leave the dropbox folder');
+    assert.ok(processedHas('trades 6-30-2026.csv'), 'imported dropbox trade CSV should land under processed/');
+  });
+
+  await check('a trade-only drop never publishes a package and leaves the junk CSV alone', async () => {
+    const current = path.join(DATA_DIR, 'current');
+    const hasPackage = fs.existsSync(current) && fs.readdirSync(current).some(f => /\.(pdf|xlsx|xlsm)$/i.test(f));
+    assert.ok(!hasPackage, 'no package should publish from a trade-only drop');
+    assert.ok(fs.existsSync(path.join(PKG_DROP, 'notes.csv')), 'a non-trade CSV stays put (it is just ignored)');
   });
 }
 
