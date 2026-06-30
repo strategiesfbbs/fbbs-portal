@@ -245,6 +245,31 @@ try {
   const replaced = pershing.getPershingForBank(tmpDir, 'B-1', { asOfDate: '2026-06-25' });
   ok('replace import removes old account rows', replaced.accounts.length === 1);
   ok('replace import updates status count', pershing.getPershingImportStatus(tmpDir).accountCount === 1);
+
+  // ---- File-based import (the CLI and the folder-drop watcher share this path) ----
+  const fileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-pershing-file-'));
+  const csvPath = path.join(fileDir, 'PERSHING TRADE 6-25-2026.csv');
+  fs.writeFileSync(csvPath, [
+    '"Account Number","Buy/Sell","IP Name","CUSIP","Quantity","Issuer","Security Description","Asset Type Code","Callable","Price (Transaction Currency)","Activity Date","Trade Date","Settlement Date","Maturity Date"',
+    '"=""7R8000001""","BUY","DAN H","=""912828U24""",100000.00000,"US TREASURY","US TREASURY NOTE 2.500% 05/31/30","USTREAS","No",99.5,"06/25/2026","06/25/2026","06/26/2026","05/31/2030"',
+    '"=""7R8000002""","SELL","JIM L","=""3130A1AA1""",-50000,"FHLB","FHLB 4.000% 06/30/28","AGENCY","Yes",101.25,"06/25/2026","06/25/2026","06/26/2026","06/30/2028"'
+  ].join('\n'), 'utf8');
+
+  const parsedRows = pershing.parsePershingTradeCsv(fs.readFileSync(csvPath, 'utf8'));
+  ok('csv parser row count', parsedRows.length === 2, String(parsedRows.length));
+  ok('csv parser preserves Excel text-formula wrapper for downstream strip', parsedRows[0]['Account Number'] === '="7R8000001"', JSON.stringify(parsedRows[0]['Account Number']));
+  ok('infer as-of from M-D-YYYY filename', pershing.inferTradeAsOfDate(csvPath) === '2026-06-25', pershing.inferTradeAsOfDate(csvPath));
+  ok('infer as-of from YYYY-MM-DD filename', pershing.inferTradeAsOfDate('trades 2026-06-29.csv') === '2026-06-29');
+
+  const fileResult = pershing.importPershingTradeFile(fileDir, csvPath);
+  ok('file import row count', fileResult.importedCount === 2, JSON.stringify(fileResult));
+  ok('file import infers as-of from filename', fileResult.asOfDate === '2026-06-25', JSON.stringify(fileResult));
+  pershing.importPershingTradeFile(fileDir, csvPath);
+  ok('file re-import is idempotent', pershing.getPershingTradeImportStatus(fileDir).tradeCount === 2, JSON.stringify(pershing.getPershingTradeImportStatus(fileDir)));
+  let missingThrew = false;
+  try { pershing.importPershingTradeFile(fileDir, path.join(fileDir, 'nope.csv')); } catch (_) { missingThrew = true; }
+  ok('file import throws on missing file', missingThrew);
+  fs.rmSync(fileDir, { recursive: true, force: true });
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }

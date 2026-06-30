@@ -638,6 +638,70 @@ function importPershingTrades(outputDir, rows, options = {}) {
   return stats;
 }
 
+// ---------- File ingestion (the CLI and the folder-drop watcher share this) ----------
+//
+// A Pershing trade-history export is a CSV whose account/CUSIP cells are wrapped
+// in Excel text-formula guards (`="7R8064788"`). parsePershingTradeCsv unwraps
+// the CSV quoting; mapPershingTrade() strips the formula guard downstream.
+
+function parsePershingTradeCsv(text) {
+  const rows = [];
+  let field = '';
+  let row = [];
+  let inQuotes = false;
+  const s = String(text || '');
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (s[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && s[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.some(c => c !== '')) rows.push(row);
+      row = [];
+    } else field += ch;
+  }
+  row.push(field);
+  if (row.some(c => c !== '')) rows.push(row);
+  if (!rows.length) return [];
+  const headers = rows[0].map(h => String(h || '').trim());
+  return rows.slice(1).map(cols => {
+    const obj = {};
+    headers.forEach((h, idx) => { if (h) obj[h] = String(cols[idx] ?? '').trim(); });
+    return obj;
+  });
+}
+
+// Snapshot lineage only — trade_date drives every per-row date. Accepts the two
+// shapes the desk's exports use in filenames: `6-24-2026` and `2026-06-24`.
+function inferTradeAsOfDate(filePath) {
+  const base = path.basename(filePath || '');
+  let m = base.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+  m = base.match(/(\d{1,2})-(\d{1,2})-(\d{4})/);
+  if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  return '';
+}
+
+function importPershingTradeFile(outputDir, filePath, options = {}) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    throw new Error(`Missing trade-history file: ${filePath}`);
+  }
+  const rows = parsePershingTradeCsv(fs.readFileSync(filePath, 'utf8'));
+  return importPershingTrades(outputDir, rows, {
+    ...options,
+    sourceFile: options.sourceFile || path.basename(filePath),
+    asOfDate: options.asOfDate || inferTradeAsOfDate(filePath)
+  });
+}
+
 function rowToAccount(row) {
   return {
     salesforcePershingId: row.salesforcePershingId || '',
@@ -993,6 +1057,9 @@ module.exports = {
   ensurePershingDatabase,
   importPershingAccounts,
   importPershingTrades,
+  parsePershingTradeCsv,
+  inferTradeAsOfDate,
+  importPershingTradeFile,
   getPershingForBank,
   getPershingRollupsForBanks,
   getPershingImportStatus,

@@ -211,7 +211,8 @@ const {
   getPershingRollupsForBanks,
   getPershingTradeImportStatus,
   listPershingTradesForBank,
-  listDormantPershingBanks
+  listDormantPershingBanks,
+  importPershingTradeFile
 } = require('./pershing-store');
 const { getTradesForBank, getTradeImportStatus } = require('./trade-store');
 
@@ -266,6 +267,9 @@ if (!process.env.ANTHROPIC_API_KEY) {
 // Folder-drop auto-publish (FBBS_AUTO_PUBLISH=0 disables; see autoPublishTick)
 const AUTO_PUBLISH_ENABLED = process.env.FBBS_AUTO_PUBLISH !== '0';
 const AUTO_PUBLISH_POLL_MS = 2 * 60 * 1000;
+// Folder-drop Pershing trade auto-import (FBBS_AUTO_PERSHING_TRADES=0 disables; see autoPershingTradesTick)
+const AUTO_PERSHING_TRADES_ENABLED = process.env.FBBS_AUTO_PERSHING_TRADES !== '0';
+const PERSHING_TRADES_DROP_DIR = path.join(BANK_REPORTS_DIR, 'incoming', 'pershing-trades');
 // FDIC weekly auto-sync (FBBS_AUTO_FDIC_SYNC=0 disables; see autoFdicSyncTick)
 const AUTO_FDIC_SYNC_ENABLED = process.env.FBBS_AUTO_FDIC_SYNC !== '0';
 const AUTO_FDIC_SYNC_CHECK_MS = 6 * 60 * 60 * 1000; // stamp check cadence
@@ -10001,6 +10005,116 @@ async function autoPublishTick() {
   }
 }
 
+// ---------- Folder-drop Pershing trade auto-import ----------
+//
+// Watches data/bank-reports/incoming/pershing-trades/ for daily Pershing
+// trade-history CSV exports and imports each through the SAME idempotent
+// importPershingTradeFile() path the CLI uses (upsert on trade_key — safe to
+// overlap days or re-drop the same export). A file must be byte-stable for one
+// full poll interval before it is read (so a half-copied file never imports),
+// then it's moved into processed/<import-date>/ on success or failed/ on error
+// so it is never re-scanned. Only loose .csv files in the folder root are
+// considered — the processed/ and failed/ subfolders are skipped.
+// Disable with FBBS_AUTO_PERSHING_TRADES=0.
+
+// filename -> "size|mtimeMs" seen on the previous tick (the stability gate).
+const pershingTradesDropState = { pending: new Map() };
+let pershingTradesImportBusy = false;
+
+function pershingTradeDropDestPath(dir, name) {
+  let dest = path.join(dir, name);
+  if (!fs.existsSync(dest)) return dest;
+  const ext = path.extname(name);
+  const base = name.slice(0, name.length - ext.length);
+  let i = 1;
+  while (fs.existsSync(dest)) { dest = path.join(dir, `${base}-${i}${ext}`); i += 1; }
+  return dest;
+}
+
+function scanPershingTradeDrop() {
+  let entries;
+  try {
+    entries = fs.readdirSync(PERSHING_TRADES_DROP_DIR, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const files = [];
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;                       // skip processed/, failed/, date subfolders
+    const name = ent.name;
+    if (name.startsWith('.') || name.startsWith('_')) continue;  // .DS_Store, private metadata
+    if (!/\.csv$/i.test(name)) continue;
+    const full = path.join(PERSHING_TRADES_DROP_DIR, name);
+    let st;
+    try { st = fs.statSync(full); } catch (_) { continue; }
+    files.push({ name, full, fingerprint: `${st.size}|${st.mtimeMs}` });
+  }
+  return files;
+}
+
+async function autoPershingTradesTick() {
+  if (pershingTradesImportBusy) return;
+  let files;
+  try {
+    files = scanPershingTradeDrop();
+  } catch (err) {
+    log('warn', 'Pershing trade auto-import scan failed:', err.message);
+    return;
+  }
+
+  // Forget files that have since been removed/moved.
+  const present = new Set(files.map(f => f.name));
+  for (const name of [...pershingTradesDropState.pending.keys()]) {
+    if (!present.has(name)) pershingTradesDropState.pending.delete(name);
+  }
+  if (!files.length) return;
+
+  // Import only files whose fingerprint is byte-identical to the previous tick.
+  const stable = [];
+  for (const f of files) {
+    const prev = pershingTradesDropState.pending.get(f.name);
+    pershingTradesDropState.pending.set(f.name, f.fingerprint);
+    if (prev === f.fingerprint) stable.push(f);
+  }
+  if (!stable.length) return;
+
+  pershingTradesImportBusy = true;
+  try {
+    const importDate = new Date().toISOString().slice(0, 10);
+    for (const f of stable) {
+      try {
+        const stats = importPershingTradeFile(BANK_REPORTS_DIR, f.full, { sourceFile: f.name });
+        const destDir = path.join(PERSHING_TRADES_DROP_DIR, 'processed', importDate);
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.renameSync(f.full, pershingTradeDropDestPath(destDir, f.name));
+        pershingTradesDropState.pending.delete(f.name);
+        log('info', `Pershing trade auto-import: ${f.name} → ${stats.importedCount} row(s) (${stats.matchedRows} bank-matched, ${stats.unmatchedRows} unmatched), trade dates ${stats.oldestTradeDate || '?'}..${stats.latestTradeDate || '?'}`);
+        appendAuditLog({
+          event: 'pershing-trades-auto-import',
+          file: f.name,
+          importedCount: stats.importedCount,
+          matchedRows: stats.matchedRows,
+          unmatchedRows: stats.unmatchedRows,
+          oldestTradeDate: stats.oldestTradeDate,
+          latestTradeDate: stats.latestTradeDate
+        });
+      } catch (err) {
+        const destDir = path.join(PERSHING_TRADES_DROP_DIR, 'failed', importDate);
+        try {
+          fs.mkdirSync(destDir, { recursive: true });
+          fs.renameSync(f.full, pershingTradeDropDestPath(destDir, f.name));
+        } catch (_) { /* leave the file in place if the move fails */ }
+        pershingTradesDropState.pending.delete(f.name);
+        log('error', `Pershing trade auto-import failed for ${f.name}:`, err.message);
+        appendAuditLog({ event: 'pershing-trades-auto-import-failed', file: f.name, error: err.message });
+      }
+    }
+  } finally {
+    pershingTradesImportBusy = false;
+  }
+}
+
 // ---------- FDIC weekly auto-sync ----------
 //
 // Runs the same non-destructive quarterly pull as the admin Upload-page
@@ -13008,6 +13122,13 @@ function listenServer() {
       log('info', `Folder-drop auto-publish armed: watching ${DROPBOX_DIR}/<today> every ${AUTO_PUBLISH_POLL_MS / 60000} min (FBBS_AUTO_PUBLISH=0 disables).`);
     }
 
+    if (AUTO_PERSHING_TRADES_ENABLED) {
+      setInterval(() => {
+        autoPershingTradesTick().catch(err => log('error', 'Pershing trade auto-import tick crashed:', err.message));
+      }, AUTO_PUBLISH_POLL_MS);
+      log('info', `Pershing trade auto-import armed: watching ${PERSHING_TRADES_DROP_DIR} every ${AUTO_PUBLISH_POLL_MS / 60000} min (FBBS_AUTO_PERSHING_TRADES=0 disables).`);
+    }
+
     if (AUTO_FDIC_SYNC_ENABLED) {
       // First check 10 minutes after boot (stay out of startup's way), then 6-hourly.
       setTimeout(() => {
@@ -13041,5 +13162,6 @@ module.exports = {
   mapSwapHoldingPosition,
   scanFolderDrop,
   autoPublishTick,
+  autoPershingTradesTick,
   startServer
 };
