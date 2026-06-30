@@ -125,13 +125,16 @@ function toNumber(val) {
 /**
  * Normalize a yield value.
  *   treatment === 'ytm':  always decimal, multiply by 100
- *   treatment === 'ytnc': heuristic — ≤ 1 means decimal, otherwise already pct
+ *   treatment === 'ytnc': 0 / blank-as-0 / negative → null ("no call yield"),
+ *                         otherwise heuristic — ≤ 1 means decimal, else already pct
  */
 function toYieldPct(val, treatment) {
   const n = toNumber(val);
   if (n == null) return null;
   if (treatment === 'ytm') return n * 100;
-  if (treatment === 'ytnc') return n <= 1 ? n * 100 : n;
+  // A 0 (or blank coded as 0) in the YTNC column means "no call yield" for a
+  // non-callable — keep it null so YTW = min(YTM, YTNC) is never dragged to 0.
+  if (treatment === 'ytnc') return n <= 0 ? null : (n <= 1 ? n * 100 : n);
   return n;
 }
 
@@ -152,11 +155,18 @@ function yieldColumnMultiplier(dataRows, colIndex) {
   return median <= 1 ? 100 : 1; // ≤1 ⇒ decimal fraction (scale up); >1 ⇒ already percent
 }
 
-// Sanity band for published yields. A computed yield outside ~0.1–25% almost
+// Sanity band for published yields. A computed YTM outside ~0.1–25% almost
 // always means a misread column or a decimal/percent scaling slip — the most
 // dangerous parser failure (a fully-populated sheet of wrong numbers that looks
 // healthy). We warn but never alter the value; the go-live smoke step keys off
 // these warnings.
+//
+// NOTE: this band is applied to YTM only, NOT YTNC. Yield-to-next-call
+// legitimately spikes far outside the band for a deep-discount bond with a
+// near call (e.g. a 1% coupon priced to a 5% YTM that gets called at par soon
+// can show a 30%+ YTNC) — that is accurate, not a scaling error, so it is not
+// a warning. The displayed yield is YTW = min(YTM, YTNC), so a high YTNC never
+// drives the headline number anyway. (See the same note at server.js:3768.)
 const YIELD_BAND_MIN = 0.1;
 const YIELD_BAND_MAX = 25;
 function warnYieldBand(value, field, structure, rowNum, warnings) {
@@ -230,7 +240,7 @@ function parseSheet(worksheet, structure, warnings) {
     }
 
     warnYieldBand(record.ytm, 'ytm', structure, rowNum, warnings);
-    warnYieldBand(record.ytnc, 'ytnc', structure, rowNum, warnings);
+    // YTNC is intentionally NOT band-checked — see the note above warnYieldBand.
     out.push(record);
   }
 

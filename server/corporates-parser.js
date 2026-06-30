@@ -123,13 +123,18 @@ function toYieldPct(val, treatment) {
   const n = toNumber(val);
   if (n == null) return null;
   if (treatment === 'ytm') return n * 100;
-  // YTNC: values ≤ 1 treated as decimal; > 1 already in percent
+  // YTNC: a 0 (or blank coded as 0) / negative means "no call yield" for a
+  // non-callable — null it so YTW = min(YTM, YTNC) is never dragged to 0.
+  // Otherwise values ≤ 1 are decimal; > 1 already in percent.
+  if (n <= 0) return null;
   return n <= 1 ? n * 100 : n;
 }
 
-// Sanity band for published yields — warn (never alter) when a computed yield
+// Sanity band for published yields — warn (never alter) when a computed YTM
 // lands outside ~0.1–25%, the signature of a misread column or a decimal/percent
-// scaling slip. The go-live smoke step keys off these warnings.
+// scaling slip. The go-live smoke step keys off these warnings. Applied to YTM
+// only: YTNC legitimately spikes outside the band for deep-discount near-call
+// bonds, so it is not band-checked (and YTW = min(YTM, YTNC) ignores it anyway).
 const YIELD_BAND_MIN = 0.1;
 const YIELD_BAND_MAX = 25;
 function warnYieldBand(value, field, rowNum, warnings) {
@@ -242,7 +247,9 @@ function parseCorporatesSheet(worksheet, warnings) {
       continue;
     }
     warnYieldBand(record.ytm, 'ytm', rowNum, warnings);
-    warnYieldBand(record.ytnc, 'ytnc', rowNum, warnings);
+    // YTNC is intentionally NOT band-checked — yield-to-next-call legitimately
+    // spikes far outside the band for deep-discount near-call bonds (accurate,
+    // not a scaling error), and YTW = min(YTM, YTNC) ignores a high YTNC anyway.
     out.push(record);
   }
   return out;

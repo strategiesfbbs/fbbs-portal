@@ -428,6 +428,23 @@ function assertAgenciesParser() {
     ])
   }]);
   assert(Math.abs(gridDecimal.offerings[0].ytm - 3.327) < 1e-9, `decimal ytm scaled up, got ${gridDecimal.offerings[0].ytm}`);
+
+  // A deep-discount callable's YTNC legitimately spikes far above the YTM band —
+  // it must be KEPT and must NOT raise a band warning. A 0 YTNC means "no call"
+  // and must be nulled (never kept as 0, which would drag YTW = min(YTM,YTNC) to 0).
+  const ytncCases = parseAgenciesFiles([{
+    filename: 'grid1_ytnc.xlsx',
+    buffer: workbookBuffer([
+      ['Tkr', 'Cpn', 'Mty', 'Nxt Call', 'Call Typ', 'A Px', 'A YTM', 'A YTNC', 'CUSIP'],
+      ['FHLB', 1.0, '4/1/2036', '7/1/2026', 'Anytime', 80.0, 5.0, 61.14, '3130ANDM9'],
+      ['FFCB', 4.5, '8/15/2028', '', '', 100.1, 4.45, 0, '3133EPXY8']
+    ])
+  }]);
+  const ddAgency = ytncCases.offerings.find(o => o.cusip === '3130ANDM9');
+  const zeroAgency = ytncCases.offerings.find(o => o.cusip === '3133EPXY8');
+  assert(Math.abs(ddAgency.ytnc - 61.14) < 1e-9, `deep-discount callable keeps its high YTNC, got ${ddAgency.ytnc}`);
+  assert.strictEqual(zeroAgency.ytnc, null, '0 YTNC is nulled, not kept as 0');
+  assert.strictEqual(ytncCases.warnings.filter(w => /ytnc/.test(w) && /outside/.test(w)).length, 0, 'a high or zero YTNC raises no band warning');
 }
 
 function assertCorporatesParser() {
@@ -453,6 +470,24 @@ function assertCorporatesParser() {
   assert.strictEqual(bannerParsed.offerings[0].cusip, '24422EXD6');
   assert(Math.abs(bannerParsed.offerings[0].ytm - 3.448) < 1e-9);
   assert(bannerParsed.warnings.some(warning => warning.includes('Row 4: skipped')));
+
+  // YTNC: a deep-discount callable keeps its high YTNC (no band warning); a 0
+  // YTNC (non-callable / blank-as-0) becomes null so it never overrides YTM as
+  // a 0% YTW, and its real YTM still shows.
+  const ytncParsed = parseCorporatesFiles([{
+    filename: 'corporates ytnc.xlsx',
+    buffer: workbookBuffer([
+      ['Moody', 'S&P', 'ASz', 'Issuer', 'Tkr', 'Cpn', 'Mty', 'Security', 'A Px', 'A YTM', 'A YTNC', 'Sector', 'Amt Out'],
+      ['A1', 'A', 2000, 'DEEP DISC CALLABLE', 'DD', 1.0, '09/08/2031', '111111AB1', 80.0, 0.05, 0.30, 'Industrial', '2MM'],
+      ['A2', 'A', 1000, 'NON CALLABLE ZERO', 'NC', 4.5, '09/08/2029', '222222AB2', 99.1, 0.042, 0, 'Industrial', '500M']
+    ])
+  }]);
+  const ddCorp = ytncParsed.offerings.find(o => o.cusip === '111111AB1');
+  const zeroCorp = ytncParsed.offerings.find(o => o.cusip === '222222AB2');
+  assert(Math.abs(ddCorp.ytnc - 30) < 1e-9, `deep-discount callable keeps its high YTNC, got ${ddCorp.ytnc}`);
+  assert.strictEqual(zeroCorp.ytnc, null, '0 YTNC is nulled, not kept as 0');
+  assert(Math.abs(zeroCorp.ytm - 4.2) < 1e-9, `non-callable keeps its real YTM, got ${zeroCorp.ytm}`);
+  assert.strictEqual(ytncParsed.warnings.filter(w => /ytnc/.test(w) && /outside/.test(w)).length, 0, 'a high or zero YTNC raises no band warning');
 }
 
 function assertTreasuryNotesParser() {
