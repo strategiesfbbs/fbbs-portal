@@ -800,6 +800,32 @@ test('bank activity route rejects contact IDs from another bank', async () => {
     });
     assert.strictEqual(good.status, 200, good.text);
     assert.strictEqual(good.json.activity.contactId, validContact.id);
+
+    const doNotCall = coverageStore.createBankContact(reportsDir, banks[0].summary, {
+      name: 'Do Not Call Contact',
+      doNotCall: true
+    });
+    const blockedCall = await request(port, {
+      method: 'POST',
+      path: '/api/banks/ACT-1/activity',
+      headers,
+      body: JSON.stringify({ ...baseBody, contactId: doNotCall.id })
+    });
+    assert.strictEqual(blockedCall.status, 400, blockedCall.text);
+    assert.match(blockedCall.json.error, /do not call/i);
+
+    const emailOptOut = coverageStore.createBankContact(reportsDir, banks[0].summary, {
+      name: 'Email Opt Out Contact',
+      optOutEmail: true
+    });
+    const blockedEmail = await request(port, {
+      method: 'POST',
+      path: '/api/banks/ACT-1/activity',
+      headers,
+      body: JSON.stringify({ ...baseBody, kind: 'email', contactId: emailOptOut.id })
+    });
+    assert.strictEqual(blockedEmail.status, 400, blockedEmail.text);
+    assert.match(blockedEmail.json.error, /email/i);
   });
 });
 

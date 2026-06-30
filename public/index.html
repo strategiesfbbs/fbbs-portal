@@ -570,6 +570,12 @@
   </section>
 
   <div class="container">
+    <nav class="local-section-nav maturity-cal-nav" aria-label="Maturity Calendar sections">
+      <a href="#maturityCalSummary">Summary</a>
+      <a href="#maturityCalMaturing">Maturing Cash</a>
+      <a href="#maturityCalCallable">Callable Watch</a>
+      <a href="#maturityCalBanks">Bank List</a>
+    </nav>
     <div class="maturity-cal-controls" id="maturityCalControls">
       <div class="mc-control">
         <label>Window</label>
@@ -1824,6 +1830,19 @@
         <tbody id="contactsBody"></tbody>
       </table>
     </div>
+    <div class="table-page-controls contacts-page-controls" id="contactsPageControls" aria-label="Contacts pagination">
+      <span id="contactsPageStatus">Loading contacts&hellip;</span>
+      <div class="table-page-actions">
+        <label for="contactsPageSize">Rows</label>
+        <select id="contactsPageSize" aria-label="Rows per page">
+          <option value="100">100</option>
+          <option value="250">250</option>
+          <option value="500">500</option>
+        </select>
+        <button type="button" class="small-btn" id="contactsPrevPage">Prev</button>
+        <button type="button" class="small-btn" id="contactsNextPage">Next</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1923,7 +1942,7 @@
             <span id="aoSelectionMeta"></span>
           </div>
           <div class="ao-selection-actions">
-            <button type="button" class="small-btn" id="aoSelectVisible">Select visible</button>
+            <button type="button" class="small-btn" id="aoSelectVisible">Select page</button>
             <button type="button" class="small-btn" id="aoClearSelection">Clear</button>
             <button type="button" class="small-btn" id="aoWatchSelected">Add to Watchlist</button>
             <button type="button" class="small-btn" id="aoBuildOffer">Build Offer</button>
@@ -1937,7 +1956,7 @@
           <table class="explorer-table" id="allOfferingsTable">
             <thead>
               <tr>
-                <th class="ao-select-col"><input type="checkbox" id="aoSelectPage" aria-label="Select visible offerings"></th>
+                <th class="ao-select-col"><input type="checkbox" id="aoSelectPage" aria-label="Select current page offerings"></th>
                 <th class="ao-expand-col"></th>
                 <th data-aosort="assetClass">Class</th>
                 <th data-aosort="description">Description</th>
@@ -1953,6 +1972,20 @@
             </thead>
             <tbody id="allOfferingsBody"></tbody>
           </table>
+        </div>
+        <div class="ao-page-controls" id="aoPageControls" aria-label="All Offerings pagination">
+          <span id="aoPageStatus">Loading rows&hellip;</span>
+          <div class="ao-page-actions">
+            <label for="aoPageSize">Rows</label>
+            <select id="aoPageSize" aria-label="Rows per page">
+              <option value="100">100</option>
+              <option value="250">250</option>
+              <option value="500">500</option>
+              <option value="1000">1000</option>
+            </select>
+            <button type="button" class="small-btn" id="aoPrevPage">Prev</button>
+            <button type="button" class="small-btn" id="aoNextPage">Next</button>
+          </div>
         </div>
       </section>
 
@@ -2816,7 +2849,7 @@
     <div class="page-hero-inner">
       <div>
         <h2>Market <strong>Color</strong></h2>
-        <p class="hero-sub" id="marketColorSub">Reference emails retained from the daily folder.</p>
+        <p class="hero-sub" id="marketColorSub">Live market wire, official headlines, and public market-color news in one place.</p>
       </div>
       <div class="hero-stat">
         <div class="num" id="marketColorStat">&mdash;</div>
@@ -2853,7 +2886,7 @@
 
       <section class="workspace-main mc-articles">
         <div class="section-title-bar">
-          <h3>Desk Color</h3>
+          <h3>Market Color Feed</h3>
         </div>
         <div id="mcLead"></div>
         <div class="mc-article-list" id="mcArticleList">
@@ -3094,20 +3127,63 @@
   </section>
 
   <div class="container">
-    <div class="section-title-bar">
-      <h3>Internal Launch Readiness</h3>
-      <div class="kicker">Auth, data, package, and sales workflow basics</div>
-    </div>
-    <div id="goLiveStatusPanel" class="go-live-panel">
-      <div style="text-align:center;padding:28px;color:var(--text3)">Loading launch status&hellip;</div>
-    </div>
+    <nav class="local-section-nav admin-local-nav" aria-label="Admin sections">
+      <a href="#adminReadiness">Readiness</a>
+      <a href="#adminWarnings">Warnings</a>
+      <a href="#adminPublishHistory">Publish History</a>
+      <a href="#adminAuditNote">Audit Note</a>
+    </nav>
 
-    <div class="section-title-bar">
-      <h3>Publish History</h3>
-      <div class="kicker">Stored in data/audit.log</div>
-    </div>
+    <section id="adminReadiness" class="admin-section">
+      <div class="section-title-bar">
+        <h3>Internal Launch Readiness</h3>
+        <div class="kicker">Auth, data, package, and sales workflow basics</div>
+      </div>
+      <div id="goLiveStatusPanel" class="go-live-panel">
+        <div style="text-align:center;padding:28px;color:var(--text3)">Loading launch status&hellip;</div>
+      </div>
+    </section>
 
-    <table class="archive-table">
+    <section id="adminWarnings" class="admin-section">
+      <div class="section-title-bar">
+        <h3>Warnings</h3>
+        <div class="kicker" id="adminWarningsKicker">Audit-log warnings that may need follow-up</div>
+      </div>
+      <div id="adminWarningsPanel" class="admin-warning-panel">
+        <div style="text-align:center;padding:18px;color:var(--text3)">Loading warnings&hellip;</div>
+      </div>
+    </section>
+
+    <section id="adminPublishHistory" class="admin-section">
+      <div class="section-title-bar">
+        <h3>Publish History</h3>
+        <div class="kicker">Stored in data/audit.log</div>
+      </div>
+      <div class="admin-audit-toolbar">
+        <label class="ef-field">
+          <span>Show</span>
+          <select id="adminAuditFilter" aria-label="Filter audit rows">
+            <option value="all">All entries</option>
+            <option value="warnings">Warnings only</option>
+            <option value="clean">Clean publishes</option>
+          </select>
+        </label>
+        <label class="ef-field">
+          <span>Rows</span>
+          <select id="adminAuditPageSize" aria-label="Audit rows per page">
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="250">250</option>
+          </select>
+        </label>
+        <div class="admin-audit-actions">
+          <button type="button" class="small-btn" id="adminAuditPrev">Prev</button>
+          <button type="button" class="small-btn" id="adminAuditNext">Next</button>
+        </div>
+        <span id="adminAuditPageStatus" class="table-page-status">Loading entries&hellip;</span>
+      </div>
+
+      <table class="archive-table">
       <thead>
         <tr>
           <th style="width:170px">When</th>
@@ -3124,9 +3200,10 @@
       <tbody id="adminBody">
         <tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">Loading audit log&hellip;</td></tr>
       </tbody>
-    </table>
+      </table>
+    </section>
 
-    <div class="legend-box">
+    <div class="legend-box" id="adminAuditNote">
       <strong>Note:</strong>
       The audit log is an append-only file. Every publish writes a single JSON line including timestamp,
       package date, file list, file sizes, and any validation warnings. Delete the file on the server to
@@ -3186,7 +3263,7 @@
 
 <script src="/js/modules/muni-tax.js?v=2026-06-01a"></script>
 <script src="/js/modules/report-logic.js?v=2026-06-10a"></script>
-<script src="/js/portal.js?v=report-builder-2026-06-10"></script>
+<script src="/js/portal.js?v=morning-review-2026-06-30"></script>
 <script src="/js/modules/breadcrumbs.js?v=2026-05-28d"></script>
 </body>
 </html>

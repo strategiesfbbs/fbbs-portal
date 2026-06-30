@@ -1803,14 +1803,32 @@
     }
   });
 
+  // In-page jump links (Maturity Calendar / Admin local-section-nav) are bare
+  // hash anchors used to scroll-jump within the current page. Intercept them
+  // here, before the global hashchange listener below would otherwise resolve
+  // the fragment through parseHashTarget()/VALID_PAGES (which doesn't know
+  // these section ids and would bounce the user to Home).
+  document.addEventListener('click', e => {
+    const link = e.target.closest('.local-section-nav a[href^="#"]');
+    if (!link) return;
+    const id = link.getAttribute('href').slice(1);
+    e.preventDefault();
+    const section = id && document.getElementById(id);
+    if (!section) return;
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
   window.addEventListener('hashchange', () => {
     const h = parseHashTarget(window.location.hash || '#home').page;
     goTo(h, { updateHash: false });
   });
 
   function updateMarketNavGroup(pageName) {
-    document.querySelectorAll('.nav-group.active-group').forEach(group => {
+    document.querySelectorAll('.nav-group').forEach(group => {
       group.classList.remove('active-group');
+      group.classList.remove('open');
+      const groupToggle = group.querySelector('.nav-parent');
+      if (groupToggle) groupToggle.setAttribute('aria-expanded', 'false');
     });
     const groupName = NAV_GROUP_BY_PAGE[pageName];
     if (!groupName) return;
@@ -1819,6 +1837,10 @@
     group.classList.add('active-group', 'open');
     const toggle = group.querySelector('.nav-parent');
     if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    const activeLink = group.querySelector(`.nav-link[data-page="${pageName}"]`);
+    if (activeLink && typeof activeLink.scrollIntoView === 'function') {
+      activeLink.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
   }
 
   function setupMarketNav() {
@@ -1955,10 +1977,15 @@
       if (renderId !== searchRenderId) return;
       pendingDataSearches = Math.max(0, pendingDataSearches - 1);
       if (pendingDataSearches > 0) return;
+      results.querySelectorAll('.jump-loading').forEach(el => el.remove());
       const hasResults = !!results.querySelector('.jump-result');
       const emptyEl = results.querySelector('.jump-empty');
-      if (!hasResults && emptyEl) {
-        emptyEl.textContent = 'No matching pages, banks, contacts, or securities found';
+      if (!hasResults) {
+        if (emptyEl) {
+          emptyEl.textContent = 'No matching pages, banks, contacts, or securities found';
+        } else {
+          results.insertAdjacentHTML('beforeend', '<div class="jump-empty">No matching pages, banks, contacts, or securities found</div>');
+        }
       }
     };
 
@@ -2101,15 +2128,16 @@
           <strong>${escapeHtml(item.label)}</strong>
           <em>${escapeHtml(item.description)}</em>
         </button>
-      `).join('') : '<div class="jump-empty">Searching pages, banks, contacts, and securities...</div>';
+      `).join('') : '';
       // Highlight the first match so Enter has an obvious target.
       activeIndex = -1;
       if (matches.length) setActive(0);
       maybeAppendCusipResults(input.value.trim(), renderId);
       maybeAppendGlobalResults(input.value.trim(), renderId);
-      if (!pendingDataSearches && !matches.length) {
-        const emptyEl = results.querySelector('.jump-empty');
-        if (emptyEl) emptyEl.textContent = 'No matching pages found';
+      if (pendingDataSearches) {
+        results.insertAdjacentHTML('beforeend', '<div class="jump-empty jump-loading"><span class="jump-loading-dot" aria-hidden="true"></span>Searching banks, contacts, reports, and securities...</div>');
+      } else if (!matches.length) {
+        results.insertAdjacentHTML('beforeend', '<div class="jump-empty">No matching pages found</div>');
       }
     };
 
@@ -2330,6 +2358,11 @@
     // so the next visit refetches under the new identity.
     crmPulseState.data = null;
     if (activePage === 'pulse') loadCrmPulse(true);
+    if (activePage === 'maps') {
+      mapsApplyActingRepTerritory({ force: true });
+      if (mapsState.loaded) applyMapsFilters();
+      else loadMaps();
+    }
   }
 
   function renderRepPicker() {
@@ -6209,6 +6242,79 @@
     return chip;
   }
 
+  function maturityCalendarSection(id, title, meta, bodyHtml) {
+    return '<section class="maturity-cal-section" id="' + escapeHtml(id) + '">' +
+      '<div class="maturity-cal-section-head"><h3>' + escapeHtml(title) + '</h3>' +
+      (meta ? '<span>' + escapeHtml(meta) + '</span>' : '') + '</div>' +
+      bodyHtml +
+      '</section>';
+  }
+
+  function maturityCalendarFlatLots(view, eventType) {
+    const rows = [];
+    (view.banks || []).forEach(bank => {
+      (bank.lots || []).forEach(lot => {
+        if (eventType && lot.eventType !== eventType) return;
+        rows.push({ ...lot, bank });
+      });
+    });
+    rows.sort((a, b) => {
+      const dateCmp = String(a.eventDate || '').localeCompare(String(b.eventDate || ''));
+      if (dateCmp) return dateCmp;
+      return (Number(b.par) || 0) - (Number(a.par) || 0);
+    });
+    return rows;
+  }
+
+  function maturityCalendarLotsTable(lots, emptyText) {
+    if (!lots.length) return '<p class="muted-note">' + escapeHtml(emptyText) + '</p>';
+    return '<div class="mc-table-wrap"><table class="mc-table"><thead><tr>' +
+      '<th>Bank</th><th>Event</th><th>Date</th><th>Sector</th><th>CUSIP</th><th>Description</th><th class="mc-num">Coupon</th><th class="mc-num">Par</th>' +
+      '</tr></thead><tbody>' + lots.slice(0, 25).map(lot => '<tr>' +
+        '<td>' + escapeHtml(lot.bank && lot.bank.name || '—') + '</td>' +
+        '<td>' + maturityCalendarEventChip(lot) + '</td>' +
+        '<td>' + escapeHtml(maturityCalendarDate(lot.eventDate)) + '</td>' +
+        '<td>' + escapeHtml(lot.sector || '—') + '</td>' +
+        '<td>' + escapeHtml(lot.cusip || '—') + '</td>' +
+        '<td class="mc-desc">' + escapeHtml(lot.description || '—') + '</td>' +
+        '<td class="mc-num">' + (lot.coupon != null ? formatPercentTile(lot.coupon) : '—') + '</td>' +
+        '<td class="mc-num">' + formatMoney(lot.par) + '</td>' +
+      '</tr>').join('') + '</tbody></table></div>' +
+      (lots.length > 25 ? '<p class="mc-summary-note muted-note">Showing first 25 of ' + formatNumber(lots.length) + ' lots. Export CSV for the full filtered list.</p>' : '');
+  }
+
+  function maturityCalendarBankCard(bank, idx) {
+    const rows = bank.lots.map(lot => '<tr>' +
+      '<td>' + maturityCalendarEventChip(lot) + '</td>' +
+      '<td>' + escapeHtml(maturityCalendarDate(lot.eventDate)) + '</td>' +
+      '<td>' + escapeHtml(lot.sector || '—') + '</td>' +
+      '<td>' + escapeHtml(lot.cusip || '—') + '</td>' +
+      '<td class="mc-desc">' + escapeHtml(lot.description || '—') + '</td>' +
+      '<td class="mc-num">' + (lot.coupon != null ? formatPercentTile(lot.coupon) : '—') + '</td>' +
+      '<td class="mc-num">' + formatMoney(lot.par) + '</td>' +
+      '<td class="mc-num">' + (lot.bookYield != null ? formatPercentTile(lot.bookYield) : '—') + '</td>' +
+      '</tr>').join('');
+    const owner = bank.owner ? escapeHtml(bank.owner) : '<em>Unassigned</em>';
+    const status = bank.status ? '<span class="mc-status">' + escapeHtml(bank.status) + '</span>' : '';
+    return '<details class="mc-bank-card"' + (idx < 6 ? ' open' : '') + '>' +
+      '<summary class="mc-bank-head">' +
+        '<div>' +
+          '<h3>' + escapeHtml(bank.name) + '</h3>' +
+          '<p class="mc-bank-sub">' + escapeHtml([bank.city, bank.state].filter(Boolean).join(', ')) + ' · Owner: ' + owner + ' ' + status + '</p>' +
+        '</div>' +
+        '<div class="mc-bank-stat">' +
+          '<span>' + formatMoney(bank.maturityPar) + '</span>' +
+          '<small>maturing' + (bank.callPar ? ' · ' + formatMoney(bank.callPar) + ' callable' : '') + ' · ' +
+            bank.lotCount + ' lot' + (bank.lotCount === 1 ? '' : 's') + ' · as of ' + escapeHtml(maturityCalendarDate(bank.reportDate)) + '</small>' +
+        '</div>' +
+      '</summary>' +
+      '<div class="mc-table-wrap"><table class="mc-table"><thead><tr>' +
+        '<th>Event</th><th>Date</th><th>Sector</th><th>CUSIP</th><th>Description</th><th class="mc-num">Coupon</th><th class="mc-num">Par</th><th class="mc-num">Bk Yld</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      '<div class="mc-bank-card-actions"><a class="small-btn" href="#bond-swap?bank=' + encodeURIComponent(bank.bankId) + '">Find swap ideas</a></div>' +
+      '</details>';
+  }
+
   function renderMaturityCalendar() {
     const app = document.getElementById('maturityCalApp');
     if (!app) return;
@@ -6270,40 +6376,15 @@
       '<div class="mc-summary-stat"><span>' + formatMoney(totals.maturityMarketValue) + '</span><small>Market value (maturing)</small></div>' +
       '</div>' +
       '<p class="mc-summary-note muted-note">Maturities are par that frees up for sure on the date. Calls are <em>potential</em> &mdash; they only free up if the issuer exercises the call, so the two are summed separately and never combined.</p>';
+    const maturityLots = maturityCalendarFlatLots(view, 'Maturity');
+    const callLots = maturityCalendarFlatLots(view, 'Call');
+    const bankCards = view.banks.map(maturityCalendarBankCard).join('');
 
-    const cards = view.banks.map(bank => {
-      const rows = bank.lots.map(lot => '<tr>' +
-        '<td>' + maturityCalendarEventChip(lot) + '</td>' +
-        '<td>' + escapeHtml(maturityCalendarDate(lot.eventDate)) + '</td>' +
-        '<td>' + escapeHtml(lot.sector || '—') + '</td>' +
-        '<td>' + escapeHtml(lot.cusip || '—') + '</td>' +
-        '<td class="mc-desc">' + escapeHtml(lot.description || '—') + '</td>' +
-        '<td class="mc-num">' + (lot.coupon != null ? formatPercentTile(lot.coupon) : '—') + '</td>' +
-        '<td class="mc-num">' + formatMoney(lot.par) + '</td>' +
-        '<td class="mc-num">' + (lot.bookYield != null ? formatPercentTile(lot.bookYield) : '—') + '</td>' +
-        '</tr>').join('');
-      const owner = bank.owner ? escapeHtml(bank.owner) : '<em>Unassigned</em>';
-      const status = bank.status ? '<span class="mc-status">' + escapeHtml(bank.status) + '</span>' : '';
-      return '<section class="mc-bank-card">' +
-        '<header class="mc-bank-head">' +
-          '<div>' +
-            '<h3>' + escapeHtml(bank.name) + '</h3>' +
-            '<p class="mc-bank-sub">' + escapeHtml([bank.city, bank.state].filter(Boolean).join(', ')) + ' · Owner: ' + owner + ' ' + status + '</p>' +
-          '</div>' +
-          '<div class="mc-bank-stat">' +
-            '<span>' + formatMoney(bank.maturityPar) + '</span>' +
-            '<small>maturing' + (bank.callPar ? ' · ' + formatMoney(bank.callPar) + ' callable' : '') + ' · ' +
-              bank.lotCount + ' lot' + (bank.lotCount === 1 ? '' : 's') + ' · as of ' + escapeHtml(maturityCalendarDate(bank.reportDate)) + '</small>' +
-          '</div>' +
-          '<a class="small-btn" href="#bond-swap?bank=' + encodeURIComponent(bank.bankId) + '">Find swap ideas</a>' +
-        '</header>' +
-        '<div class="mc-table-wrap"><table class="mc-table"><thead><tr>' +
-          '<th>Event</th><th>Date</th><th>Sector</th><th>CUSIP</th><th>Description</th><th class="mc-num">Coupon</th><th class="mc-num">Par</th><th class="mc-num">Bk Yld</th>' +
-        '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '</section>';
-    }).join('');
-
-    app.innerHTML = summary + cards;
+    app.innerHTML =
+      maturityCalendarSection('maturityCalSummary', 'Summary', `${formatNumber(totals.bankCount)} banks · ${formatNumber(totals.lotCount)} lots`, summary) +
+      maturityCalendarSection('maturityCalMaturing', 'Maturing Cash', `${formatMoney(totals.maturityPar)} certain par · ${formatNumber(totals.maturityLots)} lots`, maturityCalendarLotsTable(maturityLots, 'No certain maturities match the current filters.')) +
+      maturityCalendarSection('maturityCalCallable', 'Callable Watch', `${formatMoney(totals.callPar)} potential par · ${formatNumber(totals.callLots)} lots`, maturityCalendarLotsTable(callLots, 'No first-call events match the current filters.')) +
+      maturityCalendarSection('maturityCalBanks', 'Bank List', `${formatNumber(view.banks.length)} banks ranked by maturing par`, bankCards);
   }
 
   function maturityCalendarDate(iso) {
@@ -18943,6 +19024,60 @@
   // added/edited on the tear sheet — this is the rolodex.
 
   let contactsDirectoryRows = [];
+  let contactsDirectoryTotal = 0;
+  let contactsDirectoryPage = 0;
+  const CONTACTS_PAGE_SIZE_KEY = 'fbbs.contacts.pageSize.v1';
+  const CONTACTS_PAGE_SIZE_OPTIONS = [100, 250, 500];
+  function normalizeContactsPageSize(value) {
+    const n = Number(value);
+    return CONTACTS_PAGE_SIZE_OPTIONS.includes(n) ? n : 250;
+  }
+  let contactsDirectoryPageSize = normalizeContactsPageSize(localStorage.getItem(CONTACTS_PAGE_SIZE_KEY));
+
+  function renderContactsDirectoryPageControls() {
+    const status = document.getElementById('contactsPageStatus');
+    const size = document.getElementById('contactsPageSize');
+    const prev = document.getElementById('contactsPrevPage');
+    const next = document.getElementById('contactsNextPage');
+    const totalPages = Math.max(1, Math.ceil(contactsDirectoryRows.length / contactsDirectoryPageSize));
+    contactsDirectoryPage = Math.max(0, Math.min(contactsDirectoryPage, totalPages - 1));
+    const start = contactsDirectoryRows.length ? contactsDirectoryPage * contactsDirectoryPageSize + 1 : 0;
+    const end = contactsDirectoryRows.length ? Math.min(contactsDirectoryRows.length, start + contactsDirectoryVisibleRows().length - 1) : 0;
+    if (size) size.value = String(contactsDirectoryPageSize);
+    if (status) {
+      status.textContent = contactsDirectoryRows.length
+        ? `Showing ${formatNumber(start)}-${formatNumber(end)} of ${formatNumber(contactsDirectoryRows.length)} loaded contacts`
+        : 'No contacts to show';
+    }
+    if (prev) prev.disabled = contactsDirectoryPage <= 0 || contactsDirectoryRows.length === 0;
+    if (next) next.disabled = contactsDirectoryPage >= totalPages - 1 || contactsDirectoryRows.length === 0;
+  }
+
+  function contactsDirectoryVisibleRows() {
+    const start = contactsDirectoryPage * contactsDirectoryPageSize;
+    return contactsDirectoryRows.slice(start, start + contactsDirectoryPageSize);
+  }
+
+  function renderContactsDirectoryRows() {
+    const body = document.getElementById('contactsBody');
+    if (!body) return;
+    const rows = contactsDirectoryVisibleRows();
+    body.innerHTML = rows.map(c => `
+      <tr>
+        <td><strong>${escapeHtml(c.name)}</strong>${c.isPrimary ? ' <span class="ao-class-pill">Primary</span>' : ''}${renderContactComplianceBadges(c)}</td>
+        <td>${escapeHtml(c.role || '—')}</td>
+        <td>${c.phone ? phoneLinkHtml(c.phone, { disabled: c.doNotCall }) : '—'}</td>
+        <td>${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '—'}</td>
+        <td><button type="button" class="text-btn" data-contact-bank="${escapeHtml(c.bankId)}">${escapeHtml(c.bankName)}</button></td>
+        <td>${escapeHtml([c.city, c.state].filter(Boolean).join(', ') || '—')}</td>
+      </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text3)">No contacts yet. Add them from a bank tear sheet — or import your Salesforce contact export on the Upload page.</td></tr>';
+    body.querySelectorAll('[data-contact-bank]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        navigateToHash(bankDeepLinkHash(btn.getAttribute('data-contact-bank')), loadBankFromHashRoute);
+      });
+    });
+    renderContactsDirectoryPageControls();
+  }
 
   async function loadContactsDirectory() {
     const body = document.getElementById('contactsBody');
@@ -18954,23 +19089,12 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       contactsDirectoryRows = data.contacts || [];
+      contactsDirectoryTotal = Number(data.total || contactsDirectoryRows.length || 0);
+      contactsDirectoryPage = 0;
       document.getElementById('contactsStat').textContent = contactsDirectoryRows.length.toLocaleString();
       document.getElementById('contactsSub').textContent =
-        q.trim() ? `${contactsDirectoryRows.length.toLocaleString()} of ${Number(data.total || 0).toLocaleString()} contacts match` : `${Number(data.total || 0).toLocaleString()} contacts across your banks`;
-      body.innerHTML = contactsDirectoryRows.map(c => `
-        <tr>
-          <td><strong>${escapeHtml(c.name)}</strong>${c.isPrimary ? ' <span class="ao-class-pill">Primary</span>' : ''}${renderContactComplianceBadges(c)}</td>
-          <td>${escapeHtml(c.role || '—')}</td>
-          <td>${c.phone ? phoneLinkHtml(c.phone, { disabled: c.doNotCall }) : '—'}</td>
-          <td>${c.email ? `<a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a>` : '—'}</td>
-          <td><button type="button" class="text-btn" data-contact-bank="${escapeHtml(c.bankId)}">${escapeHtml(c.bankName)}</button></td>
-          <td>${escapeHtml([c.city, c.state].filter(Boolean).join(', ') || '—')}</td>
-        </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text3)">No contacts yet. Add them from a bank tear sheet — or import your Salesforce contact export on the Upload page.</td></tr>';
-      body.querySelectorAll('[data-contact-bank]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          navigateToHash(bankDeepLinkHash(btn.getAttribute('data-contact-bank')), loadBankFromHashRoute);
-        });
-      });
+        q.trim() ? `${contactsDirectoryRows.length.toLocaleString()} of ${contactsDirectoryTotal.toLocaleString()} contacts match` : `${contactsDirectoryTotal.toLocaleString()} contacts across your banks`;
+      renderContactsDirectoryRows();
     } catch (e) {
       body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--danger)">Failed to load contacts: ${escapeHtml(e.message)}</td></tr>`;
     }
@@ -18984,6 +19108,26 @@
     search.addEventListener('input', () => {
       clearTimeout(t);
       t = setTimeout(() => loadContactsDirectory(), 200);
+    });
+    const pageSize = document.getElementById('contactsPageSize');
+    if (pageSize) {
+      pageSize.value = String(contactsDirectoryPageSize);
+      pageSize.addEventListener('change', () => {
+        contactsDirectoryPageSize = normalizeContactsPageSize(pageSize.value);
+        localStorage.setItem(CONTACTS_PAGE_SIZE_KEY, String(contactsDirectoryPageSize));
+        contactsDirectoryPage = 0;
+        renderContactsDirectoryRows();
+      });
+    }
+    const prev = document.getElementById('contactsPrevPage');
+    if (prev) prev.addEventListener('click', () => {
+      contactsDirectoryPage = Math.max(0, contactsDirectoryPage - 1);
+      renderContactsDirectoryRows();
+    });
+    const next = document.getElementById('contactsNextPage');
+    if (next) next.addEventListener('click', () => {
+      contactsDirectoryPage += 1;
+      renderContactsDirectoryRows();
     });
     document.getElementById('contactsExport').addEventListener('click', () => {
       const header = ['Name', 'Role', 'Phone', 'Email', 'Bank', 'City', 'State', 'Primary', 'Do Not Call', 'Email Opt Out', 'Email Bounced'];
@@ -19021,6 +19165,14 @@
   let allOfferingsExpanded = new Set();
   let allOfferingsVisibleRows = [];
   let allOfferingsDensity = localStorage.getItem('fbbs.ao.density') || 'comfortable';
+  let allOfferingsPage = 0;
+  const AO_PAGE_SIZE_KEY = 'fbbs.ao.pageSize.v1';
+  const AO_PAGE_SIZE_OPTIONS = [100, 250, 500, 1000];
+  function normalizeAllOfferingsPageSize(value) {
+    const n = Number(value);
+    return AO_PAGE_SIZE_OPTIONS.includes(n) ? n : 250;
+  }
+  let allOfferingsPageSize = normalizeAllOfferingsPageSize(localStorage.getItem(AO_PAGE_SIZE_KEY));
   let allOfferingsSavedSearchId = '';
   let allOfferingsCrmTarget = { bank: null, rows: [] };
   let allOfferingsActionFocusRelease = null;
@@ -19805,6 +19957,7 @@
         else allOfferingsFilters.classes.add(cls);
         // All chips off == no filter (everything shows).
         if (allOfferingsFilters.classes.size === counts.size) allOfferingsFilters.classes.clear();
+        resetAllOfferingsPage();
         renderAllOfferingsClasses();
         renderAllOfferings();
       });
@@ -19967,6 +20120,7 @@
     if (saved.sort && saved.sort.col) allOfferingsSort = { col: saved.sort.col, dir: saved.sort.dir === 'asc' ? 'asc' : 'desc' };
     allOfferingsDensity = saved.density || allOfferingsDensity;
     localStorage.setItem('fbbs.ao.density', allOfferingsDensity);
+    resetAllOfferingsPage();
     renderAllOfferingsClasses();
     renderAllOfferingsTriFilters();
     renderAllOfferingsSavedSearches();
@@ -20056,6 +20210,7 @@
         const group = btn.closest('[data-ao-attr]');
         if (!group) return;
         allOfferingsFilters.attrs[group.getAttribute('data-ao-attr')] = btn.getAttribute('data-ao-attr-state') || '';
+        resetAllOfferingsPage();
         renderAllOfferingsTriFilters();
         renderAllOfferings();
       });
@@ -20118,6 +20273,28 @@
     document.querySelectorAll('[data-ao-density]').forEach(btn => {
       btn.classList.toggle('is-active', btn.getAttribute('data-ao-density') === allOfferingsDensity);
     });
+  }
+
+  function resetAllOfferingsPage() {
+    allOfferingsPage = 0;
+  }
+
+  function renderAllOfferingsPageControls(totalRows) {
+    const status = document.getElementById('aoPageStatus');
+    const pageSize = document.getElementById('aoPageSize');
+    const prev = document.getElementById('aoPrevPage');
+    const next = document.getElementById('aoNextPage');
+    if (pageSize) pageSize.value = String(allOfferingsPageSize);
+    const totalPages = Math.max(1, Math.ceil(totalRows / allOfferingsPageSize));
+    const start = totalRows ? (allOfferingsPage * allOfferingsPageSize) + 1 : 0;
+    const end = totalRows ? Math.min(totalRows, start + allOfferingsVisibleRows.length - 1) : 0;
+    if (status) {
+      status.textContent = totalRows
+        ? `Showing ${formatNumber(start)}-${formatNumber(end)} of ${formatNumber(totalRows)} filtered securities`
+        : 'No securities match the current screen';
+    }
+    if (prev) prev.disabled = allOfferingsPage <= 0 || totalRows === 0;
+    if (next) next.disabled = allOfferingsPage >= totalPages - 1 || totalRows === 0;
   }
 
   function syncAllOfferingsTableHeight() {
@@ -20431,7 +20608,10 @@
     const body = document.getElementById('allOfferingsBody');
     if (!body || !allOfferingsData) return;
     const filtered = sortAllOfferingsRows(applyAllOfferingsFilters(allOfferingsData.rows || []));
-    allOfferingsVisibleRows = filtered.slice(0, 1000);
+    const totalPages = Math.max(1, Math.ceil(filtered.length / allOfferingsPageSize));
+    allOfferingsPage = Math.max(0, Math.min(allOfferingsPage, totalPages - 1));
+    const pageStart = allOfferingsPage * allOfferingsPageSize;
+    allOfferingsVisibleRows = filtered.slice(pageStart, pageStart + allOfferingsPageSize);
 
     document.getElementById('allOfferingsStat').textContent = filtered.length.toLocaleString();
     document.getElementById('allOfferingsKicker').textContent = allOfferingsData.date ? formatNumericDate(allOfferingsData.date) : 'Current package';
@@ -20517,8 +20697,9 @@
         renderAllOfferings();
       });
     });
-    wireBuyersButtons(body, filtered);
+    wireBuyersButtons(body, allOfferingsVisibleRows);
     updateAllOfferingsSelectionBar();
+    renderAllOfferingsPageControls(filtered.length);
     renderAllOfferingsContext();
     scheduleAllOfferingsTableHeightSync();
   }
@@ -20945,19 +21126,23 @@
       t = setTimeout(() => {
         allOfferingsFilters.search = search.value;
         replaceHashParams('all-offerings', { q: allOfferingsFilters.search });
+        resetAllOfferingsPage();
         renderAllOfferings();
       }, 150);
     });
     document.getElementById('ao-minyield').addEventListener('input', e => {
       allOfferingsFilters.minYield = numberOrNull(e.target.value);
+      resetAllOfferingsPage();
       renderAllOfferings();
     });
     document.getElementById('ao-minmaturity').addEventListener('change', e => {
       allOfferingsFilters.minMaturity = e.target.value || '';
+      resetAllOfferingsPage();
       renderAllOfferings();
     });
     document.getElementById('ao-maxmaturity').addEventListener('change', e => {
       allOfferingsFilters.maxMaturity = e.target.value || '';
+      resetAllOfferingsPage();
       renderAllOfferings();
     });
     [
@@ -20971,6 +21156,7 @@
       if (!el) return;
       el.addEventListener(kind === 'num' ? 'input' : 'change', e => {
         allOfferingsFilters[key] = kind === 'num' ? numberOrNull(e.target.value) : (e.target.value || '');
+        resetAllOfferingsPage();
         renderAllOfferings();
       });
     });
@@ -20992,6 +21178,7 @@
       setControlValue('ao-minsize', '');
       setControlValue('ao-maxprice', '');
       replaceHashParams('all-offerings', {});
+      resetAllOfferingsPage();
       renderAllOfferingsClasses();
       renderAllOfferingsTriFilters();
       renderAllOfferingsSavedSearches();
@@ -21048,12 +21235,37 @@
         scheduleAllOfferingsTableHeightSync();
       });
     });
+    const pageSize = document.getElementById('aoPageSize');
+    if (pageSize) {
+      pageSize.value = String(allOfferingsPageSize);
+      pageSize.addEventListener('change', () => {
+        allOfferingsPageSize = normalizeAllOfferingsPageSize(pageSize.value);
+        localStorage.setItem(AO_PAGE_SIZE_KEY, String(allOfferingsPageSize));
+        resetAllOfferingsPage();
+        renderAllOfferings();
+      });
+    }
+    const prevPage = document.getElementById('aoPrevPage');
+    if (prevPage) {
+      prevPage.addEventListener('click', () => {
+        allOfferingsPage = Math.max(0, allOfferingsPage - 1);
+        renderAllOfferings();
+      });
+    }
+    const nextPage = document.getElementById('aoNextPage');
+    if (nextPage) {
+      nextPage.addEventListener('click', () => {
+        allOfferingsPage += 1;
+        renderAllOfferings();
+      });
+    }
     document.querySelectorAll('#allOfferingsTable th[data-aosort]').forEach(th => {
       th.style.cursor = 'pointer';
       th.addEventListener('click', () => {
         const col = th.getAttribute('data-aosort');
         if (allOfferingsSort.col === col) allOfferingsSort.dir = allOfferingsSort.dir === 'asc' ? 'desc' : 'asc';
         else allOfferingsSort = { col, dir: col === 'yield' || col === 'coupon' || col === 'price' ? 'desc' : 'asc' };
+        resetAllOfferingsPage();
         renderAllOfferings();
       });
     });
@@ -24692,29 +24904,94 @@
     body.innerHTML = banner + ceoBrief + kpis + riskHedge + managementActions + revenueQuality + trend + narrative + bridge + positionsCard + riskCapital + book + compCard + activity + settleCard + market + exceptions + coverage;
   }
 
-  async function loadAuditLog() {
+  let adminAuditEntries = [];
+  let adminAuditPage = 0;
+  let adminAuditFilter = 'all';
+  const ADMIN_AUDIT_PAGE_SIZE_KEY = 'fbbs.admin.auditPageSize.v1';
+  const ADMIN_AUDIT_PAGE_SIZE_OPTIONS = [50, 100, 250];
+  function normalizeAdminAuditPageSize(value) {
+    const n = Number(value);
+    return ADMIN_AUDIT_PAGE_SIZE_OPTIONS.includes(n) ? n : 100;
+  }
+  let adminAuditPageSize = normalizeAdminAuditPageSize(localStorage.getItem(ADMIN_AUDIT_PAGE_SIZE_KEY));
+
+  function adminEntryWarnings(entry) {
+    const warnings = [];
+    if (Array.isArray(entry && entry.warnings)) {
+      entry.warnings.forEach(w => { if (w) warnings.push(String(w)); });
+    }
+    const parserWarnings = entry && entry.parserWarnings && typeof entry.parserWarnings === 'object'
+      ? entry.parserWarnings
+      : {};
+    Object.entries(parserWarnings).forEach(([slot, rows]) => {
+      (Array.isArray(rows) ? rows : []).forEach(w => {
+        if (w) warnings.push(`${slot}: ${w}`);
+      });
+    });
+    return warnings;
+  }
+
+  function filteredAdminAuditEntries() {
+    if (adminAuditFilter === 'warnings') return adminAuditEntries.filter(entry => adminEntryWarnings(entry).length);
+    if (adminAuditFilter === 'clean') return adminAuditEntries.filter(entry => !adminEntryWarnings(entry).length);
+    return adminAuditEntries;
+  }
+
+  function renderAdminWarningsPanel() {
+    const panel = document.getElementById('adminWarningsPanel');
+    const kicker = document.getElementById('adminWarningsKicker');
+    if (!panel) return;
+    const warningEntries = adminAuditEntries
+      .map(entry => ({ entry, warnings: adminEntryWarnings(entry) }))
+      .filter(item => item.warnings.length);
+    if (kicker) {
+      kicker.textContent = warningEntries.length
+        ? `${formatNumber(warningEntries.length)} publish entr${warningEntries.length === 1 ? 'y has' : 'ies have'} warnings`
+        : 'No audit-log warnings found';
+    }
+    if (!warningEntries.length) {
+      panel.innerHTML = '<div class="admin-clean">No publish warnings in the current audit log.</div>';
+      return;
+    }
+    panel.innerHTML = warningEntries.slice(0, 8).map(item => {
+      const entry = item.entry || {};
+      const actor = entry.actorDisplay || entry.actorUsername || entry.publishedBy || 'Unknown actor';
+      return `<div class="admin-warning-item">
+        <strong>${escapeHtml(formatFullTimestamp(entry.at))} · ${escapeHtml(formatShortDate(entry.packageDate))}</strong>
+        <span>${escapeHtml(actor)} · ${escapeHtml(item.warnings.slice(0, 3).join(' | '))}${item.warnings.length > 3 ? ` · ${formatNumber(item.warnings.length - 3)} more` : ''}</span>
+      </div>`;
+    }).join('') + (warningEntries.length > 8
+      ? `<div class="admin-warning-item"><strong>${formatNumber(warningEntries.length - 8)} more warning entr${warningEntries.length - 8 === 1 ? 'y' : 'ies'}</strong><span>Use the "Warnings only" filter in Publish History.</span></div>`
+      : '');
+  }
+
+  function renderAdminAuditRows() {
     const body = document.getElementById('adminBody');
-    const stat = document.getElementById('adminStat');
-    loadGoLiveStatus();
-    try {
-      const res = await fetch('/api/audit-log', { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const entries = await res.json();
-      stat.textContent = entries.length;
-
-      if (entries.length === 0) {
-        body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
-          No publishes recorded yet.
-        </td></tr>`;
-        return;
-      }
-
-      body.innerHTML = entries.map(e => {
+    const status = document.getElementById('adminAuditPageStatus');
+    const prev = document.getElementById('adminAuditPrev');
+    const next = document.getElementById('adminAuditNext');
+    const pageSize = document.getElementById('adminAuditPageSize');
+    const filter = document.getElementById('adminAuditFilter');
+    if (!body) return;
+    if (pageSize) pageSize.value = String(adminAuditPageSize);
+    if (filter) filter.value = adminAuditFilter;
+    const entries = filteredAdminAuditEntries();
+    const totalPages = Math.max(1, Math.ceil(entries.length / adminAuditPageSize));
+    adminAuditPage = Math.max(0, Math.min(adminAuditPage, totalPages - 1));
+    const start = adminAuditPage * adminAuditPageSize;
+    const page = entries.slice(start, start + adminAuditPageSize);
+    if (!entries.length) {
+      body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text3)">
+        ${adminAuditEntries.length ? 'No audit entries match the current filter.' : 'No publishes recorded yet.'}
+      </td></tr>`;
+    } else {
+      body.innerHTML = page.map(e => {
         const files = Array.isArray(e.files)
           ? e.files.map(f => `<span class="file-chip" title="${formatSize(f.size)}">${escapeHtml(f.type)}</span>`).join('')
           : '';
-        const warnings = Array.isArray(e.warnings) && e.warnings.length
-          ? `<div class="admin-warnings">${e.warnings.map(w => `&#9888; ${escapeHtml(w)}`).join('<br>')}</div>`
+        const entryWarnings = adminEntryWarnings(e);
+        const warnings = entryWarnings.length
+          ? `<div class="admin-warnings">${entryWarnings.map(w => `&#9888; ${escapeHtml(w)}`).join('<br>')}</div>`
           : '<div class="admin-clean">No warnings</div>';
         const cdCount = e.offeringsCount != null ? e.offeringsCount : '—';
         const muniCount = e.muniOfferingsCount != null ? e.muniOfferingsCount : '—';
@@ -24735,8 +25012,66 @@
           </tr>
         `;
       }).join('');
+    }
+    if (status) {
+      const from = entries.length ? start + 1 : 0;
+      const to = entries.length ? Math.min(entries.length, start + page.length) : 0;
+      status.textContent = entries.length
+        ? `Showing ${formatNumber(from)}-${formatNumber(to)} of ${formatNumber(entries.length)} filtered entries`
+        : 'No matching audit entries';
+    }
+    if (prev) prev.disabled = adminAuditPage <= 0 || entries.length === 0;
+    if (next) next.disabled = adminAuditPage >= totalPages - 1 || entries.length === 0;
+  }
+
+  function wireAdminAuditControls() {
+    const filter = document.getElementById('adminAuditFilter');
+    if (!filter || filter.dataset.bound) return;
+    filter.dataset.bound = '1';
+    filter.addEventListener('change', () => {
+      adminAuditFilter = filter.value || 'all';
+      adminAuditPage = 0;
+      renderAdminAuditRows();
+    });
+    const pageSize = document.getElementById('adminAuditPageSize');
+    if (pageSize) {
+      pageSize.value = String(adminAuditPageSize);
+      pageSize.addEventListener('change', () => {
+        adminAuditPageSize = normalizeAdminAuditPageSize(pageSize.value);
+        localStorage.setItem(ADMIN_AUDIT_PAGE_SIZE_KEY, String(adminAuditPageSize));
+        adminAuditPage = 0;
+        renderAdminAuditRows();
+      });
+    }
+    const prev = document.getElementById('adminAuditPrev');
+    if (prev) prev.addEventListener('click', () => {
+      adminAuditPage = Math.max(0, adminAuditPage - 1);
+      renderAdminAuditRows();
+    });
+    const next = document.getElementById('adminAuditNext');
+    if (next) next.addEventListener('click', () => {
+      adminAuditPage += 1;
+      renderAdminAuditRows();
+    });
+  }
+
+  async function loadAuditLog() {
+    const body = document.getElementById('adminBody');
+    const stat = document.getElementById('adminStat');
+    loadGoLiveStatus();
+    wireAdminAuditControls();
+    try {
+      const res = await fetch('/api/audit-log', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const entries = await res.json();
+      adminAuditEntries = Array.isArray(entries) ? entries : [];
+      adminAuditPage = 0;
+      stat.textContent = adminAuditEntries.length;
+      renderAdminWarningsPanel();
+      renderAdminAuditRows();
     } catch (err) {
       console.error('Failed to load audit log:', err);
+      renderAdminWarningsPanel();
       body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load audit log: ${escapeHtml(err.message)}
       </td></tr>`;
@@ -25348,7 +25683,7 @@
     muniDeal: null,
     muniAnchorCache: new Map(),
     locationFilter: null,
-    territory: { owner: '', minAssets: '', maxAssets: '', sort: 'opportunity' },
+    territory: { owner: '', ownerTouched: false, minAssets: '', maxAssets: '', sort: 'opportunity' },
     advanced: [],
     viewport: null,
     mapRevision: 0
@@ -25365,26 +25700,42 @@
     if (typeof Plotly !== 'undefined') return Promise.resolve(Plotly);
     if (plotlyLoadPromise) return plotlyLoadPromise;
     plotlyLoadPromise = new Promise((resolve, reject) => {
+      const stale = document.querySelector('script[data-fbbs-plotly-failed="1"]');
+      if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
       const existing = document.querySelector('script[data-fbbs-plotly], script[src="/vendor/plotly-2.27.0.min.js"]');
       const script = existing || document.createElement('script');
+      let done = false;
+      let watchdog = null;
       script.dataset.fbbsPlotly = '1';
       const cleanup = () => {
+        done = true;
+        if (watchdog) clearTimeout(watchdog);
         script.onload = null;
         script.onerror = null;
       };
       script.onload = () => {
         cleanup();
+        script.dataset.fbbsPlotlyLoaded = '1';
         if (typeof Plotly !== 'undefined') resolve(Plotly);
         else {
           plotlyLoadPromise = null;
+          script.dataset.fbbsPlotlyFailed = '1';
           reject(new Error('Plotly loaded without exposing a global'));
         }
       };
       script.onerror = () => {
         cleanup();
         plotlyLoadPromise = null;
+        script.dataset.fbbsPlotlyFailed = '1';
         reject(new Error('Plotly failed to load'));
       };
+      watchdog = setTimeout(() => {
+        if (done) return;
+        cleanup();
+        plotlyLoadPromise = null;
+        script.dataset.fbbsPlotlyFailed = '1';
+        reject(new Error('Plotly load timed out'));
+      }, 8000);
       if (!existing) {
         script.src = PLOTLY_SRC;
         script.async = true;
@@ -25536,6 +25887,58 @@
     return String(bank && bank.accountStatus && bank.accountStatus.owner || '').trim();
   }
 
+  function mapsNormalizeOwnerName(value) {
+    return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  function mapsOwnerKey(value) {
+    return mapsNormalizeOwnerName(value).replace(/[^a-z0-9]+/g, '');
+  }
+
+  function mapsSplitOwnerString(value) {
+    return String(value || '')
+      .split(/[,;\/|]|\s+and\s+/i)
+      .map(part => part.trim())
+      .filter(Boolean);
+  }
+
+  function mapsOwnerParts(bank) {
+    const raw = mapsCoverageOwner(bank);
+    if (!raw) return [];
+    const parts = mapsSplitOwnerString(raw);
+    return parts.length ? parts : [raw];
+  }
+
+  function mapsOwnerNameMatches(candidate, ownerFilter) {
+    const wantedName = mapsNormalizeOwnerName(ownerFilter);
+    const wantedKey = mapsOwnerKey(ownerFilter);
+    const candidateName = mapsNormalizeOwnerName(candidate);
+    const candidateKey = mapsOwnerKey(candidate);
+    if (!wantedName || !candidateName) return false;
+    if (candidateName === wantedName || (wantedKey && candidateKey === wantedKey)) return true;
+    const wantedTokens = wantedName.split(/\s+/).filter(Boolean);
+    const candidateTokens = candidateName.split(/\s+/).filter(Boolean);
+    return wantedTokens.length > 1 &&
+      candidateTokens.length > 1 &&
+      wantedTokens[wantedTokens.length - 1] === candidateTokens[candidateTokens.length - 1] &&
+      wantedTokens[0][0] === candidateTokens[0][0];
+  }
+
+  function mapsOwnerMatches(bank, ownerFilter) {
+    if (!ownerFilter) return true;
+    const raw = mapsCoverageOwner(bank);
+    if (!raw) return false;
+    if (mapsOwnerNameMatches(raw, ownerFilter)) return true;
+    return mapsOwnerParts(bank).some(part => mapsOwnerNameMatches(part, ownerFilter));
+  }
+
+  function mapsRepOwnerNames(rep) {
+    if (!rep) return [];
+    return [rep.displayName, rep.username]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+  }
+
   function mapsAssetsMm(bank) {
     const raw = mapsNumber(bank && bank.totalAssets);
     return raw === null ? null : raw / 1000;
@@ -25572,12 +25975,68 @@
   }
 
   function mapsOwnerOptions() {
-    const owners = new Set();
+    const byKey = new Map();
     mapsState.banks.forEach(bank => {
-      const owner = mapsCoverageOwner(bank);
-      if (owner) owners.add(owner);
+      mapsOwnerParts(bank).forEach(owner => {
+        const key = mapsOwnerKey(owner);
+        if (!key) return;
+        const existing = byKey.get(key);
+        if (existing) existing.count += 1;
+        else byKey.set(key, { name: owner, count: 1 });
+      });
     });
-    return Array.from(owners).sort((a, b) => a.localeCompare(b));
+    return Array.from(byKey.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(item => item.name);
+  }
+
+  function mapsFindOwnerForRep(rep) {
+    const names = mapsRepOwnerNames(rep);
+    if (!names.length) return '';
+    const owners = mapsOwnerOptions();
+    return owners.find(owner => names.some(name => mapsOwnerNameMatches(owner, name))) || '';
+  }
+
+  function mapsResetTerritoryFocus() {
+    mapsState.selectedStates.clear();
+    mapsState.selectedStatuses.clear();
+    mapsState.locationFilter = null;
+    mapsState.areaSearch = { query: '', radiusMiles: 50, center: null, label: '', matchedCount: 0 };
+    mapsState.muniDeal = null;
+    mapsState.muniMatches = [];
+    mapsState.selectedBankId = '';
+    mapsState.detailDismissed = false;
+    const areaInput = document.getElementById('mapsAreaSearchBox');
+    if (areaInput) areaInput.value = '';
+    mapsSetViewport(null);
+    mapsState.mapRevision += 1;
+    renderMapsStateChips();
+    renderMapsStatusFilters();
+    renderMapsMuniResults();
+    renderMapsAreaStatus();
+  }
+
+  function mapsApplyActingRepTerritory(options = {}) {
+    const force = options.force === true;
+    const rep = meState.rep;
+    if (!mapsState.loaded) return false;
+    if (!rep) {
+      if (force) {
+        mapsState.territory.owner = '';
+        mapsState.territory.ownerTouched = false;
+        mapsResetTerritoryFocus();
+        renderMapsOwnerOptions();
+      }
+      return false;
+    }
+    if (!force && (mapsState.territory.owner || mapsState.territory.ownerTouched)) return false;
+    const owner = mapsFindOwnerForRep(rep);
+    if (!owner) return false;
+    mapsState.territory.owner = owner;
+    mapsState.territory.ownerTouched = false;
+    mapsResetTerritoryFocus();
+    renderMapsOwnerOptions();
+    return true;
   }
 
   function mapsLocationFilterMatches(bank) {
@@ -25694,6 +26153,20 @@
 
   function mapsAreaIsActive() {
     return Boolean(mapsState.areaSearch && mapsState.areaSearch.center);
+  }
+
+  function mapsShouldShowMarkers() {
+    const searchActive = (mapsState.search || '').trim().length >= 2;
+    return mapsState.selectedStates.size > 0 ||
+      mapsAreaIsActive() ||
+      Boolean(
+        mapsState.territory.owner ||
+        mapsState.territory.minAssets ||
+        mapsState.territory.maxAssets ||
+        mapsState.selectedStatuses.size ||
+        mapsState.advanced.length ||
+        searchActive
+      );
   }
 
   function mapsApplyAreaSearch() {
@@ -26235,9 +26708,10 @@
       mapsState.latestPeriod = data.latestPeriod || '';
       mapsState.mappedCount = data.mappedCount || mapsState.banks.filter(mapsHasCoords).length;
       mapsState.peerComparison = data.peerComparison || null;
-    mapsState.loaded = true;
+      mapsState.loaded = true;
       mapsBindHandlers();
       renderMapsOwnerOptions();
+      mapsApplyActingRepTerritory();
       renderMapsView();
       mapsApplyHashDeal();
     } catch (err) {
@@ -26280,7 +26754,7 @@
       ? 'Drag or scroll the map freely, then click a pin for status and key stats.'
       : hasArea
         ? 'Showing banks around the searched muni deal area.'
-      : 'Use Add State or area search to drop pins, then drag the map freely.';
+      : 'Choose a territory, state, status, area search, or bank search to drop pins.';
     subtitle.textContent = mapsState.latestPeriod
       ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · ${tail}`
       : `${mapsState.banks.length.toLocaleString()} banks · ${tail}`;
@@ -26300,13 +26774,31 @@
     applyMapsFilters();
   }
 
+  function renderMapsMarkerHint(el, show) {
+    if (!el) return;
+    const existing = el.querySelector('.maps-marker-hint');
+    if (!show) {
+      if (existing) existing.remove();
+      return;
+    }
+    const html = `
+      <div class="maps-marker-hint" aria-hidden="true">
+        <div class="maps-marker-hint-inner">
+          <strong>No bank pins shown yet</strong>
+          <span>Choose a territory, state, status, area search, or bank search to focus the map. The bank list below stays available.</span>
+        </div>
+      </div>`;
+    if (existing) existing.outerHTML = html;
+    else el.insertAdjacentHTML('beforeend', html);
+  }
+
   function renderMapsMarkerMap(rows, options = {}) {
     const plotId = options.plotId || 'mapsPlot';
     const isFull = options.full === true;
     const el = document.getElementById(plotId);
     if (!el) return;
     if (typeof Plotly === 'undefined') {
-      el.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading bank map&hellip;</span></div>';
+      el.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Rendering map&hellip; bank list is ready below.</span></div>';
       ensurePlotlyLoaded()
         .then(() => renderMapsMarkerMap(rows, options))
         .catch(() => {
@@ -26316,7 +26808,10 @@
     }
     if (Plotly.setPlotConfig) Plotly.setPlotConfig({ topojsonURL: '/vendor/' });
     if (!el.style.position) el.style.position = 'relative';
-    const showMarkers = mapsState.selectedStates.size > 0 || mapsAreaIsActive() || (mapsState.search || '').trim().length >= 2;
+    Array.from(el.children).forEach(child => {
+      if (child.classList.contains('table-loading') || child.classList.contains('bank-search-empty')) child.remove();
+    });
+    const showMarkers = mapsShouldShowMarkers();
     const groups = showMarkers ? mapsLocationGroups(rows) : [];
     const selectedKey = mapsState.selectedLocationKey;
     const area = mapsAreaIsActive() ? mapsState.areaSearch : null;
@@ -26439,6 +26934,7 @@
       uirevision: `maps-${mapsState.mapRevision}`
     };
     Plotly.react(el, figData, layout, { responsive: true, displaylogo: false, scrollZoom: true, modeBarButtonsToRemove: ['select2d', 'lasso2d'] }).then(() => {
+      renderMapsMarkerHint(el, !showMarkers);
       // The inline plot can draw before its flex container has its final size
       // (page just became visible), leaving it clipped to a stale box. Re-measure
       // after layout settles — the same fix openMapsFullView() already applies.
@@ -26517,7 +27013,9 @@
     const select = document.getElementById('mapsOwnerSelect');
     if (!select) return;
     const current = mapsState.territory.owner || '';
-    select.innerHTML = '<option value="">All owners</option>' + mapsOwnerOptions().map(owner =>
+    const owners = mapsOwnerOptions();
+    if (current && !owners.some(owner => mapsOwnerNameMatches(owner, current))) owners.unshift(current);
+    select.innerHTML = '<option value="">All owners</option>' + owners.map(owner =>
       `<option value="${escapeHtml(owner)}"${owner === current ? ' selected' : ''}>${escapeHtml(owner)}</option>`
     ).join('');
   }
@@ -26532,7 +27030,8 @@
     const parts = [];
     if (states.length) parts.push(`<strong>${escapeHtml(states.join(', '))}</strong><span>Click a selected state again to remove it.</span>`);
     else if (area) parts.push(`<strong>${escapeHtml(area.label || area.query)}</strong><span>${formatNumber(area.radiusMiles)} mile area search.</span>`);
-    else parts.push('<strong>All states</strong><span>Click any state to drop pins and focus the list.</span>');
+    else if (owner) parts.push(`<strong>${escapeHtml(owner)} territory</strong><span>Coverage across all states, including clients and prospects.</span>`);
+    else parts.push('<strong>All states</strong><span>Choose a territory, state, status, area search, or bank search to focus the map.</span>');
     if (filter) parts.push(`<span>Drilldown: ${escapeHtml(filter.label)}</span>`);
     if (owner) parts.push(`<span>Owner: ${escapeHtml(owner)}</span>`);
     if (mapsState.selectedStatuses.size) parts.push(`<span>Status: ${escapeHtml(Array.from(mapsState.selectedStatuses).sort().join(', '))}</span>`);
@@ -26684,7 +27183,7 @@
     for (const b of mapsState.banks) {
       if (sel.size > 0 && !sel.has(b.state)) continue;
       if (statusSel.size > 0 && !statusSel.has(mapsAccountStatusLabel(b))) continue;
-      if (ownerFilter && mapsCoverageOwner(b) !== ownerFilter) continue;
+      if (ownerFilter && !mapsOwnerMatches(b, ownerFilter)) continue;
       const assetsMm = mapsAssetsMm(b);
       if (minAssets !== null && (assetsMm === null || assetsMm < minAssets)) continue;
       if (maxAssets !== null && (assetsMm === null || assetsMm > maxAssets)) continue;
@@ -27119,6 +27618,8 @@
     if (ownerSelect && !ownerSelect.dataset.bound) {
       ownerSelect.addEventListener('change', () => {
         mapsState.territory.owner = ownerSelect.value;
+        mapsState.territory.ownerTouched = true;
+        mapsResetTerritoryFocus();
         applyMapsFilters();
       });
       ownerSelect.dataset.bound = '1';
@@ -27150,7 +27651,7 @@
     const clearTerritory = document.getElementById('mapsClearTerritory');
     if (clearTerritory && !clearTerritory.dataset.bound) {
       clearTerritory.addEventListener('click', () => {
-        mapsState.territory = { owner: '', minAssets: '', maxAssets: '', sort: 'opportunity' };
+        mapsState.territory = { owner: '', ownerTouched: true, minAssets: '', maxAssets: '', sort: 'opportunity' };
         if (ownerSelect) ownerSelect.value = '';
         if (minAssets) minAssets.value = '';
         if (maxAssets) maxAssets.value = '';

@@ -5283,6 +5283,12 @@ async function handleLogBankActivity(req, res, bankId) {
       if (!contact || String(contact.bankId || '') !== String(bankId)) {
         return sendJSON(res, 400, { error: 'Activity contact does not belong to this bank' });
       }
+      if (String(body.kind || '') === 'call' && contact.doNotCall) {
+        return sendJSON(res, 400, { error: 'This contact is marked Do Not Call' });
+      }
+      if (String(body.kind || '') === 'email' && (contact.optOutEmail || contact.emailBounced)) {
+        return sendJSON(res, 400, { error: 'This contact cannot receive email activity' });
+      }
     }
     upsertSavedBank(BANK_REPORTS_DIR, summary, body.coverage || {});
     const rep = resolveRequestRep(req);
