@@ -10804,9 +10804,10 @@ async function publishPackageFilesUnsafe(files, res, options = {}) {
   if (offeringsAsOfDate && brokeredCdAsOfDate && offeringsAsOfDate !== brokeredCdAsOfDate) {
     dateWarnings.push(`CD Offers (${offeringsAsOfDate}) and Brokered CD Rate Sheet (${brokeredCdAsOfDate}) are dated differently inside the PDFs.`);
   }
-  if (mmdAsOfDate && dateValues.length > 0 && !dateValues.includes(mmdAsOfDate)) {
-    dateWarnings.push(`MMD document is dated ${mmdAsOfDate}, but filenames suggest ${dateValues.join(', ')}.`);
-  }
+  // NOTE: MMD is intentionally NOT date-checked against the package. The MMD AAA
+  // scale is published at the prior-day close, so its internal date is normally a
+  // business day behind the rest of the package — flagging that every day is noise,
+  // not a stale-data signal. (Offering sheets above are still checked.)
 
   const packageDate = offeringsAsOfDate || brokeredCdAsOfDate || muniOfferingsAsOfDate || mmdAsOfDate || uniqueDates[0] || todayStamp();
 
