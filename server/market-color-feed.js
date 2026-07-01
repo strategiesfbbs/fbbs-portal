@@ -38,19 +38,29 @@ const MAX_ARTICLES = 60;
 const SUMMARY_MAX = 320;
 const TITLE_MAX = 240;
 
-// Same keyword tagging the old .eml inbox used, so the tag chips/search keep
-// working unchanged against the RSS-sourced items.
+// Desk relevance gate:
+// MarketWatch top stories and CNBC finance feeds carry a lot of lifestyle,
+// stock-picking, and consumer-advice content. The sales desk needs article
+// color that can plausibly shape a bank conversation: rates, the Fed, fixed
+// income/credit, bank funding/regulation, macro data, energy/trade shocks, or
+// broad market-index moves. Keep the rules explicit and fixture-tested so the
+// page does not slowly drift back into retail news.
 const TAG_RULES = [
-  ['rates', /fed|fomc|rate|yield|treasur|inflation|cpi|ppi|powell/i],
-  ['credit', /credit|spread|bond|issuance|debt|default|downgrade/i],
-  ['equities', /equit|stock|futures|s&p|nasdaq|dow|earnings/i],
-  ['macro', /oil|energy|tariff|iran|china|geopolit|gdp|jobs|payroll/i],
-  ['banks', /bank|deposit|loan|liquidit|lender|fdic/i],
+  ['rates', /\b(?:fed|fomc|powell|warsh|hammack|kashkari|goolsbee|interest[- ]rates?|rate[- ](?:cut|cuts|hike|hikes|path|outlook)|monetary policy|central bank|treasur(?:y|ies)|yield(?:s| curve)?|curve|auction|term premium|duration|inflation|cpi|ppi|pce)\b/i],
+  ['credit', /\b(?:bond markets?|bonds?|fixed income|credit spreads?|spreads?|corporate debt|muni(?:cipal)?s?|issuance|default|downgrade|upgrade|high[- ]yield|investment[- ]grade|leveraged loans?|oas)\b/i],
+  ['equities', /\b(?:s&p 500|nasdaq(?:-100)?|dow jones|russell 2000|small[- ]caps?|stock futures|u\.s\. stocks?|equity markets?|bear market|bull market|market rally|sell-?off|record close|market breadth|valuation|earnings season)\b/i],
+  ['macro', /\b(?:oil prices?|crude|energy prices?|tariffs?|sanctions?|trade war|exports?|shipping|strait of hormuz|supply chain|geopolitics?|gdp|payrolls?|jobs report|jobless claims|unemployment|adp|ism|pmi|factory|manufacturing|retail sales|consumer confidence|housing starts|economic data|economic calendar|recession|soft landing)\b/i],
+  ['banks', /\b(?:bank earnings|regional banks?|bank stocks?|banking system|deposits?|loan growth|liquidity|lenders?|fdic|net interest margin|commercial real estate|cre)\b/i],
 ];
 
 const PERSONAL_FINANCE_URL_RE = /\/(?:personal-finance|retirement|personalfinance|pf|select|make-it)\b/i;
-const PERSONAL_FINANCE_TEXT_RE = /\b(?:personal finance|retirement planning|retirees?|401\(k\)|401k|ira|roth ira|social security benefits?|medicare|student loans?|credit cards?|personal loans?|auto loans?|car insurance|home buyers?|homebuyers?|home equity|mortgage rates?|savings accounts?|checking accounts?|budgeting)\b/i;
-const PERSONAL_FINANCE_ADVICE_RE = /\b(?:how to|what to know|what it means for you|your money|your wallet|your taxes|financial advisor|financial planner)\b/i;
+const PERSONAL_FINANCE_TEXT_RE = /\b(?:personal finance|retirement planning|retirees?|401\(k\)|401k|ira|roth ira|social security benefits?|medicare|student loans?|credit cards?|personal loans?|auto loans?|car insurance|home buyers?|homebuyers?|home equity|reverse mortgage|mortgage rates?|savings accounts?|checking accounts?|budgeting|estate planning|inheritance|payroll taxes?|trump accounts?|children's financial future)\b/i;
+const PERSONAL_FINANCE_ADVICE_RE = /\b(?:how to|what to know|what it means for you|your money|your wallet|your taxes|financial advisor|financial planner|should you|protect your|worth streaming|best time to buy|stocks? to buy)\b/i;
+const LIFESTYLE_TEXT_RE = /\b(?:streaming|netflix|hulu|hbo|max|apple tv|cooling costs?|heat wave|stay healthy|meds?|romance|life admin|soft off day|love your job|job satisfaction|walmart|earthquakes?|casinos?)\b/i;
+const RETAIL_TRADING_TEXT_RE = /\b(?:traders? (?:are )?(?:betting|divided|worried)|how to ride|with less risk|top wall street analysts|analysts? (?:are )?bullish|short sellers?|shorting|post-earnings rally|monster rally|options traders?|prediction market|polymarket|kalshi|bitcoin|crypto)\b/i;
+const STOCK_PICK_TEXT_RE = /\b(?:these \d+ stocks?|stocks? to buy|best time .*buy .*stocks?|global etf|etf that's|how to ride|with less risk|top wall street analysts|analysts? (?:are )?bullish)\b/i;
+const SINGLE_STOCK_TEXT_RE = /\b(?:caterpillar|micron|metlife|spacex|alphabet|verizon|openai|tesla|apple stock)\b/i;
+const BANK_ACCOUNT_CONSUMER_RE = /\b(?:your bank accounts?|connect to your bank accounts?|bank account privacy|checking accounts?)\b/i;
 
 // ---------- RSS parsing (pure, fixture-tested) ----------
 
@@ -75,11 +85,16 @@ function tagText(block, tag) {
   return decodeEntities(value.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
 }
 
-function inferTags(text) {
+function tagNamesForText(text) {
   const tags = [];
   for (const [tag, re] of TAG_RULES) {
     if (re.test(text)) tags.push(tag);
   }
+  return tags;
+}
+
+function inferTags(text) {
+  const tags = tagNamesForText(text);
   return tags.length ? tags : ['market color'];
 }
 
@@ -91,6 +106,28 @@ function isPersonalFinanceArticle(item) {
   if (PERSONAL_FINANCE_URL_RE.test(url)) return true;
   if (PERSONAL_FINANCE_TEXT_RE.test(text)) return true;
   return PERSONAL_FINANCE_ADVICE_RE.test(text) && /\b(?:money|tax|retire|saving|debt|loan|mortgage|credit|household|consumer)\b/i.test(text);
+}
+
+function isSalesRelevantArticle(item) {
+  const title = String((item && item.title) || '');
+  const summary = String((item && item.summary) || '');
+  const url = String((item && item.url) || '');
+  const text = `${title} ${summary}`;
+  if (isPersonalFinanceArticle({ title, summary, url })) return false;
+  if (LIFESTYLE_TEXT_RE.test(text)) return false;
+  if (BANK_ACCOUNT_CONSUMER_RE.test(text)) return false;
+  if (STOCK_PICK_TEXT_RE.test(text)) return false;
+
+  const tags = tagNamesForText(text);
+  if (!tags.length) return false;
+
+  // Equity-only single-name/options pieces are retail trade ideas, not useful
+  // color for bank-account conversations. Keep broad index/market items and
+  // any article that also has a rates, macro, credit, or banking hook.
+  const onlyEquities = tags.length === 1 && tags[0] === 'equities';
+  if (onlyEquities && (RETAIL_TRADING_TEXT_RE.test(text) || SINGLE_STOCK_TEXT_RE.test(text))) return false;
+  if (RETAIL_TRADING_TEXT_RE.test(text) && !tags.some(tag => tag === 'rates' || tag === 'credit' || tag === 'macro' || tag === 'banks')) return false;
+  return true;
 }
 
 /**
@@ -107,7 +144,7 @@ function parseFeedItems(xml) {
     const url = tagText(block, 'link');
     if (!title || !/^https:\/\//i.test(url)) continue;
     const summary = tagText(block, 'description').slice(0, SUMMARY_MAX);
-    if (isPersonalFinanceArticle({ title, url, summary })) continue;
+    if (!isSalesRelevantArticle({ title, url, summary })) continue;
     const pubDate = tagText(block, 'pubDate') || tagText(block, 'dc:date');
     const parsed = pubDate ? Date.parse(pubDate) : NaN;
     items.push({
@@ -181,12 +218,12 @@ function buildResponse(cache, { stale = false } = {}) {
   const items = [];
   for (const it of collected) {
     if (seenUrl.has(it.url)) continue;
-    if (isPersonalFinanceArticle(it)) continue;
+    if (!isSalesRelevantArticle(it)) continue;
     const tkey = normalizeTitleKey(it.title);
     if (tkey && seenTitle.has(tkey)) continue;
     seenUrl.add(it.url);
     if (tkey) seenTitle.add(tkey);
-    items.push({ id: articleId(it.url), ...it });
+    items.push({ id: articleId(it.url), ...it, tags: inferTags(`${it.title} ${it.summary || ''}`) });
     if (items.length >= MAX_ARTICLES) break;
   }
 
@@ -230,11 +267,11 @@ async function getMarketColorFeed(opts) {
       let succeeded = 0;
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
-        if (r.status === 'fulfilled' && r.value.items.length) {
+        if (r.status === 'fulfilled') {
           feeds[r.value.feed.key] = { fetchedAt: new Date(now).toISOString(), items: r.value.items };
           succeeded += 1;
         } else {
-          const reason = r.status === 'rejected' ? r.reason.message : 'no items parsed';
+          const reason = r.reason.message;
           log('warn', `market-color feed ${FEEDS[i].key} failed:`, reason);
         }
       }
@@ -260,6 +297,7 @@ module.exports = {
   parseFeedItems,
   inferTags,
   isPersonalFinanceArticle,
+  isSalesRelevantArticle,
   buildResponse,
   FEEDS,
 };

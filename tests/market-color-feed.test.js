@@ -62,16 +62,61 @@ function testTagFallback() {
   console.log('  ✓ inferTags: default + keyword');
 }
 
+function testSalesRelevanceFilter() {
+  assert.ok(feed.isSalesRelevantArticle({
+    title: 'Fed officials debate rate cuts as Treasury yields fall',
+    url: 'https://www.cnbc.com/fed.html',
+    summary: 'Bond markets are repricing the policy path.'
+  }), 'rates and Treasury story kept');
+  assert.ok(feed.isSalesRelevantArticle({
+    title: 'U.S. stocks moving lower as ADP jobs data miss forecasts',
+    url: 'https://www.marketwatch.com/bulletins/redirect/go?g=jobs',
+    summary: ''
+  }), 'broad equity + macro story kept');
+  assert.ok(!feed.isSalesRelevantArticle({
+    title: 'Here’s what’s worth streaming in July',
+    url: 'https://www.marketwatch.com/story/streaming.html',
+    summary: 'Netflix and Hulu picks.'
+  }), 'lifestyle story dropped');
+  assert.ok(!feed.isSalesRelevantArticle({
+    title: 'This insurance stock is on an impressive run. How to ride the momentum with less risk',
+    url: 'https://www.cnbc.com/metlife.html',
+    summary: 'Analysts are bullish on MetLife.'
+  }), 'single-stock trade idea dropped');
+  assert.ok(!feed.isSalesRelevantArticle({
+    title: 'Why energy could be a great place to invest even with oil prices retreating — 5 stocks to buy',
+    url: 'https://www.cnbc.com/energy-stocks.html',
+    summary: 'Oil prices are moving after the latest supply shock.'
+  }), 'stock-pick list dropped even with a macro hook');
+  assert.ok(!feed.isSalesRelevantArticle({
+    title: 'These 10 stocks have generated nearly all Nasdaq-100 gains this year',
+    url: 'https://www.marketwatch.com/bulletins/redirect/go?g=stocks',
+    summary: ''
+  }), 'stock-list concentration story dropped');
+  assert.ok(!feed.isSalesRelevantArticle({
+    title: "Bulls are betting big on this global ETF that's deep in a bear market",
+    url: 'https://www.cnbc.com/global-etf.html',
+    summary: ''
+  }), 'ETF trade setup dropped');
+  assert.ok(!feed.isSalesRelevantArticle({
+    title: 'ChatGPT is ready to connect to your bank accounts. Should you let it in?',
+    url: 'https://www.marketwatch.com/story/bank-accounts.html',
+    summary: ''
+  }), 'consumer bank-account article dropped');
+  console.log('  ✓ isSalesRelevantArticle: keeps desk color, drops retail/lifestyle');
+}
+
 function testPersonalFinanceFilter() {
   const xml = rssFixture([
     { title: 'Treasury yields rise as Fed path shifts', link: 'https://www.cnbc.com/markets.html', desc: 'Bond yields moved higher.', pubDate: 'Wed, 18 Jun 2026 14:00:00 GMT' },
     { title: 'How to manage your 401(k) when markets fall', link: 'https://www.cnbc.com/personal-finance/retirement.html', desc: 'Retirement planning tips for your money.', pubDate: 'Wed, 18 Jun 2026 13:00:00 GMT' },
     { title: 'Mortgage rates fall for homebuyers', link: 'https://www.marketwatch.com/story/mortgage.html', desc: 'What it means for your wallet.', pubDate: 'Wed, 18 Jun 2026 12:00:00 GMT' },
+    { title: 'Here’s what’s worth streaming in July', link: 'https://www.marketwatch.com/story/streaming.html', desc: 'Netflix and Hulu picks.', pubDate: 'Wed, 18 Jun 2026 11:00:00 GMT' },
   ]);
   const items = feed.parseFeedItems(xml);
   assert.deepStrictEqual(items.map(i => i.title), ['Treasury yields rise as Fed path shifts']);
   assert.ok(feed.isPersonalFinanceArticle({ title: 'Credit card debt hits consumers', url: 'https://example.com/x', summary: '' }));
-  console.log('  ✓ parseFeedItems: drops personal-finance articles');
+  console.log('  ✓ parseFeedItems: drops personal-finance and lifestyle articles');
 }
 
 // ---------- getMarketColorFeed: dedup + sort + cache ----------
@@ -81,11 +126,11 @@ async function testFetchDedupSortCache() {
   // CNBC Markets + Finance both carry the same headline (cross-post) — should dedup.
   const markets = rssFixture([
     { title: 'Shared headline about bonds', link: 'https://www.cnbc.com/shared.html', desc: 'credit spreads tighten', pubDate: 'Wed, 18 Jun 2026 10:00:00 GMT' },
-    { title: 'Older markets story', link: 'https://www.cnbc.com/old.html', desc: '', pubDate: 'Wed, 18 Jun 2026 08:00:00 GMT' },
+    { title: 'Older Treasury story', link: 'https://www.cnbc.com/old.html', desc: 'Treasury yields slipped.', pubDate: 'Wed, 18 Jun 2026 08:00:00 GMT' },
   ]);
   const finance = rssFixture([
     { title: 'Shared headline about bonds', link: 'https://www.cnbc.com/shared.html', desc: 'credit spreads tighten', pubDate: 'Wed, 18 Jun 2026 10:00:00 GMT' },
-    { title: 'Newest finance story', link: 'https://www.cnbc.com/new.html', desc: '', pubDate: 'Wed, 18 Jun 2026 12:00:00 GMT' },
+    { title: 'Newest Fed rate story', link: 'https://www.cnbc.com/new.html', desc: 'Treasury yields moved after Fed comments.', pubDate: 'Wed, 18 Jun 2026 12:00:00 GMT' },
   ]);
   let calls = 0;
   const fetchImpl = async (url) => {
@@ -128,6 +173,7 @@ function testCachedPersonalFinanceFilter() {
   };
   const res = feed.buildResponse(cache);
   assert.deepStrictEqual(res.items.map(i => i.title), ['Fed officials debate rate cuts']);
+  assert.deepStrictEqual(res.items[0].tags, ['rates']);
   console.log('  ✓ buildResponse: filters personal finance from cache');
 }
 
@@ -135,7 +181,7 @@ function testCachedPersonalFinanceFilter() {
 
 async function testStaleOnFailure() {
   const dir = tmpDir();
-  const good = rssFixture([{ title: 'Cached story', link: 'https://www.cnbc.com/c.html', desc: '', pubDate: 'Wed, 18 Jun 2026 10:00:00 GMT' }]);
+  const good = rssFixture([{ title: 'Cached Treasury story', link: 'https://www.cnbc.com/c.html', desc: 'Yields fell after the Fed remarks.', pubDate: 'Wed, 18 Jun 2026 10:00:00 GMT' }]);
   const okFetch = makeFetch([['15839069', good]]);
   const now = Date.parse('2026-06-18T15:00:00Z');
   await feed.getMarketColorFeed({ marketDir: dir, fetchImpl: okFetch, now });
@@ -145,7 +191,7 @@ async function testStaleOnFailure() {
   const stale = await feed.getMarketColorFeed({ marketDir: dir, fetchImpl: failFetch, now: now + 60 * 60 * 1000 });
   assert.strictEqual(stale.stale, true, 'marked stale');
   assert.strictEqual(stale.items.length, 1, 'cached items still served');
-  assert.strictEqual(stale.items[0].title, 'Cached story');
+  assert.strictEqual(stale.items[0].title, 'Cached Treasury story');
   console.log('  ✓ getMarketColorFeed: stale-on-failure serves cache');
 }
 
@@ -163,6 +209,7 @@ async function testNoCacheNoThrow() {
 (async function main() {
   testParse();
   testTagFallback();
+  testSalesRelevanceFilter();
   testPersonalFinanceFilter();
   await testFetchDedupSortCache();
   testCachedPersonalFinanceFilter();
