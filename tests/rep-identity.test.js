@@ -66,13 +66,15 @@ test('splitOwnerString splits on , ; / | and "and", keeping multi-word names', (
 
 // ---------- ownerStringContainsRep ----------
 
-test('ownerStringContainsRep matches by username, display, multi-owner, and loose initial+surname', () => {
+test('ownerStringContainsRep matches by username, display, and multi-owner identity keys', () => {
   const rep = r.parseRepValue('Mike Jones|mjones'); // { username:'mjones', displayName:'Mike Jones' }
   assert.ok(r.ownerStringContainsRep('mjones', rep), 'exact username');
   assert.ok(r.ownerStringContainsRep('Mike Jones', rep), 'exact display');
   assert.ok(r.ownerStringContainsRep('MIKE JONES, John Smith', rep), 'within a multi-owner string');
-  assert.ok(r.ownerStringContainsRep('M Jones', rep), 'loose: first initial + surname');
+  assert.ok(r.ownerStringContainsRep('M Jones', rep), 'abbreviated owner username');
+  assert.ok(r.ownerStringContainsRep('M. Jones', rep), 'punctuation-insensitive abbreviated owner username');
   assert.ok(!r.ownerStringContainsRep('John Smith', rep), 'different person');
+  assert.ok(!r.ownerStringContainsRep('Jane Smith', r.parseRepValue('John Smith|jsmith')), 'same initial + surname is not enough');
   assert.ok(!r.ownerStringContainsRep('', rep), 'empty owner');
   assert.ok(!r.ownerStringContainsRep('Mike Jones', null), 'null rep');
 });

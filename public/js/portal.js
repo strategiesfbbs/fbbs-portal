@@ -2377,8 +2377,8 @@
     // so the next visit refetches under the new identity.
     crmPulseState.data = null;
     if (activePage === 'pulse') loadCrmPulse(true);
+    if (mapsState.loaded) mapsApplyActingRepTerritory({ force: true });
     if (activePage === 'maps') {
-      mapsApplyActingRepTerritory({ force: true });
       if (mapsState.loaded) applyMapsFilters();
       else loadMaps();
     }
@@ -26033,6 +26033,10 @@
   }
 
   function mapsOwnerKey(value) {
+    return mapsNormalizeOwnerName(value);
+  }
+
+  function mapsOwnerIdentityKey(value) {
     return mapsNormalizeOwnerName(value).replace(/[^a-z0-9]+/g, '');
   }
 
@@ -26052,17 +26056,11 @@
 
   function mapsOwnerNameMatches(candidate, ownerFilter) {
     const wantedName = mapsNormalizeOwnerName(ownerFilter);
-    const wantedKey = mapsOwnerKey(ownerFilter);
+    const wantedKey = mapsOwnerIdentityKey(ownerFilter);
     const candidateName = mapsNormalizeOwnerName(candidate);
-    const candidateKey = mapsOwnerKey(candidate);
+    const candidateKey = mapsOwnerIdentityKey(candidate);
     if (!wantedName || !candidateName) return false;
-    if (candidateName === wantedName || (wantedKey && candidateKey === wantedKey)) return true;
-    const wantedTokens = wantedName.split(/\s+/).filter(Boolean);
-    const candidateTokens = candidateName.split(/\s+/).filter(Boolean);
-    return wantedTokens.length > 1 &&
-      candidateTokens.length > 1 &&
-      wantedTokens[wantedTokens.length - 1] === candidateTokens[candidateTokens.length - 1] &&
-      wantedTokens[0][0] === candidateTokens[0][0];
+    return candidateName === wantedName || (wantedKey && candidateKey === wantedKey);
   }
 
   function mapsOwnerMatches(bank, ownerFilter) {
@@ -26163,16 +26161,28 @@
     if (!mapsState.loaded) return false;
     if (!rep) {
       if (force) {
+        const changed = Boolean(mapsState.territory.owner || mapsState.territory.ownerTouched);
         mapsState.territory.owner = '';
         mapsState.territory.ownerTouched = false;
         mapsResetTerritoryFocus();
         renderMapsOwnerOptions();
+        return changed;
       }
       return false;
     }
     if (!force && (mapsState.territory.owner || mapsState.territory.ownerTouched)) return false;
     const owner = mapsFindOwnerForRep(rep);
-    if (!owner) return false;
+    if (!owner) {
+      if (force) {
+        const changed = Boolean(mapsState.territory.owner || mapsState.territory.ownerTouched);
+        mapsState.territory.owner = '';
+        mapsState.territory.ownerTouched = false;
+        mapsResetTerritoryFocus();
+        renderMapsOwnerOptions();
+        return changed;
+      }
+      return false;
+    }
     mapsState.territory.owner = owner;
     mapsState.territory.ownerTouched = false;
     mapsResetTerritoryFocus();

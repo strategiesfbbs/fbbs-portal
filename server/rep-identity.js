@@ -47,6 +47,10 @@ function normalizeUsername(value) {
   return stripDomain(value).toLowerCase().replace(/\s+/g, '').slice(0, 80);
 }
 
+function identityKey(value) {
+  return normalizeUsername(value).replace(/[^a-z0-9]+/g, '');
+}
+
 // Display-friendly name. Owners frequently come in as "MIKE JONES" — title-case those.
 // Anything that already mixes case is left alone.
 function prettifyDisplayName(value) {
@@ -151,21 +155,16 @@ function ownerStringContainsRep(ownerString, rep) {
   const parts = splitOwnerString(ownerString);
   if (!parts.length) return false;
   const repKey = rep.username;
+  const repIdentityKey = identityKey(rep.username);
   const repDisplay = (rep.displayName || '').toLowerCase();
+  const repDisplayKey = identityKey(rep.displayName);
   for (const part of parts) {
     const partKey = normalizeUsername(part);
+    const partIdentityKey = identityKey(part);
     if (partKey && partKey === repKey) return true;
+    if (partIdentityKey && repIdentityKey && partIdentityKey === repIdentityKey) return true;
     if (repDisplay && part.toLowerCase() === repDisplay) return true;
-    // Loose match for "Mike Jones" vs "M Jones" — only when last names match exactly.
-    if (repDisplay) {
-      const repTokens = repDisplay.split(/\s+/).filter(Boolean);
-      const partTokens = part.toLowerCase().split(/\s+/).filter(Boolean);
-      if (repTokens.length && partTokens.length &&
-          repTokens[repTokens.length - 1] === partTokens[partTokens.length - 1] &&
-          repTokens[0][0] === partTokens[0][0]) {
-        return true;
-      }
-    }
+    if (partIdentityKey && repDisplayKey && partIdentityKey === repDisplayKey) return true;
   }
   return false;
 }
@@ -199,6 +198,7 @@ module.exports = {
   aggregateRepsFromOwnerStrings,
   buildRepOverrideCookie,
   clearRepOverrideCookieHeader,
+  identityKey,
   normalizeUsername,
   ownerStringContainsRep,
   parseCookies,
