@@ -898,6 +898,25 @@ test('bank activity route rejects contact IDs from another bank', async () => {
     });
     assert.strictEqual(blockedEmail.status, 400, blockedEmail.text);
     assert.match(blockedEmail.json.error, /email/i);
+
+    const auditPath = path.join(dataDir, 'audit.log');
+    const auditEntries = fs.existsSync(auditPath)
+      ? fs.readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+      : [];
+    assert.ok(auditEntries.some(entry =>
+      entry.event === 'bank-activity-blocked' &&
+      entry.bankId === 'ACT-1' &&
+      entry.contactId === doNotCall.id &&
+      entry.kind === 'call' &&
+      entry.reason === 'do-not-call'
+    ), JSON.stringify(auditEntries));
+    assert.ok(auditEntries.some(entry =>
+      entry.event === 'bank-activity-blocked' &&
+      entry.bankId === 'ACT-1' &&
+      entry.contactId === emailOptOut.id &&
+      entry.kind === 'email' &&
+      entry.reason === 'email-opt-out'
+    ), JSON.stringify(auditEntries));
   });
 });
 

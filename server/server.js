@@ -5310,15 +5310,24 @@ async function handleLogBankActivity(req, res, bankId) {
       return sendJSON(res, 400, { error: 'Invalid activity type' });
     }
     const contactId = String(body.contactId || '').trim();
+    const auditBlockedActivity = reason => appendAuditLog({
+      event: 'bank-activity-blocked',
+      bankId,
+      contactId,
+      kind: String(body.kind || ''),
+      reason
+    });
     if (contactId) {
       const contact = getBankContact(BANK_REPORTS_DIR, contactId);
       if (!contact || String(contact.bankId || '') !== String(bankId)) {
         return sendJSON(res, 400, { error: 'Activity contact does not belong to this bank' });
       }
       if (String(body.kind || '') === 'call' && contact.doNotCall) {
+        auditBlockedActivity('do-not-call');
         return sendJSON(res, 400, { error: 'This contact is marked Do Not Call' });
       }
       if (String(body.kind || '') === 'email' && (contact.optOutEmail || contact.emailBounced)) {
+        auditBlockedActivity(contact.emailBounced ? 'email-bounced' : 'email-opt-out');
         return sendJSON(res, 400, { error: 'This contact cannot receive email activity' });
       }
     }
