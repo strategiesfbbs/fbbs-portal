@@ -36,6 +36,7 @@ const { parseMuniOffersText } = require('./muni-offers-parser');
 const { parseBairdSyndicateWorkbook, looksLikeBairdSyndicateWorkbook } = require('./baird-syndicate-parser');
 const { parseEconomicUpdateText } = require('./economic-update-parser');
 const XLSX = require('./xlsx');
+const { buildXlsxBuffer } = require('./xlsx-export');
 const execSummaryStore = require('./exec-summary-store');
 const { parseMmdCurveText, parseMmdCurveWorkbook } = require('./mmd-parser');
 const { parseTreasuryNotesWorkbook, looksLikeTreasuryWorkbook } = require('./treasury-notes-parser');
@@ -11594,6 +11595,40 @@ function sendCsv(res, filename, csv) {
   res.end(csv);
 }
 
+// Generic "convert an already-built table to .xlsx" endpoint for the Reports
+// Workspace. The report builders (Reports v2 custom-bank, and any future
+// report) already compute their headers/rows client-side for CSV export
+// (downloadCsv) against data that's firm-wide/shared per the Soft-A boundary
+// — same trust level as the existing CSV export, so no extra gating here.
+// This just converts that already-computed table to a real workbook using
+// the vendored SheetJS build (server/xlsx.js), so cells stay numeric/sortable
+// instead of shipping a CSV renamed .xlsx.
+async function handleExportReportXlsx(req, res) {
+  try {
+    const body = await readJsonBody(req, 20 * 1024 * 1024);
+    const headers = Array.isArray(body.headers) ? body.headers : [];
+    const rows = Array.isArray(body.rows) ? body.rows : [];
+    if (!headers.length || !rows.length) {
+      return sendJSON(res, 400, { error: 'No data to export' });
+    }
+    if (rows.length > 200000) {
+      return sendJSON(res, 400, { error: 'Too many rows to export as a single workbook' });
+    }
+    const buffer = buildXlsxBuffer(body.sheetName, headers, rows);
+    const safeName = String(body.filename || 'report.xlsx').replace(/[^a-z0-9._-]+/gi, '_');
+    res.writeHead(200, {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-store',
+      'Content-Disposition': `attachment; filename="${safeName}"`
+    });
+    res.end(buffer);
+  } catch (err) {
+    log('error', 'Excel export failed:', err.message);
+    return sendJSON(res, err.statusCode || 500, { error: err.message || 'Could not build Excel export' });
+  }
+}
+
 async function handleMeOverride(req, res) {
   try {
     const body = await readJsonBody(req, 8 * 1024);
@@ -12332,6 +12367,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (pathname === '/api/reports/hidden' && req.method === 'POST') {
       return await handleSetReportHidden(req, res);
+    }
+    if (pathname === '/api/reports/export/xlsx' && req.method === 'POST') {
+      return await handleExportReportXlsx(req, res);
     }
     // Aggregation reports (Phase 4) — named routes BEFORE the :id regex.
     if (pathname === '/api/reports/activity-summary' && req.method === 'GET') {

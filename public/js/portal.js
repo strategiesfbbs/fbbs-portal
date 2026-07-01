@@ -10410,6 +10410,51 @@
     showToast(`Exported ${formatNumber(rows.length)} banks`);
   }
 
+  // Real .xlsx export (not a renamed CSV): posts the same rows CSV export
+  // already computes to /api/reports/export/xlsx, but with raw values
+  // (customBankReportValue, not the formatted display strings CSV uses) so
+  // money/percent columns land as real numbers Excel can sort/sum/filter.
+  // The server converts to a workbook via the vendored SheetJS build (same
+  // one used to read uploaded workbooks) and streams the binary back.
+  async function exportCustomBankReportXlsx(triggerEl) {
+    const rows = filteredCustomBankRows();
+    if (!rows.length) return showToast('No report rows to export', true);
+    const cols = (customBankReportState.selectedColumns || []).map(customBankColumnDef);
+    const dataRows = rows.map(row => cols.map(col => {
+      const value = customBankReportValue(row, col.key);
+      return typeof value === 'number' && Number.isFinite(value) ? value : (value == null ? '' : String(value));
+    }));
+    const stamp = (customBankReportState.dataset && customBankReportState.dataset.latestPeriod) || new Date().toISOString().slice(0, 10);
+    if (triggerEl) triggerEl.disabled = true;
+    try {
+      const res = await fetch('/api/reports/export/xlsx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sheetName: 'Custom Bank Report',
+          filename: `custom_bank_report_${stamp}.xlsx`,
+          headers: cols.map(col => col.label),
+          rows: dataRows
+        })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `custom_bank_report_${stamp}.xlsx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      showToast(`Exported ${formatNumber(rows.length)} banks`);
+    } catch (e) {
+      showToast(e.message || 'Could not export to Excel', true);
+    } finally {
+      if (triggerEl) triggerEl.disabled = false;
+    }
+  }
+
   async function saveCustomBankReportDefinition() {
     const defaultName = customBankReportState.name || `Custom Bank List - ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
     const name = window.prompt('Name this saved view', defaultName);
@@ -10571,7 +10616,7 @@
             <div class="reports-output-options">
               <label><input type="radio" name="reportsOutputFormat" value="view" checked> In-app view</label>
               <label><input type="radio" name="reportsOutputFormat" value="csv"> CSV</label>
-              <label title="Use CSV export for go-live"><input type="radio" name="reportsOutputFormat" value="xlsx" disabled> XLSX</label>
+              <label${type === 'custom-bank' ? '' : ' title="XLSX export is available for Custom Bank Lists"'}><input type="radio" name="reportsOutputFormat" value="xlsx"${type === 'custom-bank' ? '' : ' disabled'}> XLSX</label>
               <label${type === 'portfolio-peer' ? '' : ' title="Print/PDF is available for Portfolio Review"'}><input type="radio" name="reportsOutputFormat" value="pdf"${type === 'portfolio-peer' ? '' : ' disabled'}> Print / PDF</label>
             </div>
           </section>
@@ -12853,6 +12898,10 @@
     if (type === 'custom-bank') {
       if (outputFormat === 'csv' && customBankReportState.dataset) {
         exportCustomBankReportCsv();
+        return;
+      }
+      if (outputFormat === 'xlsx' && customBankReportState.dataset) {
+        exportCustomBankReportXlsx(document.querySelector('[data-reports-run]'));
         return;
       }
       runCustomBankReport();

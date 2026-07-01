@@ -53,6 +53,31 @@ function request(port, { method = 'GET', path: requestPath = '/', headers = {}, 
   });
 }
 
+// Like request(), but resolves the raw response Buffer instead of decoding
+// as UTF-8 text — required for binary payloads (e.g. .xlsx) where text
+// decode/re-encode would corrupt bytes.
+function requestBinary(port, { method = 'GET', path: requestPath = '/', headers = {}, body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      method,
+      path: requestPath,
+      headers: {
+        ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
+        ...headers
+      }
+    }, res => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, buffer: Buffer.concat(chunks) }));
+    });
+    req.once('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
 function requestChunked(port, { method = 'POST', path: requestPath = '/', headers = {}, chunks = [] } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request({
@@ -917,6 +942,47 @@ test('bank activity route rejects contact IDs from another bank', async () => {
       entry.kind === 'email' &&
       entry.reason === 'email-opt-out'
     ), JSON.stringify(auditEntries));
+  });
+});
+
+test('reports xlsx export streams a real workbook with numeric cells and a formula-injection guard', async () => {
+  await withServer({}, async ({ port }) => {
+    const XLSX = require('../server/xlsx');
+    const headers = ['Bank', 'Assets', 'Note'];
+    const rows = [
+      ['Acme Bank', 123456.78, 'normal text'],
+      ['Zero Bank', 0, '=SUM(1,2)']
+    ];
+    const res = await requestBinary(port, {
+      method: 'POST',
+      path: '/api/reports/export/xlsx',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheetName: 'Custom Bank Report', filename: 'custom_bank_report_2026-06-30.xlsx', headers, rows })
+    });
+    assert.strictEqual(res.status, 200, res.buffer.toString('utf8').slice(0, 300));
+    assert.strictEqual(res.headers['content-type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    assert.match(res.headers['content-disposition'], /attachment; filename="custom_bank_report_2026-06-30\.xlsx"/);
+    assert.ok(res.buffer.length > 0, 'response body is a non-empty binary buffer');
+
+    const workbook = XLSX.read(res.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets['Custom Bank Report'];
+    assert.ok(sheet, 'sheet is present under the requested name');
+    const table = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+    assert.deepStrictEqual(table[0], headers);
+    assert.strictEqual(table[1][0], 'Acme Bank');
+    assert.strictEqual(typeof table[1][1], 'number', 'money value round-trips as a number, not display text');
+    assert.strictEqual(table[1][1], 123456.78);
+    assert.strictEqual(table[2][1], 0, 'a legitimate zero survives (not coerced to blank)');
+    assert.strictEqual(table[2][2], "'=SUM(1,2)", 'a formula-shaped string is neutralized with a leading quote, not left executable');
+
+    const empty = await request(port, {
+      method: 'POST',
+      path: '/api/reports/export/xlsx',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ headers: [], rows: [] })
+    });
+    assert.strictEqual(empty.status, 400, empty.text);
+    assert.match(empty.json.error, /no data/i);
   });
 });
 
