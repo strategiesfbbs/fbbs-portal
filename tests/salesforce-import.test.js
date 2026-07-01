@@ -339,9 +339,10 @@ test('[integration] real export reproduces the documented funnel (skips if absen
     }
   }
   const plan = sf.buildContactImportPlan(contacts, { accountIndex, certToBankId, nameToBankId, existingKeys: new Set() });
-  // Documented in the spec: ~2,110 live contacts, ~1,760 cert auto-links, big RIA bucket.
+  // Documented in the spec: ~2,110 live contacts, ~1,680 current-bank cert
+  // auto-links after stale/M&A bank rows are excluded, big RIA bucket.
   assert.ok(plan.stats.total >= 2000 && plan.stats.total <= 2200, `total ${plan.stats.total}`);
-  assert.ok(plan.stats.viaCert >= 1700, `viaCert ${plan.stats.viaCert} should be ~1760`);
+  assert.ok(plan.stats.viaCert >= 1650, `viaCert ${plan.stats.viaCert} should be ~1680 current-bank links`);
   assert.ok(plan.stats.unmatched >= 250, `unmatched ${plan.stats.unmatched} (RIA/general/orphan)`);
   // RIA contacts must be a named unmatched reason, not lost
   assert.ok(Object.keys(plan.stats.byReason).some(r => /RIA/.test(r)), 'RIA reason present');
@@ -363,9 +364,9 @@ test('[integration] real export reproduces the documented funnel (skips if absen
     assert.strictEqual(
       plan2.stats.create + plan2.stats.update + plan2.stats.unchanged + plan2.stats.duplicate + plan2.stats.unmatched,
       plan2.stats.total, 'buckets reconcile to total');
-    if (existingBySfId.size >= 1700) {
+    if (existingBySfId.size >= 1650) {
       assert.ok(plan2.stats.create <= 40, `after apply, create should be tiny (was ${plan2.stats.create})`);
-      assert.ok(plan2.stats.unchanged + plan2.stats.update >= 1700, 'most contacts reconcile as unchanged/update');
+      assert.ok(plan2.stats.unchanged + plan2.stats.update >= 1650, 'most current-bank contacts reconcile as unchanged/update');
     }
   }
 });

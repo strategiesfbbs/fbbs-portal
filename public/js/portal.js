@@ -474,6 +474,25 @@
     { key: 'peerDelta_liquidAssetsToAssets', label: 'Liquid Assets Gap', type: 'percent', section: 'Peer Gaps' },
     { key: 'peerDelta_longTermAssetsToAssets', label: 'Long-Term Assets Gap', type: 'percent', section: 'Peer Gaps' }
   ];
+  // Maps BANK_FIELDS' raw section keys (server/bank-data-importer.js) to the
+  // same friendly group names CUSTOM_BANK_REPORT_COLUMNS already uses, so a
+  // field that's whitelisted server-side but not yet curated above (e.g. a
+  // newly added MAP_FIELD_KEYS entry) joins its section's existing group in
+  // the field picker instead of spawning a differently-cased duplicate
+  // (e.g. a raw 'capital' group sitting next to the curated 'Capital' one).
+  const CUSTOM_BANK_SECTION_LABELS = {
+    details: 'Details',
+    accountDetails: 'Details',
+    balanceSheet: 'Balance Sheet',
+    securitiesHtm: 'Securities',
+    securitiesAfs: 'Securities',
+    profitability: 'Profitability',
+    capital: 'Capital',
+    loans: 'Loans',
+    assetQuality: 'Credit',
+    liquidity: 'Liquidity',
+    peer: 'Peer Gaps'
+  };
   // Three-section rail (Salesforce-style cleanup): Templates you run or clone,
   // what you recently ran, and your saved custom reports. Folders stay as a
   // secondary data-driven section ("Move to folder…" still creates them).
@@ -3193,7 +3212,7 @@
     const status = bankDataStatus || {};
     const accountInfo = status.accountStatuses || {};
     const bankCount = status.available
-      ? (status.bankCount || (status.metadata && status.metadata.bankCount))
+      ? (status.currentBankCount || status.bankCount || (status.metadata && status.metadata.bankCount))
       : null;
 
     if (!status.available) {
@@ -3204,7 +3223,7 @@
       return;
     }
 
-    const counts = (accountInfo.metadata && accountInfo.metadata.statuses) || {};
+    const counts = accountInfo.currentStatuses || (accountInfo.metadata && accountInfo.metadata.statuses) || {};
     const clients = Number(counts.Client || 0);
     const prospects = Number(counts.Prospect || 0);
     const watchlist = Number(counts.Watchlist || 0);
@@ -3218,16 +3237,18 @@
     if (!parts.length && open) parts.push(`<strong>${formatNumber(open)}</strong> tagged`);
     if (!parts.length && accountInfo.available) parts.push(`<strong>${formatNumber(accountInfo.statusCount || 0)}</strong> tagged`);
 
-    const period = (status.metadata && status.metadata.latestPeriod) || null;
+    const period = status.latestPeriod || (status.metadata && status.metadata.latestPeriod) || null;
+    const hidden = Number(status.excludedStaleBankCount || status.excludedBankCount || 0);
     const footPieces = parts.length ? parts.join('<span class="home-tile-foot-divider">·</span>') : '';
     const periodSuffix = period ? `<span class="home-tile-foot-divider">·</span>${escapeHtml(period)}` : '';
+    const hiddenSuffix = hidden ? `<span class="home-tile-foot-divider">·</span>${escapeHtml(formatNumber(hidden))} stale hidden` : '';
     const taggedSuffix = !parts.length && tagged === 0
       ? 'No accounts tagged yet'
-      : footPieces + periodSuffix;
+      : footPieces + periodSuffix + hiddenSuffix;
 
     setHomeTilePulse('homeTileAccountsNum', 'homeTileAccountsLabel', 'homeTileAccountsFoot', {
       num: formatNumber(bankCount),
-      label: 'Banks',
+      label: 'Current Banks',
       footHtml: taggedSuffix
     });
   }
@@ -5007,9 +5028,16 @@
 
     if (bankDataStatus && bankDataStatus.available) {
       const meta = bankDataStatus.metadata || {};
-      if (sub) sub.textContent = `Imported ${formatNumber(bankDataStatus.bankCount || meta.bankCount)} banks · latest period ${meta.latestPeriod || '—'}`;
-      if (count) count.textContent = formatNumber(bankDataStatus.bankCount || meta.bankCount);
-      if (status) status.textContent = `${meta.sourceFile || 'Workbook'} imported ${formatImportedDate(meta.importedAt)} · ${formatNumber(meta.rowCount)} rows · latest ${meta.latestPeriod || '—'}`;
+      const currentBanks = bankDataStatus.currentBankCount || bankDataStatus.bankCount || 0;
+      const totalBanks = bankDataStatus.totalBankCount || meta.bankCount || currentBanks;
+      const excludedBanks = Number(bankDataStatus.excludedStaleBankCount || bankDataStatus.excludedBankCount || 0);
+      const latestPeriod = bankDataStatus.latestPeriod || meta.latestPeriod || '—';
+      const staleText = excludedBanks
+        ? ` · ${formatNumber(excludedBanks)} stale/inactive hidden${bankDataStatus.freshnessCutoffPeriod ? ` (older than ${bankDataStatus.freshnessCutoffPeriod})` : ''}`
+        : '';
+      if (sub) sub.textContent = `Imported ${formatNumber(currentBanks)} current banks · latest period ${latestPeriod}${staleText}`;
+      if (count) count.textContent = formatNumber(currentBanks);
+      if (status) status.textContent = `${meta.sourceFile || 'Workbook'} imported ${formatImportedDate(meta.importedAt)} · ${formatNumber(meta.rowCount)} rows · ${formatNumber(currentBanks)} current of ${formatNumber(totalBanks)} total · latest ${latestPeriod}${staleText}`;
     } else {
       if (sub) sub.textContent = bankDataStatus.error || 'Upload the SNL call report workbook to enable bank tear sheet search.';
       if (count) count.textContent = '0';
@@ -5847,6 +5875,57 @@
     });
   }
 
+  // FFIEC CDR Call Report / UBPR sync (Upload page): same dry-run guard as
+  // FDIC, but uses configured FFIEC bulk files/URLs for deeper field coverage.
+  function setupFfiecSyncButton() {
+    const btn = document.getElementById('ffiecSyncBtn');
+    const status = document.getElementById('ffiecSyncStatus');
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', async () => {
+      if (!requireAdminAction('Admin permission is required for the FFIEC sync.')) return;
+      btn.disabled = true;
+      const setStatus = text => { if (status) status.textContent = text; };
+      try {
+        setStatus('Checking configured FFIEC Call/UBPR bulk files...');
+        const dryRes = await fetch('/api/admin/ffiec-sync?dryRun=1', { method: 'POST' });
+        const dry = await dryRes.json();
+        if (!dryRes.ok) throw new Error(dry.error || `HTTP ${dryRes.status}`);
+        const coverage = dry.fieldCoverage || {};
+        const coverageText = coverage.mappedCount
+          ? `${coverage.mappedCount.toLocaleString()} mapped fields, ${coverage.carriedIdentityCount.toLocaleString()} carried identity fields, ${coverage.remainingCount.toLocaleString()} still workbook-only`
+          : 'field coverage unavailable';
+        if (!dry.updated) {
+          setStatus(`FFIEC ${dry.period || 'latest'} has no new matched periods to add (${Number(dry.matched || 0).toLocaleString()} matched, ${Number(dry.unmatchedFilers || 0).toLocaleString()} unmatched filers). Coverage: ${coverageText}.`);
+          return;
+        }
+        const sourceNames = ((dry.sourceSummary && dry.sourceSummary.files) || []).slice(0, 4).map(file => file.name).join(', ');
+        const go = window.confirm(
+          `FFIEC has ${dry.period} for ${dry.updated.toLocaleString()} of your banks that don't have it yet (${dry.matched.toLocaleString()} matched overall; ${Number(dry.unmatchedFilers || 0).toLocaleString()} unmatched FFIEC filers).\n\n` +
+          `Field coverage: ${coverageText}.\n\n` +
+          (sourceNames ? `Source files: ${sourceNames}${(dry.sourceSummary.files || []).length > 4 ? ', ...' : ''}\n\n` : '') +
+          `Add ${dry.period} to those tear sheets now? Existing periods will not be overwritten.`
+        );
+        if (!go) { setStatus('FFIEC sync cancelled.'); return; }
+        setStatus(`Syncing ${dry.period} from FFIEC Call/UBPR files...`);
+        const res = await fetch('/api/admin/ffiec-sync', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const writtenCoverage = data.fieldCoverage || coverage;
+        const writtenCoverageText = writtenCoverage.mappedCount
+          ? ` · ${writtenCoverage.mappedCount.toLocaleString()} mapped fields`
+          : '';
+        setStatus(`FFIEC sync complete: ${data.period} added to ${data.updated.toLocaleString()} banks (${data.skippedExisting.toLocaleString()} already had it, ${Number(data.unmatchedFilers || 0).toLocaleString()} unmatched filers)${writtenCoverageText}.`);
+        showToast(`FFIEC ${data.period} synced to ${data.updated.toLocaleString()} banks`);
+      } catch (e) {
+        setStatus(`FFIEC sync failed: ${e.message}`);
+        showToast(e.message || 'FFIEC sync failed', true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
   // Salesforce contact-export CSV import (Upload page): dry-run first, show
   // the match/duplicate/unmatched counts, confirm, then import for real.
   function setupSfContactsImport() {
@@ -5897,6 +5976,7 @@
     const averagedSeriesUpload = document.getElementById('averagedSeriesWorkbookInput');
     const clearRecent = document.getElementById('clearRecentBanksBtn');
     setupFdicSyncButton();
+    setupFfiecSyncButton();
     setupSfContactsImport();
     if (input) {
       let t = null;
@@ -9800,7 +9880,12 @@
       return field ? { ...col, label: col.label || field.label, type: col.type || field.type } : col;
     }).concat(datasetFields
       .filter(field => field && field.key && !seen.has(field.key))
-      .map(field => ({ key: field.key, label: field.label || field.key, type: field.type || 'text', section: field.section || 'Other' }))
+      .map(field => ({
+        key: field.key,
+        label: field.label || field.key,
+        type: field.type || 'text',
+        section: CUSTOM_BANK_SECTION_LABELS[field.section] || field.section || 'Other'
+      }))
     );
   }
 
@@ -10138,6 +10223,10 @@
     const source = customBankReportState.dataset || {};
     const peer = source.peerComparison || {};
     const selectedColumns = customBankReportState.selectedColumns || [];
+    const excludedBanks = Number(source.excludedStaleBankCount || source.excludedBankCount || 0);
+    const currentText = excludedBanks
+      ? ` · ${formatNumber(excludedBanks)} stale/inactive hidden`
+      : '';
     return `
       <div class="custom-report-builder">
         ${customBankQuickStartHtml()}
@@ -10165,7 +10254,7 @@
         </details>
         <div class="custom-report-summary">
           <strong>${escapeHtml(formatNumber(rows.length))} banks</strong>
-          <span>${escapeHtml(source.latestPeriod ? `Call report ${source.latestPeriod}` : 'Run the report to load bank data')}${peer.period ? escapeHtml(` · Peer ${peer.period}`) : ''}</span>
+          <span>${escapeHtml(source.latestPeriod ? `Call report ${source.latestPeriod}${currentText}` : 'Run the report to load bank data')}${peer.period ? escapeHtml(` · Peer ${peer.period}`) : ''}</span>
           <span>${escapeHtml(customBankReportState.lastRunAt ? `Generated ${new Date(customBankReportState.lastRunAt).toLocaleString()}` : '')}</span>
         </div>
         <div id="customBankReportOutput">${customBankReportOutputHtml(rows)}</div>
@@ -25668,6 +25757,9 @@
     stateCounts: {},
     latestPeriod: '',
     mappedCount: 0,
+    totalBankCount: 0,
+    excludedStaleBankCount: 0,
+    freshnessCutoffPeriod: '',
     selectedStates: new Set(),
     selectedStatuses: new Set(),
     selectedBankId: '',
@@ -26707,6 +26799,9 @@
       mapsState.stateCounts = data.stateCounts || {};
       mapsState.latestPeriod = data.latestPeriod || '';
       mapsState.mappedCount = data.mappedCount || mapsState.banks.filter(mapsHasCoords).length;
+      mapsState.totalBankCount = Number(data.totalBankCount || 0);
+      mapsState.excludedStaleBankCount = Number(data.excludedStaleBankCount || data.excludedBankCount || 0);
+      mapsState.freshnessCutoffPeriod = data.freshnessCutoffPeriod || '';
       mapsState.peerComparison = data.peerComparison || null;
       mapsState.loaded = true;
       mapsBindHandlers();
@@ -26756,7 +26851,7 @@
         ? 'Showing banks around the searched muni deal area.'
       : 'Choose a territory, state, status, area search, or bank search to drop pins.';
     subtitle.textContent = mapsState.latestPeriod
-      ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} banks · ${mapsState.mappedCount.toLocaleString()} mapped · ${tail}`
+      ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} current banks${mapsState.excludedStaleBankCount ? ` · ${mapsState.excludedStaleBankCount.toLocaleString()} stale/inactive hidden` : ''} · ${mapsState.mappedCount.toLocaleString()} mapped · ${tail}`
       : `${mapsState.banks.length.toLocaleString()} banks · ${tail}`;
   }
 

@@ -233,7 +233,7 @@ try {
   fs.mkdirSync(reportsDir, { recursive: true });
 
   function makeBank(id, o) {
-    const period = '2026Q1';
+    const period = o.period || '2026Q1';
     const values = {
       displayName: o.displayName, city: o.city, state: o.state, certNumber: o.certNumber,
       zip: o.zip, totalAssets: o.totalAssets, totalDeposits: o.totalDeposits,
@@ -248,19 +248,24 @@ try {
   }
 
   const parsed = {
-    metadata: { importedAt: new Date().toISOString(), sourceFile: 'smoke.xlsm', latestPeriod: '2026Q1', bankCount: 2, rowCount: 2, fields: bankImporter.BANK_FIELDS },
+    metadata: { importedAt: new Date().toISOString(), sourceFile: 'smoke.xlsm', latestPeriod: '2026Q1', bankCount: 3, rowCount: 3, fields: bankImporter.BANK_FIELDS },
     banks: [
       makeBank('B-1', { displayName: TRICKY, city: "St. O'Fallon", state: 'IL', certNumber: '12345', zip: '62269', totalAssets: 400000, totalDeposits: 350000, roa: 1.1, subchapterS: 'Yes', agSum: 30 }),
-      makeBank('B-2', { displayName: 'Second Bank', city: 'Des Moines', state: 'IA', certNumber: '222', zip: '50301', totalAssets: 800000, totalDeposits: 700000, roa: 0.9, subchapterS: 'No', agSum: 10 })
+      makeBank('B-2', { displayName: 'Second Bank', city: 'Des Moines', state: 'IA', certNumber: '222', zip: '50301', totalAssets: 800000, totalDeposits: 700000, roa: 0.9, subchapterS: 'No', agSum: 10 }),
+      makeBank('B-3', { displayName: 'Stale Acquired Bank', city: 'Oldtown', state: 'MO', certNumber: '333', zip: '65000', totalAssets: 100000, totalDeposits: 90000, roa: 0.2, subchapterS: 'No', agSum: 0, period: '2025Q3' })
     ]
   };
   bankImporter.writeBankDatabase(parsed, reportsDir);
 
   const status = bankImporter.getBankDatabaseStatus(reportsDir);
-  ok('importer-status available', status.available === true && status.bankCount === 2, JSON.stringify(status));
+  ok('importer-status available/current count', status.available === true && status.bankCount === 2 && status.totalBankCount === 3 && status.excludedStaleBankCount === 1, JSON.stringify(status));
 
   const searchTricky = bankImporter.searchBankDatabase(reportsDir, "o'brien");
   ok('importer-search quote in LIKE', searchTricky.results.length === 1 && searchTricky.results[0].id === 'B-1', JSON.stringify(searchTricky.results.map(r => r.id)));
+  const searchStale = bankImporter.searchBankDatabase(reportsDir, 'stale');
+  ok('importer-search excludes stale banks', searchStale.results.length === 0 && searchStale.total === 0 && searchStale.excludedStaleBankCount === 1, JSON.stringify(searchStale));
+  const searchStaleIncluded = bankImporter.searchBankDatabase(reportsDir, 'stale', 12, { includeStale: true });
+  ok('importer-search includeStale override', searchStaleIncluded.results.length === 1 && searchStaleIncluded.results[0].id === 'B-3', JSON.stringify(searchStaleIncluded.results));
   const searchWild = bankImporter.searchBankDatabase(reportsDir, 'bank');
   ok('importer-search token', searchWild.results.length === 1 && searchWild.total === 1 && searchWild.truncated === false, JSON.stringify(searchWild));
   const searchEmptyTop = bankImporter.searchBankDatabase(reportsDir, '', 1);
@@ -270,11 +275,14 @@ try {
 
   const oneBank = bankImporter.getBankFromDatabase(reportsDir, 'B-1');
   ok('importer-getBank', oneBank && oneBank.bank.id === 'B-1');
+  ok('importer-getBank excludes stale', bankImporter.getBankFromDatabase(reportsDir, 'B-3') === null);
+  ok('importer-getBank includeStale override', bankImporter.getBankFromDatabase(reportsDir, 'B-3', { includeStale: true }).bank.id === 'B-3');
   ok('importer-getBank missing', bankImporter.getBankFromDatabase(reportsDir, "X'1") === null);
-  ok('importer-listSummaries', bankImporter.listBankSummaries(reportsDir).length === 2);
+  ok('importer-listSummaries excludes stale', bankImporter.listBankSummaries(reportsDir).length === 2);
+  ok('importer-listSummaries includeStale override', bankImporter.listBankSummaries(reportsDir, { includeStale: true }).length === 3);
 
   const mapData = bankImporter.queryBankMapDataset(reportsDir);
-  ok('importer-mapDataset rows', mapData && Array.isArray(mapData.banks) && mapData.banks.length === 2, mapData && JSON.stringify(Object.keys(mapData)));
+  ok('importer-mapDataset rows exclude stale', mapData && Array.isArray(mapData.banks) && mapData.banks.length === 2 && mapData.totalBankCount === 3 && mapData.excludedStaleBankCount === 1, mapData && JSON.stringify(Object.keys(mapData)));
   ok('importer-mapDataset GLOB period filter', mapData && mapData.latestPeriod === '2026Q1', mapData && mapData.latestPeriod);
 
   // peer-averages reads the same bank-data.sqlite the importer just wrote.

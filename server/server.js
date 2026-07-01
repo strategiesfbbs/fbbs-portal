@@ -205,6 +205,7 @@ const tradeFit = require('./trade-fit');                             // data-bac
 const tradeFitBridge = require('./trade-fit-bridge');                // same profile from the Salesforce Trade__c blotter when populated
 const fdicBankfind = require('./fdic-bankfind');
 const fdicBulkSync = require('./fdic-bulk-sync');
+const ffiecBulkSync = require('./ffiec-bulk-sync');
 const {
   getPershingForBank,
   getPershingImportStatus,
@@ -2815,6 +2816,18 @@ async function buildDailyIntelligence() {
 const bankSearchCache = new Map();
 const bankDetailCache = new Map();
 
+function currentBankIdSet() {
+  return new Set((listBankSummaries(BANK_REPORTS_DIR) || [])
+    .map(row => String(row.id || ''))
+    .filter(Boolean));
+}
+
+function filterCurrentBankRows(rows, key = 'bankId') {
+  const currentIds = currentBankIdSet();
+  if (!currentIds.size) return [];
+  return (rows || []).filter(row => currentIds.has(String(row[key] || '')));
+}
+
 function cacheSet(cache, key, value) {
   if (cache.has(key)) cache.delete(key);
   cache.set(key, value);
@@ -2856,7 +2869,12 @@ function getBankById(id, options = {}) {
   const cacheKey = `${bankId}|thcLinks:${options.includeAdminLinks ? '1' : '0'}`;
   if (bankDetailCache.has(cacheKey)) return bankDetailCache.get(cacheKey);
   try {
-    const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId);
+    // includeStale: this is a direct fetch by known bank ID (bookmark, CRM
+    // row, contact link) — the freshness filter is meant to keep zombie/M&A
+    // rows out of discovery surfaces (search/maps/reports), not to 404 a
+    // tear sheet a rep is already covering just because its own period lags
+    // the freshest period seen anywhere else in the DB.
+    const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId, { includeStale: true });
     if (!data || !data.bank || !data.bank.summary) return data;
     const statuses = getBankAccountStatuses(BANK_REPORTS_DIR, [data.bank.id]);
     const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, [data.bank.id]);
@@ -2918,9 +2936,19 @@ function enrichBankSummary(summary, statuses, coverageMap) {
 
 function getBankDataStatus() {
   const bankStatus = getBankDatabaseStatus(BANK_REPORTS_DIR);
+  const accountStatuses = getBankAccountStatusImportStatus(BANK_REPORTS_DIR);
+  if (accountStatuses && accountStatuses.available) {
+    const currentStatuses = {};
+    for (const row of filterCurrentBankRows(listBankAccountStatuses(BANK_REPORTS_DIR, { limit: 8000, maxLimit: 8000, sort: 'bank' }))) {
+      const key = row.status || 'Open';
+      currentStatuses[key] = (currentStatuses[key] || 0) + 1;
+    }
+    accountStatuses.currentStatusCount = Object.values(currentStatuses).reduce((sum, n) => sum + n, 0);
+    accountStatuses.currentStatuses = currentStatuses;
+  }
   return {
     ...bankStatus,
-    accountStatuses: getBankAccountStatusImportStatus(BANK_REPORTS_DIR),
+    accountStatuses,
     averagedSeries: getAveragedSeriesStatus(BANK_REPORTS_DIR),
     bondAccounting: getBondAccountingStatus(BANK_REPORTS_DIR),
     thcSummary: getThcSummaryStatus(BANK_REPORTS_DIR)
@@ -5211,7 +5239,11 @@ function decoratePeerComparison(comparison, options = {}) {
 }
 
 function getBankSummaryForCoverage(bankId) {
-  const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId);
+  // includeStale: coverage (status/priority/owner) is saved against a bank a
+  // rep already knows by ID — same reasoning as getBankById above, this must
+  // not 404 just because the bank's own period lags the DB-wide freshness
+  // ceiling.
+  const data = getBankFromDatabase(BANK_REPORTS_DIR, bankId, { includeStale: true });
   if (!data || !data.bank || !data.bank.summary) return null;
   return data.bank.summary;
 }
@@ -7093,9 +7125,10 @@ function handleActivitySummaryReport(req, res, query) {
       });
     } else {
       // Bank view: name/state come from the coverage rows the activities hang on.
-      const banks = new Map((listSavedBanks(BANK_REPORTS_DIR) || []).map(b => [b.bankId, b]));
+      const banks = new Map(filterCurrentBankRows(listSavedBanks(BANK_REPORTS_DIR) || []).map(b => [b.bankId, b]));
       activityCountsByBank(BANK_REPORTS_DIR, { from, to, kinds }).forEach(entry => {
         const bank = banks.get(entry.bankId) || {};
+        if (!bank.bankId) return;
         if (scopedRep && !ownerStringContainsRep(bank.owner, scopedRep)) return;
         const row = rows.get(entry.bankId) || {
           bankId: entry.bankId,
@@ -7136,7 +7169,7 @@ function handleAccountTouchReport(req, res, query) {
     const today = new Date().toISOString().slice(0, 10);
     const lastTouch = lastActivityByBank(BANK_REPORTS_DIR);
     const dayMs = 86400000;
-    const rows = (listSavedBanks(BANK_REPORTS_DIR) || [])
+    const rows = filterCurrentBankRows(listSavedBanks(BANK_REPORTS_DIR) || [])
       .filter(row => {
         if (statuses.size && !statuses.has(row.status || 'Open')) return false;
         if (states.size && !states.has(String(row.state || '').toUpperCase())) return false;
@@ -11009,12 +11042,13 @@ function buildPershingDormantRows(options = {}) {
     return { status, dormantDays, includeUndated, rows: [] };
   }
 
+  const currentIds = currentBankIdSet();
   const sourceRows = listDormantPershingBanks(BANK_REPORTS_DIR, {
     asOfDate: options.asOfDate || todayStamp(),
     dormantDays,
     includeUndated,
     limit: 1000
-  });
+  }).filter(row => currentIds.has(String(row.bankId || '')));
   const bankIds = sourceRows.map(row => row.bankId);
   const accountStatuses = getBankAccountStatuses(BANK_REPORTS_DIR, bankIds);
   const coverageMap = getSavedBankCoverageMap(BANK_REPORTS_DIR, bankIds) || new Map();
@@ -11111,7 +11145,7 @@ function buildMyWorkResponse(rep) {
   });
 
   const today = new Date().toISOString().slice(0, 10);
-  const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
+  const savedBanks = filterCurrentBankRows(listSavedBanks(BANK_REPORTS_DIR) || []);
   // Overdue follow-ups now come from the task engine (next_action_date retired
   // in the 2026-06-12 coverage consolidation), rep-scoped by task assignee.
   const overdueTaskList = listOverdueOpenTasks(BANK_REPORTS_DIR, { username: rep ? rep.username : null, today });
@@ -11323,8 +11357,10 @@ function buildGlobalSearch(rawQuery) {
     out.contacts = all
       .map(c => {
         const s = summaries.get(String(c.bankId)) || {};
+        if (!s.id) return null;
         return { ...c, bankName: s.displayName || s.name || c.bankId };
       })
+      .filter(Boolean)
       .filter(c => matchAll([c.name, c.role, c.email, c.bankName].join(' ')))
       .slice(0, 6)
       .map(c => ({ id: c.id, name: c.name, role: c.role || '', email: c.email || '', bankId: c.bankId, bankName: c.bankName }));
@@ -11361,8 +11397,8 @@ function buildCrmDashboard(rep) {
 
   // Clients / prospects come from the account-status universe (same source as
   // the Views tiles), not just saved coverage rows.
-  const clients = repScope(listBankAccountStatuses(BANK_REPORTS_DIR, { status: 'Client', limit: 8000, maxLimit: 8000, sort: 'bank' }));
-  const prospects = repScope(listBankAccountStatuses(BANK_REPORTS_DIR, { status: 'Prospect', limit: 8000, maxLimit: 8000, sort: 'bank' }));
+  const clients = repScope(filterCurrentBankRows(listBankAccountStatuses(BANK_REPORTS_DIR, { status: 'Client', limit: 8000, maxLimit: 8000, sort: 'bank' })));
+  const prospects = repScope(filterCurrentBankRows(listBankAccountStatuses(BANK_REPORTS_DIR, { status: 'Prospect', limit: 8000, maxLimit: 8000, sort: 'bank' })));
 
   // By-state, two series — the SF "Clients & Prospects by State" bar chart.
   const stateMap = new Map();
@@ -11376,7 +11412,7 @@ function buildCrmDashboard(rep) {
   bump(prospects, 'prospects');
   const byState = [...stateMap.values()].sort((a, b) => (b.clients + b.prospects) - (a.clients + a.prospects)).slice(0, 20);
 
-  const savedBanks = listSavedBanks(BANK_REPORTS_DIR) || [];
+  const savedBanks = filterCurrentBankRows(listSavedBanks(BANK_REPORTS_DIR) || []);
   const myBanks = repScope(savedBanks);
   const quarter = Math.floor(new Date().getMonth() / 3);
   const quarterStart = `${new Date().getFullYear()}-${String(quarter * 3 + 1).padStart(2, '0')}-01`;
@@ -11950,8 +11986,9 @@ const server = http.createServer(async (req, res) => {
       const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, ids);
       const enriched = contacts.map(c => {
         const s = summaries.get(String(c.bankId)) || {};
+        if (!s.id) return null;
         return { ...c, bankName: s.displayName || s.name || c.bankId, city: s.city || '', state: s.state || '' };
-      });
+      }).filter(Boolean);
       const q = String(query.get('q') || '').trim().toLowerCase();
       const filtered = q
         ? enriched.filter(c => {
@@ -12009,6 +12046,26 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         log('error', 'FDIC sync failed:', err.message);
         return sendJSON(res, err.statusCode || 502, { error: err.message || 'FDIC sync failed' });
+      }
+    }
+
+    // Pull FFIEC CDR Call Report / UBPR bulk data into bank-data.sqlite.
+    // Source files/URLs are configured in server/ffiec-bulk-sync.js; this
+    // stays append-only and admin-triggered until the map is fully trusted.
+    if (pathname === '/api/admin/ffiec-sync' && req.method === 'POST') {
+      const { auth } = authInfoForRequest(req);
+      if ((IS_IIS_AUTH_MODE || ADMIN_USERS.size > 0) && !auth.isAdmin) {
+        return sendJSON(res, 403, { error: 'Admin permission is required for the FFIEC sync.' });
+      }
+      try {
+        const dryRun = query.get('dryRun') === '1' || query.get('dryRun') === 'true';
+        const result = await ffiecBulkSync.syncFfiecQuarter(BANK_REPORTS_DIR, { dryRun, log, stampDir: path.join(MARKET_DIR, 'ffiec') });
+        if (!dryRun && result.updated > 0) invalidateBankCaches();
+        appendAuditLog({ event: 'ffiec-sync', ...result });
+        return sendJSON(res, 200, result);
+      } catch (err) {
+        log('error', 'FFIEC sync failed:', err.message);
+        return sendJSON(res, err.statusCode || 502, { error: err.message || 'FFIEC sync failed' });
       }
     }
 
@@ -12493,7 +12550,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/bank-coverage' && req.method === 'GET') {
-      return sendJSON(res, 200, { savedBanks: listSavedBanks(BANK_REPORTS_DIR) });
+      return sendJSON(res, 200, { savedBanks: filterCurrentBankRows(listSavedBanks(BANK_REPORTS_DIR) || []) });
     }
 
     if (pathname === '/api/bank-coverage' && req.method === 'POST') {

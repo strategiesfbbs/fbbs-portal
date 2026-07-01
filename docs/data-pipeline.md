@@ -94,6 +94,21 @@ two parts:
 
 Both verified working against the live preview on 2026-05-13.
 
+## Current bank universe
+
+The bank database can carry stale institutions from historical call-report
+workbooks (merged/acquired banks, missing periods, and old one-off rows). Portal
+discovery surfaces should use the current-bank universe from
+`server/bank-data-importer.js`: latest valid call-report period is the anchor,
+and banks more than one quarter behind that anchor are excluded by default.
+
+`getBankDatabaseStatus()` reports both the visible count (`bankCount` /
+`currentBankCount`) and the imported total (`totalBankCount`) plus
+`excludedStaleBankCount`. Search, tear sheets, custom bank reports, maps, saved
+views, CRM Pulse, My Work, contacts, and activity touch reports should all stay
+on the current-bank default unless an admin-only maintenance path explicitly
+passes `includeStale`.
+
 ## What's missing
 
 - **No re-import indicator on the banner.** If the FedFis workbook is older

@@ -9,6 +9,7 @@ const ZIP_CENTROIDS = require('./us-zcta-centroids-2025.json');
 
 const BANK_DATABASE_FILENAME = 'bank-data.sqlite';
 const LEGACY_CRM_SECTION = ['sales', 'force'].join('');
+const CURRENT_BANK_MAX_QUARTER_LAG = 1;
 
 const BANK_FIELDS = [
   { key: 'displayName', col: 'A', label: 'Account Name', section: 'details', type: 'text' },
@@ -523,31 +524,144 @@ function normalizeBankMetadata(metadata) {
   };
 }
 
+function periodRank(period) {
+  const m = String(period || '').trim().match(/^(\d{4})Q([1-4])$/i);
+  if (!m) return null;
+  return Number(m[1]) * 4 + Number(m[2]);
+}
+
+function periodFromRank(rank) {
+  if (!Number.isFinite(rank) || rank < 1) return '';
+  const year = Math.floor((rank - 1) / 4);
+  const quarter = rank - year * 4;
+  return `${year}Q${quarter}`;
+}
+
+function periodRankSql(columnSql) {
+  return `(CAST(substr(${columnSql}, 1, 4) AS INTEGER) * 4 + CAST(substr(${columnSql}, 6, 1) AS INTEGER))`;
+}
+
+function getBankFreshnessStats(dbPath, maxQuarterLag = CURRENT_BANK_MAX_QUARTER_LAG) {
+  if (!fs.existsSync(dbPath)) {
+    return {
+      latestPeriod: '',
+      freshnessCutoffPeriod: '',
+      maxQuarterLag,
+      totalBankCount: 0,
+      currentBankCount: 0,
+      staleBankCount: 0,
+      missingPeriodCount: 0,
+      excludedBankCount: 0,
+    };
+  }
+  const rows = querySqliteJson(dbPath, 'SELECT period, COUNT(*) AS count FROM banks GROUP BY period;');
+  let latestRank = null;
+  let totalBankCount = 0;
+  let missingPeriodCount = 0;
+  const periodCounts = [];
+  for (const row of rows) {
+    const count = Number(row.count) || 0;
+    totalBankCount += count;
+    const rank = periodRank(row.period);
+    if (rank == null) {
+      missingPeriodCount += count;
+      continue;
+    }
+    periodCounts.push({ period: String(row.period), rank, count });
+    latestRank = latestRank == null ? rank : Math.max(latestRank, rank);
+  }
+  if (latestRank == null) {
+    return {
+      latestPeriod: '',
+      freshnessCutoffPeriod: '',
+      maxQuarterLag,
+      totalBankCount,
+      currentBankCount: 0,
+      staleBankCount: totalBankCount,
+      missingPeriodCount,
+      excludedBankCount: totalBankCount,
+    };
+  }
+  const freshnessCutoffRank = latestRank - Math.max(0, Number(maxQuarterLag) || 0);
+  let currentBankCount = 0;
+  let staleBankCount = missingPeriodCount;
+  for (const item of periodCounts) {
+    if (item.rank >= freshnessCutoffRank) currentBankCount += item.count;
+    else staleBankCount += item.count;
+  }
+  return {
+    latestPeriod: periodFromRank(latestRank),
+    freshnessCutoffPeriod: periodFromRank(freshnessCutoffRank),
+    freshnessCutoffRank,
+    maxQuarterLag,
+    totalBankCount,
+    currentBankCount,
+    staleBankCount,
+    missingPeriodCount,
+    excludedBankCount: staleBankCount,
+  };
+}
+
+function currentBankSqlFilter(stats, alias = '') {
+  const prefix = alias ? `${alias}.` : '';
+  const column = `${prefix}period`;
+  if (!stats || !stats.latestPeriod || !Number.isFinite(stats.freshnessCutoffRank)) {
+    return { sql: '1 = 0', params: [] };
+  }
+  return {
+    sql: `${column} GLOB '????Q?' AND ${periodRankSql(column)} >= ?`,
+    params: [stats.freshnessCutoffRank],
+  };
+}
+
+function isCurrentBankPeriod(period, stats) {
+  const rank = periodRank(period);
+  return rank != null && stats && Number.isFinite(stats.freshnessCutoffRank) && rank >= stats.freshnessCutoffRank;
+}
+
+function freshnessPayload(stats) {
+  return {
+    latestPeriod: stats.latestPeriod,
+    freshnessCutoffPeriod: stats.freshnessCutoffPeriod,
+    maxQuarterLag: stats.maxQuarterLag,
+    totalBankCount: stats.totalBankCount,
+    currentBankCount: stats.currentBankCount,
+    staleBankCount: stats.staleBankCount,
+    missingPeriodCount: stats.missingPeriodCount,
+    excludedBankCount: stats.excludedBankCount,
+    excludedStaleBankCount: stats.excludedBankCount,
+  };
+}
+
 function getBankDatabaseStatus(outputDir) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return { available: false };
   try {
     const metadata = readBankMetadata(outputDir) || {};
     const rows = querySqliteJson(dbPath, 'SELECT COUNT(*) AS bankCount FROM banks;');
-    const bankCount = rows.length ? Number(rows[0].bankCount) : 0;
-    if (metadata.bankCount && bankCount !== Number(metadata.bankCount)) {
+    const totalBankCount = rows.length ? Number(rows[0].bankCount) : 0;
+    const freshness = getBankFreshnessStats(dbPath);
+    if (metadata.bankCount && totalBankCount !== Number(metadata.bankCount)) {
       return {
         available: false,
         metadata,
-        bankCount,
-        error: `Bank database is incomplete: ${bankCount} of ${metadata.bankCount} banks are available. Re-import the workbook.`
+        bankCount: freshness.currentBankCount,
+        ...freshnessPayload(freshness),
+        error: `Bank database is incomplete: ${totalBankCount} of ${metadata.bankCount} banks are available. Re-import the workbook.`
       };
     }
-    return { available: bankCount > 0, metadata, bankCount };
+    return { available: freshness.currentBankCount > 0, metadata, bankCount: freshness.currentBankCount, ...freshnessPayload(freshness) };
   } catch (err) {
     return { available: false, error: err.message };
   }
 }
 
-function searchBankDatabase(outputDir, query, limit = 12) {
+function searchBankDatabase(outputDir, query, limit = 12, options = {}) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return null;
   const metadata = readBankMetadata(outputDir) || {};
+  const freshness = getBankFreshnessStats(dbPath);
+  const activeFilter = options.includeStale ? { sql: '1 = 1', params: [] } : currentBankSqlFilter(freshness);
   const safeLimit = Math.max(1, Math.min(50, parseInt(limit, 10) || 12));
   const q = String(query || '').trim().toLowerCase();
   let sql;
@@ -556,10 +670,10 @@ function searchBankDatabase(outputDir, query, limit = 12) {
   let countParams;
 
   if (!q) {
-    sql = 'SELECT summary_json FROM banks ORDER BY display_name COLLATE NOCASE LIMIT ?;';
-    params = [safeLimit];
-    countSql = 'SELECT COUNT(*) AS count FROM banks;';
-    countParams = [];
+    sql = `SELECT summary_json FROM banks WHERE ${activeFilter.sql} ORDER BY display_name COLLATE NOCASE LIMIT ?;`;
+    params = activeFilter.params.concat([safeLimit]);
+    countSql = `SELECT COUNT(*) AS count FROM banks WHERE ${activeFilter.sql};`;
+    countParams = activeFilter.params.slice();
   } else {
     const tokens = q.split(/\s+/).filter(Boolean);
     const where = tokens
@@ -569,7 +683,8 @@ function searchBankDatabase(outputDir, query, limit = 12) {
     sql = `
       SELECT summary_json
       FROM banks
-      WHERE ${where || '1 = 1'}
+      WHERE ${activeFilter.sql}
+        AND ${where || '1 = 1'}
       ORDER BY
         CASE WHEN lower(display_name) = ? THEN 60 ELSE 0 END +
         CASE WHEN lower(legal_name) = ? THEN 40 ELSE 0 END +
@@ -578,51 +693,55 @@ function searchBankDatabase(outputDir, query, limit = 12) {
         display_name COLLATE NOCASE
       LIMIT ?;
     `;
-    params = [
+    params = activeFilter.params.concat([
       ...tokens.map(token => `%${escapeLikeWildcards(token)}%`),
       q,
       q,
       `${qEsc}%`,
       `%${qEsc}%`,
       safeLimit
-    ];
-    countSql = `SELECT COUNT(*) AS count FROM banks WHERE ${where || '1 = 1'};`;
-    countParams = tokens.map(token => `%${escapeLikeWildcards(token)}%`);
+    ]);
+    countSql = `SELECT COUNT(*) AS count FROM banks WHERE ${activeFilter.sql} AND ${where || '1 = 1'};`;
+    countParams = activeFilter.params.concat(tokens.map(token => `%${escapeLikeWildcards(token)}%`));
   }
 
   const results = querySqliteJson(dbPath, sql, params).map(row => JSON.parse(row.summary_json));
   const countRow = querySqliteJson(dbPath, countSql, countParams)[0] || {};
   const total = Number(countRow.count) || results.length;
-  return { metadata, results, total, limit: safeLimit, truncated: total > results.length };
+  return { metadata, results, total, limit: safeLimit, truncated: total > results.length, bankCount: freshness.currentBankCount, ...freshnessPayload(freshness) };
 }
 
-function getBankFromDatabase(outputDir, id) {
+function getBankFromDatabase(outputDir, id, options = {}) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return null;
   const metadata = readBankMetadata(outputDir) || {};
+  const freshness = getBankFreshnessStats(dbPath);
   const rows = querySqliteJson(
     dbPath,
-    'SELECT detail_json FROM banks WHERE id = ? LIMIT 1;',
+    'SELECT period, detail_json FROM banks WHERE id = ? LIMIT 1;',
     [String(id || '')]
   );
   if (!rows.length) return null;
+  if (!options.includeStale && !isCurrentBankPeriod(rows[0].period, freshness)) return null;
   return { metadata, bank: JSON.parse(rows[0].detail_json) };
 }
 
 // Batched lookup of the slim summary blob for many banks in one query — avoids
 // the N+1 of getBankFromDatabase (which parses each bank's full detail_json) when
 // a caller only needs summary fields. Returns Map(id -> parsed summary).
-function getBankSummariesByIds(outputDir, ids) {
+function getBankSummariesByIds(outputDir, ids, options = {}) {
   const out = new Map();
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return out;
   const unique = [...new Set((ids || []).map(id => String(id || '')).filter(Boolean))];
   if (!unique.length) return out;
+  const freshness = getBankFreshnessStats(dbPath);
+  const activeFilter = options.includeStale ? { sql: '1 = 1', params: [] } : currentBankSqlFilter(freshness);
   const placeholders = unique.map(() => '?').join(',');
   const rows = querySqliteJson(
     dbPath,
-    `SELECT id, summary_json FROM banks WHERE id IN (${placeholders});`,
-    unique
+    `SELECT id, summary_json FROM banks WHERE id IN (${placeholders}) AND ${activeFilter.sql};`,
+    unique.concat(activeFilter.params)
   );
   for (const row of rows) {
     try {
@@ -632,25 +751,33 @@ function getBankSummariesByIds(outputDir, ids) {
   return out;
 }
 
-function listBankSummaries(outputDir) {
+function listBankSummaries(outputDir, options = {}) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return [];
-  return querySqliteJson(dbPath, 'SELECT summary_json FROM banks;')
+  const freshness = getBankFreshnessStats(dbPath);
+  const activeFilter = options.includeStale ? { sql: '1 = 1', params: [] } : currentBankSqlFilter(freshness);
+  return querySqliteJson(dbPath, `SELECT summary_json FROM banks WHERE ${activeFilter.sql};`, activeFilter.params)
     .map(row => JSON.parse(row.summary_json));
 }
 
 const MAP_FIELD_KEYS = [
   'displayName', 'certNumber', 'city', 'state', 'county', 'address', 'zip',
-  'totalAssets', 'totalEquityCapital', 'tier1Capital', 'totalDeposits',
-  'afsTotal', 'htmTotal', 'securitiesToAssets', 'loansToAssets', 'loansToDeposits',
+  'totalAssets', 'totalEquityCapital', 'tier1Capital', 'totalDeposits', 'totalBorrowings',
+  'afsTotal', 'htmTotal', 'htmMunis', 'securitiesToAssets', 'loansToAssets', 'loansToDeposits',
   'roa', 'roe', 'netInterestMargin', 'yieldOnSecurities', 'yieldOnLoans',
   'yieldOnEarningAssets', 'costOfFunds', 'efficiencyRatio', 'leverageRatio',
-  'nonInterestBearingDeposits', 'wholesaleFundingReliance',
+  'nonInterestBearingDeposits', 'wholesaleFundingReliance', 'brokeredDepositsToDeposits',
+  'netNonCoreFundingDependence',
   'liquidAssetsToAssets', 'tier1RiskBasedRatio', 'texasRatio', 'nplsToLoans', 'longTermAssetsToAssets',
   // AFS muni book + Sub-S election (BQ context). Additive per CLAUDE.md
   // "Adding a metric to the map" — projected here so the cached map dataset
   // carries them for maps, tear sheets, and future coverage screens.
-  'afsMunis', 'subchapterS'
+  'afsMunis', 'subchapterS',
+  // Reports v2's custom-bank builder offers these as selectable columns
+  // (CUSTOM_BANK_REPORT_COLUMNS in portal.js) but its dataset IS this same
+  // map projection — any curated report column not listed here silently
+  // renders blank for every bank. Keep this list a superset of that one.
+  'numberOfOffices', 'website', 'phone'
 ];
 
 function zip5(value) {
@@ -704,20 +831,9 @@ function peerDeltaFieldKey(metricKey) {
 function queryBankMapDataset(outputDir, periodPattern = null, options = {}) {
   const dbPath = databasePathForDir(outputDir);
   if (!fs.existsSync(dbPath)) return null;
-  let pattern = periodPattern;
-  if (!pattern) {
-    const latestRows = querySqliteJson(dbPath, `
-      SELECT MAX(json_extract(summary_json, '$.period')) AS p
-      FROM banks
-      WHERE json_extract(summary_json, '$.period') GLOB '????Q?';
-    `);
-    const latest = latestRows && latestRows[0] && latestRows[0].p;
-    if (latest && /^(\d{4})Q\d$/.test(latest)) {
-      pattern = latest.slice(0, 4) + 'Q*';
-    } else {
-      pattern = '*';
-    }
-  }
+  const freshness = getBankFreshnessStats(dbPath);
+  const activeFilter = options.includeStale ? { sql: '1 = 1', params: [] } : currentBankSqlFilter(freshness, 'b');
+  const pattern = periodPattern || '*';
   const fields = buildMapFieldDefs();
   // Pull each bank's latest-period values from detail_json by walking
   // the periods array via json_each, then extracting from the entry
@@ -735,8 +851,9 @@ function queryBankMapDataset(outputDir, periodPattern = null, options = {}) {
     FROM banks b, json_each(b.detail_json, '$.periods') p
     WHERE json_extract(p.value, '$.period') = json_extract(b.summary_json, '$.period')
       AND json_extract(b.summary_json, '$.period') GLOB ?
+      AND ${activeFilter.sql}
     ORDER BY b.total_assets DESC;
-  `, [String(pattern)]);
+  `, [String(pattern)].concat(activeFilter.params));
   const stateCounts = {};
   let mappedCount = 0;
   let latestPeriod = '';
@@ -777,6 +894,13 @@ function queryBankMapDataset(outputDir, periodPattern = null, options = {}) {
     stateCounts,
     latestPeriod,
     bankCount: rows.length,
+    currentBankCount: freshness.currentBankCount,
+    totalBankCount: freshness.totalBankCount,
+    staleBankCount: freshness.staleBankCount,
+    excludedBankCount: freshness.excludedBankCount,
+    excludedStaleBankCount: freshness.excludedBankCount,
+    freshnessCutoffPeriod: freshness.freshnessCutoffPeriod,
+    maxQuarterLag: freshness.maxQuarterLag,
     mappedCount,
     peerComparison: peerComparison ? {
       peerGroup: peerComparison.peerGroup,
@@ -791,13 +915,17 @@ function queryBankMapDataset(outputDir, periodPattern = null, options = {}) {
 module.exports = {
   BANK_DATABASE_FILENAME,
   BANK_FIELDS,
+  CURRENT_BANK_MAX_QUARTER_LAG,
   databasePathForDir,
   getBankDatabaseStatus,
   getBankFromDatabase,
+  getBankFreshnessStats,
   getBankSummariesByIds,
   importBankWorkbook,
+  isCurrentBankPeriod,
   listBankSummaries,
   parseBankWorkbook,
+  periodRank,
   queryBankMapDataset,
   searchBankDatabase,
   writeBankDatabase

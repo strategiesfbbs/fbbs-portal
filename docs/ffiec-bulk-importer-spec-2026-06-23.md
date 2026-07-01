@@ -1,6 +1,6 @@
 # FFIEC CDR Bulk Importer Spec
 
-Status: proposed only. Build after owner approval and after confirming the desired replacement path for the FedFis workbook.
+Status: initial importer implemented 2026-07-01. It is still admin-triggered and additive; FedFis remains the authoritative rebuild path until the FFIEC field map is proven over real quarterly downloads.
 
 ## Goal
 
@@ -114,3 +114,11 @@ Suggested file: `tests/ffiec-bulk-importer.test.js`.
 Keep FedFis peer-group averaged series separate for now. The FFIEC importer can replace headline bank periods, but it does not automatically replace FedFis peer analytics unless the portal later computes peers internally.
 
 This is a good Wave-2 build after the desk confirms whether the goal is "newer stopgap quarters" or "full FedFis replacement."
+
+Live/source configuration for the initial build:
+
+- `FFIEC_BULK_DIR` or `FFIEC_BULK_FILE`: local downloaded tab-delimited or ZIP files.
+- `FFIEC_CALL_REPORT_FILE` + `FFIEC_UBPR_FILE`: explicit local files for the two single-period products.
+- `FFIEC_CALL_REPORT_URL` + `FFIEC_UBPR_URL`: explicit downloadable URLs when the FFIEC PWS/account flow is configured.
+
+The public FFIEC bulk page exposes the right products, but its period/download controls are ASP.NET postback driven. The importer deliberately avoids brittle viewstate scraping; configure the files/URLs above or extend the source loader once the PWS REST account instructions are available.

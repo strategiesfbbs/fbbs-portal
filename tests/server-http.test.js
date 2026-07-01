@@ -106,6 +106,46 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value));
 }
 
+function seedBankData(dataDir, banks, latestPeriod = '2026Q1') {
+  const bankImporter = require('../server/bank-data-importer');
+  const reportsDir = path.join(dataDir, 'bank-reports');
+  bankImporter.writeBankDatabase({
+    metadata: {
+      importedAt: '2026-07-01T12:00:00.000Z',
+      sourceFile: 'server-http-bank-fixture.xlsx',
+      latestPeriod,
+      bankCount: banks.length,
+      rowCount: banks.length,
+      fields: bankImporter.BANK_FIELDS
+    },
+    banks: banks.map(bank => {
+      const period = bank.period || latestPeriod;
+      const summary = {
+        id: bank.id,
+        displayName: bank.displayName,
+        name: bank.name || bank.displayName,
+        city: bank.city || '',
+        state: bank.state || '',
+        certNumber: bank.certNumber || '',
+        parentName: '',
+        primaryRegulator: bank.primaryRegulator || 'FDIC',
+        period,
+        totalAssets: bank.totalAssets || 1000,
+        totalDeposits: bank.totalDeposits || 800
+      };
+      return {
+        id: bank.id,
+        summary,
+        periods: [{
+          period,
+          endDate: period === '2026Q1' ? '3/31/2026' : '',
+          values: { ...summary, period }
+        }]
+      };
+    })
+  }, reportsDir);
+}
+
 async function waitForHealth(port, child) {
   const started = Date.now();
   let lastError = null;
@@ -423,6 +463,7 @@ test('iis crm rollups collapse non-admin all/other-rep scope to self', async () 
     const reportsDir = path.join(dataDir, 'bank-reports');
     const jimBank = { id: 'AUTH-1', displayName: 'Jim Client', city: 'Austin', state: 'TX', certNumber: '101' };
     const danBank = { id: 'AUTH-2', displayName: 'Dan Client', city: 'Springfield', state: 'MO', certNumber: '202' };
+    seedBankData(dataDir, [jimBank, danBank]);
     statusStore.upsertBankAccountStatus(reportsDir, jimBank, { status: 'Client', owner: 'Jim Lewis' });
     statusStore.upsertBankAccountStatus(reportsDir, danBank, { status: 'Client', owner: 'Dan Hagemann' });
     coverageStore.upsertSavedBank(reportsDir, jimBank, { status: 'Client', owner: 'Jim Lewis' });
@@ -733,6 +774,7 @@ test('my-work surfaces cold accounts; views join lastActivityDate', async () => 
     const reportsDir = path.join(dataDir, 'bank-reports');
     const touched = { id: 'HT-1', displayName: 'Touched Bank', city: 'Alton', state: 'IL', certNumber: '111' };
     const cold = { id: 'HT-2', displayName: 'Cold Bank', city: 'Pana', state: 'IL', certNumber: '222' };
+    seedBankData(dataDir, [touched, cold]);
     coverageStore.upsertSavedBank(reportsDir, touched, { status: 'Client', owner: 'Test Rep' });
     coverageStore.upsertSavedBank(reportsDir, cold, { status: 'Prospect', owner: 'Test Rep' });
     // An overdue open task makes HT-1 a "stale follow-up" (the post-consolidation
@@ -757,6 +799,36 @@ test('my-work surfaces cold accounts; views join lastActivityDate', async () => 
     const row = view.json.rows.find(r => r.bankId === 'HT-1');
     assert.ok(row, 'stale follow-up present');
     assert.strictEqual(row.lastActivityDate, fresh);
+  });
+});
+
+test('tear sheet fetch and coverage save stay reachable for a bank with stale financials', async () => {
+  // The current-bank freshness filter (bank-data-importer.js) is meant to
+  // keep zombie/M&A rows out of discovery surfaces (search/maps/reports),
+  // not to 404 a bank a rep already knows by ID and is actively covering.
+  await withServer({}, async ({ port, dataDir }) => {
+    const current = { id: 'FR-1', displayName: 'Current Bank', city: 'Alton', state: 'IL', certNumber: '111' };
+    // Three quarters behind latestPeriod (2026Q1) — well outside the
+    // 1-quarter freshness window, so this bank is "stale" for search/maps.
+    const stale = { id: 'FR-2', displayName: 'Long-Covered Bank', city: 'Pana', state: 'IL', certNumber: '222', period: '2025Q1' };
+    seedBankData(dataDir, [current, stale]);
+
+    const tearSheet = await request(port, { path: '/api/banks/FR-2' });
+    assert.strictEqual(tearSheet.status, 200, tearSheet.text);
+    assert.strictEqual(tearSheet.json.bank && tearSheet.json.bank.id, 'FR-2');
+
+    const save = await request(port, {
+      method: 'POST',
+      path: '/api/bank-coverage',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bankId: 'FR-2', status: 'Client', owner: 'Test Rep' })
+    });
+    assert.strictEqual(save.status, 200, save.text);
+
+    // Discovery surfaces still exclude it by default.
+    const search = await request(port, { path: '/api/banks/search?q=Long-Covered' });
+    assert.strictEqual(search.status, 200, search.text);
+    assert.ok(!search.json.results.some(r => r.id === 'FR-2'), 'stale bank stays out of search results');
   });
 });
 
@@ -835,6 +907,7 @@ test('activity-summary and account-touch report routes aggregate manual activiti
     const reportsDir = path.join(dataDir, 'bank-reports');
     const a = { id: 'AR-1', displayName: 'Alpha Bank', city: 'Alton', state: 'IL', certNumber: '11' };
     const b = { id: 'AR-2', displayName: 'Beta Bank', city: 'Pana', state: 'MO', certNumber: '22' };
+    seedBankData(dataDir, [a, b]);
     coverageStore.upsertSavedBank(reportsDir, a, { status: 'Client', owner: 'Jim Lewis' });
     coverageStore.upsertSavedBank(reportsDir, b, { status: 'Prospect', owner: 'Dan Hagemann' });
     const today = new Date().toISOString().slice(0, 10);
@@ -878,11 +951,15 @@ test('crm dashboard aggregates KPIs, by-state, activity, and follow-ups', async 
   const statusStore = require('../server/bank-account-status-store');
   await withServer({}, async ({ port, dataDir }) => {
     const reportsDir = path.join(dataDir, 'bank-reports');
-    statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-1', displayName: 'TX Client', city: 'Austin', state: 'TX', certNumber: '1' }, { status: 'Client', owner: 'Jim Lewis' });
-    statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-2', displayName: 'TX Prospect', city: 'Waco', state: 'TX', certNumber: '2' }, { status: 'Prospect', owner: 'Jim Lewis' });
-    statusStore.upsertBankAccountStatus(reportsDir, { id: 'CD-3', displayName: 'MO Client', city: 'Alton', state: 'MO', certNumber: '3' }, { status: 'Client', owner: 'Dan Hagemann' });
+    const cd1 = { id: 'CD-1', displayName: 'TX Client', city: 'Austin', state: 'TX', certNumber: '1' };
+    const cd2 = { id: 'CD-2', displayName: 'TX Prospect', city: 'Waco', state: 'TX', certNumber: '2' };
+    const cd3 = { id: 'CD-3', displayName: 'MO Client', city: 'Alton', state: 'MO', certNumber: '3' };
+    seedBankData(dataDir, [cd1, cd2, cd3]);
+    statusStore.upsertBankAccountStatus(reportsDir, cd1, { status: 'Client', owner: 'Jim Lewis' });
+    statusStore.upsertBankAccountStatus(reportsDir, cd2, { status: 'Prospect', owner: 'Jim Lewis' });
+    statusStore.upsertBankAccountStatus(reportsDir, cd3, { status: 'Client', owner: 'Dan Hagemann' });
     const soon = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-    coverageStore.upsertSavedBank(reportsDir, { id: 'CD-1', displayName: 'TX Client', city: 'Austin', state: 'TX', certNumber: '1' }, { status: 'Client', owner: 'Jim Lewis' });
+    coverageStore.upsertSavedBank(reportsDir, cd1, { status: 'Client', owner: 'Jim Lewis' });
     // Upcoming follow-up = an open task due within the 14-day horizon.
     coverageStore.createBankTask(reportsDir, { bankId: 'CD-1', title: 'Quarterly review', dueDate: soon });
     coverageStore.recordManualActivity(reportsDir, { bankId: 'CD-1', kind: 'call', subject: 'Quarterly check-in', actorUsername: 'jim', actorDisplay: 'Jim Lewis' });

@@ -1578,9 +1578,11 @@
         <p id="bankStatusImportStatus">Account statuses default to Open until imported or edited.</p>
         <p id="averagedSeriesImportStatus">Averaged-series peer data has not been imported yet.</p>
         <p id="fdicSyncStatus">FDIC call-report sync: pulls the newest public filed quarter into matching bank tear sheets; workbook upload remains available as fallback until parity is proven.</p>
+        <p id="ffiecSyncStatus">FFIEC Call/UBPR sync: adds configured CDR bulk files for deeper Call Report fields and UBPR-style ratios; existing periods are never overwritten.</p>
         <p id="sfContactsImportStatus">Salesforce contacts: export Contacts to CSV in Salesforce, drop it here — rows match to banks by account name.</p>
       </div>
       <button type="button" class="small-btn bank-upload-btn" id="fdicSyncBtn">Sync Call Reports from FDIC</button>
+      <button type="button" class="small-btn bank-upload-btn" id="ffiecSyncBtn">Sync Call/UBPR from FFIEC</button>
       <label class="small-btn bank-upload-btn">
         Import Salesforce Contacts
         <input type="file" id="sfContactsCsvInput" accept=".csv" hidden>

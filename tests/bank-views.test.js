@@ -87,8 +87,31 @@ test('runBankView surfaces banks with an overdue open task + joins lastActivityD
   const os = require('os');
   const path = require('path');
   const coverageStore = require('../server/bank-coverage-store');
+  const bankImporter = require('../server/bank-data-importer');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fbbs-views-'));
   try {
+    bankImporter.writeBankDatabase({
+      metadata: {
+        importedAt: '2026-07-01T12:00:00.000Z',
+        sourceFile: 'views-bank-fixture.xlsx',
+        latestPeriod: '2026Q1',
+        bankCount: 2,
+        rowCount: 2,
+        fields: bankImporter.BANK_FIELDS
+      },
+      banks: [
+        {
+          id: 'V-1',
+          summary: { id: 'V-1', displayName: 'View Test Bank', city: 'Alton', state: 'IL', certNumber: '999', period: '2026Q1', totalAssets: 1, totalDeposits: 1 },
+          periods: [{ period: '2026Q1', values: { displayName: 'View Test Bank', city: 'Alton', state: 'IL', certNumber: '999', period: '2026Q1' } }]
+        },
+        {
+          id: 'V-2',
+          summary: { id: 'V-2', displayName: 'No Task Bank', city: 'Alton', state: 'IL', certNumber: '888', period: '2026Q1', totalAssets: 1, totalDeposits: 1 },
+          periods: [{ period: '2026Q1', values: { displayName: 'No Task Bank', city: 'Alton', state: 'IL', certNumber: '888', period: '2026Q1' } }]
+        }
+      ]
+    }, tmpDir);
     const bank = { id: 'V-1', displayName: 'View Test Bank', city: 'Alton', state: 'IL', certNumber: '999' };
     coverageStore.upsertSavedBank(tmpDir, bank, { status: 'Client', owner: 'Jim Lewis' });
     coverageStore.createBankTask(tmpDir, { bankId: 'V-1', title: 'Follow up', dueDate: '2020-01-01' });

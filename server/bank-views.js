@@ -12,9 +12,11 @@
 // string contains-matching via the shared rep-identity helper.
 
 const {
-  countBankAccountStatuses,
   listBankAccountStatuses
 } = require('./bank-account-status-store');
+const {
+  listBankSummaries
+} = require('./bank-data-importer');
 const {
   getSavedBankCoverageMap,
   lastActivityByBank,
@@ -150,6 +152,18 @@ function summarizeStrategy(row) {
 // group fits in one shell-out and the JS-side rep filter has the full set to work with.
 const ACCOUNT_VIEW_FETCH_LIMIT = 8000;
 
+function currentBankIdSet(outputDir) {
+  return new Set((listBankSummaries(outputDir) || [])
+    .map(row => String(row.id || ''))
+    .filter(Boolean));
+}
+
+function filterCurrentBankRows(outputDir, rows, key = 'bankId') {
+  const currentIds = currentBankIdSet(outputDir);
+  if (!currentIds.size) return [];
+  return (rows || []).filter(row => currentIds.has(String(row[key] || '')));
+}
+
 // One GROUP BY over bank_activities (manual CRM kinds only) → { bankId: 'YYYY-MM-DD' }.
 // Swallows store errors so a coverage-db hiccup can't take the views page down.
 function safeLastActivityMap(outputDir) {
@@ -167,9 +181,10 @@ function runAccountStatusView(view, { outputDir, rep, limit = ACCOUNT_VIEW_FETCH
     maxLimit: ACCOUNT_VIEW_FETCH_LIMIT,
     sort: 'bank'
   });
+  const currentRows = filterCurrentBankRows(outputDir, rows);
   const filtered = (view.requiresRep || (view.supportsRep && rep))
-    ? rows.filter(r => ownerStringContainsRep(r.owner, rep))
-    : rows;
+    ? currentRows.filter(r => ownerStringContainsRep(r.owner, rep))
+    : currentRows;
   const lastActivity = safeLastActivityMap(outputDir);
   return {
     rows: filtered.map(row => ({
@@ -183,7 +198,9 @@ function runAccountStatusView(view, { outputDir, rep, limit = ACCOUNT_VIEW_FETCH
 
 function runStrategiesView(view, { outputDir, rep }) {
   const result = listStrategyRequests(outputDir, { status: view.statusFilter });
+  const currentIds = currentBankIdSet(outputDir);
   const matches = (result.requests || []).filter(r => {
+    if (r.bankId && !currentIds.has(String(r.bankId))) return false;
     if (view.supportsRep && rep) {
       return ownerStringContainsRep(r.assignedTo, rep) || ownerStringContainsRep(r.requestedBy, rep);
     }
@@ -212,9 +229,10 @@ function runFollowUpsView(view, { outputDir, rep }) {
     if (!existing || String(task.dueDate) < String(existing.dueDate)) byBank.set(task.bankId, task);
   }
   const bankIds = [...byBank.keys()];
+  const currentIds = currentBankIdSet(outputDir);
   const coverage = getSavedBankCoverageMap(outputDir, bankIds) || new Map();
   const lastActivity = safeLastActivityMap(outputDir);
-  const rows = bankIds.map(bankId => {
+  const rows = bankIds.filter(bankId => currentIds.has(String(bankId))).map(bankId => {
     const task = byBank.get(bankId);
     const cov = coverage.get(String(bankId)) || {};
     return {
@@ -291,10 +309,6 @@ function runBankView({ outputDir, viewId, rep, limit }) {
 
 function countBankView({ outputDir, view, rep }) {
   if (view.requiresRep && !rep) return null;
-  // Fast path: no rep filter on account-status views can use SQL COUNT(*).
-  if (view.kind === 'account-status' && !rep) {
-    return countBankAccountStatuses(outputDir, { status: view.statusFilter });
-  }
   if (view.kind === 'billing') {
     return listBillingQueue(outputDir, { state: view.stateFilter }).length;
   }
