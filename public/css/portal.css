@@ -16220,6 +16220,9 @@ body {
   justify-content: flex-end;
   padding: 10px 14px;
 }
+.mc-bank-head .mc-bank-card-actions {
+  padding: 6px 0 0;
+}
 .mc-status {
   display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px;
   background: var(--border-light); color: var(--text2); font-weight: 600;
@@ -16940,7 +16943,6 @@ body {
     grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
   }
   .workspace-context-rail {
-    display: none;
     position: fixed;
     top: 0;
     right: 0;
@@ -16957,7 +16959,6 @@ body {
     box-shadow: -18px 0 42px rgba(0, 0, 0, .18);
   }
   .workspace-3col.context-open .workspace-context-rail {
-    display: block;
     pointer-events: auto;
     transform: translateX(0);
     visibility: visible;

@@ -1845,9 +1845,6 @@
   function updateMarketNavGroup(pageName) {
     document.querySelectorAll('.nav-group').forEach(group => {
       group.classList.remove('active-group');
-      group.classList.remove('open');
-      const groupToggle = group.querySelector('.nav-parent');
-      if (groupToggle) groupToggle.setAttribute('aria-expanded', 'false');
     });
     const groupName = NAV_GROUP_BY_PAGE[pageName];
     if (!groupName) return;
@@ -6386,12 +6383,12 @@
           '<span>' + formatMoney(bank.maturityPar) + '</span>' +
           '<small>maturing' + (bank.callPar ? ' · ' + formatMoney(bank.callPar) + ' callable' : '') + ' · ' +
             bank.lotCount + ' lot' + (bank.lotCount === 1 ? '' : 's') + ' · as of ' + escapeHtml(maturityCalendarDate(bank.reportDate)) + '</small>' +
+          '<div class="mc-bank-card-actions"><a class="small-btn" href="#bond-swap?bank=' + encodeURIComponent(bank.bankId) + '">Find swap ideas</a></div>' +
         '</div>' +
       '</summary>' +
       '<div class="mc-table-wrap"><table class="mc-table"><thead><tr>' +
         '<th>Event</th><th>Date</th><th>Sector</th><th>CUSIP</th><th>Description</th><th class="mc-num">Coupon</th><th class="mc-num">Par</th><th class="mc-num">Bk Yld</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-      '<div class="mc-bank-card-actions"><a class="small-btn" href="#bond-swap?bank=' + encodeURIComponent(bank.bankId) + '">Find swap ideas</a></div>' +
       '</details>';
   }
 
@@ -6465,6 +6462,9 @@
       maturityCalendarSection('maturityCalMaturing', 'Maturing Cash', `${formatMoney(totals.maturityPar)} certain par · ${formatNumber(totals.maturityLots)} lots`, maturityCalendarLotsTable(maturityLots, 'No certain maturities match the current filters.')) +
       maturityCalendarSection('maturityCalCallable', 'Callable Watch', `${formatMoney(totals.callPar)} potential par · ${formatNumber(totals.callLots)} lots`, maturityCalendarLotsTable(callLots, 'No first-call events match the current filters.')) +
       maturityCalendarSection('maturityCalBanks', 'Bank List', `${formatNumber(view.banks.length)} banks ranked by maturing par`, bankCards);
+    app.querySelectorAll('.mc-bank-card-actions a').forEach(link => {
+      link.addEventListener('click', e => e.stopPropagation());
+    });
   }
 
   function maturityCalendarDate(iso) {
@@ -19234,6 +19234,19 @@
         q.trim() ? `${contactsDirectoryRows.length.toLocaleString()} of ${contactsDirectoryTotal.toLocaleString()} contacts match` : `${contactsDirectoryTotal.toLocaleString()} contacts across your banks`;
       renderContactsDirectoryRows();
     } catch (e) {
+      contactsDirectoryRows = [];
+      contactsDirectoryTotal = 0;
+      contactsDirectoryPage = 0;
+      const stat = document.getElementById('contactsStat');
+      const sub = document.getElementById('contactsSub');
+      const status = document.getElementById('contactsPageStatus');
+      const prev = document.getElementById('contactsPrevPage');
+      const next = document.getElementById('contactsNextPage');
+      if (stat) stat.textContent = '—';
+      if (sub) sub.textContent = 'Contacts unavailable';
+      if (status) status.textContent = 'Could not load contacts';
+      if (prev) prev.disabled = true;
+      if (next) next.disabled = true;
       body.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--danger)">Failed to load contacts: ${escapeHtml(e.message)}</td></tr>`;
     }
   }
@@ -19335,6 +19348,21 @@
       allOfferingsData = await res.json();
       allOfferingsBuyerCache.clear();
     } catch (e) {
+      allOfferingsData = null;
+      allOfferingsVisibleRows = [];
+      allOfferingsPage = 0;
+      const stat = document.getElementById('allOfferingsStat');
+      const kicker = document.getElementById('allOfferingsKicker');
+      const sub = document.getElementById('allOfferingsSub');
+      const status = document.getElementById('aoPageStatus');
+      const prev = document.getElementById('aoPrevPage');
+      const next = document.getElementById('aoNextPage');
+      if (stat) stat.textContent = '—';
+      if (kicker) kicker.textContent = 'Current package';
+      if (sub) sub.textContent = 'Offerings unavailable';
+      if (status) status.textContent = 'Could not load offerings';
+      if (prev) prev.disabled = true;
+      if (next) next.disabled = true;
       body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--danger)">Failed to load offerings: ${escapeHtml(e.message)}</td></tr>`;
       return;
     }
@@ -25209,7 +25237,16 @@
       renderAdminAuditRows();
     } catch (err) {
       console.error('Failed to load audit log:', err);
+      adminAuditEntries = [];
+      adminAuditPage = 0;
+      if (stat) stat.textContent = '—';
       renderAdminWarningsPanel();
+      const status = document.getElementById('adminAuditPageStatus');
+      const prev = document.getElementById('adminAuditPrev');
+      const next = document.getElementById('adminAuditNext');
+      if (status) status.textContent = 'Could not load audit log';
+      if (prev) prev.disabled = true;
+      if (next) next.disabled = true;
       body.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--danger)">
         Failed to load audit log: ${escapeHtml(err.message)}
       </td></tr>`;
