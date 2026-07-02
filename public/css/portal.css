@@ -12859,9 +12859,23 @@ body {
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 18px;
   margin-bottom: 24px;
-  /* -292px = header/hero (240) + the scope strip above the panels. */
-  height: calc(100vh - 292px);
-  min-height: 600px;
+  /* Fill the viewport on load (-292px = header/hero + scope strip), but let
+     the row GROW when a bank is selected so the call-report detail shows in
+     full instead of a 120px sliver — the page scrolls, the data is visible. */
+  min-height: max(600px, calc(100vh - 292px));
+  height: auto;
+  /* Panels size independently: the right panel grows with the detail; the
+     left map panel stays viewport-sized and STICKS while you scroll the data
+     (instead of stretching the map to match a 2,000px column). */
+  align-items: start;
+}
+.maps-split > .maps-panel:first-child {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+}
+.maps-split > .maps-panel:last-child {
+  min-height: max(600px, calc(100vh - 292px));
 }
 .maps-panel {
   background: var(--bg-card, #fff);
@@ -13402,8 +13416,10 @@ body {
   border-radius: 10px;
   flex: 1 1 auto;
   /* The list must survive a populated detail zone below it — never collapse
-     past a few visible rows. */
+     past a few visible rows. The max cap matters now that the panel can grow:
+     without it, flex-basis:auto would size the wrap to all 1,000 rows. */
   min-height: 170px;
+  max-height: 44vh;
   overflow: auto;
   position: relative;
 }
@@ -13526,13 +13542,11 @@ body {
 }
 /* Selected-bank detail is a stable IN-FLOW bottom zone (the old absolute
    overlay covered ~74% of the list after nearly every filter change). It
-   scrolls internally; the table above keeps its min-height. */
+   renders at FULL natural height — the call-report metrics + peer deltas are
+   the point of clicking a bank; the page grows instead of clipping them. */
 .maps-detail-panel.maps-detail-populated {
   background: #fff;
-  flex: 0 1 auto;
-  max-height: 38%;
-  min-height: 120px;
-  overflow-y: auto;
+  flex: 0 0 auto;
 }
 .maps-detail-empty {
   color: var(--text3, #666);
@@ -13853,6 +13867,10 @@ body {
   /* Two stacked panels inside one fixed viewport-height grid was the single
      worst squeeze (641-980px band) — let the page grow and cap the table. */
   .maps-split { grid-template-columns: 1fr; height: auto; min-height: 0; }
+  /* Stacked layout: the map scrolls away normally; sticky would pin it over
+     the list. */
+  .maps-split > .maps-panel:first-child { position: static; max-height: none; }
+  .maps-split > .maps-panel:last-child { min-height: 0; }
   .maps-tablewrap {
     flex: 0 0 auto;
     max-height: 360px;
@@ -13860,7 +13878,6 @@ body {
     overflow: auto;
     -webkit-overflow-scrolling: touch;
   }
-  .maps-detail-panel.maps-detail-populated { max-height: 320px; }
   .maps-panel-head { align-items: flex-start; flex-direction: column; }
   .maps-head-actions { justify-content: flex-start; }
   .maps-area-card { grid-template-columns: 1fr; }
@@ -13904,13 +13921,6 @@ body {
 
   .maps-scope-strip { padding: 8px; }
   .maps-clear-all { margin-left: 0; }
-
-  /* Detail is in-flow everywhere now; on phones let it grow naturally. */
-  .maps-detail-panel.maps-detail-populated {
-    margin-top: 10px;
-    max-height: none;
-    overflow: visible;
-  }
 }
 
 /* Scroll fade-in utility (used by [data-reveal] elements) */
