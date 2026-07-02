@@ -90,4 +90,42 @@ test('sanitizeFilename strips path + unsafe chars and bounds length', () => {
   assert.ok(m.sanitizeFilename('x'.repeat(300) + '.xlsx').length <= 180);
 });
 
+// ---------- filterOffersForDate (current-day-only display policy) ----------
+
+test('filterOffersForDate keeps only offers created on the package date', () => {
+  const inv = {
+    uploadedAt: '2026-07-02T15:00:00.000Z',
+    sources: [{ id: 'a' }],
+    offers: [
+      { id: '1', createdAt: '2026-07-02T14:00:00.000Z', description: 'today' },
+      { id: '2', createdAt: '2026-05-01T20:03:35.276Z', description: 'may' },
+      { id: '3', createdAt: null, description: 'undated' },
+    ],
+    warnings: []
+  };
+  const out = m.filterOffersForDate(inv, '2026-07-02');
+  assert.strictEqual(out.offers.length, 1);
+  assert.strictEqual(out.offers[0].description, 'today');
+  assert.strictEqual(out.staleOfferCount, 2);
+  assert.strictEqual(out.lastUploadedAt, '2026-07-02T15:00:00.000Z');
+  assert.strictEqual(out.currentForDate, '2026-07-02');
+  // Sources/warnings pass through untouched (history stays browsable).
+  assert.strictEqual(out.sources.length, 1);
+});
+
+test('filterOffersForDate with no package date hides everything (no date = nothing is current)', () => {
+  const inv = { uploadedAt: null, sources: [], offers: [{ id: '1', createdAt: '2026-07-02T14:00:00.000Z' }], warnings: [] };
+  const out = m.filterOffersForDate(inv, '');
+  assert.strictEqual(out.offers.length, 0);
+  assert.strictEqual(out.staleOfferCount, 1);
+});
+
+test('localYmd converts ISO timestamps to the local calendar day', () => {
+  assert.strictEqual(m.localYmd(''), '');
+  assert.strictEqual(m.localYmd('garbage'), '');
+  // A midday UTC timestamp lands on the same local day in US timezones.
+  const noonUtc = '2026-07-02T12:00:00.000Z';
+  assert.ok(/^2026-07-0[12]$/.test(m.localYmd(noonUtc)));
+});
+
 console.log(`mbs-cmo-store tests: ${passed} passed.`);

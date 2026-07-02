@@ -25212,9 +25212,15 @@
 
     updateMbsCmoTabs(offers, sources);
     const sourceCount = sources.length;
-    const uploaded = mbsCmoData.uploadedAt ? `Updated ${formatFullTimestamp(mbsCmoData.uploadedAt)}` : 'No uploads yet';
-    setText('mbsCmoKicker', `${uploaded} · ${formatNumber(sourceCount)} source files`);
-    setText('mbsCmoSub', `${formatNumber(offers.length)} modeled rows from ${formatNumber(sourceCount)} uploaded sources`);
+    // Offers are current-package-date only — say so instead of presenting a
+    // stale upload date as if the rows were live.
+    const pkgDate = mbsCmoData.currentForDate || '';
+    const staleHidden = Number(mbsCmoData.staleOfferCount || 0);
+    const uploaded = mbsCmoData.uploadedAt ? `Last upload ${formatFullTimestamp(mbsCmoData.uploadedAt)}` : 'No uploads yet';
+    setText('mbsCmoKicker', `${uploaded} · ${formatNumber(sourceCount)} source files${staleHidden ? ` · ${formatNumber(staleHidden)} older offer${staleHidden === 1 ? '' : 's'} hidden` : ''}`);
+    setText('mbsCmoSub', offers.length
+      ? `${formatNumber(offers.length)} offer${offers.length === 1 ? '' : 's'} uploaded for ${pkgDate || 'today'} — offers show only on their upload day`
+      : `No MBS/CMO offerings uploaded for ${pkgDate || 'today'} — this page is empty unless the desk uploads today's sheets`);
     const offerWrap = document.querySelector('#p-mbs-cmo .mbs-cmo-table')?.closest('.explorer-table-wrap');
     const sourcesWrap = document.getElementById('mbsCmoSourcesWrap');
     const showingSources = mbsCmoView === 'sources';
@@ -25243,8 +25249,11 @@
 
     setText('mbsCmoStat', formatNumber(filtered.length));
     if (!offers.length) {
+      const staleNote = Number(mbsCmoData.staleOfferCount || 0)
+        ? `<br><span style="font-size:12px">${formatNumber(mbsCmoData.staleOfferCount)} offer${Number(mbsCmoData.staleOfferCount) === 1 ? '' : 's'} from earlier days ${Number(mbsCmoData.staleOfferCount) === 1 ? 'is' : 'are'} hidden — dealer sheets are only good on their upload day.${mbsCmoData.lastUploadedAt ? ` Last upload ${escapeHtml(formatFullTimestamp(mbsCmoData.lastUploadedAt))}.` : ''}</span>`
+        : '';
       body.innerHTML = `<tr><td colspan="15" style="text-align:center;padding:40px;color:var(--text3)">
-        No MBS/CMO sources uploaded yet. Use the source drop above to add Bloomberg workbooks, PDFs, offer emails, or screenshots.
+        No MBS/CMO offerings uploaded today. Drop GNR/FHR/FNR offer-sheet PDFs in the daily folder (they import automatically) or use the source drop above.${staleNote}
       </td></tr>`;
       return;
     }

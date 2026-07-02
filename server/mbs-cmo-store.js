@@ -32,6 +32,33 @@ function sanitizeFilename(original) {
   return name;
 }
 
+/** Local-clock YYYY-MM-DD for an ISO timestamp ('' when unparseable). */
+function localYmd(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * MBS/CMO offers are CURRENT-DAY ONLY (desk policy 2026-07-02): the inventory
+ * accumulates history on disk, but only offers uploaded ON `ymd` (the current
+ * package date) are live — everything older is hidden, not deleted, because
+ * a dealer offer sheet is stale the next morning. Pure.
+ */
+function filterOffersForDate(inventory, ymd) {
+  const inv = inventory || {};
+  const offers = Array.isArray(inv.offers) ? inv.offers : [];
+  const fresh = ymd ? offers.filter(o => localYmd(o && o.createdAt) === ymd) : [];
+  return {
+    ...inv,
+    offers: fresh,
+    staleOfferCount: offers.length - fresh.length,
+    lastUploadedAt: inv.uploadedAt || null,
+    currentForDate: ymd || null
+  };
+}
+
 function loadMbsCmoInventory(baseDir) {
   ensureDir(baseDir);
   const empty = { uploadedAt: null, sources: [], offers: [], warnings: [] };
@@ -478,6 +505,8 @@ module.exports = {
   getMbsCmoSourceFile,
   loadMbsCmoInventory,
   saveMbsCmoUpload,
+  filterOffersForDate,
+  localYmd,
   // Pure parsing/normalization helpers — exported for unit testing.
   inferProductType,
   isMissingValue,

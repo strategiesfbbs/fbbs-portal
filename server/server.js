@@ -45,7 +45,8 @@ const { parseCorporatesFiles } = require('./corporates-parser');
 const {
   getMbsCmoSourceFile,
   loadMbsCmoInventory,
-  saveMbsCmoUpload
+  saveMbsCmoUpload,
+  filterOffersForDate: filterMbsCmoOffersForDate
 } = require('./mbs-cmo-store');
 const {
   getStructuredNoteSourceFile,
@@ -277,6 +278,7 @@ const AUTO_PUBLISH_ENABLED = process.env.FBBS_AUTO_PUBLISH !== '0';
 const AUTO_PUBLISH_POLL_MS = 2 * 60 * 1000;
 // Folder-drop Pershing trade auto-import (FBBS_AUTO_PERSHING_TRADES=0 disables; see autoPershingTradesTick)
 const AUTO_PERSHING_TRADES_ENABLED = process.env.FBBS_AUTO_PERSHING_TRADES !== '0';
+const AUTO_MBS_CMO_ENABLED = process.env.FBBS_AUTO_MBS_CMO !== '0';
 const PERSHING_TRADES_DROP_DIR = path.join(BANK_REPORTS_DIR, 'incoming', 'pershing-trades');
 // FDIC weekly auto-sync (FBBS_AUTO_FDIC_SYNC=0 disables; see autoFdicSyncTick)
 const AUTO_FDIC_SYNC_ENABLED = process.env.FBBS_AUTO_FDIC_SYNC !== '0';
@@ -8873,7 +8875,7 @@ function cusipSearchSources() {
     },
     {
       type: 'mbs', typeLabel: 'MBS/CMO', page: 'mbs-cmo',
-      rows: (loadMbsCmoInventory(MBS_CMO_DIR) || {}).offers || [],
+      rows: currentMbsCmoInventory().offers || [],
       describe: r => join([r.description, fmtPct(r.coupon), r.productType]),
       normalize: r => ({ description: r.description || '', coupon: pct(r.coupon), yield: pct(r.yield), maturity: r.maturityDate || null, price: pct(r.ask) ?? pct(r.price), state: '', sector: r.productType || 'MBS', availabilityK: null, callDate: null }),
     },
@@ -9817,6 +9819,11 @@ function scanFolderDrop(dateValue) {
       const tradeFile = !slot && !execSlot && !reference
         && /\.csv$/i.test(filename) && !filename.startsWith('.') && !filename.startsWith('_')
         && looksLikePershingTradeCsv(fullPath);
+      // Agency REMIC offer sheets (GNR/FHR/FNR/FNA/FR …) likewise ride along —
+      // they import into the MBS/CMO inventory, never a package slot.
+      const mbsCmoFile = !slot && !execSlot && !reference && !tradeFile
+        && !filename.startsWith('.') && !filename.startsWith('_')
+        && looksLikeMbsCmoOfferPdf(fullPath, filename);
       return {
         filename,
         size: stat.size,
@@ -9826,12 +9833,14 @@ function scanFolderDrop(dateValue) {
         label: slot ? (DOC_TYPES_LABELS[slot] || slot)
           : execSlot ? (EXEC_SUMMARY_SLOT_LABELS[execSlot] || execSlot)
           : tradeFile ? 'Pershing trade history'
+          : mbsCmoFile ? 'MBS/CMO offer sheet'
           : folderDropReferenceLabel(filename),
         companionRole: folderDropCompanionRole(filename),
         date: sniffDateFromFilename(filename),
         reference,
         tradeFile,
-        ignored: filename.startsWith('.') || filename.startsWith('_') || (!slot && !execSlot && !reference && !tradeFile)
+        mbsCmoFile,
+        ignored: filename.startsWith('.') || filename.startsWith('_') || (!slot && !execSlot && !reference && !tradeFile && !mbsCmoFile)
       };
     })
     .filter(row => !row.filename.startsWith('.') && row.filename !== '.DS_Store');
@@ -9840,7 +9849,8 @@ function scanFolderDrop(dateValue) {
   const references = entries.filter(row => row.reference && !row.ignored);
   const execFiles = entries.filter(row => row.execSlot && !row.ignored);
   const tradeFiles = entries.filter(row => row.tradeFile && !row.ignored);
-  const ignored = entries.filter(row => row.ignored || (!row.slot && !row.execSlot && !row.reference && !row.tradeFile));
+  const mbsCmoFiles = entries.filter(row => row.mbsCmoFile && !row.ignored);
+  const ignored = entries.filter(row => row.ignored || (!row.slot && !row.execSlot && !row.reference && !row.tradeFile && !row.mbsCmoFile));
   const slots = {};
   publishable.forEach(row => {
     if (!slots[row.slot]) slots[row.slot] = [];
@@ -9881,6 +9891,11 @@ function scanFolderDrop(dateValue) {
   if (dates.length > 1) warnings.push(`Files appear to reference multiple dates: ${dates.join(', ')}.`);
   if (references.length) warnings.push(`${references.length} reference/internal file${references.length === 1 ? '' : 's'} found. They will stay in the folder and will not replace package slots yet.`);
   if (tradeFiles.length) warnings.push(`${tradeFiles.length} Pershing trade-history file${tradeFiles.length === 1 ? '' : 's'} detected. ${tradeFiles.length === 1 ? 'It' : 'They'} will import into trade history (not a package slot) and move to bank-reports/incoming/pershing-trades/processed/.`);
+  if (mbsCmoFiles.length) warnings.push(`${mbsCmoFiles.length} MBS/CMO offer sheet${mbsCmoFiles.length === 1 ? '' : 's'} detected (${mbsCmoFiles.map(r => r.filename).join(', ')}). ${mbsCmoFiles.length === 1 ? 'It' : 'They'} will import into the MBS/CMO inventory (not a package slot) and move to mbs-cmo/processed/.`);
+  // Files that classified as NOTHING would previously vanish silently — the
+  // 2026-07-02 GNR sheet + Roscoe CMO email lesson. Name them loudly.
+  const unusedNames = ignored.map(r => r.filename).filter(n => n !== '.DS_Store');
+  if (unusedNames.length) warnings.push(`Not used: ${unusedNames.length} file${unusedNames.length === 1 ? '' : 's'} did not classify into any slot or ingest (${unusedNames.join(', ')}). If one is an offer sheet the portal should carry, rename it to a recognized pattern or upload it on the Upload page.`);
   if (execPresent.length && !execSummary.complete) {
     warnings.push(`Executive Summary: ${execRequiredPresent.length} of 3 required files detected (${execPresent.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')}). Missing ${execMissing.map(k => EXEC_SUMMARY_SLOT_LABELS[k]).join(', ')} — exec summary will not generate on publish until holdings, TBLT trades, and margin are in the folder.`);
   } else if (execSummary.complete) {
@@ -9895,6 +9910,7 @@ function scanFolderDrop(dateValue) {
     references,
     execFiles,
     tradeFiles,
+    mbsCmoFiles,
     execSummary,
     ignored,
     slots,
@@ -10098,6 +10114,11 @@ async function handleFolderDropPublish(req, res) {
         const result = ingestFolderDropReferences(scan);
         result.execSummary = await ingestFolderDropExecSummary(scan, req);
         if (AUTO_PERSHING_TRADES_ENABLED) result.pershingTrades = importDropboxTradeFilesNow(scan);
+        if (AUTO_MBS_CMO_ENABLED) result.mbsCmo = await importDropboxMbsCmoFilesNow(scan);
+        // Leftover files that classified as nothing — name them in the audit
+        // so a missed offer sheet is visible the same morning, never silent.
+        const unused = (scan.ignored || []).map(r => r.filename).filter(n => n !== '.DS_Store');
+        if (unused.length) appendAuditLog({ event: 'folder-drop-unclassified', date: scan.date, files: unused });
         return result;
       }
     });
@@ -10145,6 +10166,18 @@ function nullHttpResponse() {
 // Every file the scan saw (including ignored ones) goes into the fingerprint:
 // a half-copied workbook usually classifies as nothing, and it still has to
 // hold the publish until it settles.
+/**
+ * MBS/CMO offers gated to the CURRENT PACKAGE DATE (desk policy 2026-07-02):
+ * a dealer offer sheet is stale the next morning, so the explorer, All
+ * Offerings, CUSIP search, Sales Dashboard candidates, and the assistant all
+ * see ONLY offers uploaded on today's package date. History stays on disk.
+ */
+function currentMbsCmoInventory() {
+  const inventory = loadMbsCmoInventory(MBS_CMO_DIR);
+  const pkg = getCurrentPackage();
+  return filterMbsCmoOffersForDate(inventory, (pkg && pkg.date) || '');
+}
+
 function dropFolderFingerprint(scan) {
   return [...(scan.publishable || []), ...(scan.references || []), ...(scan.execFiles || []), ...(scan.ignored || [])]
     .map(row => `${row.filename}|${row.size}|${row.modifiedAt}`)
@@ -10178,6 +10211,17 @@ async function autoPublishTick() {
       importDropboxTradeFilesStable(scan);
     } catch (err) {
       log('warn', 'Dropbox Pershing trade side-car failed:', err.message);
+    }
+  }
+
+  // Side-car: agency REMIC offer sheets (GNR/FHR/…) import into the MBS/CMO
+  // inventory on the same stability gate; excluded from the package
+  // fingerprint so they never block or trigger a publish.
+  if (AUTO_MBS_CMO_ENABLED) {
+    try {
+      await importDropboxMbsCmoFilesStable(scan);
+    } catch (err) {
+      log('warn', 'Dropbox MBS/CMO side-car failed:', err.message);
     }
   }
 
@@ -10221,6 +10265,8 @@ async function autoPublishTick() {
     });
     if (shim.statusCode >= 200 && shim.statusCode < 300) {
       log('info', `Auto-publish: ${scan.publishable.length} file(s) published from ${scan.folderPath}`);
+      const unused = (scan.ignored || []).map(r => r.filename).filter(n => n !== '.DS_Store');
+      if (unused.length) appendAuditLog({ event: 'folder-drop-unclassified', date: scan.date, files: unused });
     } else {
       log('error', `Auto-publish failed (${shim.statusCode}):`, String(shim.body).slice(0, 300));
       appendAuditLog({ event: 'folder-auto-publish-failed', date: scan.date, status: shim.statusCode });
@@ -10356,6 +10402,106 @@ function scanPershingTradeDrop() {
     files.push({ key: full, full, filename: name, fingerprint: `${st.size}|${st.mtime.toISOString()}` });
   }
   return files;
+}
+
+// ---------- Folder-drop MBS/CMO offer-sheet auto-import ----------
+//
+// Agency REMIC offer sheets (GNR/FHR/FNR/FNA/FR + series, e.g. "GNR 2024-30
+// TA.pdf") dropped in the daily package folder import into the MBS/CMO
+// inventory — never a package slot. Same discipline as the Pershing side-car:
+// byte-stable across two ticks before reading, excluded from the package
+// fingerprint, moved to mbs-cmo/processed/<date>/ (or failed/) afterwards.
+// Disable with FBBS_AUTO_MBS_CMO=0.
+
+const mbsCmoDropState = new Map(); // full path -> "size|ISO-mtime" from the prior tick
+let mbsCmoImportBusy = false;
+
+// Filename must look like an agency REMIC ticker + the bytes must be a PDF.
+function looksLikeMbsCmoOfferPdf(fullPath, filename) {
+  if (!/\.pdf$/i.test(filename)) return false;
+  if (!/^(GNR|FHR|FNR|FNA|FR)[\s_.-]+[A-Z0-9]/i.test(filename)) return false;
+  try {
+    const fd = fs.openSync(fullPath, 'r');
+    try {
+      const buf = Buffer.alloc(5);
+      fs.readSync(fd, buf, 0, 5, 0);
+      return buf.toString('latin1') === '%PDF-';
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
+async function importAndArchiveMbsCmoFile(fullPath, filename, scanDate) {
+  const dateDir = scanDate || new Date().toISOString().slice(0, 10);
+  try {
+    const data = fs.readFileSync(fullPath);
+    let pdfText = '';
+    try { pdfText = (await extractPdfText(data)).text || ''; } catch (_) { /* parser warns downstream */ }
+    const result = saveMbsCmoUpload(MBS_CMO_DIR, [{ filename, data, pdfText }]);
+    const processedDir = path.join(MBS_CMO_DIR, 'processed', dateDir);
+    fs.mkdirSync(processedDir, { recursive: true });
+    fs.renameSync(fullPath, pershingTradeDropDestPath(processedDir, filename));
+    appendAuditLog({
+      event: 'mbs-cmo-auto-import',
+      filename,
+      offers: (result.uploadedOffers || []).length,
+      warnings: (result.uploadWarnings || []).slice(0, 5)
+    });
+    log('info', `MBS/CMO offer sheet imported from folder drop: ${filename} (${(result.uploadedOffers || []).length} offer(s))`);
+    return { filename, ok: true, offers: (result.uploadedOffers || []).length };
+  } catch (err) {
+    try {
+      const failedDir = path.join(MBS_CMO_DIR, 'failed', dateDir);
+      fs.mkdirSync(failedDir, { recursive: true });
+      if (fs.existsSync(fullPath)) fs.renameSync(fullPath, pershingTradeDropDestPath(failedDir, filename));
+    } catch (_) { /* leave in place if the move itself fails */ }
+    appendAuditLog({ event: 'mbs-cmo-auto-import-failed', filename, error: String(err.message || err).slice(0, 200) });
+    log('warn', `MBS/CMO folder-drop import failed for ${filename}:`, err.message);
+    return { filename, ok: false, error: err.message };
+  }
+}
+
+// Stability-gated side-car for the daily dropbox (async — PDF text extraction).
+async function importDropboxMbsCmoFilesStable(scan) {
+  if (mbsCmoImportBusy) return [];
+  mbsCmoImportBusy = true;
+  try {
+    const files = (scan.mbsCmoFiles || []).map(row => ({
+      key: path.join(scan.folderPath, row.filename),
+      full: path.join(scan.folderPath, row.filename),
+      filename: row.filename,
+      fingerprint: `${row.size}|${row.modifiedAt}`
+    }));
+    const present = new Set(files.map(f => f.key));
+    for (const key of [...mbsCmoDropState.keys()]) {
+      if (!present.has(key)) mbsCmoDropState.delete(key);
+    }
+    const results = [];
+    for (const f of files) {
+      const prev = mbsCmoDropState.get(f.key);
+      mbsCmoDropState.set(f.key, f.fingerprint);
+      if (prev !== f.fingerprint) continue; // first sighting — confirm stable next tick
+      results.push(await importAndArchiveMbsCmoFile(f.full, f.filename, scan.date));
+      mbsCmoDropState.delete(f.key);
+    }
+    return results;
+  } finally {
+    mbsCmoImportBusy = false;
+  }
+}
+
+// Manual Folder-Drop publish: the admin pressed the button — import immediately.
+async function importDropboxMbsCmoFilesNow(scan) {
+  const results = [];
+  for (const row of (scan.mbsCmoFiles || [])) {
+    const full = path.join(scan.folderPath, row.filename);
+    if (!fs.existsSync(full)) continue;
+    results.push(await importAndArchiveMbsCmoFile(full, row.filename, scan.date));
+  }
+  return results;
 }
 
 // Dedicated-folder watcher: data/bank-reports/incoming/pershing-trades/.
@@ -12598,7 +12744,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/mbs-cmo' && req.method === 'GET') {
-      return sendJSON(res, 200, loadMbsCmoInventory(MBS_CMO_DIR));
+      return sendJSON(res, 200, currentMbsCmoInventory());
     }
 
     if (pathname === '/api/mbs-cmo/upload' && req.method === 'POST') {
