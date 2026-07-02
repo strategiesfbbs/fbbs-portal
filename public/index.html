@@ -3333,6 +3333,29 @@
 
 <div class="toast" id="toast" role="status" aria-live="polite">Action completed</div>
 
+<!-- ============ AI Sales Assistant (global chat drawer) ============ -->
+<button type="button" class="assistant-fab" id="assistantFab" aria-label="Open the FBBS Sales Assistant" aria-expanded="false" title="Sales Assistant">
+  <span class="assistant-fab-icon" aria-hidden="true">✳</span><span class="assistant-fab-label">Assistant</span>
+</button>
+<section class="assistant-drawer" id="assistantDrawer" hidden role="dialog" aria-label="FBBS Sales Assistant" aria-modal="false">
+  <header class="assistant-head">
+    <div>
+      <strong>Sales Assistant</strong>
+      <span class="assistant-context-chip" id="assistantContextChip" hidden></span>
+    </div>
+    <div class="assistant-head-actions">
+      <button type="button" class="text-btn" id="assistantClearBtn" title="Clear this conversation">Clear</button>
+      <button type="button" class="small-btn" id="assistantCloseBtn" aria-label="Close assistant">Close</button>
+    </div>
+  </header>
+  <div class="assistant-messages" id="assistantMessages" aria-live="polite"></div>
+  <form class="assistant-input-row" id="assistantForm">
+    <textarea id="assistantInput" rows="2" maxlength="600" placeholder="Ask about a bank, your book, or today's inventory…" aria-label="Ask the Sales Assistant"></textarea>
+    <button type="submit" class="small-btn primary" id="assistantSendBtn">Ask</button>
+  </form>
+  <p class="assistant-foot">Answers come from portal data only. Drafts are copy-paste — the assistant never changes CRM records. For institutional use only.</p>
+</section>
+
 <!-- Shared rep-roster suggestions (filled from /api/me/reps) — attach via list="fbbsRepList" on any rep-name input. -->
 <datalist id="fbbsRepList"></datalist>
 

@@ -27384,10 +27384,312 @@
     setupPeerGroups();
     setupCommissionControls();
     setupSidebar();
+    setupSalesAssistant();
 
     // Respect a hash on initial load (e.g. bookmarked /#archive)
     const target = parseHashTarget(window.location.hash || '#home').page;
     goTo(target, { updateHash: false });
+  }
+
+  // ============ AI Sales Assistant (global chat drawer) ============
+  // Session-only history, safe rendering (escapeHtml everywhere), draft-only:
+  // the drawer never writes CRM data — drafts are copy buttons into the
+  // existing forms. Offline (no Claude key) renders a clear disabled state.
+
+  const assistantState = {
+    open: false,
+    enabled: null,     // null = status not checked yet (or unreachable — recheck on open)
+    busy: false,
+    history: [],       // [{ role: 'user'|'assistant', text, sources?, drafts?, error?, question? }]
+    lastQuestion: '',
+    generation: 0,     // bumped by Clear so in-flight replies from a cleared chat are dropped
+  };
+
+  function assistantActiveBank() {
+    try {
+      const active = document.querySelector('.page.active');
+      const page = active ? active.id.replace(/^p-/, '') : '';
+      if (page !== 'banks' || !selectedBank || !selectedBank.bank) return null;
+      const summary = selectedBank.bank.summary || {};
+      const id = selectedBankId();
+      if (!id) return null;
+      return { id, name: summary.displayName || 'Selected bank', page };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function assistantCurrentPage() {
+    const active = document.querySelector('.page.active');
+    return active ? active.id.replace(/^p-/, '') : '';
+  }
+
+  function renderAssistantContextChip() {
+    const chip = document.getElementById('assistantContextChip');
+    if (!chip) return;
+    const bank = assistantActiveBank();
+    if (bank) {
+      chip.textContent = `Asking about: ${bank.name}`;
+      chip.hidden = false;
+    } else {
+      chip.hidden = true;
+    }
+  }
+
+  function assistantMessageHtml(msg, index) {
+    if (msg.role === 'user') {
+      return `<div class="assistant-msg assistant-msg-user">${escapeHtml(msg.text)}</div>`;
+    }
+    if (msg.error) {
+      return `<div class="assistant-msg assistant-msg-error">
+        ${escapeHtml(msg.text)}
+        ${msg.question ? `<button type="button" class="text-btn" data-assistant-retry="${index}">Retry</button>` : ''}
+      </div>`;
+    }
+    const body = escapeHtml(msg.text).replace(/\n/g, '<br>');
+    const sources = (msg.sources || []).length
+      ? `<div class="assistant-sources">Sources: ${msg.sources.map(s => escapeHtml(s)).join(' · ')}</div>` : '';
+    const drafts = (msg.drafts || []).map((d, i) => `
+      <div class="assistant-draft">
+        <div class="assistant-draft-head">
+          <span class="assistant-draft-kind">${escapeHtml(d.kind)}</span>
+          <strong>${escapeHtml(d.title || 'Draft')}</strong>
+          <button type="button" class="text-btn" data-assistant-copy="${i}">Copy</button>
+        </div>
+        <pre class="assistant-draft-body">${escapeHtml(d.body)}</pre>
+        <span class="assistant-draft-note">Draft only — paste it into the portal form to save.</span>
+      </div>`).join('');
+    return `<div class="assistant-msg assistant-msg-bot" data-assistant-msg>${body}${sources}${drafts}</div>`;
+  }
+
+  function renderAssistantMessages() {
+    const list = document.getElementById('assistantMessages');
+    if (!list) return;
+    if (assistantState.enabled === false) {
+      const offlineNote = `<div class="assistant-empty">
+        <strong>The assistant is offline.</strong>
+        No Claude API key is configured on this box — the rest of the portal keeps working normally.
+      </div>`;
+      // Mid-conversation offline: keep the transcript visible and append the
+      // notice instead of hiding everything; kill the input controls.
+      list.innerHTML = assistantState.history.length
+        ? assistantState.history.map(assistantMessageHtml).join('') + offlineNote
+        : offlineNote;
+      const send = document.getElementById('assistantSendBtn');
+      const input = document.getElementById('assistantInput');
+      if (send) send.disabled = true;
+      if (input) input.disabled = true;
+      return;
+    }
+    if (!assistantState.history.length) {
+      list.innerHTML = `<div class="assistant-empty">
+        Ask about a bank ("what's this bank's loan/deposit ratio?"), your book
+        ("which of my prospects look like CD rollover calls?"), or the universe
+        ("how many banks in TX hold $100MM+ of securities?").
+      </div>`;
+      return;
+    }
+    list.innerHTML = assistantState.history.map(assistantMessageHtml).join('')
+      + (assistantState.busy ? '<div class="assistant-msg assistant-msg-busy"><span class="loading-spinner" aria-hidden="true"></span> Working…</div>' : '');
+    list.scrollTop = list.scrollHeight;
+  }
+
+  async function assistantCheckStatus() {
+    if (assistantState.enabled !== null) return;
+    try {
+      const res = await fetch('/api/assistant/status', { cache: 'no-store' });
+      const data = await res.json();
+      // Only a REAL {enabled:false} answer sticks as offline; a transient
+      // status failure stays null so reopening rechecks (a key added later
+      // never needs a page reload).
+      assistantState.enabled = Boolean(data && data.enabled);
+    } catch (_) {
+      assistantState.enabled = null;
+      const list = document.getElementById('assistantMessages');
+      if (list && !assistantState.history.length) {
+        list.innerHTML = '<div class="assistant-empty"><strong>Couldn’t reach the assistant.</strong> Close and reopen the drawer to retry.</div>';
+      }
+      return;
+    }
+    renderAssistantMessages();
+  }
+
+  function toggleAssistant(open) {
+    const drawer = document.getElementById('assistantDrawer');
+    const fab = document.getElementById('assistantFab');
+    if (!drawer || !fab) return;
+    assistantState.open = open != null ? open : drawer.hidden;
+    drawer.hidden = !assistantState.open;
+    fab.setAttribute('aria-expanded', String(assistantState.open));
+    fab.classList.toggle('is-open', assistantState.open);
+    if (assistantState.open) {
+      renderAssistantContextChip();
+      renderAssistantMessages();
+      assistantCheckStatus();
+      const input = document.getElementById('assistantInput');
+      if (input && !input.disabled) input.focus();
+    }
+  }
+
+  async function sendAssistantQuestion(question) {
+    const q = String(question || '').trim().slice(0, 600);
+    if (!q || assistantState.busy || assistantState.enabled === false) return;
+    renderAssistantContextChip(); // rep may have navigated since opening the drawer
+    assistantState.lastQuestion = q;
+    assistantState.history.push({ role: 'user', text: q });
+    assistantState.busy = true;
+    const sendBtn = document.getElementById('assistantSendBtn');
+    if (sendBtn) sendBtn.disabled = true;
+    renderAssistantMessages();
+    const bank = assistantActiveBank();
+    // Generation fence: Clear during an in-flight request bumps this, and the
+    // late reply (or error) from the cleared conversation is dropped.
+    const gen = assistantState.generation;
+    try {
+      const res = await fetch('/api/assistant/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: q,
+          page: assistantCurrentPage(),
+          bankId: bank ? bank.id : undefined,
+          // Session-only memory: the last few turns ride along for continuity.
+          history: assistantState.history
+            .filter(m => !m.error)
+            .slice(-9, -1)
+            .map(m => ({ role: m.role, text: m.text })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (gen !== assistantState.generation) return;
+      assistantState.busy = false;
+      if (res.status === 503 && data && data.enabled === false) {
+        assistantState.enabled = false;
+        renderAssistantMessages();
+        return;
+      }
+      if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+      assistantState.history.push({
+        role: 'assistant',
+        text: data.answer || 'No answer returned.',
+        sources: data.sources || [],
+        drafts: data.drafts || [],
+      });
+    } catch (e) {
+      if (gen !== assistantState.generation) return;
+      assistantState.busy = false;
+      // The error row remembers ITS question so Retry re-asks the right one.
+      assistantState.history.push({ role: 'assistant', error: true, question: q, text: e.message || 'The assistant hit an error.' });
+    }
+    if (sendBtn && assistantState.enabled !== false) sendBtn.disabled = false;
+    renderAssistantMessages();
+  }
+
+  function assistantCopyText(text) {
+    // navigator.clipboard needs a secure context — the production portal is
+    // plain HTTP on the LAN, so fall back to the textarea/execCommand path.
+    const fallback = () => {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) showToast('Draft copied — paste it into the portal form to save.');
+        else showToast('Copy failed — select the text manually.', true);
+      } catch (_) {
+        showToast('Copy failed — select the text manually.', true);
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        () => showToast('Draft copied — paste it into the portal form to save.'),
+        fallback
+      );
+    } else {
+      fallback();
+    }
+  }
+
+  function setupSalesAssistant() {
+    const fab = document.getElementById('assistantFab');
+    const drawer = document.getElementById('assistantDrawer');
+    if (!fab || !drawer) return;
+    fab.addEventListener('click', () => toggleAssistant());
+    // Keep the "Asking about: <bank>" chip honest while the rep navigates
+    // with the drawer open.
+    window.addEventListener('hashchange', () => {
+      if (assistantState.open) renderAssistantContextChip();
+    });
+    const closeBtn = document.getElementById('assistantCloseBtn');
+    if (closeBtn) closeBtn.addEventListener('click', () => toggleAssistant(false));
+    const clearBtn = document.getElementById('assistantClearBtn');
+    if (clearBtn) clearBtn.addEventListener('click', () => {
+      assistantState.generation += 1; // drop any in-flight reply from the cleared chat
+      assistantState.history = [];
+      assistantState.lastQuestion = '';
+      assistantState.busy = false;
+      renderAssistantMessages();
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape' || !assistantState.open) return;
+      // A modal/full-view above the drawer owns Escape — don't close underneath it.
+      const overlayAbove = document.querySelector(
+        '.maps-modal-backdrop:not([hidden]), .maps-full-backdrop:not([hidden]), .reports-modal-backdrop:not([hidden])'
+      );
+      if (overlayAbove) return;
+      toggleAssistant(false);
+    });
+    const form = document.getElementById('assistantForm');
+    const input = document.getElementById('assistantInput');
+    if (form && input) {
+      form.addEventListener('submit', e => {
+        e.preventDefault();
+        // Never swallow a typed question while a request is in flight or the
+        // assistant is offline — leave the draft in the textarea.
+        if (assistantState.busy || assistantState.enabled === false) return;
+        const q = input.value;
+        input.value = '';
+        sendAssistantQuestion(q);
+      });
+      // Enter sends; Shift+Enter makes a newline (desk-chat convention).
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          form.requestSubmit();
+        }
+      });
+    }
+    const messages = document.getElementById('assistantMessages');
+    if (messages) {
+      messages.addEventListener('click', e => {
+        const retry = e.target.closest('[data-assistant-retry]');
+        if (retry) {
+          if (assistantState.busy) return;
+          // The error row carries ITS OWN question — remove the row plus its
+          // preceding user turn, then re-ask exactly that question.
+          const idx = Number(retry.dataset.assistantRetry);
+          const row = assistantState.history[idx];
+          if (!row || !row.error || !row.question) return;
+          assistantState.history.splice(idx, 1);
+          const prev = assistantState.history[idx - 1];
+          if (prev && prev.role === 'user' && prev.text === row.question) assistantState.history.splice(idx - 1, 1);
+          sendAssistantQuestion(row.question);
+          return;
+        }
+        const copy = e.target.closest('[data-assistant-copy]');
+        if (copy) {
+          const msgEl = copy.closest('[data-assistant-msg]');
+          const pre = msgEl && msgEl.querySelectorAll('.assistant-draft-body')[Number(copy.dataset.assistantCopy)];
+          const text = pre ? pre.textContent : '';
+          if (!text) return;
+          assistantCopyText(text);
+        }
+      });
+    }
   }
 
   function setupSidebar() {

@@ -204,6 +204,7 @@ const fredSeries = require('./fred-series');
 const { buildMarketSnapshot } = require('./market-snapshot');
 const claudeClient = require('./claude-client');
 const dailySummary = require('./daily-summary');
+const salesAssistant = require('./sales-assistant');
 const marketSnapshotTitle = require('./market-snapshot-title');
 const dailyDashboard = require('./daily-dashboard');                 // Phase 1: audience/tax candidate layer
 const dailyDashboardJudgment = require('./daily-dashboard-judgment'); // Phase 2: grounded Claude judgment layer
@@ -11923,6 +11924,136 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/market/yield-curve' && req.method === 'GET') {
       const curve = await marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log });
       return sendJSON(res, 200, { curve });
+    }
+
+    // ============ AI Sales Assistant (chat drawer) ============
+    // Status is free and never calls Claude; chat is the one rep-billable AI
+    // route by design (the assistant IS the feature) — every call is audited.
+    if (pathname === '/api/assistant/status' && req.method === 'GET') {
+      return sendJSON(res, 200, {
+        enabled: claudeClient.isConfigured(),
+        model: claudeClient.DEFAULT_MODEL,
+      });
+    }
+
+    if (pathname === '/api/assistant/chat' && req.method === 'POST') {
+      const { rep, auth } = authInfoForRequest(req);
+      if (shouldEnforceRepScope(auth) && !rep) {
+        return sendJSON(res, 401, { error: 'Sign in to use the assistant.' });
+      }
+      if (!claudeClient.isConfigured()) {
+        appendAuditLog({ event: 'assistant-chat-skipped', rep: rep ? rep.username : '', reason: 'no-api-key' });
+        return sendJSON(res, 503, { enabled: false, error: 'The assistant is offline — no Claude API key is configured on this box.' });
+      }
+      let body;
+      try {
+        body = await readJsonBody(req);
+      } catch (err) {
+        return sendJSON(res, 400, { error: err.message || 'Invalid JSON body' });
+      }
+      const question = salesAssistant.sanitizeQuestion(body.question);
+      if (!question) return sendJSON(res, 400, { error: 'question is required' });
+      const bankId = body.bankId != null && body.bankId !== '' ? String(body.bankId).slice(0, 40) : '';
+      const page = String(body.page || '').slice(0, 40);
+
+      // Grounded context: the cached map dataset is both the screen universe
+      // and the active bank's call-report row; CRM panels ride along when a
+      // bank is in play. Every block degrades to absent, never throws.
+      const mapData = getMapBankData();
+      const banks = (mapData && mapData.banks) || [];
+      const context = {
+        rep: publicRep(rep),
+        page,
+        universeCount: banks.length,
+        latestPeriod: (mapData && mapData.latestPeriod) || '',
+      };
+      if (bankId) {
+        const row = banks.find(b => String(b.id) === bankId);
+        if (row) {
+          context.bank = row;
+          try {
+            const acts = listActivitiesForBank(BANK_REPORTS_DIR, bankId, { limit: 25 }) || [];
+            context.activities = acts.filter(a => MANUAL_ACTIVITY_KINDS.includes(String(a.kind || ''))).slice(0, 8);
+          } catch (_) { /* CRM context is optional */ }
+          try { context.tasks = listTasksForBank(BANK_REPORTS_DIR, bankId) || []; } catch (_) { /* optional */ }
+          try { context.opportunities = listOpportunitiesForBank(BANK_REPORTS_DIR, bankId) || []; } catch (_) { /* optional */ }
+          try { context.contacts = listContactsForBank(BANK_REPORTS_DIR, bankId) || []; } catch (_) { /* optional */ }
+        }
+      }
+      try {
+        const rows = buildAllOfferingsRows();
+        if (rows && rows.length) {
+          const byClass = new Map();
+          for (const r of rows) {
+            const label = String(r.assetClass || 'Other');
+            byClass.set(label, (byClass.get(label) || 0) + 1);
+          }
+          const pkg = getCurrentPackage();
+          context.offeringsSummary = {
+            packageDate: (pkg && pkg.date) || '',
+            classCounts: [...byClass.entries()].map(([label, count]) => ({ label, count })),
+          };
+        }
+      } catch (_) { /* offerings context is optional */ }
+      try {
+        const [headlines, curve] = await Promise.all([
+          marketWire.getLatestHeadlines({ marketDir: MARKET_DIR, log }).catch(() => null),
+          marketRates.getLatestYieldCurve({ marketDir: MARKET_DIR, log }).catch(() => null),
+        ]);
+        const market = {};
+        if (curve && curve.tenors) {
+          const t10 = curve.tenors['10Y'];
+          const t2 = curve.tenors['2Y'];
+          market.rates = {
+            asOfDate: curve.asOfDate,
+            tenYear: t10 != null ? t10 : null,
+            twoYear: t2 != null ? t2 : null,
+            spread2s10sBp: t10 != null && t2 != null ? Math.round((t10 - t2) * 100) : null,
+          };
+        }
+        if (headlines && Array.isArray(headlines.headlines)) market.headlines = headlines.headlines;
+        context.market = market;
+      } catch (_) { /* market context is optional */ }
+
+      try {
+        const result = await salesAssistant.askAssistant({
+          question,
+          history: body.history,
+          context,
+          banks,
+          rep,
+          createMessage: claudeClient.createMessage,
+          log,
+        });
+        appendAuditLog({
+          event: 'assistant-chat',
+          rep: rep ? rep.username : '',
+          page,
+          bankId: bankId || undefined,
+          intent: result.intent,
+          screened: result.screened ? result.screened.count : undefined,
+          model: result.model,
+          usage: result.usage || null,
+        });
+        return sendJSON(res, 200, {
+          enabled: true,
+          answer: result.answer,
+          sources: result.sources,
+          drafts: result.drafts,
+          intent: result.intent,
+        });
+      } catch (err) {
+        if (err && err.code === 'bad-request') return sendJSON(res, 400, { error: err.message });
+        appendAuditLog({
+          event: 'assistant-chat-failed',
+          rep: rep ? rep.username : '',
+          page,
+          bankId: bankId || undefined,
+          reason: String(err && err.message || 'error').slice(0, 200),
+        });
+        log('warn', 'Assistant chat failed:', err.message);
+        return sendJSON(res, 502, { error: 'The assistant hit an error — try again in a moment.' });
+      }
     }
 
     // Live market wire: official headlines (Fed/FDIC/SEC RSS) + headline

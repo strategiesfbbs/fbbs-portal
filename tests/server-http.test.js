@@ -1161,6 +1161,69 @@ test('swap proposal lifecycle: send-gating, strategy link, execute/cancel guards
   });
 });
 
+// ============ AI Sales Assistant routes ============
+
+test('assistant status is free and honest about a missing key', async () => {
+  await withServer({ ANTHROPIC_API_KEY: '' }, async ({ port }) => {
+    const res = await request(port, { path: '/api/assistant/status' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.json.enabled, false);
+  });
+});
+
+test('assistant chat with no key → 503 offline + assistant-chat-skipped audit', async () => {
+  await withServer({ ANTHROPIC_API_KEY: '' }, async ({ port, dataDir }) => {
+    const res = await request(port, {
+      method: 'POST',
+      path: '/api/assistant/chat',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: 'How many assets does this bank have?' })
+    });
+    assert.strictEqual(res.status, 503);
+    assert.strictEqual(res.json.enabled, false);
+    assert.ok(/offline/i.test(res.json.error));
+    const audit = fs.readFileSync(path.join(dataDir, 'audit.log'), 'utf8');
+    assert.ok(audit.includes('assistant-chat-skipped'), 'audit records the skip');
+    assert.ok(audit.includes('no-api-key'));
+  });
+});
+
+test('assistant chat validates the body before ever calling Claude', async () => {
+  // A dummy key exercises the validation path; both requests fail fast
+  // client-side of any network call (missing question / non-JSON body).
+  await withServer({ ANTHROPIC_API_KEY: 'test-key-never-used' }, async ({ port }) => {
+    const missing = await request(port, {
+      method: 'POST',
+      path: '/api/assistant/chat',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: '   ' })
+    });
+    assert.strictEqual(missing.status, 400);
+    assert.ok(/question/.test(missing.json.error));
+    const malformed = await request(port, {
+      method: 'POST',
+      path: '/api/assistant/chat',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not json {'
+    });
+    assert.strictEqual(malformed.status, 400);
+  });
+});
+
+test('assistant chat requires an identified rep when auth is enforced', async () => {
+  await withServer({ ANTHROPIC_API_KEY: 'test-key-never-used', FBBS_AUTH_MODE: 'iis' }, async ({ port }) => {
+    const res = await request(port, {
+      method: 'POST',
+      path: '/api/assistant/chat',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: 'Which of my prospects should I call?' })
+    });
+    // In IIS mode the global auth gate rejects unidentified requests with 403
+    // before the route's own 401 guard — either way, no anonymous chat.
+    assert.ok(res.status === 401 || res.status === 403, `expected 401/403, got ${res.status}`);
+  });
+});
+
 async function main() {
   for (const t of tests) {
     try {

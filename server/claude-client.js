@@ -52,6 +52,14 @@ function extractToolInput(message) {
   return block ? block.input : null;
 }
 
+/** The name of the first tool_use block, or null — pairs with extractToolInput
+ * so multi-tool callers (sales-assistant) can tell WHICH tool the model chose. */
+function extractToolName(message) {
+  const blocks = message && Array.isArray(message.content) ? message.content : [];
+  const block = blocks.find(b => b && b.type === 'tool_use' && b.input && typeof b.input === 'object');
+  return block && typeof block.name === 'string' ? block.name : null;
+}
+
 /**
  * One Messages API call. Returns { text, model, stopReason, usage }.
  * Throws on a missing key, a non-2xx response, a network/timeout failure, or a
@@ -112,6 +120,7 @@ async function createMessage(opts) {
   return {
     text: extractText(message),
     toolInput: extractToolInput(message),
+    toolName: extractToolName(message),
     model: (message && message.model) || body.model,
     stopReason: (message && message.stop_reason) || null,
     usage: (message && message.usage) || null,
@@ -123,6 +132,7 @@ module.exports = {
   isConfigured,
   extractText,
   extractToolInput,
+  extractToolName,
   ANTHROPIC_URL,
   ANTHROPIC_VERSION,
   DEFAULT_MODEL,
