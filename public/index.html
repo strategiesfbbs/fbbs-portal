@@ -145,7 +145,7 @@
         <div class="home-tile-chips">
           <button type="button" data-goto="sales-dashboard">Sales</button>
           <button type="button" data-goto="daily-intelligence">Economic</button>
-          <button type="button" data-goto="sales-dashboard">Relative Value</button>
+          <button type="button" data-goto="mmd">Relative Value</button>
           <button type="button" data-goto="cd">CD Rates</button>
         </div>
       </article>
@@ -313,8 +313,8 @@
         <p class="hero-sub" id="bankTearSheetSub">Search a bank to view the latest call report tear sheet.</p>
       </div>
       <div class="hero-stat">
-        <span id="bankDataCount">&mdash;</span>
-        <small>Banks</small>
+        <div class="num" id="bankDataCount">&mdash;</div>
+        <div class="lbl">Banks</div>
       </div>
     </div>
   </section>
@@ -323,19 +323,17 @@
     <section class="bank-workspace-view active" id="bankViewTearSheet">
       <section class="bank-search-panel">
         <div class="bank-search-row">
-          <input type="search" id="bankSearchInput" placeholder="Start typing a bank name, city, cert number, or parent..." autocomplete="off">
+          <input type="search" id="bankSearchInput" placeholder="Start typing a bank name, city, cert number, or parent..." autocomplete="off" role="combobox" aria-expanded="false" aria-controls="bankSearchResults" aria-autocomplete="list" aria-label="Search banks">
           <button class="publish-btn" id="bankSearchBtn" type="button">Search</button>
         </div>
         <div class="bank-recent-dropdown" id="bankRecentPanel" hidden>
-          <label for="bankRecentList">
+          <div>
             <span>Previous searches</span>
-            <select id="bankRecentList">
-              <option value="">Select a recent bank</option>
-            </select>
-          </label>
+            <div class="bank-search-results" id="bankRecentList" role="listbox" aria-label="Recently viewed banks"></div>
+          </div>
           <button type="button" class="text-btn" id="clearRecentBanksBtn">Clear</button>
         </div>
-        <div class="bank-search-results" id="bankSearchResults"></div>
+        <div class="bank-search-results" id="bankSearchResults" role="listbox" aria-label="Bank search results"></div>
       </section>
 
       <section class="bank-profile" id="bankProfile">
@@ -358,7 +356,7 @@
     <div class="page-hero-inner">
       <div>
         <h2>Saved <strong>Views</strong></h2>
-        <p class="hero-sub" id="viewsSub">Replace Salesforce reports with native filtered lists over your bank database. Switch between &ldquo;Just me&rdquo; and &ldquo;Everyone&rdquo; to scope each view.</p>
+        <p class="hero-sub" id="viewsSub">Saved filtered bank lists &mdash; clients, prospects, stale follow-ups &mdash; plus your custom views.</p>
       </div>
       <div class="views-scope-toggle" role="radiogroup" aria-label="View scope">
         <button type="button" class="views-scope-btn is-active" data-views-scope="me">Just me</button>
@@ -402,8 +400,8 @@
         <p class="hero-sub">Generate bank, peer, portfolio, coverage, and billing reports from portal data.</p>
       </div>
       <div class="hero-stat">
-        <span>4</span>
-        <small>Planned</small>
+        <div class="num" id="reportsHeroStat">—</div>
+        <div class="lbl">Saved Reports</div>
       </div>
     </div>
   </section>
@@ -563,8 +561,8 @@
         <p class="hero-sub">Covered banks with bonds maturing or first-callable inside the window &mdash; reinvestment money coming free, and a reason to call.</p>
       </div>
       <div class="hero-stat">
-        <span id="maturityCalHeroStat">&mdash;</span>
-        <small>Banks in window</small>
+        <div class="num" id="maturityCalHeroStat">&mdash;</div>
+        <div class="lbl">Banks in window</div>
       </div>
     </div>
   </section>
@@ -612,8 +610,8 @@
         <p class="hero-sub">Issuing banks with brokered CDs maturing inside the window &mdash; funding rolling off, and a reason to call about the re-raise.</p>
       </div>
       <div class="hero-stat">
-        <span id="cdRolloverHeroStat">&mdash;</span>
-        <small>Issuers in window</small>
+        <div class="num" id="cdRolloverHeroStat">&mdash;</div>
+        <div class="lbl">Issuers in window</div>
       </div>
     </div>
   </section>
@@ -659,8 +657,8 @@
         <p class="hero-sub" id="strategiesSub">Bond swaps, Muni BCIS, THO reports, CECL analysis, and miscellaneous strategy requests.</p>
       </div>
       <div class="hero-stat">
-        <span id="strategiesOpenCount">&mdash;</span>
-        <small id="strategiesCountLabel">Active</small>
+        <div class="num" id="strategiesOpenCount">&mdash;</div>
+        <div class="lbl" id="strategiesCountLabel">Active</div>
       </div>
     </div>
   </section>
@@ -791,6 +789,10 @@
         <p class="hero-sub" id="pulseSub">Live view of clients, prospects, follow-ups, and logged activity.</p>
       </div>
       <div class="page-hero-actions">
+        <div class="views-scope-toggle" id="pulseScopeToggle" role="radiogroup" aria-label="Pulse scope" hidden>
+          <button type="button" class="views-scope-btn is-active" data-pulse-scope="me">My book</button>
+          <button type="button" class="views-scope-btn" data-pulse-scope="all">Firm-wide</button>
+        </div>
         <button type="button" class="small-btn secondary" id="pulseRefreshBtn">Refresh</button>
       </div>
     </div>
@@ -1208,7 +1210,7 @@
   <section class="page-hero">
     <div class="page-hero-inner">
       <div>
-        <h2>Daily <strong>Intake</strong></h2>
+        <h2>Daily <strong>Upload</strong></h2>
         <p class="hero-sub">Use the dated folder as the main workflow; keep manual uploads for quick fixes.</p>
       </div>
       <div class="hero-stat">
@@ -1220,7 +1222,7 @@
 
   <div class="container">
     <div class="section-title-bar">
-      <h3>Daily Intake</h3>
+      <h3>Daily Upload</h3>
       <div class="kicker" id="uploadDate">&mdash;</div>
     </div>
 
@@ -2033,6 +2035,8 @@
   </section>
 
   <div class="container">
+    <div class="market-snapshot-strip" id="salesDashSnapshotStrip" hidden></div>
+
     <section class="daily-picks-card" id="salesDashboardCard" hidden>
       <div class="daily-picks-body" id="salesDashboardBody"></div>
     </section>
@@ -2906,16 +2910,6 @@
     </div>
   </div>
 
-  <div class="maps-modal-backdrop" id="mcReaderBackdrop" hidden>
-    <div class="maps-modal mc-reader" role="dialog" aria-modal="true" aria-label="Market color article">
-      <header>
-        <span class="title" id="mcReaderTitle">Market color</span>
-        <button type="button" class="small-btn" id="mcReaderClose">Close</button>
-      </header>
-      <div class="mc-reader-meta" id="mcReaderMeta"></div>
-      <div class="mc-reader-body" id="mcReaderBody"></div>
-    </div>
-  </div>
 </div>
 
 <!-- ========== MAPS PAGE ========== -->
@@ -2923,7 +2917,7 @@
   <section class="page-hero">
     <div class="page-hero-inner">
       <div>
-        <h2>US Bank Map</h2>
+        <h2>US Bank <strong>Map</strong></h2>
         <p class="hero-sub" id="mapsSubtitle">Loading bank tear sheet data&hellip;</p>
       </div>
       <div class="hero-stat">
@@ -3012,7 +3006,7 @@
                 <th>City</th>
                 <th>State</th>
                 <th>Status</th>
-                <th class="num">Priority</th>
+                <th class="num" title="Blend of account status, size, securities book, and funding capacity — higher = better prospecting target">Priority</th>
                 <th class="num">Assets ($MM)</th>
                 <th class="num">Securities / Assets (%)</th>
               </tr>
@@ -3055,6 +3049,8 @@
           <span><i class="maps-pin-open"></i>Open</span>
           <span><i class="maps-pin-prospect"></i>Prospect</span>
           <span><i class="maps-pin-client"></i>Client</span>
+          <span><i class="maps-pin-watchlist"></i>Watchlist</span>
+          <span><i class="maps-pin-dormant"></i>Dormant</span>
         </div>
         <div class="maps-head-actions">
           <button type="button" class="small-btn" id="mapsFullFitResultsBtn">Fit Results</button>
@@ -3262,6 +3258,9 @@
 <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
 <div class="toast" id="toast" role="status" aria-live="polite">Action completed</div>
+
+<!-- Shared rep-roster suggestions (filled from /api/me/reps) — attach via list="fbbsRepList" on any rep-name input. -->
+<datalist id="fbbsRepList"></datalist>
 
 <script src="/js/modules/muni-tax.js?v=2026-06-01a"></script>
 <script src="/js/modules/report-logic.js?v=2026-06-10a"></script>

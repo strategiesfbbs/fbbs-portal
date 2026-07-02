@@ -14,7 +14,7 @@
   --surface-hover: #f3f8f5;
   --text: #1f2925;
   --text2: #5f6f66;
-  --text3: #8c9a92;
+  --text3: #6d7a72; /* was #8c9a92 (2.94:1 on white); darkened to meet AA 4.5:1 */
   --bg: #ffffff;
   --bg-light: #f7faf8;
   --bg-lighter: #fbfdfc;
@@ -33,6 +33,11 @@
   --radius-pill: 999px;
   --danger: #B94444;
   --success: #18735A;
+  /* Shared amber "warn" family (AA-passing) — new warn surfaces should use these
+     instead of inventing another amber hex family. */
+  --warn-text: #92400e;
+  --warn-bg: #fef3c7;
+  --warn-border: #fcd34d;
   --maps-open: #7c3bc7;
   --maps-prospect: #1597c7;
   --maps-client: #ba2f25;
@@ -49,6 +54,15 @@
   --green: var(--racing-green);
   --bg-soft: var(--surface-2);
   --shadow-sm: 0 1px 2px rgba(16, 23, 21, 0.06);
+  /* Second sweep (2026-07-01): six more tokens referenced without a definition —
+     var(--muted) ×17, var(--green-bg) ×6, var(--surface2) ×5, var(--text1) ×2,
+     var(--panel) ×1, var(--accent-brown) ×1. Routed to the palette like the above. */
+  --muted: var(--text2);
+  --text1: var(--text);
+  --green-bg: rgba(24, 115, 90, 0.10);
+  --accent-brown: #8a5d11;
+  --panel: var(--surface);
+  --surface2: var(--surface-2);
 }
 
 body {
@@ -1259,10 +1273,14 @@ summary:focus-visible,
   text-align: left;
   transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
 }
-.home-recent-card:hover,
-.home-recent-card:focus-visible {
+.home-recent-card:hover {
   border-color: rgba(0, 63, 42, 0.18);
   box-shadow: 0 8px 18px rgba(16, 23, 21, 0.06);
+  transform: translateY(-2px);
+}
+.home-recent-card:focus-visible {
+  border-color: rgba(0, 63, 42, 0.18);
+  box-shadow: var(--focus-ring), 0 8px 18px rgba(16, 23, 21, 0.06);
   outline: none;
   transform: translateY(-2px);
 }
@@ -3586,6 +3604,19 @@ summary:focus-visible,
 }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.error { border-left-color: var(--danger); color: #fac775; }
+.toast-action-btn {
+  background: none;
+  border: 1px solid var(--tea-green);
+  border-radius: 3px;
+  color: var(--tea-green);
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  margin-left: 12px;
+  padding: 2px 8px;
+  text-transform: inherit;
+}
+.toast-action-btn:hover { background: rgba(255, 255, 255, 0.12); }
 
 /* OFFERINGS EXPLORER */
 .explorer-filters {
@@ -5186,6 +5217,7 @@ body {
   color: #fff;
   outline: none;
 }
+.home-bubble-button:focus-visible { box-shadow: var(--focus-ring); }
 
 .home-bubble-button span {
   display: inline-flex;
@@ -5373,6 +5405,7 @@ body {
   color: #fff;
   outline: none;
 }
+.home-tile-jump:focus-visible { box-shadow: var(--focus-ring); }
 
 .home-tile:hover .home-tile-jump span,
 .home-tile-jump:hover span {
@@ -5457,6 +5490,7 @@ body {
   outline: none;
   transform: translateY(-1px);
 }
+.home-tile-chips button:focus-visible { box-shadow: var(--focus-ring); }
 
 /* Markets tile — vertical breakdown by asset class (no hero number) */
 .home-tile-breakdown {
@@ -5519,6 +5553,7 @@ body {
   outline: none;
   transform: translateY(-1px);
 }
+.home-tile-breakdown li .home-tile-breakdown-btn:focus-visible { box-shadow: var(--focus-ring); }
 
 .home-tile-breakdown-empty {
   color: var(--text3);
@@ -5647,10 +5682,13 @@ body {
   .home-tile,
   .home-tile-jump,
   .home-tile-jump span,
-  .home-tile-chips button {
+  .home-tile-chips button,
+  .home-recent-card {
     transition: none;
   }
   .home-tile:hover { transform: none; }
+  .home-recent-card:hover,
+  .home-recent-card:focus-visible { transform: none; }
 }
 
 .universal-search-panel {
@@ -6252,7 +6290,8 @@ body {
   .commission-control { grid-template-columns: 1fr 1fr; }
   .strategy-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ef-actions { grid-column: 1 / -1; justify-content: flex-end; }
-  .top-strip-links { display: none; }
+  /* .top-strip-links stays visible 901-1100px (rep picker lives there and
+     placeRepPicker() only relocates it below 900; .top-strip already wraps). */
 }
 
 .bank-workspace-view {
@@ -6335,13 +6374,16 @@ body {
   display: none;
 }
 
-.bank-recent-dropdown label {
+.bank-recent-dropdown label,
+.bank-recent-dropdown > div {
   display: grid;
   gap: 5px;
   min-width: 0;
 }
 
-.bank-recent-dropdown span {
+/* Kicker only — the recents list now reuses .bank-result rows, whose inner
+   spans must keep the search-result styling. */
+.bank-recent-dropdown > div > span {
   color: var(--text3);
   font-size: 10px;
   font-weight: 900;
@@ -7337,7 +7379,8 @@ body {
 .bank-account-coverage-summary-grid {
   display: grid;
   gap: 0;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  /* Empty cells are filtered out — let the populated ones share the row. */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .bank-account-coverage-summary-grid div {
@@ -7387,6 +7430,14 @@ body {
   white-space: nowrap;
 }
 
+/* Unsaved Status/Priority/Owner edits — "Save changes" accent. */
+.bank-action-btn.dirty {
+  background: var(--warn-bg, #fef3c7);
+  border-color: rgba(146, 64, 14, 0.5);
+  color: var(--warn-text, #92400e);
+  font-weight: 700;
+}
+
 .bank-action-select {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -7422,6 +7473,25 @@ body {
 
 .bank-period-badge span {
   color: rgba(255,255,255,0.78);
+}
+
+/* Interim FDIC/FFIEC sync marker on period headers + the header badge. */
+.bank-period-interim {
+  background: var(--warn-bg, #fef3c7);
+  border: 1px solid rgba(146, 64, 14, 0.4);
+  border-radius: 4px;
+  color: var(--warn-text, #92400e);
+  display: inline-block;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  margin-left: 4px;
+  padding: 1px 3px;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 .bank-coverage-signal {
@@ -7861,6 +7931,63 @@ body {
 .thc-scenario-list span {
   color: var(--text3);
   font-size: 11px;
+}
+
+/* Policy-exception rows carry the warn palette so they jump out of the ladder. */
+.thc-scenario-list div.exception {
+  background: rgba(183, 28, 28, 0.05);
+  border-color: rgba(183, 28, 28, 0.32);
+  border-left: 3px solid rgba(183, 28, 28, 0.55);
+}
+
+.thc-scenario-list div.exception strong {
+  color: #b71c1c;
+}
+
+.thc-scenario-group + .thc-scenario-group {
+  margin-top: 10px;
+}
+
+.thc-scenario-group-label {
+  color: var(--text3);
+  display: block;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+/* THC summary staleness chip (quarterly-cycle bands). */
+.thc-age-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-left: 6px;
+  padding: 1px 7px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.thc-age-chip.ready {
+  border-color: rgba(46, 125, 50, 0.35);
+  color: #2e7d32;
+}
+
+.thc-age-chip.aging {
+  background: var(--warn-bg, #fef3c7);
+  border-color: rgba(146, 64, 14, 0.4);
+  color: var(--warn-text, #92400e);
+}
+
+.thc-age-chip.warn {
+  background: rgba(183, 28, 28, 0.06);
+  border-color: rgba(183, 28, 28, 0.4);
+  color: #b71c1c;
 }
 
 .thc-impact-grid {
@@ -9016,6 +9143,71 @@ body {
    controls render (no-value / normal / between have 3, 4, or 6 children) — a fixed grid
    would misalign those cases, so we stay flex and push the button right. */
 .custom-cond-row [data-cond-remove] { margin-left: auto; }
+
+/* Persistent unit suffix + live magnitude echo on money condition values
+   ($000 call-report units vs the $MM quick filters two inputs up). */
+.custom-cond-unit {
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.custom-cond-echo {
+  color: var(--text2);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Saved condition on a field the current dataset doesn't carry — the engine
+   passes every row for it, so flag the dead condition (amber, like
+   .reports-freshness-warning). */
+.custom-cond-ignored {
+  background: #fff7e6;
+  border: 1px solid #efd6a5;
+  border-radius: 6px;
+  color: #7a4f00;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+/* "Editing: <name>" chip in the builder summary bar — makes an intentional
+   saved-report edit visible so Save View overwrites are never a surprise. */
+.custom-report-editing-chip {
+  background: #eef5ef;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+/* Active-filter enumeration inside the zero-row empty state. */
+.custom-report-empty-filters {
+  display: block;
+  color: var(--text3);
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+/* Scope chip on the Activity Summary / Account Touch outputs — labels whether
+   the numbers are the signed-in rep's book or the firm-wide rollup. */
+.reports-scope-chip {
+  background: #eef5ef;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text2);
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  margin: 10px 0 2px;
+  padding: 3px 10px;
+}
 
 /* Group By controls */
 .custom-report-groupby {
@@ -11483,7 +11675,7 @@ body {
   height: 9px;
   width: 9px;
 }
-.pulse-dot.is-clients { background: #16523a; }
+.pulse-dot.is-clients { background: var(--racing-green); }
 .pulse-dot.is-prospects { background: #357ca0; }
 
 .pulse-bars {
@@ -11527,7 +11719,7 @@ body {
   height: 100%;
   min-width: 2px;
 }
-.pulse-bar-fill.is-clients { background: linear-gradient(90deg, #16523a, #0a3d2a); }
+.pulse-bar-fill.is-clients { background: linear-gradient(90deg, var(--racing-green), var(--racing-green-dark)); }
 .pulse-bar-fill.is-prospects { background: linear-gradient(90deg, #357ca0, #1f4c66); }
 
 .pulse-bar-track em {
@@ -11867,6 +12059,12 @@ body {
   top: 0;
 }
 .views-detail-table tbody tr:hover { background: #f6faf7; }
+/* Keyboard focus for the clickable bank rows (tabindex added in the SPA). */
+.views-detail-table tr[data-views-row-bank]:focus-visible {
+  outline: 2px solid var(--racing-green);
+  outline-offset: -2px;
+}
+.views-detail-table tr[data-views-row-bank]:focus-visible td { background: var(--surface-hover); }
 
 /* Clickable column-sort headers (asc → desc → cleared) */
 .views-sort-btn {
@@ -12494,7 +12692,7 @@ body {
   }
 
   .bank-account-coverage-summary-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
   }
 
   .bank-account-coverage-summary-grid div {
@@ -13525,6 +13723,8 @@ body {
 .maps-pin-open { background: var(--maps-open); }
 .maps-pin-prospect { background: var(--maps-prospect); }
 .maps-pin-client { background: var(--maps-client); }
+.maps-pin-watchlist { background: var(--maps-watchlist); }
+.maps-pin-dormant { background: var(--maps-dormant); }
 .maps-full-body {
   display: grid;
   flex: 1 1 auto;
@@ -14318,7 +14518,7 @@ body {
 
 /* Opportunity hero */
 .swap-hero {
-  background: linear-gradient(135deg, #16523a, #0a3d2a);
+  background: linear-gradient(135deg, var(--racing-green), var(--racing-green-dark));
   color: #fff;
   border-radius: 10px;
   padding: 18px 22px;
@@ -14332,7 +14532,7 @@ body {
 
 /* Multi-sell swap packages */
 .swap-pkg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-bottom: 18px; }
-.swap-pkg-card { border: 1px solid #cdddd0; border-left: 4px solid #16523a; border-radius: 10px; padding: 16px 18px; background: #fafdfb; }
+.swap-pkg-card { border: 1px solid #cdddd0; border-left: 4px solid var(--racing-green); border-radius: 10px; padding: 16px 18px; background: #fafdfb; }
 .swap-pkg-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 .swap-pkg-head strong { display: block; font-size: 14px; color: #0a3d2a; }
 .swap-pkg-sub { display: block; font-size: 11px; color: #5a6b5e; margin-top: 2px; }
@@ -14376,7 +14576,7 @@ body {
 .swap-barrow { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; font-size: 12.5px; }
 .swap-barrow .lab { width: 120px; color: #33403a; font-weight: 700; }
 .swap-barrow .track { flex: 1; background: #eef2ef; border-radius: 3px; height: 15px; overflow: hidden; }
-.swap-barrow .fill { height: 100%; background: linear-gradient(90deg, #16523a, #0a3d2a); }
+.swap-barrow .fill { height: 100%; background: linear-gradient(90deg, var(--racing-green), var(--racing-green-dark)); }
 .swap-barrow .val { width: 130px; text-align: right; color: #4a5b53; font-variant-numeric: tabular-nums; }
 
 /* Runoff table */
@@ -16297,8 +16497,13 @@ body {
 
 /* ============ Bank opportunities panel + Pulse pipeline ============ */
 .bank-opps-section .bank-section-title { display: flex; align-items: center; justify-content: space-between; }
+.bank-opps-section .bank-section-title span:last-child { display: inline-flex; align-items: center; gap: 10px; }
 .bank-opp-item { display: flex; gap: 8px; align-items: flex-start; justify-content: space-between; padding: 8px 2px; border-bottom: 1px solid var(--border-light); }
 .bank-opp-item:last-child { border-bottom: none; }
+.bank-opp-item.is-closed .bank-opp-body { opacity: 0.65; }
+.bank-opp-item.is-editing { display: block; }
+.bank-opp-item.is-editing .bank-task-form { margin: 0; }
+.bank-opp-controls { display: flex; flex: none; align-items: center; gap: 8px; }
 .bank-opp-body { min-width: 0; }
 .bank-opp-title { margin: 0; font-size: 14px; font-weight: 600; }
 .bank-opp-value { color: var(--racing-green, #003F2A); font-weight: 700; margin-left: 6px; }
@@ -17409,11 +17614,34 @@ body {
 
 .bank-signal-green { border-color: rgba(46, 125, 50, 0.45); }
 .bank-signal-green .bank-signal-value { color: #2e7d32; }
-.bank-signal-amber { border-color: rgba(176, 124, 16, 0.5); }
-.bank-signal-amber .bank-signal-value { color: #b07c10; }
+.bank-signal-amber { border-color: rgba(146, 64, 14, 0.4); }
+.bank-signal-amber .bank-signal-value { color: var(--warn-text); }
 .bank-signal-red { border-color: rgba(183, 28, 28, 0.45); }
 .bank-signal-red .bank-signal-value { color: #b71c1c; }
 .bank-signal-neutral .bank-signal-value { color: var(--text2, #4a514d); }
+
+/* Inline expansion under the signal strip for the "CDs rolling" chip — this
+   bank's maturing brokered CDs, already loaded for the chip itself. */
+.bank-cdroll-drawer {
+  background: var(--surface, #fff);
+  border: 1px solid var(--line, #ddd);
+  border-radius: 6px;
+  margin-top: 8px;
+  padding: 8px 12px;
+}
+.bank-cdroll-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.bank-cdroll-table th, .bank-cdroll-table td { border-bottom: 1px solid var(--border-light, #eee); padding: 4px 8px; text-align: left; }
+.bank-cdroll-table th.num, .bank-cdroll-table td.num { text-align: right; }
+.bank-cdroll-table tr:last-child td { border-bottom: none; }
+.bank-cdroll-cusip { font-family: var(--mono, monospace); }
+.bank-cdroll-foot { color: var(--text2, #4a514d); font-size: 12px; margin: 6px 0 0; }
+
+.bank-task-assignee-warn {
+  color: var(--warn-text, #92400e);
+  display: block;
+  font-size: 11px;
+  margin-top: 3px;
+}
 
 .bank-pershing-summary {
   display: grid;
@@ -17560,10 +17788,21 @@ body {
   gap: 10px;
 }
 
-/* Print captures the whole tear sheet regardless of the active tab. */
+/* Print captures the whole tear sheet regardless of the active tab.
+   The signal strip now sits above the tab bar (shared ground) — its chips
+   are interactive buttons, so keep them out of print like the toolbar. */
 @media print {
-  .bank-tab-bar, .bank-workspace-toolbar { display: none !important; }
+  .bank-tab-bar, .bank-workspace-toolbar, .bank-signal-strip, .bank-cdroll-drawer { display: none !important; }
   .bank-tab-panel[hidden] { display: block !important; }
+  /* Drop the interactive CRM chrome (blank forms, filter chips, assistant
+     buttons) from printed tear sheets — timeline/task/opp content stays. */
+  #p-banks .bank-activity-log,
+  #p-banks .bank-task-form,
+  #p-banks .bank-activity-filters,
+  #p-banks .bank-assistant-actions,
+  #p-banks .bank-assistant-note-btns { display: none !important; }
+  /* The THC panel renders in both tabs; print it once, in the Call Report flow. */
+  [data-bank-tab-panel="sales"] .bank-thc-summary-section { display: none !important; }
 }
 
 /* ===== Wire sparklines + FDIC national CD-rate strips ===== */

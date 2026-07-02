@@ -34,6 +34,9 @@
   let bankDataStatus = null;
   let selectedBank = null;
   let bankSearchActiveIndex = -1;
+  let bankSearchSeq = 0; // stale-response guard — mirrors loadBank's bankLoadRequestId
+  let lastBankSearchPayload = null; // last rendered search response, backing the "Back to N results" restore bar
+  let lastBankSearchQuery = '';
   let savedBanks = [];
   let selectedBankAccountStatus = null;
   let selectedTearSheetCoverage = null;
@@ -41,23 +44,32 @@
   let bankContactsEditingId = null;
   let bankContactsAdding = false;
   let selectedBankActivities = [];
+  let selectedBankLastManualTouch = ''; // server-computed last manual-touch date (YYYY-MM-DD)
   let bankActivityBankId = null;
   let bankActivityRequestId = 0;
   let bankActivityFilter = 'all';     // 'all' (CRM kinds) | a single kind | 'system'
   let bankActivityLogKind = 'call';   // selected pill in the Log Activity form
+  let bankActivityDraft = null;
   let bankActivitySaving = false;
-  let selectedBankTasks = [];         // open tasks on the selected bank (task engine)
+  let selectedBankTasks = null;       // open tasks on the selected bank (task engine); null = loading
   let bankTasksBankId = null;
+  let bankTasksLoadError = false;
   let bankTaskSaving = false;
   let bankTaskAdding = false;         // add-task form expanded?
-  let selectedBankOpps = [];          // open opportunities on the selected bank (pipeline)
+  let selectedBankOpps = null;        // open opportunities on the selected bank (pipeline); null = loading
   let bankOppsBankId = null;
+  let bankOppsLoadError = false;
   let bankOppSaving = false;
   let bankOppAdding = false;
+  let bankOppEditingId = null;        // opp being edited inline (PATCH form)
+  let bankOppShowClosed = false;      // include Won/Lost rows in the panel
   let selectedBankPershing = null;    // Pershing brokerage-account footprint
   let selectedBankPershingTrades = null;
+  let selectedBankTradeHistory = null; // Salesforce Trade__c blotter (trade-store)
   let bankPershingBankId = null;
   let bankPershingTradesBankId = null;
+  let bankTradeHistoryBankId = null;
+  let bankTradeHistoryLimit = 25;
   let bankLoadRequestId = 0;
   let tearSheetCoverageRequestId = 0;
   let selectedBankProductFit = [];
@@ -69,7 +81,8 @@
     selectedId: '',
     selectedResult: null,
     loading: false,
-    loadingDetailFor: ''
+    loadingDetailFor: '',
+    summariesError: '' // last summaries-load failure — renders a Retry state, not the workbook hint
   };
   let bankAssistantLastResponse = null;
   const bankAssistantCache = new Map();
@@ -89,6 +102,7 @@
     work: null,
     repsLoaded: false,
     workLoading: false,
+    workError: false,
     panelOpen: false,
     searchQuery: ''
   };
@@ -98,6 +112,7 @@
   let structuredNotesFilters = { search: '', structure: '' };
   let marketColorData = null;
   let marketColorWire = null;
+  let marketColorLoadError = false;
   let marketColorActiveId = '';
   const marketColorFilters = { tag: 'all', search: '' };
   let cdInternalData = null;
@@ -113,11 +128,17 @@
   let reportsSessionReports = [];
   let savedReportDefinitions = [];
   let hiddenReportIds = [];
+  let reportsCurrentRep = null;
   let reportsLoadPromise = null;
   let reportsAppEventsBound = false;
   let coverageBookState = { loaded: false, loading: false, banks: [], strategyCounts: {}, search: '', expanded: new Set(), detail: {} };
   let billingQueueState = { loaded: false, loading: false, requests: [], counts: {}, search: '', requestType: '', assignedTo: '' };
   let portfolioReviewState = { banks: [], selectedBankId: '', review: null, screen: 'topLosses', search: '', loading: false, searchRequestId: 0, bankPickerCollapsed: false, holdingSector: 'All', holdingSearch: '', holdingSort: { key: 'marketValue', dir: 'desc' } };
+  const CUSTOM_BANK_DEFAULT_COLUMNS = ['displayName', 'city', 'state', 'certNumber', 'accountStatusLabel', 'totalAssets', 'totalDeposits', 'securitiesToAssets', 'loansToDeposits', 'yieldOnSecurities', 'netInterestMargin'];
+  function defaultCustomBankFilters() {
+    return { search: '', states: '', statuses: '', minAssets: '', maxAssets: '', peerWatchOnly: false, savedOnly: false, portfolioOnly: false, conditions: [], groupBy: { field: '', thenBy: '', aggs: {} } };
+  }
+
   let customBankReportState = {
     loading: false,
     dataset: null,
@@ -129,8 +150,8 @@
     // `conditions` (the dynamic field/operator/value builder) and `groupBy`
     // ride inside filters so saved definitions persist them without a
     // report-store schema change.
-    filters: { search: '', states: '', statuses: '', minAssets: '', maxAssets: '', peerWatchOnly: false, savedOnly: false, portfolioOnly: false, conditions: [], groupBy: { field: '', thenBy: '', aggs: {} } },
-    selectedColumns: ['displayName', 'city', 'state', 'certNumber', 'accountStatusLabel', 'totalAssets', 'totalDeposits', 'securitiesToAssets', 'loansToDeposits', 'yieldOnSecurities', 'netInterestMargin'],
+    filters: defaultCustomBankFilters(),
+    selectedColumns: CUSTOM_BANK_DEFAULT_COLUMNS.slice(),
     sort: { key: 'totalAssets', dir: 'desc' }
   };
   let selectedFiles = {
@@ -208,7 +229,7 @@
         { page: 'peer-groups', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
         { page: 'maturity-calendar', label: 'Maturity Calendar', description: 'Covered banks with bonds maturing or first-callable in the window — reinvestment call list', aliases: 'maturity call calendar rollover runoff reinvestment maturing callable proceeds call list coverage bond accounting' },
         { page: 'cd-rollover', label: 'CD Rollover Wall', description: 'Issuing banks with brokered CDs maturing in the window — funding re-raise call list', aliases: 'cd rollover wall brokered funding maturing reissue re-raise liability deposits call list' },
-        { page: 'maps', label: 'Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' }
+        { page: 'maps', label: 'US Bank Map', description: 'Choropleth and filterable bank list driven by call report data', aliases: 'map maps state choropleth heat geographic location filter' }
       ]
     },
     {
@@ -270,7 +291,7 @@
 
   const COMMISSION_STORAGE_KEY = 'fbbs_commission_settings_v1';
   const BANK_RECENT_STORAGE_KEY = 'fbbs_recent_banks_v1';
-  const MAX_RECENT_BANKS = 5;
+  const MAX_RECENT_BANKS = 10;
   const BANK_COVERAGE_STATUSES = ['Open', 'Prospect', 'Client', 'Watchlist', 'Dormant'];
   const BANK_COVERAGE_PRIORITIES = ['High', 'Medium', 'Low'];
   const FBBS_SERVICE_NAMES = ['ALM', 'BCIS', 'Brokered CDs', 'CECL', 'Bond Accounting'];
@@ -705,14 +726,28 @@
 
   // ============ Utilities ============
 
-  function showToast(msg, isError) {
+  // Optional `action` ({ label, onClick }) renders an inline button on the
+  // toast — e.g. Undo on task completion. textContent/appendChild only, so no
+  // escaping concerns.
+  function showToast(msg, isError, action) {
     const t = document.getElementById('toast');
     if (!t) return;
     t.textContent = msg;
+    if (action && action.label && typeof action.onClick === 'function') {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toast-action-btn';
+      btn.textContent = action.label;
+      btn.addEventListener('click', () => {
+        t.classList.remove('show');
+        action.onClick();
+      });
+      t.appendChild(btn);
+    }
     t.classList.toggle('error', !!isError);
     t.classList.add('show');
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => t.classList.remove('show'), 3500);
+    showToast._t = setTimeout(() => t.classList.remove('show'), action ? 6000 : 3500);
   }
 
   function setPeerAnalysisValidation(message) {
@@ -1633,6 +1668,8 @@
       'bondAccountingImportBtn',
       'bondAccountingBankListPicker',
       'bondAccountingPortfolioPicker',
+      'thcSummaryImportBtn',
+      'thcSummaryPicker',
       'mbsCmoUploadPanel',
       'mbsCmoUploadPicker',
       'mbsCmoUploadBtn'
@@ -1645,7 +1682,7 @@
       if (!allowAdmin) btn.title = 'Admin permission is required for this action.';
       else btn.removeAttribute('title');
     });
-    ['wirpWorkbookInput', 'reportsAveragedSeriesWorkbookInput', 'bondAccountingBankListInput', 'bondAccountingPortfolioInput', 'mbsCmoUploadInput'].forEach(id => {
+    ['wirpWorkbookInput', 'reportsAveragedSeriesWorkbookInput', 'bondAccountingBankListInput', 'bondAccountingPortfolioInput', 'thcSummaryInput', 'mbsCmoUploadInput'].forEach(id => {
       const input = document.getElementById(id);
       if (input) input.disabled = !allowAdmin;
     });
@@ -1678,6 +1715,29 @@
           b.classList.toggle('is-active', b.getAttribute('data-views-scope') === 'me');
         });
       }
+    }
+    // The firm-wide CRM Pulse is the same admin-only rollup — non-admins get
+    // the toggle hidden and the scope pinned back to "me" (the server would
+    // collapse ?rep=all anyway; don't render a dead-end control).
+    const pulseScopeToggle = document.getElementById('pulseScopeToggle');
+    if (pulseScopeToggle) {
+      pulseScopeToggle.hidden = !allowAdmin;
+      pulseScopeToggle.setAttribute('aria-hidden', allowAdmin ? 'false' : 'true');
+      if (!allowAdmin && crmPulseState.scope !== 'me') {
+        crmPulseState.scope = 'me';
+        crmPulseState.data = null;
+        pulseScopeToggle.querySelectorAll('[data-pulse-scope]').forEach(b => {
+          b.classList.toggle('is-active', b.getAttribute('data-pulse-scope') === 'me');
+        });
+      }
+    }
+    // Hero copy matches the controls the signed-in role can actually see:
+    // only admins get the "Just me / Everyone" scope toggle.
+    const viewsSub = document.getElementById('viewsSub');
+    if (viewsSub) {
+      viewsSub.textContent = allowAdmin
+        ? 'Saved filtered bank lists — clients, prospects, stale follow-ups — plus your custom views. Switch between “Just me” and “Everyone” to scope each view.'
+        : 'Saved filtered bank lists — clients, prospects, stale follow-ups — plus your custom views.';
     }
     const active = parseHashTarget(window.location.hash || '#home').page;
     if (!allowAdmin && (active === 'upload' || active === 'admin' || active === 'exec-summary')) {
@@ -1712,16 +1772,28 @@
     closeNavSearch();
     closeWorkspaceContextRail();
 
-    if (updateHash && window.location.hash !== '#' + pageName) {
+    // Programmatic correction only (admin bounce, post-publish redirects) —
+    // and never strip an already-active page's hash params (e.g. re-running
+    // goTo('banks') while on '#banks?bank=123' must keep the deep link).
+    if (updateHash && parseHashTarget(window.location.hash || '#home').page !== pageName) {
       history.replaceState(null, '', '#' + pageName);
     }
 
-    if (pageName === 'home') renderHomeRecents();
+    if (pageName === 'home') {
+      renderHomeRecents();
+      // Re-pull the rep's to-do numbers on every return to Home — the counts
+      // go stale as tasks complete and activities log during the day.
+      // loadMyWork() is re-entrant-safe via meState.workLoading.
+      loadMyWork();
+    }
     if (pageName === 'views') {
       const viewId = hashParamsForPage('views').get('view');
-      loadSavedViewSummaries().then(() => {
-        if (viewId) openSavedView(viewId);
-      });
+      // Fire the deep-linked view's detail in parallel with the per-view
+      // counts — opening #views?view=my-book shouldn't wait behind all eight
+      // summary scans. The grid re-renders (with the selected card) when the
+      // summaries land.
+      loadSavedViewSummaries();
+      if (viewId) openSavedView(viewId);
     }
     if (pageName === 'pulse') loadCrmPulse();
     if (pageName === 'daily-intelligence') loadDailyIntelligence();
@@ -1817,7 +1889,12 @@
       if (cusip) {
         window.location.hash = '#' + dest + '?q=' + encodeURIComponent(cusip);
       } else {
-        goTo(dest);
+        // Route through the hash so Back/Forward walk page navigation.
+        // Re-clicking the active page's link keeps its hash params (deep-link
+        // state like '#banks?bank=…') and just re-runs the page loader.
+        const current = parseHashTarget(window.location.hash || '#home');
+        const nextHash = '#' + dest + (current.page === dest && current.query ? '?' + current.query : '');
+        navigateToHash(nextHash, () => goTo(dest));
       }
     }
   });
@@ -1977,6 +2054,7 @@
     if (!input || !results) return;
 
     let activeIndex = -1;
+    let userSelected = false; // true once the user arrows to a row — Enter must honor it
     let cusipDebounce = null;
     let cusipToken = 0;
     let globalDebounce = null;
@@ -2124,6 +2202,7 @@
     const render = () => {
       const renderId = ++searchRenderId;
       pendingDataSearches = 0;
+      userSelected = false;
       const query = input.value.trim().toLowerCase();
       if (!query) {
         results.classList.remove('show');
@@ -2132,7 +2211,9 @@
         return;
       }
       const terms = query.split(/\s+/).filter(Boolean);
+      const adminOk = isAdminUiAllowed();
       const matches = NAV_ITEMS.filter(item => {
+        if (!adminOk && (item.page === 'upload' || item.page === 'admin' || item.page === 'exec-summary')) return false;
         const haystack = `${item.group} ${item.label} ${item.description} ${item.aliases}`.toLowerCase();
         return terms.every(term => haystack.includes(term));
       }).slice(0, 7);
@@ -2173,21 +2254,25 @@
         input.blur();
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
+        userSelected = true;
         setActive(activeIndex + 1);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        userSelected = true;
         setActive(activeIndex - 1);
       } else if (e.key === 'Enter') {
         const opts = optionEls();
         let target = opts[activeIndex] || opts[0];
         if (target) {
           e.preventDefault();
-          if (pendingDataSearches > 0 && !target.dataset.jumpKind && !target.dataset.cusip) {
-            const renderId = searchRenderId;
-            await new Promise(resolve => setTimeout(resolve, 240));
-            if (renderId !== searchRenderId) return;
-            target = preferredEnterResult(target);
-          } else {
+          // Only auto-prefer a data hit (CUSIP/bank/contact) when the user
+          // hasn't arrowed to a row — Enter must open the visible highlight.
+          if (!userSelected) {
+            if (pendingDataSearches > 0 && !target.dataset.jumpKind && !target.dataset.cusip) {
+              const renderId = searchRenderId;
+              await new Promise(resolve => setTimeout(resolve, 240));
+              if (renderId !== searchRenderId) return;
+            }
             target = preferredEnterResult(target);
           }
           activateJumpResult(target);
@@ -2327,6 +2412,19 @@
       meState.knownReps = [];
     }
     renderRepPickerList();
+    populateRepDatalist();
+  }
+
+  // Shared <datalist> of roster names (canonical spellings) — attached to the
+  // tear-sheet Owner input and reusable by any rep-name field (e.g. task
+  // assignee). Free text stays allowed; this just steers to roster spellings
+  // so rep-scoped rollups keep matching.
+  function populateRepDatalist() {
+    const list = document.getElementById('fbbsRepList');
+    if (!list) return;
+    list.innerHTML = (meState.knownReps || [])
+      .map(rep => `<option value="${escapeHtml(rep.displayName || rep.username || '')}"></option>`)
+      .join('');
   }
 
   async function loadMyWork() {
@@ -2336,9 +2434,11 @@
       const res = await fetch('/api/me/work', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       meState.work = await res.json();
+      meState.workError = false;
     } catch (e) {
       console.error('Failed to load /api/me/work:', e);
       meState.work = null;
+      meState.workError = true;
     } finally {
       meState.workLoading = false;
     }
@@ -2370,6 +2470,15 @@
       await loadSavedViewSummaries();
       if (savedViewsState.selectedId) openSavedView(savedViewsState.selectedId);
     }
+    if (activePage === 'watchlist') loadWatchlistPage();
+    // The rollover wall / maturity calendar owner filters default to the acting
+    // rep once — reset so the next load re-defaults under the new identity.
+    cdRolloverState.owner = '';
+    cdRolloverState.ownerTouched = false;
+    maturityCalState.owner = '';
+    maturityCalState.ownerTouched = false;
+    if (activePage === 'cd-rollover') loadCdRolloverWall();
+    if (activePage === 'maturity-calendar') loadMaturityCalendar();
     // CRM Pulse widgets are rep-scoped server-side — drop the cache either way
     // so the next visit refetches under the new identity.
     crmPulseState.data = null;
@@ -2508,6 +2617,10 @@
     }
   }
 
+  // Home My Work "My Tasks" tile: collapsed shows the first 5 rows; the
+  // expand toggle reveals every returned bucket (overdue + due today + upcoming).
+  let myWorkTasksExpanded = false;
+
   function renderMyWork() {
     const section = document.getElementById('myWorkSection');
     if (!section) return;
@@ -2528,6 +2641,28 @@
 
     const displayName = rep.displayName || rep.username;
     if (heading) heading.textContent = `Acting as ${displayName}.`;
+
+    // A failed /api/me/work fetch must not read as a genuinely empty book —
+    // leave every tile at '—' with a retry affordance instead of clean zeros.
+    if (!work && meState.workError) {
+      if (sub) {
+        sub.innerHTML = 'Couldn&rsquo;t load your work items &mdash; <button type="button" class="text-btn" id="myWorkRetryBtn">retry</button>';
+        const retry = document.getElementById('myWorkRetryBtn');
+        if (retry) retry.addEventListener('click', () => loadMyWork());
+      }
+      if (grid) grid.hidden = false;
+      ['clients', 'prospects', 'strategies', 'tasks', 'overdue', 'cold', 'pershing'].forEach(key => {
+        const numEl = document.querySelector(`[data-mywork-num="${key}"]`);
+        if (numEl) numEl.textContent = '—';
+        const listEl = document.querySelector(`[data-mywork-list="${key}"]`);
+        if (listEl) listEl.innerHTML = '';
+        const detailEl = document.querySelector(`[data-mywork-detail="${key}"]`);
+        if (detailEl) detailEl.textContent = '';
+      });
+      if (recents) recents.hidden = true;
+      return;
+    }
+
     if (sub) {
       const sourceLabel = rep.source === 'iis'
         ? `Detected from Windows login (${rep.username}). Use the top bar to override.`
@@ -2585,15 +2720,26 @@
     const taskParts = [];
     if (tasks.overdue.length) taskParts.push(`<strong>${formatNumber(tasks.overdue.length)}</strong> overdue`);
     if (tasks.dueToday.length) taskParts.push(`<strong>${formatNumber(tasks.dueToday.length)}</strong> due today`);
+    const allTaskRows = [...tasks.overdue, ...tasks.dueToday, ...tasks.upcoming];
+    const taskRows = myWorkTasksExpanded ? allTaskRows : allTaskRows.slice(0, 5);
     const taskDetail = document.querySelector('[data-mywork-detail="tasks"]');
-    if (taskDetail) taskDetail.innerHTML = taskParts.join(' &middot; ');
-    const taskRows = [...tasks.overdue, ...tasks.dueToday, ...tasks.upcoming].slice(0, 5);
+    if (taskDetail) {
+      const openTotal = Number(tasks.openCount || allTaskRows.length);
+      const shown = allTaskRows.length
+        ? `<span>showing ${formatNumber(taskRows.length)} of ${formatNumber(openTotal)} open</span>`
+        : '';
+      const toggle = allTaskRows.length > 5
+        ? ` <button type="button" class="text-btn" data-mywork-tasks-toggle>${myWorkTasksExpanded ? 'Show fewer' : `Show all ${formatNumber(allTaskRows.length)}`}</button>`
+        : '';
+      taskDetail.innerHTML = taskParts.concat(shown ? [shown] : []).join(' &middot; ') + toggle;
+    }
     setMyWorkList('tasks', taskRows, row => `
-      <li>
-        <button type="button" class="my-work-list-link" data-mywork-bank="${escapeHtml(row.bankId)}">
+      <li style="display:flex;align-items:center;gap:4px;">
+        <button type="button" class="my-work-list-link" style="flex:1 1 auto;min-width:0;" data-mywork-bank="${escapeHtml(row.bankId)}">
           <span class="my-work-list-name">${escapeHtml(row.title || 'Task')}</span>
           <span class="my-work-list-meta">${escapeHtml(row.bankName || row.bankId)}${row.dueDate ? ` &middot; due ${escapeHtml(row.dueDate)}` : ''}</span>
         </button>
+        <button type="button" class="text-btn" data-mywork-task-done="${escapeHtml(row.id)}" title="Mark this task done">Done</button>
       </li>
     `);
 
@@ -2696,11 +2842,30 @@
     const section = document.getElementById('myWorkSection');
     if (!section) return;
     section.addEventListener('click', evt => {
+      const done = evt.target.closest('[data-mywork-task-done]');
+      if (done) {
+        // Same PATCH path as the tear-sheet Tasks panel, then re-pull the
+        // My Work counts so the tile reflects the completion.
+        done.disabled = true;
+        completeBankTask(done.getAttribute('data-mywork-task-done')).then(() => loadMyWork());
+        return;
+      }
+      const toggle = evt.target.closest('[data-mywork-tasks-toggle]');
+      if (toggle) {
+        myWorkTasksExpanded = !myWorkTasksExpanded;
+        renderMyWork();
+        return;
+      }
       const btn = evt.target.closest('[data-mywork-bank]');
       if (!btn) return;
       const bankId = btn.getAttribute('data-mywork-bank');
       const strategyId = btn.getAttribute('data-mywork-strategy');
       if (strategyId) {
+        // Select the clicked request on the Strategies board instead of
+        // dropping the rep on the generic queue (loadStrategies honors
+        // strategyActiveId + the sessionStorage mirror).
+        strategyActiveId = strategyId;
+        sessionStorage.setItem('fbbs.strategy.activeId', strategyId);
         goTo('strategies');
         return;
       }
@@ -2752,9 +2917,11 @@
     ]);
     if (presetRes.status === 'fulfilled') {
       savedViewsState.summaries = Array.isArray(presetRes.value.views) ? presetRes.value.views : [];
+      savedViewsState.summariesError = '';
     } else {
       console.error('Failed to load saved views:', presetRes.reason);
       savedViewsState.summaries = [];
+      savedViewsState.summariesError = (presetRes.reason && presetRes.reason.message) || 'Load failed';
     }
     if (customRes.status === 'fulfilled') {
       const hidden = new Set(customRes.value.hidden || []);
@@ -2778,7 +2945,9 @@
       savedViewsState.selectedResult = await res.json();
     } catch (e) {
       console.error('Failed to load view:', e);
-      savedViewsState.selectedResult = { rows: [], columns: [], view: { label: viewId } };
+      // Carry the error so the detail renders a Retry state — a failed fetch
+      // must not be indistinguishable from a genuinely empty view.
+      savedViewsState.selectedResult = { error: e.message || 'Load failed', rows: [], columns: [], view: { label: viewId } };
     } finally {
       savedViewsState.loadingDetailFor = '';
     }
@@ -2830,9 +2999,13 @@
 
     const presetSection = savedViewsState.summaries.length
       ? `<div class="views-section-label">Standard views</div><div class="views-card-row">${presetCards}</div>`
-      : '<p class="views-loading">No standard views available — make sure the bank workbooks are imported.</p>';
+      : savedViewsState.summariesError
+        ? '<p class="views-loading">Couldn&#39;t load views — <button type="button" class="text-btn" data-views-retry-summaries="1">Retry</button></p>'
+        : '<p class="views-loading">No standard views available — make sure the bank workbooks are imported.</p>';
     const customSection = `<div class="views-section-label">My custom views</div><div class="views-card-row">${customCards}${createCard}</div>`;
     grid.innerHTML = presetSection + customSection;
+    const retrySummariesBtn = grid.querySelector('[data-views-retry-summaries]');
+    if (retrySummariesBtn) retrySummariesBtn.addEventListener('click', () => loadSavedViewSummaries());
 
     grid.querySelectorAll('[data-views-card]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -2873,11 +3046,24 @@
         ? 'Loading rows…'
         : (count != null ? `${formatNumber(count)} row${count === 1 ? '' : 's'}` : '');
     }
-    if (csv) csv.setAttribute('href', `/api/bank-views/${encodeURIComponent(id)}.csv` + repScopeQuery());
+    const csvHref = `/api/bank-views/${encodeURIComponent(id)}.csv` + repScopeQuery();
+    if (csv) csv.setAttribute('href', csvHref);
     if (!result) {
       if (thead) thead.innerHTML = '';
       if (tbody) tbody.innerHTML = '';
       if (empty) empty.hidden = true;
+      return;
+    }
+    if (result.error) {
+      // Distinct failure state — never masquerade a load error as an empty view.
+      if (thead) thead.innerHTML = '';
+      if (tbody) tbody.innerHTML = '';
+      if (empty) {
+        empty.hidden = false;
+        empty.innerHTML = 'Couldn&#39;t load this view — <button type="button" class="text-btn" data-views-retry="1">Retry</button>';
+        const retryBtn = empty.querySelector('[data-views-retry]');
+        if (retryBtn) retryBtn.addEventListener('click', () => openSavedView(id));
+      }
       return;
     }
     const cols = result.columns || [];
@@ -2893,26 +3079,42 @@
     }
     if (!result.rows || !result.rows.length) {
       if (tbody) tbody.innerHTML = '';
-      if (empty) empty.hidden = false;
+      if (empty) {
+        empty.textContent = 'No matching rows.'; // restore after an error render
+        empty.hidden = false;
+      }
       return;
     }
     if (empty) empty.hidden = true;
     if (tbody) {
       const rows = sortedSavedViewRows(result.rows, sort);
+      // The table renders the first 500; rows beyond that live in the CSV.
+      const overflowRow = rows.length > 500
+        ? `<tr class="views-truncated-row"><td colspan="${cols.length || 1}">Showing first 500 of ${escapeHtml(formatNumber(rows.length))} — <a href="${escapeHtml(csvHref)}">Download CSV</a> for the complete list</td></tr>`
+        : '';
       tbody.innerHTML = rows.slice(0, 500).map(row => {
         const bankId = row.bankId || '';
-        const rowOpen = bankId ? ` data-views-row-bank="${escapeHtml(bankId)}"` : '';
+        // Bank rows are keyboard-reachable links (Tab + Enter), mirroring the
+        // All Offerings row pattern — the row is the only way into the bank.
+        const rowOpen = bankId ? ` data-views-row-bank="${escapeHtml(bankId)}" tabindex="0" role="link"` : '';
         return `<tr${rowOpen}>${cols.map(c => {
           if (c === 'lastActivityDate') return lastActivityCellHtml(row[c]);
           return `<td>${escapeHtml(String(row[c] == null ? '' : row[c]))}</td>`;
         }).join('')}</tr>`;
-      }).join('');
+      }).join('') + overflowRow;
       tbody.querySelectorAll('[data-views-row-bank]').forEach(tr => {
-        tr.style.cursor = 'pointer';
-        tr.addEventListener('click', () => {
+        const openBank = () => {
           const bankId = tr.getAttribute('data-views-row-bank');
           if (!bankId) return;
           navigateToHash(bankDeepLinkHash(bankId), loadBankFromHashRoute);
+        };
+        tr.style.cursor = 'pointer';
+        tr.addEventListener('click', openBank);
+        tr.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            openBank();
+          }
         });
       });
     }
@@ -2972,22 +3174,47 @@
   // Single payload from /api/crm/dashboard; CSS bars (the swap-sector pattern),
   // no chart library. Respects the acting rep server-side.
 
-  let crmPulseState = { loading: false, data: null };
+  let crmPulseState = { loading: false, data: null, pipelineReport: null, scope: 'me', error: false, loadedAt: null };
+
+  // Admin-only firm rollup: the server collapses ?rep=all back to self for
+  // non-admins, so only ever send it when the admin toggle can be shown.
+  function pulseScopeQuery() {
+    return crmPulseState.scope === 'all' && isAdminUiAllowed() ? '?rep=all' : '';
+  }
 
   async function loadCrmPulse(force) {
     if (crmPulseState.loading) return;
     if (crmPulseState.data && !force) { renderCrmPulse(); return; }
     crmPulseState.loading = true;
     renderCrmPulse();
-    try {
-      crmPulseState.data = await fetch('/api/crm/dashboard', { cache: 'no-store' }).then(readBankJson);
-    } catch (e) {
-      crmPulseState.data = null;
-      showToast(e.message || 'Could not load CRM pulse', true);
-    } finally {
-      crmPulseState.loading = false;
-      renderCrmPulse();
+    const scopeQuery = pulseScopeQuery();
+    // The dedicated rep-scoped pipeline report rides along so the "My Pipeline"
+    // work list can show every open opp with a stage control; the two fetches
+    // are isolated so one failing doesn't blank the other.
+    const [dashRes, pipeRes] = await Promise.allSettled([
+      fetch('/api/crm/dashboard' + scopeQuery, { cache: 'no-store' }).then(readBankJson),
+      fetch('/api/reports/pipeline' + scopeQuery, { cache: 'no-store' }).then(readBankJson)
+    ]);
+    if (dashRes.status === 'fulfilled') {
+      crmPulseState.data = dashRes.value;
+      crmPulseState.error = false;
+      crmPulseState.loadedAt = new Date().toISOString();
+    } else {
+      // Keep the last good payload on a transient failure (the 5-minute
+      // auto-refresh) — renderCrmPulse flags it instead of blanking a
+      // standing Pulse screen.
+      crmPulseState.error = true;
+      if (!crmPulseState.data) {
+        showToast((dashRes.reason && dashRes.reason.message) || 'Could not load CRM pulse', true);
+      }
     }
+    if (pipeRes.status === 'fulfilled') {
+      crmPulseState.pipelineReport = (pipeRes.value && pipeRes.value.pipeline) || null;
+    } else if (dashRes.status === 'fulfilled') {
+      crmPulseState.pipelineReport = null;
+    }
+    crmPulseState.loading = false;
+    renderCrmPulse();
   }
 
   function pulseTwoSeriesBarsHtml(rows) {
@@ -3078,6 +3305,36 @@
     `;
   }
 
+  // "My Pipeline" work list — one row per open opportunity (nearest close
+  // first) with the same inline stage control as the tear-sheet panel, fed by
+  // the dedicated rep-scoped /api/reports/pipeline route. The route caps
+  // openItems server-side (nearest close dates), so note when more exist.
+  function pulseMyPipelineHtml(report) {
+    if (!report) {
+      return '<div class="bank-search-empty">Couldn&rsquo;t load the pipeline report. Refresh to retry.</div>';
+    }
+    const items = report.openItems || [];
+    if (!items.length) {
+      return '<div class="bank-search-empty">No open opportunities. Add one from a bank tear sheet.</div>';
+    }
+    const openCount = (report.open && report.open.count) || items.length;
+    const capNote = openCount > items.length
+      ? `<p class="pulse-legend">Showing ${escapeHtml(formatNumber(items.length))} of ${escapeHtml(formatNumber(openCount))} open — nearest close dates first.</p>`
+      : '';
+    const rows = items.map(o => `
+      <tr>
+        <td><button type="button" class="text-btn" data-pulse-bank="${escapeHtml(o.bankId)}">${escapeHtml(o.product || 'Opportunity')}</button></td>
+        <td>${o.estValue ? escapeHtml(formatMoney(o.estValue, 0)) : '—'}</td>
+        <td>${escapeHtml(o.closeDate || '—')}</td>
+        <td><select class="bank-opp-stage stage-${escapeHtml(String(o.stage || 'Prospect').toLowerCase())}" data-pulse-opp-stage="${escapeHtml(o.id)}" aria-label="Opportunity stage">${OPP_STAGES.map(s => `<option${s === o.stage ? ' selected' : ''}>${s}</option>`).join('')}</select></td>
+      </tr>`).join('');
+    return `${capNote}
+      <table class="reports-list pulse-table">
+        <thead><tr><th>Opportunity</th><th>Est. value</th><th>Close</th><th>Stage</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
   function renderCrmPulse() {
     const mount = document.getElementById('pulseMount');
     if (!mount) return;
@@ -3092,12 +3349,26 @@
       return;
     }
     if (sub) {
-      sub.textContent = data.rep
-        ? `Acting as ${data.rep.displayName || data.rep.username} — widgets scoped to your book. Clear "Acting as" for the firm-wide view.`
-        : 'Firm-wide view. Pick a rep in the top bar to scope every widget to one book.';
+      // The rep picker is disabled in production auth mode, so never point at
+      // it — admins get the Me/Firm toggle, reps just see their scope.
+      const admin = isAdminUiAllowed();
+      if (data.rep) {
+        sub.textContent = `Acting as ${data.rep.displayName || data.rep.username} — widgets scoped to your book.`
+          + (admin ? ' Use the “My book / Firm-wide” toggle above for the firm rollup.' : '');
+      } else {
+        sub.textContent = admin && crmPulseState.scope === 'all'
+          ? 'Firm-wide view — every widget spans all reps. Switch to “My book” to scope to your own.'
+          : 'Firm-wide view. Pick a rep in the top bar to scope every widget to one book.';
+      }
     }
+    // Transient auto-refresh failure: the grid keeps the last good payload —
+    // flag its age instead of blanking the page.
+    const staleBanner = crmPulseState.error
+      ? `<p class="sd-banner warn">Last refresh failed — showing data as of ${escapeHtml(crmPulseState.loadedAt ? formatRelativeAt(crmPulseState.loadedAt) : 'the previous load')}. Retrying automatically.</p>`
+      : '';
     const k = data.kpis || {};
     mount.innerHTML = `
+      ${staleBanner}
       <div class="reports-readiness pulse-kpis">
         <div><strong>${escapeHtml(formatNumber(k.totalClients || 0))}</strong><span>Clients</span></div>
         <div><strong>${escapeHtml(formatNumber(k.totalProspects || 0))}</strong><span>Prospects</span></div>
@@ -3105,7 +3376,6 @@
         <div><strong>${escapeHtml(formatNumber(k.openStrategies || 0))}</strong><span>Open strategies</span></div>
         <div><strong>${escapeHtml(formatNumber(k.openTasks || 0))}</strong><span>Open tasks</span></div>
         <div><strong>${escapeHtml(formatNumber(k.overdueTasks || 0))}</strong><span>Overdue tasks</span></div>
-        <div><strong>${escapeHtml(formatNumber(k.overdueFollowups || 0))}</strong><span>Overdue follow-ups</span></div>
       </div>
       <div class="pulse-grid">
         <article class="pulse-card">
@@ -3120,6 +3390,10 @@
         <article class="pulse-card">
           <h3>Pipeline</h3>
           ${pulsePipelineHtml(data.pipeline)}
+        </article>
+        <article class="pulse-card">
+          <h3>${data.rep ? 'My Pipeline — work list' : 'Open Pipeline — work list'}</h3>
+          ${pulseMyPipelineHtml(crmPulseState.pipelineReport)}
         </article>
         <article class="pulse-card">
           <h3>THC Portfolio Roll-up</h3>
@@ -3169,6 +3443,43 @@
         navigateToHash(bankDeepLinkHash(btn.getAttribute('data-pulse-bank')), loadBankFromHashRoute);
       });
     });
+    mount.querySelectorAll('[data-pulse-opp-stage]').forEach(select => {
+      select.addEventListener('change', () => movePulsePipelineStage(select.getAttribute('data-pulse-opp-stage'), select.value, select));
+    });
+  }
+
+  // Stage move from the Pulse work list — same PATCH path as the tear-sheet
+  // panel (moveBankOpportunityStage), with the same Won/Lost confirm, then a
+  // full Pulse refetch so the KPIs and both pipeline cards stay in step.
+  async function movePulsePipelineStage(oppId, stage, select) {
+    if (!oppId || !stage) return;
+    const report = crmPulseState.pipelineReport;
+    const opp = report ? (report.openItems || []).find(o => o.id === oppId) : null;
+    if (stage === 'Won' || stage === 'Lost') {
+      const what = opp ? `${opp.estValue ? `${formatMoney(opp.estValue, 0)} ` : ''}${opp.product} deal` : 'this deal';
+      if (!window.confirm(`Mark ${what} ${stage}?`)) {
+        if (select) select.value = opp ? opp.stage : 'Prospect';
+        return;
+      }
+    }
+    if (select) select.disabled = true;
+    try {
+      const res = await fetch(`/api/bank-opportunities/${encodeURIComponent(oppId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage })
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      showToast(stage === 'Won' ? 'Marked won 🎉' : stage === 'Lost' ? 'Marked lost' : 'Stage updated');
+      loadCrmPulse(true);
+    } catch (e) {
+      showToast(e.message || 'Could not update opportunity', true);
+      if (select) {
+        select.disabled = false;
+        if (opp) select.value = opp.stage;
+      }
+    }
   }
 
   function setupSavedViews() {
@@ -3356,7 +3667,7 @@
     const section = document.getElementById('homeRecentsSection');
     const grid = document.getElementById('homeRecentsGrid');
     if (!section || !grid) return;
-    const recents = (typeof loadRecentBanks === 'function' ? loadRecentBanks() : []).slice(0, 6);
+    const recents = (typeof loadRecentBanks === 'function' ? loadRecentBanks() : []).slice(0, MAX_RECENT_BANKS);
     if (!recents.length) {
       section.hidden = true;
       grid.innerHTML = '';
@@ -3802,7 +4113,7 @@
     // Daily Intelligence is strictly FBBS-uploaded data: the parsed Economic
     // Update + CD Relative Value digital panels and the desk read (grounded only
     // in the uploaded Economic Update). The live market-snapshot strip (Treasury
-    // curve + FRED deltas) deliberately lives on Home / Market Color, not here.
+    // curve + FRED deltas) deliberately lives on the Sales Dashboard, not here.
     loadDailySummaryCard(); // AI desk read (dormant without an Anthropic key)
   }
 
@@ -4076,21 +4387,6 @@
     { key: 'muniTey21', label: "MUNI GO 'AA' TEY (21%)", color: '#6f7f3c' },
     { key: 'corp', label: "'AA' Corp", color: '#8b3f2f' }
   ];
-
-  async function loadRelativeValueSnapshot() {
-    const chart = document.getElementById('rvRateSnapshotChart');
-    if (chart) chart.innerHTML = '<div class="market-empty small">Loading rate snapshot&hellip;</div>';
-    try {
-      const res = await fetch('/api/relative-value', { cache: 'no-store' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      relativeValueData = await res.json();
-    } catch (e) {
-      console.error('Failed to load relative value snapshot:', e);
-      relativeValueData = null;
-    }
-    renderRelativeValueNative();
-    loadMarketSnapshotStrip('rvMarketSnapshotStrip'); // canonical desk-vs-live band
-  }
 
   async function loadMmdCurve() {
     const chart = document.getElementById('mmdCurveChart');
@@ -6186,6 +6482,7 @@
     loading: false,
     wired: false
   };
+  let maturityCalLoadSeq = 0; // discard out-of-order window/filter responses
 
   function enterMaturityCalendarPage() {
     if (!maturityCalState.wired) {
@@ -6222,12 +6519,15 @@
   async function loadMaturityCalendar() {
     const app = document.getElementById('maturityCalApp');
     if (!app) return;
+    const seq = ++maturityCalLoadSeq;
     maturityCalState.loading = true;
     app.innerHTML = '<p class="muted-note">Loading maturity calendar…</p>';
     try {
       const res = await fetch('/api/maturity-calendar?window=' + encodeURIComponent(maturityCalState.window), { cache: 'no-store' });
+      if (seq !== maturityCalLoadSeq) return; // a newer window/filter request superseded this one
       if (!res.ok) throw new Error('Request failed (' + res.status + ')');
       const data = await res.json();
+      if (seq !== maturityCalLoadSeq) return;
       maturityCalState.data = data;
       // Default owner to the acting-as rep the first time, if their name matches
       // a coverage owner in the data and the user hasn't picked one yet.
@@ -6238,9 +6538,10 @@
       }
       renderMaturityCalendar();
     } catch (err) {
+      if (seq !== maturityCalLoadSeq) return;
       app.innerHTML = '<p class="error-note">Could not load the maturity calendar: ' + escapeHtml(err.message) + '</p>';
     } finally {
-      maturityCalState.loading = false;
+      if (seq === maturityCalLoadSeq) maturityCalState.loading = false;
     }
   }
 
@@ -6506,6 +6807,7 @@
     data: null,
     wired: false
   };
+  let cdRolloverLoadSeq = 0; // discard out-of-order window/owner responses
 
   function hydrateCdRolloverFromHash() {
     const params = hashParamsForPage('cd-rollover');
@@ -6582,14 +6884,17 @@
   async function loadCdRolloverWall() {
     const app = document.getElementById('cdRolloverApp');
     if (!app) return;
+    const seq = ++cdRolloverLoadSeq;
     app.innerHTML = '<div class="table-loading"><div class="loading-spinner" aria-hidden="true"></div><span>Loading rollover wall&hellip;</span></div>';
     try {
       const params = new URLSearchParams({ window: String(cdRolloverState.window) });
       if (cdRolloverState.scope === 'covered') params.set('covered', '1');
       if (cdRolloverState.owner) params.set('owner', cdRolloverState.owner);
       const res = await fetch('/api/cd-rollover-wall?' + params.toString(), { cache: 'no-store' });
+      if (seq !== cdRolloverLoadSeq) return; // a newer window/owner request superseded this one
       if (!res.ok) throw new Error('Request failed (' + res.status + ')');
       const data = await res.json();
+      if (seq !== cdRolloverLoadSeq) return;
       cdRolloverState.data = data;
       // Same acting-rep default as the maturity calendar, applied once.
       if (!cdRolloverState.ownerTouched && !cdRolloverState.owner && meState.rep) {
@@ -6606,6 +6911,7 @@
       renderCdRolloverWall();
       renderFdicNationalStrip('cdRolloverNational', null);
     } catch (err) {
+      if (seq !== cdRolloverLoadSeq) return;
       app.innerHTML = '<p class="error-note">Could not load the rollover wall: ' + escapeHtml(err.message) + '</p>';
     }
   }
@@ -9248,6 +9554,7 @@
       portfolio: 'Portfolio',
       liquidity: 'Liquidity',
       cecl: 'CECL',
+      assumption: 'Assumptions',
       tradeSimulation: 'Trade Sim'
     };
     return Object.keys(labels).map(key => {
@@ -9271,6 +9578,10 @@
     }
     list.innerHTML = rows.slice(0, 40).map(row => {
       const reportText = thcSummaryReportStatusText(row) || (row.tradeSimulation && row.tradeSimulation.status ? `Trade Sim ${row.tradeSimulation.status}` : '');
+      // Unmatched records get a derived reason + a search action so an admin
+      // can resolve them without opening the JSON.
+      const unmatchedReason = row.matched ? '' : (row.certNumber ? `Cert ${row.certNumber} not in bank DB` : 'No FDIC cert in file — name-only record');
+      const findQuery = row.bankDisplayName || row.certNumber || '';
       return `
         <div class="reports-match-row thc-summary-row">
           <div>
@@ -9279,9 +9590,13 @@
           </div>
           <div>
             <strong>${escapeHtml(row.matched ? 'Matched' : 'Needs bank match')}</strong>
-            <small>${escapeHtml(reportText || row.posture && row.posture.summary || '')}</small>
+            <small>${escapeHtml([unmatchedReason, reportText || (row.posture && row.posture.summary) || ''].filter(Boolean).join(' · '))}</small>
           </div>
-          ${row.bankId && row.matched ? `<a class="text-btn" href="#banks/${encodeURIComponent(row.bankId)}">Open</a>` : '<span></span>'}
+          ${row.bankId && row.matched
+            ? `<a class="text-btn" href="${escapeHtml(bankDeepLinkHash(row.bankId))}">Open</a>`
+            : findQuery
+              ? `<a class="text-btn" href="#banks?q=${encodeURIComponent(findQuery)}">Find bank</a>`
+              : '<span></span>'}
         </div>
       `;
     }).join('') + (rows.length > 40 ? `<div class="bank-search-empty">Showing 40 of ${formatNumber(rows.length)} THC summary records.</div>` : '');
@@ -9410,6 +9725,36 @@
     }
   }
 
+  // Actual run history for SAVED definitions (per machine): id → ISO stamp,
+  // written by the run path. Without it, "Recently Ran" showed every saved
+  // report and displayed its edit timestamp as a fake "Last Run".
+  const REPORT_RUN_LOG_KEY = 'fbbs.reports.runLog';
+  let reportRunLog = (() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(REPORT_RUN_LOG_KEY) || '{}');
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  })();
+
+  function recordReportRun(definitionId) {
+    const id = String(definitionId || '').trim();
+    if (!id) return;
+    reportRunLog[id] = new Date().toISOString();
+    const ids = Object.keys(reportRunLog);
+    if (ids.length > 100) {
+      ids.sort((a, b) => String(reportRunLog[b]).localeCompare(String(reportRunLog[a])))
+        .slice(100)
+        .forEach(staleId => { delete reportRunLog[staleId]; });
+    }
+    try {
+      localStorage.setItem(REPORT_RUN_LOG_KEY, JSON.stringify(reportRunLog));
+    } catch (e) {
+      // Run history is a convenience only.
+    }
+  }
+
   // Reports persistence moved server-side (see /api/reports). Saved definitions
   // and the hidden-ids list load from the server into the in-memory caches; the
   // render path stays synchronous against those caches and repaints when the
@@ -9421,6 +9766,7 @@
       const data = await readBankJson(res);
       savedReportDefinitions = Array.isArray(data.reports) ? data.reports : [];
       hiddenReportIds = Array.isArray(data.hidden) ? data.hidden.map(String) : [];
+      reportsCurrentRep = data.rep || null;
     } catch (e) {
       // Graceful: the workspace still renders fixtures + session rows.
       console.warn('Could not load reports from server:', e && e.message);
@@ -9509,17 +9855,25 @@
   }
 
   function savedReportRows() {
-    return savedReportDefinitions.map(def => ({
-      id: def.id,
-      name: def.name || 'Saved Bank List',
-      type: def.type || 'custom-bank',
-      folder: def.folder || 'Saved Views',
-      description: def.description || reportTypeMeta(def.type || 'custom-bank').description,
-      lastRunAt: def.updatedAt || def.createdAt,
-      lastRunBy: 'You',
-      pinned: Boolean(def.pinned),
-      savedDefinition: true
-    }));
+    const me = reportsCurrentRep && reportsCurrentRep.username ? String(reportsCurrentRep.username).toLowerCase() : '';
+    return savedReportDefinitions.map(def => {
+      const owner = String(def.createdBy || '').trim();
+      const mine = Boolean(owner && me && owner.toLowerCase() === me);
+      return {
+        id: def.id,
+        name: def.name || 'Saved Bank List',
+        type: def.type || 'custom-bank',
+        folder: def.folder || 'Saved Views',
+        description: def.description || reportTypeMeta(def.type || 'custom-bank').description,
+        // Honest "Last Run": only an actually recorded run stamps it — never
+        // the definition's edit timestamp.
+        lastRunAt: reportRunLog[def.id] || null,
+        createdBy: owner,
+        createdByName: mine ? 'You' : (def.createdByName || owner || 'Shared'),
+        pinned: Boolean(def.pinned),
+        savedDefinition: true
+      };
+    });
   }
 
   function allReportsRows() {
@@ -9542,7 +9896,16 @@
     const id = String(reportId || '');
     const row = allReportsRows().find(item => item.id === id);
     if (!row) return showToast('Report not found', true);
-    if (!window.confirm(`Delete "${row.name}" from Reports?`)) return;
+    // Saved definitions are firm-visible — deleting a colleague's report (or a
+    // legacy no-owner shared one) removes it for everyone, so say so.
+    const def = savedReportDefinitionById(id);
+    const me = reportsCurrentRep && reportsCurrentRep.username ? String(reportsCurrentRep.username).toLowerCase() : '';
+    const owner = def ? String(def.createdBy || '').trim() : '';
+    const ownedByOther = Boolean(def && (!owner || (me && owner.toLowerCase() !== me)));
+    const confirmMsg = ownedByOther
+      ? `This is a shared report${owner ? ` created by ${def.createdByName || owner}` : ''} — deleting removes it for everyone. Delete "${row.name}" anyway?`
+      : `Delete "${row.name}" from Reports?`;
+    if (!window.confirm(confirmMsg)) return;
     const inSession = reportsSessionReports.some(item => item.id === id);
     const inSaved = savedReportDefinitions.some(item => item.id === id);
     try {
@@ -9569,7 +9932,9 @@
       renderReportsWorkspace();
       showToast('Deleted report');
     } catch (e) {
-      showToast('Could not delete report', true);
+      // Surface the server's ownership refusal ("This report belongs to
+      // another rep", 403) instead of a generic failure.
+      showToast(e && e.message ? e.message : 'Could not delete report', true);
     }
   }
 
@@ -9789,8 +10154,7 @@
               <th>${header('type', 'Type')}</th>
               <th>${header('folder', 'Folder')}</th>
               <th>${header('lastRunAt', 'Last Run')}</th>
-              <th>Last Run By</th>
-              <th>Subscribed</th>
+              <th>Created By</th>
               <th></th>
             </tr>
           </thead>
@@ -9804,8 +10168,7 @@
                   <td><span class="reports-type-badge">${escapeHtml(meta.shortName)}</span></td>
                   <td>${escapeHtml(row.folder || 'Personal')}</td>
                   <td title="${escapeHtml(reportAbsoluteDate(row.lastRunAt))}">${escapeHtml(reportRelativeDate(row.lastRunAt))}</td>
-                  <td>${escapeHtml(row.lastRunBy || 'You')}</td>
-                  <td class="reports-sub-cell"></td>
+                  <td>${escapeHtml(row.createdByName || row.lastRunBy || 'You')}</td>
                   <td>
                     <details class="reports-row-menu">
                       <summary aria-label="Report actions">⌄</summary>
@@ -9837,7 +10200,7 @@
           </header>
           <div class="reports-type-picker">
             <nav aria-label="Report type categories">
-              ${categories.map((cat, idx) => `<button type="button" class="${idx === 0 ? 'active' : ''}" ${idx > 4 ? 'disabled title="Coming soon"' : ''}>${escapeHtml(cat)}</button>`).join('')}
+              ${categories.map((cat, idx) => `<button type="button" class="${cat === 'All' ? 'active' : ''}" ${idx > 4 ? 'disabled title="Coming soon"' : `data-report-type-category="${escapeHtml(cat)}"`}>${escapeHtml(cat)}</button>`).join('')}
             </nav>
             <main>
               <div class="reports-type-head">
@@ -9915,6 +10278,20 @@
     if (!clean) return null;
     const n = Number(clean);
     return Number.isFinite(n) ? n : null;
+  }
+
+  // Live echo for money condition values, which are call-report $000s: typing
+  // 500 reads "= $500K", 10000 reads "= $10MM" — so a rep who meant $500MM but
+  // typed 500 self-corrects immediately.
+  function customBankMoneyEcho(raw) {
+    const n = numberFromInput(raw);
+    if (n == null) return '';
+    const abs = Math.abs(n);
+    let text;
+    if (abs >= 1000000) text = `$${formatCallReportNumber(n / 1000000, abs >= 10000000 ? 0 : 1)}B`;
+    else if (abs >= 1000) text = `$${formatCallReportNumber(n / 1000, abs >= 10000 ? 0 : 1)}MM`;
+    else text = `$${formatCallReportNumber(n, 0)}K`;
+    return `= ${text}`;
   }
 
   function normalizeCustomBankReportRows(banks) {
@@ -10146,13 +10523,22 @@
     const op = ops.some(o => o.op === cond.op) ? cond.op : ops[0].op;
     const isBetween = op === 'between';
     const noValue = op === 'blank' || kind === 'boolean';
-    const unitsHint = def.type === 'money' ? ' ($000)' : def.type === 'percent' ? ' (%)' : '';
+    const isMoney = def.type === 'money';
+    const unitsHint = isMoney ? ' ($000)' : def.type === 'percent' ? ' (%)' : '';
+    // A saved condition on a field the current dataset doesn't carry passes
+    // every row (the engine's unknown-field contract) — flag it instead of
+    // rendering it as if it were active.
+    const fieldMissing = Boolean(customBankReportState.dataset)
+      && !(customBankReportState.fields || []).some(f => f && f.key === def.key)
+      && !CUSTOM_BANK_REPORT_COLUMNS.some(c => c.key === def.key);
     const valueInput = noValue ? '' : `
       <input type="text" class="custom-cond-value" data-cond-value="${idx}"
         placeholder="${escapeHtml(kind === 'numeric' ? `Value${unitsHint}` : op === 'oneOf' ? 'TX, OK, MO...' : 'Value')}"
         value="${escapeHtml(cond.value || '')}">
       ${isBetween ? `<span class="custom-cond-and">and</span>
       <input type="text" class="custom-cond-value" data-cond-value2="${idx}" placeholder="Upper${escapeHtml(unitsHint)}" value="${escapeHtml(cond.value2 || '')}">` : ''}
+      ${isMoney ? `<span class="custom-cond-unit" title="Call-report money values are in thousands">$000</span>
+      <span class="custom-cond-echo" data-cond-echo="${idx}">${escapeHtml(customBankMoneyEcho(cond.value))}</span>` : ''}
     `;
     return `
       <div class="custom-cond-row" data-cond-row="${idx}">
@@ -10161,6 +10547,7 @@
           ${ops.map(o => `<option value="${escapeHtml(o.op)}" ${o.op === op ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
         </select>
         ${valueInput}
+        ${fieldMissing ? `<span class="custom-cond-ignored" title="The field &quot;${escapeHtml(def.key)}&quot; is not in the current dataset, so this condition is ignored">field not in dataset — ignored</span>` : ''}
         <button type="button" class="text-btn danger" data-cond-remove="${idx}" aria-label="Remove condition">✕</button>
       </div>
     `;
@@ -10253,13 +10640,32 @@
           <div>${customBankReportColumnPickerHtml()}</div>
         </details>
         <div class="custom-report-summary">
-          <strong>${escapeHtml(formatNumber(rows.length))} banks</strong>
+          <strong id="customBankReportCount">${escapeHtml(formatNumber(rows.length))} banks</strong>
+          ${customBankReportState.definitionId ? `<span class="custom-report-editing-chip" title="Save View updates this saved report">Editing: ${escapeHtml(customBankReportState.name || customBankReportState.definitionId)}</span>` : ''}
           <span>${escapeHtml(source.latestPeriod ? `Call report ${source.latestPeriod}${currentText}` : 'Run the report to load bank data')}${peer.period ? escapeHtml(` · Peer ${peer.period}`) : ''}</span>
           <span>${escapeHtml(customBankReportState.lastRunAt ? `Generated ${new Date(customBankReportState.lastRunAt).toLocaleString()}` : '')}</span>
         </div>
         <div id="customBankReportOutput">${customBankReportOutputHtml(rows)}</div>
       </div>
     `;
+  }
+
+  // Human-readable list of the constraints currently narrowing the report, so
+  // a zero-row result explains itself instead of looking like missing data.
+  function customBankActiveFilterParts() {
+    const f = customBankReportState.filters || {};
+    const parts = [];
+    const conditions = (Array.isArray(f.conditions) ? f.conditions : []).filter(c => c && c.field);
+    if (conditions.length) parts.push(`${conditions.length} condition${conditions.length === 1 ? '' : 's'}`);
+    if (f.search) parts.push(`search "${f.search}"`);
+    if (f.states) parts.push(`states ${f.states}`);
+    if (f.statuses) parts.push(`status ${f.statuses}`);
+    if (f.minAssets) parts.push(`min assets $${f.minAssets}MM`);
+    if (f.maxAssets) parts.push(`max assets $${f.maxAssets}MM`);
+    if (f.savedOnly) parts.push('saved banks only');
+    if (f.portfolioOnly) parts.push('has portfolio file');
+    if (f.peerWatchOnly) parts.push('peer watch gaps');
+    return parts;
   }
 
   function customBankReportOutputHtml(rows) {
@@ -10270,7 +10676,14 @@
       return '<div class="bank-search-empty">Choose filters and run the report.</div>';
     }
     if (!rows.length) {
-      return '<div class="bank-search-empty">No banks match the current report setup.</div>';
+      const parts = customBankActiveFilterParts();
+      return `
+        <div class="bank-search-empty">
+          No banks match the current report setup.
+          ${parts.length ? `<span class="custom-report-empty-filters">Active filters: ${escapeHtml(parts.join(' · '))}.</span>
+          <button type="button" class="text-btn" data-custom-clear-filters>Clear all filters</button>` : ''}
+        </div>
+      `;
     }
     const gb = customBankGroupBy();
     if (gb.field) return customBankGroupedOutputHtml(rows, gb);
@@ -10359,8 +10772,11 @@
     customBankReportState.definitionId = def.id || '';
     customBankReportState.name = def.name || '';
     const defFilters = def.filters || {};
+    // Compose onto the pristine defaults, NOT the live state — templates and
+    // saved definitions that omit a filter key (statuses, minAssets, toggles…)
+    // must not inherit leftovers from whatever was on screen before.
     customBankReportState.filters = {
-      ...customBankReportState.filters,
+      ...defaultCustomBankFilters(),
       ...defFilters,
       // Definitions saved before the dynamic builder carry no conditions or
       // groupBy — reset both so leftovers from the last session never leak in.
@@ -10371,10 +10787,41 @@
     customBankReportState.sort = def.sort || customBankReportState.sort;
   }
 
+  function resetCustomBankReportForNewDefinition() {
+    customBankReportState.loading = false;
+    customBankReportState.dataset = null;
+    customBankReportState.fields = [];
+    customBankReportState.rows = [];
+    customBankReportState.lastRunAt = null;
+    customBankReportState.definitionId = '';
+    customBankReportState.name = '';
+    customBankReportState.filters = defaultCustomBankFilters();
+    customBankReportState.selectedColumns = CUSTOM_BANK_DEFAULT_COLUMNS.slice();
+    customBankReportState.sort = { key: 'totalAssets', dir: 'desc' };
+  }
+
   function renderCustomBankReportMount() {
     const mount = document.getElementById('reportsCustomBankMount');
     if (!mount) return;
     mount.innerHTML = customBankReportBuilderHtml();
+  }
+
+  // Keystroke path: re-filtering ~4,400 banks and rebuilding a 250-row table
+  // per character is wasteful, and the full-mount re-render used to snap the
+  // caret to the end of the input. Text inputs now leave the builder DOM alone
+  // (caret untouched) and refresh only the output table + row count on a short
+  // debounce.
+  let customBankOutputRefreshTimer = null;
+  function scheduleCustomBankOutputRefresh() {
+    clearTimeout(customBankOutputRefreshTimer);
+    customBankOutputRefreshTimer = setTimeout(() => {
+      const output = document.getElementById('customBankReportOutput');
+      if (!output) return;
+      const rows = filteredCustomBankRows();
+      output.innerHTML = customBankReportOutputHtml(rows);
+      const count = document.getElementById('customBankReportCount');
+      if (count) count.textContent = `${formatNumber(rows.length)} banks`;
+    }, 150);
   }
 
   async function runCustomBankReport() {
@@ -10478,7 +10925,9 @@
       showToast('Saved report view');
       renderReportsWorkspace();
     } catch (e) {
-      showToast('Could not save report view', true);
+      // Surface the server's ownership refusal (403/409) when overwriting a
+      // colleague's definition instead of a generic failure.
+      showToast(e && e.message ? e.message : 'Could not save report view', true);
     }
   }
 
@@ -10498,17 +10947,7 @@
 
   function clearCustomBankOpenListFilters() {
     customBankReportState.filters = {
-      ...customBankReportState.filters,
-      search: '',
-      states: '',
-      statuses: '',
-      minAssets: '',
-      maxAssets: '',
-      peerWatchOnly: false,
-      savedOnly: false,
-      portfolioOnly: false,
-      conditions: [],
-      groupBy: { field: '', thenBy: '', aggs: {} }
+      ...defaultCustomBankFilters()
     };
     customBankReportState.name = '';
     customBankReportState.definitionId = '';
@@ -10623,7 +11062,7 @@
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
             <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Save View is available for Custom Bank Lists"'}>Save View</button>
-            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'account-touch', 'pershing-dormant'].includes(type) ? '' : 'disabled title="Export not available for this report type yet"'}>Export CSV</button>
+            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'account-touch', 'pershing-dormant'].includes(type) ? 'title="Exports in the selected output format (CSV unless XLSX / Print is chosen)"' : 'disabled title="Export not available for this report type yet"'}>Export</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
         </main>
@@ -11560,6 +11999,11 @@
       pinned: false
     });
     saveReportsSessionReports();
+    // When the run executed a SAVED definition, stamp its real run history so
+    // "Recently Ran" and the Last Run column reflect actual runs.
+    if (type === 'custom-bank' && customBankReportState.definitionId) {
+      recordReportRun(customBankReportState.definitionId);
+    }
   }
 
   let reportsModalFocusRelease = null;
@@ -11567,6 +12011,9 @@
   function renderReportsWorkspace() {
     const app = document.getElementById('reportsApp');
     if (!app) return;
+    // Live hero stat (replaces the old hardcoded "4 Planned" placeholder).
+    const heroStat = document.getElementById('reportsHeroStat');
+    if (heroStat) heroStat.textContent = formatNumber(savedReportDefinitions.length);
     // Every route change re-renders app, destroying the Create-Report modal — so
     // release any focus trap from a prior render before we replace the DOM.
     if (reportsModalFocusRelease) { reportsModalFocusRelease(); reportsModalFocusRelease = null; }
@@ -11586,12 +12033,18 @@
       app.innerHTML = reportsBuilderHtml(type);
       if (type === 'custom-bank') {
         const reportId = route.params.get('id') || '';
-        if (reportId) {
-          const def = savedReportDefinitionById(reportId) || starterTemplateById(reportId);
+        const def = reportId ? (savedReportDefinitionById(reportId) || starterTemplateById(reportId)) : null;
+        if (def && def.template) {
           // A starter template seeds conditions/columns but must save as a NEW
           // definition, never overwrite the template id.
-          if (def && def.template) resetCustomBankReportFromDefinition({ ...def, id: '' });
-          else resetCustomBankReportFromDefinition(def);
+          resetCustomBankReportFromDefinition({ ...def, id: '' });
+        } else if (def) {
+          resetCustomBankReportFromDefinition(def);
+        } else {
+          // No id, or an id that resolves to nothing (deleted report, tpl-type-*
+          // rail rows) — clear definitionId/name so Save View can never silently
+          // PATCH the last-opened saved report.
+          resetCustomBankReportForNewDefinition();
         }
         renderCustomBankReportMount();
       }
@@ -12059,7 +12512,8 @@
     from: currentMonthStart(),
     to: new Date().toISOString().slice(0, 10),
     kinds: ACTIVITY_REPORT_KINDS.slice(),
-    rows: []
+    rows: [],
+    scopeRep: null
   };
 
   let accountTouchState = {
@@ -12068,8 +12522,19 @@
     days: 30,
     statuses: '',
     states: '',
-    rows: []
+    rows: [],
+    scopeRep: null
   };
+
+  // Both rollup routes return the ENFORCED scope (`rep` is the signed-in rep
+  // when a non-admin request was collapsed, null for firm-wide) — label the
+  // output so a rep never mistakes their own book for the whole desk.
+  function reportScopeChipHtml(rep) {
+    const label = rep
+      ? `Scope: ${rep.displayName || rep.username} (your book)`
+      : 'Scope: firm-wide';
+    return `<div class="reports-scope-chip">${escapeHtml(label)}</div>`;
+  }
 
   let pershingDormantState = {
     loading: false,
@@ -12149,6 +12614,7 @@
           </label>
           <div class="custom-report-toggles">${kindChecks}</div>
         </div>
+        ${s.loaded ? reportScopeChipHtml(s.scopeRep) : ''}
         <div id="activityReportOutput">${body}</div>
       </div>
     `;
@@ -12166,6 +12632,7 @@
       if (s.kinds.length && s.kinds.length < ACTIVITY_REPORT_KINDS.length) params.set('kinds', s.kinds.join(','));
       const data = await fetch(`/api/reports/activity-summary?${params}`, { cache: 'no-store' }).then(readBankJson);
       s.rows = Array.isArray(data.rows) ? data.rows : [];
+      s.scopeRep = data.rep || null;
       s.loaded = true;
       addSessionReport('activity-by-rep');
       showToast('Activity summary ready');
@@ -12241,6 +12708,7 @@
             </select>
           </label>
         </div>
+        ${s.loaded ? reportScopeChipHtml(s.scopeRep) : ''}
         <div id="accountTouchOutput">${body}</div>
       </div>
     `;
@@ -12257,6 +12725,7 @@
       if (s.states) params.set('states', String(s.states).toUpperCase().split(/[\s,]+/).filter(Boolean).join(','));
       const data = await fetch(`/api/reports/account-touch?${params}`, { cache: 'no-store' }).then(readBankJson);
       s.rows = Array.isArray(data.rows) ? data.rows : [];
+      s.scopeRep = data.rep || null;
       s.loaded = true;
       addSessionReport('account-touch');
       showToast('Account touch report ready');
@@ -12483,12 +12952,14 @@
           customBankQuickStateInput: 'states'
         };
         customBankReportState.filters[keyById[target.id]] = target.value || '';
-        renderCustomBankReportMount();
-        const nextInput = document.getElementById(target.id);
-        if (nextInput) {
-          nextInput.focus();
-          nextInput.setSelectionRange(nextInput.value.length, nextInput.value.length);
+        // The quick-start State box and the States filter share one filter key;
+        // mirror the value so they don't drift now that keystrokes no longer
+        // re-render the whole builder.
+        if (keyById[target.id] === 'states') {
+          const twin = document.getElementById(target.id === 'customBankStatesInput' ? 'customBankQuickStateInput' : 'customBankStatesInput');
+          if (twin && twin.value !== target.value) twin.value = target.value || '';
         }
+        scheduleCustomBankOutputRefresh();
       }
       const condValueAttr = target.hasAttribute && target.hasAttribute('data-cond-value') ? 'data-cond-value'
         : target.hasAttribute && target.hasAttribute('data-cond-value2') ? 'data-cond-value2' : '';
@@ -12497,12 +12968,13 @@
         const cond = (customBankReportState.filters.conditions || [])[idx];
         if (cond) {
           cond[condValueAttr === 'data-cond-value' ? 'value' : 'value2'] = target.value || '';
-          renderCustomBankReportMount();
-          const next = document.querySelector(`[${condValueAttr}="${idx}"]`);
-          if (next) {
-            next.focus();
-            next.setSelectionRange(next.value.length, next.value.length);
+          // Keep the $000 money echo live without a re-render (textContent is
+          // safe for the untrusted value — no innerHTML).
+          if (condValueAttr === 'data-cond-value') {
+            const echo = document.querySelector(`[data-cond-echo="${idx}"]`);
+            if (echo) echo.textContent = customBankMoneyEcho(cond.value);
           }
+          scheduleCustomBankOutputRefresh();
         }
       }
     });
@@ -12637,6 +13109,19 @@
         loadCrmPulse(true);
         return;
       }
+      const pulseScopeBtn = clickTarget.closest('[data-pulse-scope]');
+      if (pulseScopeBtn) {
+        const next = pulseScopeBtn.getAttribute('data-pulse-scope');
+        if (crmPulseState.scope !== next) {
+          crmPulseState.scope = next;
+          document.querySelectorAll('#pulseScopeToggle [data-pulse-scope]').forEach(b => {
+            b.classList.toggle('is-active', b.getAttribute('data-pulse-scope') === next);
+          });
+          crmPulseState.data = null;
+          loadCrmPulse(true);
+        }
+        return;
+      }
       const sorter = clickTarget.closest('[data-reports-sort]');
       if (sorter) {
         const key = sorter.dataset.reportsSort;
@@ -12659,6 +13144,29 @@
         renderReportsFilesTable();
         return;
       }
+      const typeCategory = clickTarget.closest('[data-report-type-category]');
+      if (typeCategory) {
+        const cat = typeCategory.dataset.reportTypeCategory || 'All';
+        const nav = typeCategory.closest('nav');
+        if (nav) nav.querySelectorAll('button').forEach(btn => btn.classList.toggle('active', btn === typeCategory));
+        let recentTypes = [];
+        if (cat === 'Recently Used') {
+          try {
+            const parsed = JSON.parse(localStorage.getItem('fbbs.reports.recentTypes') || '[]');
+            if (Array.isArray(parsed)) recentTypes = parsed.filter(slug => typeof slug === 'string');
+          } catch (_) { /* corrupted key — treat as no recents */ }
+        }
+        document.querySelectorAll('.reports-type-row').forEach(row => {
+          const slug = row.dataset.reportTypeSelect || '';
+          const meta = REPORT_TYPE_META[slug];
+          const show = cat === 'All'
+            || (cat === 'Recently Used'
+              ? (recentTypes.length ? recentTypes.includes(slug) : true)
+              : Boolean(meta && meta.category === cat));
+          row.hidden = !show;
+        });
+        return;
+      }
       const typeRow = clickTarget.closest('[data-report-type-select]');
       if (typeRow) {
         reportsSelectedType = typeRow.dataset.reportTypeSelect || '';
@@ -12674,7 +13182,12 @@
       const continueBtn = clickTarget.closest('#reportsTypeContinueBtn');
       if (continueBtn && reportsSelectedType) {
         event.preventDefault();
-        const recent = JSON.parse(localStorage.getItem('fbbs.reports.recentTypes') || '[]').filter(type => type !== reportsSelectedType);
+        let recent = [];
+        try {
+          const parsed = JSON.parse(localStorage.getItem('fbbs.reports.recentTypes') || '[]');
+          if (Array.isArray(parsed)) recent = parsed;
+        } catch (_) { /* corrupted key — start fresh */ }
+        recent = recent.filter(type => type !== reportsSelectedType);
         recent.unshift(reportsSelectedType);
         localStorage.setItem('fbbs.reports.recentTypes', JSON.stringify(recent.slice(0, 6)));
         window.location.hash = reportsHash(`build/${reportsSelectedType}`);
@@ -12692,7 +13205,21 @@
       }
       const exportBtn = clickTarget.closest('[data-reports-export]');
       if (exportBtn) {
-        exportReport(exportBtn.dataset.reportsExport, 'csv');
+        // Honor the output-format radios: XLSX for Custom Bank Lists and
+        // Print/PDF for Portfolio Review route to their exporters; everything
+        // else (including "In-app view") exports CSV.
+        const exportType = exportBtn.dataset.reportsExport;
+        const exportFormat = (document.querySelector('input[name="reportsOutputFormat"]:checked') || {}).value || 'view';
+        if (exportType === 'custom-bank' && exportFormat === 'xlsx') {
+          if (customBankReportState.dataset) exportCustomBankReportXlsx(exportBtn);
+          else showToast('Run the report before exporting', true);
+          return;
+        }
+        if (exportType === 'portfolio-peer' && exportFormat === 'pdf') {
+          exportReport(exportType, 'pdf');
+          return;
+        }
+        exportReport(exportType, 'csv');
         return;
       }
       const customSort = clickTarget.closest('[data-custom-bank-sort]');
@@ -12719,6 +13246,15 @@
       if (condRemove) {
         const idx = Number(condRemove.dataset.condRemove);
         (customBankReportState.filters.conditions || []).splice(idx, 1);
+        renderCustomBankReportMount();
+        return;
+      }
+      const clearFilters = clickTarget.closest('[data-custom-clear-filters]');
+      if (clearFilters) {
+        // Reset the constraints only — keep the loaded dataset and any saved
+        // definition being edited (unlike the quick-start Clear, which also
+        // drops the definition).
+        customBankReportState.filters = defaultCustomBankFilters();
         renderCustomBankReportMount();
         return;
       }
@@ -12755,7 +13291,7 @@
           if (def) {
             persistReportDefinition({ id: def.id, pinned: !def.pinned })
               .then(() => { renderReportsWorkspace(); showToast(def.pinned ? 'Unpinned' : 'Pinned'); })
-              .catch(() => showToast('Could not update pin', true));
+              .catch(err => showToast(err && err.message ? err.message : 'Could not update pin', true));
           }
         }
         if (action === 'move') {
@@ -12766,7 +13302,7 @@
             if (target && target.trim() && target.trim() !== def.folder) {
               persistReportDefinition({ id: def.id, folder: target.trim() })
                 .then(() => { renderReportsWorkspace(); showToast('Moved to ' + target.trim()); })
-                .catch(() => showToast('Could not move report', true));
+                .catch(err => showToast(err && err.message ? err.message : 'Could not move report', true));
             }
           }
         }
@@ -12893,15 +13429,17 @@
     });
   }
 
-  function runReportBuilder(type) {
+  async function runReportBuilder(type) {
     const outputFormat = (document.querySelector('input[name="reportsOutputFormat"]:checked') || {}).value || 'view';
     if (type === 'custom-bank') {
-      if (outputFormat === 'csv' && customBankReportState.dataset) {
-        exportCustomBankReportCsv();
-        return;
-      }
-      if (outputFormat === 'xlsx' && customBankReportState.dataset) {
-        exportCustomBankReportXlsx(document.querySelector('[data-reports-run]'));
+      if (outputFormat === 'csv' || outputFormat === 'xlsx') {
+        // First Run with CSV/XLSX selected: load the dataset, THEN export, so
+        // the chosen format is honored on the first click instead of silently
+        // rendering the in-app view.
+        if (!customBankReportState.dataset) await runCustomBankReport();
+        if (!customBankReportState.dataset) return; // load failed — toast already shown
+        if (outputFormat === 'csv') exportCustomBankReportCsv();
+        else exportCustomBankReportXlsx(document.querySelector('[data-reports-run]'));
         return;
       }
       runCustomBankReport();
@@ -13739,21 +14277,32 @@
     return data;
   }
 
-  async function searchBanks(query) {
+  async function searchBanks(query, limit) {
     const results = document.getElementById('bankSearchResults');
     const q = String(query || '').trim();
     if (!results) return;
+    // Sequence token so a slower earlier response can never overwrite newer
+    // results (mirrors loadBank's bankLoadRequestId). Bumped even on the
+    // short-query early-out so an in-flight search can't clobber the hint.
+    const seq = ++bankSearchSeq;
     if (q.length < 2) {
       results.innerHTML = '<div class="bank-search-empty">Type at least two characters to search banks.</div>';
+      setBankSearchExpanded(false);
       return;
     }
+    const safeLimit = Math.max(1, Math.min(25, parseInt(limit, 10) || 10));
     results.innerHTML = '<div class="bank-search-empty">Searching banks&hellip;</div>';
     try {
-      const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=10`, { cache: 'no-store' });
+      const res = await fetch(`/api/banks/search?q=${encodeURIComponent(q)}&limit=${safeLimit}`, { cache: 'no-store' });
       const data = await readBankJson(res);
+      if (seq !== bankSearchSeq) return; // a newer search superseded this one
+      lastBankSearchPayload = data;
+      lastBankSearchQuery = q;
       renderBankResults(data);
     } catch (e) {
+      if (seq !== bankSearchSeq) return; // don't surface a stale error either
       results.innerHTML = `<div class="bank-search-empty">${escapeHtml(e.message)}</div>`;
+      setBankSearchExpanded(false);
     }
   }
 
@@ -13761,10 +14310,21 @@
     return Array.from(document.querySelectorAll('#bankSearchResults .bank-result'));
   }
 
+  // Combobox wiring: the search input announces the arrow-selected option and
+  // whether the listbox is open (role="combobox" lives on the input markup).
+  function setBankSearchExpanded(expanded, activeId) {
+    const input = document.getElementById('bankSearchInput');
+    if (!input) return;
+    input.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    if (expanded && activeId) input.setAttribute('aria-activedescendant', activeId);
+    else input.removeAttribute('aria-activedescendant');
+  }
+
   function setActiveBankSearchResult(index) {
     const buttons = bankResultButtons();
     if (!buttons.length) {
       bankSearchActiveIndex = -1;
+      setBankSearchExpanded(false);
       return;
     }
     bankSearchActiveIndex = (index + buttons.length) % buttons.length;
@@ -13773,6 +14333,7 @@
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-selected', String(active));
     });
+    setBankSearchExpanded(true, buttons[bankSearchActiveIndex].id);
     buttons[bankSearchActiveIndex].scrollIntoView({ block: 'nearest' });
   }
 
@@ -13784,23 +14345,32 @@
     const truncated = Boolean(!Array.isArray(dataOrRows) && dataOrRows && dataOrRows.truncated);
     bankSearchActiveIndex = -1;
     if (!rows.length) {
-      results.innerHTML = '<div class="bank-search-empty">No matching banks found.</div>';
-      selectedBank = null;
-      selectedBankAccountStatus = null;
-      resetSelectedBankTransientState();
-      if (parseHashTarget(window.location.hash || '#home').page === 'banks') {
-        replaceHashParams('banks', {});
-      }
-      const profile = document.getElementById('bankProfile');
-      if (profile) {
-        profile.innerHTML = '<div class="bank-empty-state"><h2>No matching banks found</h2><p>Try a different bank name, city, state, FDIC cert, or parent company.</p></div>';
-      }
+      // Only the result list reacts to a dead-end search — never touch the
+      // open tear sheet, its transient CRM state, or the ?bank= deep link
+      // (a mistyped lookup mid-call must not wipe the bank being worked).
+      const staleCount = !Array.isArray(dataOrRows) && dataOrRows ? Number(dataOrRows.staleBankCount) || 0 : 0;
+      const cutoff = (!Array.isArray(dataOrRows) && dataOrRows && dataOrRows.freshnessCutoffPeriod) || '';
+      const staleNote = staleCount > 0
+        ? ` Note: ${formatNumber(staleCount)} stale/inactive banks${cutoff ? ` (call reports older than ${cutoff})` : ''} are excluded from search.`
+        : '';
+      results.innerHTML = `<div class="bank-search-empty">${escapeHtml(`No matching banks found.${staleNote}`)}</div>`;
+      setBankSearchExpanded(false);
       return;
     }
     const countText = truncated
       ? `Showing ${formatNumber(rows.length)} of ${formatNumber(total)} matching banks`
       : `${formatNumber(total)} matching bank${total === 1 ? '' : 's'}`;
-    results.innerHTML = `<div class="bank-search-count">${escapeHtml(countText)}</div>` + rows.map(row => {
+    // Expansion footer: the server caps search at 25 rows — beyond that the
+    // custom-bank report builder is the full-list surface.
+    const footerParts = [];
+    if (truncated && rows.length < 25) {
+      footerParts.push('<button type="button" class="text-btn" data-bank-search-more="25">Show 25</button>');
+    }
+    if (total > 25) {
+      footerParts.push(`<a class="text-btn" href="${escapeHtml(reportBuildHash('custom-bank', ''))}">Open all ${escapeHtml(formatNumber(total))} in the report builder</a>`);
+    }
+    const footerHtml = footerParts.length ? `<div class="bank-search-empty bank-search-more">${footerParts.join(' · ')}</div>` : '';
+    results.innerHTML = `<div class="bank-search-count">${escapeHtml(countText)}</div>` + rows.map((row, i) => {
       const status = statusForBankRow(row);
       const coverage = [
         status.owner ? `Owner: ${status.owner}` : '',
@@ -13809,7 +14379,7 @@
         status.bankersBankServices ? `${serviceCount(status.bankersBankServices)} Bankers Bank services` : ''
       ].filter(Boolean).join(' · ');
       return `
-      <button type="button" class="bank-result" data-bank-id="${escapeHtml(row.id)}" role="option" aria-selected="false">
+      <button type="button" class="bank-result" id="bankSearchOpt${i}" data-bank-id="${escapeHtml(row.id)}" role="option" aria-selected="false">
         <div>
           <strong>${escapeHtml(bankDisplayName(row))}</strong>
           ${coverage ? `<small>${escapeHtml(coverage)}</small>` : ''}
@@ -13821,17 +14391,43 @@
         </div>
       </button>
       `;
-    }).join('');
+    }).join('') + footerHtml;
     results.querySelectorAll('[data-bank-id]').forEach(btn => {
       btn.addEventListener('click', () => navigateToHash(bankDeepLinkHash(btn.dataset.bankId), loadBankFromHashRoute));
     });
-    setActiveBankSearchResult(0);
+    const moreBtn = results.querySelector('[data-bank-search-more]');
+    if (moreBtn) moreBtn.addEventListener('click', () => searchBanks(lastBankSearchQuery, 25));
+    // Highlight the open tear sheet's row when restoring a result list.
+    const openId = String(selectedBankId() || '');
+    const openIdx = openId ? rows.findIndex(row => String(row.id) === openId) : -1;
+    setActiveBankSearchResult(openIdx >= 0 ? openIdx : 0);
   }
 
   function clearBankSearchResults() {
     const results = document.getElementById('bankSearchResults');
     if (results) results.innerHTML = '';
     bankSearchActiveIndex = -1;
+    setBankSearchExpanded(false);
+  }
+
+  // Selecting a result collapses the list to keep the tear sheet above the
+  // fold, but a rep working a multi-bank result set (all banks in a county)
+  // gets a one-click restore bar instead of retyping the search.
+  function collapseBankSearchResults() {
+    const results = document.getElementById('bankSearchResults');
+    bankSearchActiveIndex = -1;
+    setBankSearchExpanded(false);
+    if (!results) return;
+    const payload = lastBankSearchPayload;
+    const rows = payload && Array.isArray(payload.results) ? payload.results : [];
+    if (!rows.length) {
+      results.innerHTML = '';
+      return;
+    }
+    const label = `‹ Back to ${formatNumber(rows.length)} result${rows.length === 1 ? '' : 's'}${lastBankSearchQuery ? ` for "${lastBankSearchQuery}"` : ''}`;
+    results.innerHTML = `<button type="button" class="text-btn bank-search-restore">${escapeHtml(label)}</button>`;
+    const btn = results.querySelector('.bank-search-restore');
+    if (btn) btn.addEventListener('click', () => renderBankResults(payload));
   }
 
   function bankAccountStatusLabel(value) {
@@ -13917,23 +14513,28 @@
     const rows = loadRecentBanks();
     panel.hidden = true;
     if (!rows.length) {
-      list.innerHTML = '<option value="">No previous searches</option>';
+      list.innerHTML = '';
       return;
     }
-    list.innerHTML = [
-      '<option value="">Select a recent bank</option>',
-      ...rows.map(row => {
-        const detail = [row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : ''].filter(Boolean).join(' · ');
-        return `<option value="${escapeHtml(row.id)}">${escapeHtml(bankDisplayName(row))}${detail ? ` - ${escapeHtml(detail)}` : ''}</option>`;
-      })
-    ].join('');
-    list.value = '';
-    list.onchange = () => {
-      if (!list.value) return;
-      navigateToHash(bankDeepLinkHash(list.value), loadBankFromHashRoute);
-      list.value = '';
-      hideBankRecentDropdown();
-    };
+    // Scannable one-click rows reusing the search-result markup (the old
+    // native <select> hid everything behind two clicks and no status cue).
+    list.innerHTML = rows.map(row => `
+      <button type="button" class="bank-result" data-recent-bank-id="${escapeHtml(row.id)}" role="option" aria-selected="false">
+        <div>
+          <strong>${escapeHtml(bankDisplayName(row))}</strong>
+        </div>
+        <span>${escapeHtml([row.city, row.state, row.certNumber ? `Cert ${row.certNumber}` : '', row.primaryRegulator].filter(Boolean).join(' · '))}</span>
+        <div class="bank-result-meta">
+          <em>${escapeHtml(row.period || '')}</em>
+          ${renderBankStatusChip({ id: row.id, accountStatus: row.accountStatus ? { status: bankAccountStatusLabel(row.accountStatus) } : null })}
+        </div>
+      </button>`).join('');
+    list.querySelectorAll('[data-recent-bank-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        hideBankRecentDropdown();
+        navigateToHash(bankDeepLinkHash(btn.dataset.recentBankId), loadBankFromHashRoute);
+      });
+    });
   }
 
   function getSavedBankById(bankId) {
@@ -14037,24 +14638,33 @@
     bankContactsEditingId = null;
     bankContactsAdding = false;
     selectedBankActivities = [];
+    selectedBankLastManualTouch = '';
     bankActivityBankId = null;
     bankActivityRequestId += 1;
     bankActivityFilter = 'all';
+    bankActivityDraft = null;
     bankActivitySaving = false;
-    selectedBankTasks = [];
+    selectedBankTasks = null;
     bankTasksBankId = null;
+    bankTasksLoadError = false;
     bankTaskSaving = false;
     bankTaskAdding = false;
-    selectedBankOpps = [];
+    selectedBankOpps = null;
     bankOppsBankId = null;
+    bankOppsLoadError = false;
     bankOppSaving = false;
     bankOppAdding = false;
+    bankOppEditingId = null;
+    bankOppShowClosed = false;
     selectedBankProductFit = [];
     selectedBankStrategyHistory = [];
     selectedBankPershing = null;
     selectedBankPershingTrades = null;
+    selectedBankTradeHistory = null;
     bankPershingBankId = null;
     bankPershingTradesBankId = null;
+    bankTradeHistoryBankId = null;
+    bankTradeHistoryLimit = 25;
     bankAssistantLastResponse = null;
     bankIntelligenceRequestId += 1;
     bankIntelligenceLoading = false;
@@ -14085,48 +14695,79 @@
     </button>`;
   }
 
+  // Local wall-clock YMD — toISOString() is UTC and flips to tomorrow in the
+  // evening US time, mislabeling today's tasks as overdue.
+  function localTodayYmd() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  // Age (days) of the imported sales-safe THC summary, from asOfDate with an
+  // importedAt fallback. Null when no summary or no usable date.
+  function thcSummaryAgeDays(summary) {
+    if (!summary || !summary.available) return null;
+    const when = String(summary.asOfDate || summary.importedAt || '').slice(0, 10);
+    const parsed = Date.parse(when);
+    if (!isFinite(parsed)) return null;
+    return Math.max(0, Math.round((Date.parse(localTodayYmd()) - parsed) / 86400000));
+  }
+
   function buildBankSignalChips() {
     const chips = [];
-    const todayYmd = new Date().toISOString().slice(0, 10);
+    const todayYmd = localTodayYmd();
 
     // Last manual touch — same 30/60d green/amber/red bands as saved views.
+    // The server-computed lastManualTouch is correct even when system rows push
+    // the last manual activity out of the fetched timeline window; the loaded
+    // window still wins when a just-logged activity is newer than that fetch.
     const manual = (selectedBankActivities || []).filter(a => isManualActivityKind(a.kind));
+    const newestLoaded = manual.reduce((best, a) => {
+      const when = a.activityDate || (a.at ? String(a.at).slice(0, 10) : '');
+      return when > best ? when : best;
+    }, '');
+    const newest = (selectedBankLastManualTouch || '') > newestLoaded ? selectedBankLastManualTouch : newestLoaded;
     let touchTone = 'red', touchValue = 'No logged touch';
-    if (manual.length) {
-      const newest = manual.reduce((best, a) => {
-        const when = a.activityDate || (a.at ? String(a.at).slice(0, 10) : '');
-        return when > best ? when : best;
-      }, '');
-      if (newest) {
-        const days = Math.max(0, Math.round((Date.parse(todayYmd) - Date.parse(newest)) / 86400000));
-        touchTone = days <= 30 ? 'green' : (days <= 60 ? 'amber' : 'red');
-        touchValue = days === 0 ? 'Today' : `${days}d ago`;
-      }
+    if (newest) {
+      const days = Math.max(0, Math.round((Date.parse(todayYmd) - Date.parse(newest)) / 86400000));
+      touchTone = days <= 30 ? 'green' : (days <= 60 ? 'amber' : 'red');
+      touchValue = days === 0 ? 'Today' : `${days}d ago`;
     }
     chips.push(bankSignalChip(touchTone, 'Last touch', touchValue, 'bankActivityPanel'));
 
-    const tasks = selectedBankTasks || [];
-    const overdue = tasks.filter(t => t.dueDate && t.dueDate < todayYmd).length;
-    const nextDue = tasks.filter(t => t.dueDate).map(t => t.dueDate).sort()[0] || '';
-    if (overdue) chips.push(bankSignalChip('red', 'Tasks', `${overdue} overdue`, 'bankTasksPanel'));
-    else if (nextDue) chips.push(bankSignalChip(nextDue === todayYmd ? 'amber' : 'green', 'Next task', nextDue === todayYmd ? 'Due today' : formatActivityDate(nextDue), 'bankTasksPanel'));
-    else chips.push(bankSignalChip('neutral', 'Tasks', 'None open', 'bankTasksPanel'));
+    // null = still loading (or load failed) — a neutral '…' chip, never a
+    // false 'None open' read.
+    if (selectedBankTasks === null) {
+      chips.push(bankSignalChip('neutral', 'Tasks', '…', 'bankTasksPanel'));
+    } else {
+      const tasks = selectedBankTasks || [];
+      const overdue = tasks.filter(t => t.dueDate && t.dueDate < todayYmd).length;
+      const nextDue = tasks.filter(t => t.dueDate).map(t => t.dueDate).sort()[0] || '';
+      if (overdue) chips.push(bankSignalChip('red', 'Tasks', `${overdue} overdue`, 'bankTasksPanel'));
+      else if (nextDue) chips.push(bankSignalChip(nextDue === todayYmd ? 'amber' : 'green', 'Next task', nextDue === todayYmd ? 'Due today' : formatActivityDate(nextDue), 'bankTasksPanel'));
+      else chips.push(bankSignalChip('neutral', 'Tasks', 'None open', 'bankTasksPanel'));
+    }
 
-    const opps = selectedBankOpps || [];
-    const oppValue = opps.reduce((sum, o) => sum + (Number(o.estValue) || 0), 0);
-    chips.push(bankSignalChip(opps.length ? 'green' : 'neutral', 'Pipeline',
-      opps.length ? `${opps.length} open${oppValue ? ' · ' + compactMoney(oppValue) : ''}` : 'Empty', 'bankOppsPanel'));
+    if (selectedBankOpps === null) {
+      chips.push(bankSignalChip('neutral', 'Pipeline', '…', 'bankOppsPanel'));
+    } else {
+      const opps = (selectedBankOpps || []).filter(o => o.stage !== 'Won' && o.stage !== 'Lost');
+      const oppValue = opps.reduce((sum, o) => sum + (Number(o.estValue) || 0), 0);
+      chips.push(bankSignalChip(opps.length ? 'green' : 'neutral', 'Pipeline',
+        opps.length ? `${opps.length} open${oppValue ? ' · ' + compactMoney(oppValue) : ''}` : 'Empty', 'bankOppsPanel'));
+    }
 
     const roll = bankSignalState.cdRollover;
     if (roll && roll.count > 0) {
       chips.push(bankSignalChip('amber', 'CDs rolling',
-        `${roll.count} in ${roll.windowDays}d (next ${roll.cds[0].daysOut}d)`, 'goto:cd-rollover'));
+        `${roll.count} in ${roll.windowDays}d (next ${roll.cds[0].daysOut}d)`, 'cdroll:toggle'));
     } else if (roll) {
       chips.push(bankSignalChip('neutral', 'CDs rolling', `None in ${roll.windowDays}d`, ''));
     }
 
     const fdic = bankSignalState.fdic;
-    if (fdic) {
+    if (fdic && fdic.unavailable) {
+      chips.push(bankSignalChip('neutral', 'FDIC', 'Live check unavailable', 'tab:callreport'));
+    } else if (fdic) {
       chips.push(fdic.newer
         ? bankSignalChip('amber', 'FDIC', `${fdic.period} out — refresh import`, 'tab:callreport')
         : bankSignalChip('green', 'FDIC', `${fdic.period} current`, 'tab:callreport'));
@@ -14159,6 +14800,13 @@
       const ageText = ageDays != null ? (ageDays > 40 ? ` · ${ageDays}d old` : '') : '';
       chips.push(bankSignalChip(tone, 'THC portfolio', glText + ageText, 'tab:callreport'));
     }
+
+    // THC summary staleness — quarterly-cycle bands (green ≤100d, amber ≤190d).
+    const summaryAge = thcSummaryAgeDays(selectedBank && selectedBank.bank && selectedBank.bank.thcSummary);
+    if (summaryAge != null) {
+      const tone = summaryAge <= 100 ? 'green' : (summaryAge <= 190 ? 'amber' : 'red');
+      chips.push(bankSignalChip(tone, 'THC summary', summaryAge === 0 ? 'Imported today' : `${summaryAge}d old`, 'tab:callreport'));
+    }
     return chips.join('');
   }
 
@@ -14171,8 +14819,34 @@
     if (strip) strip.innerHTML = buildBankSignalChips();
   }
 
+  // Inline expansion for the "CDs rolling" chip — the per-bank CD slice is
+  // already loaded (bankSignalState.cdRollover), so answer the call cue in
+  // place instead of dumping the rep on the full unfiltered Rollover Wall.
+  function toggleBankCdRolloverDrawer() {
+    const drawer = document.getElementById('bankCdRollDrawer');
+    const roll = bankSignalState.cdRollover;
+    if (!drawer || !roll || !Array.isArray(roll.cds) || !roll.cds.length) return;
+    if (!drawer.hidden) { drawer.hidden = true; return; }
+    const rows = roll.cds.map(cd => `
+      <tr>
+        <td class="bank-cdroll-cusip">${escapeHtml(cd.cusip || '—')}</td>
+        <td class="num">${escapeHtml(cd.rate != null && cd.rate !== '' ? `${Number(cd.rate).toFixed(2)}%` : '—')}</td>
+        <td>${escapeHtml(cd.term || '—')}</td>
+        <td>${escapeHtml(formatActivityDate(cd.maturity) || cd.maturity || '—')}</td>
+        <td class="num">${escapeHtml(cd.daysOut != null ? `${cd.daysOut}d` : '—')}</td>
+      </tr>`).join('');
+    drawer.innerHTML = `
+      <table class="bank-cdroll-table">
+        <thead><tr><th>CUSIP</th><th class="num">Rate</th><th>Term</th><th>Maturity</th><th class="num">Days out</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p class="bank-cdroll-foot">${escapeHtml(`${roll.count} brokered CD${roll.count === 1 ? '' : 's'} maturing in ${roll.windowDays}d`)} · <a href="#cd-rollover">Open full Rollover Wall ›</a></p>`;
+    drawer.hidden = false;
+  }
+
   function handleBankSignalClick(target) {
     if (!target) return;
+    if (target === 'cdroll:toggle') { toggleBankCdRolloverDrawer(); return; }
     if (target.startsWith('goto:')) { window.location.hash = '#' + target.slice(5); return; }
     if (target.startsWith('tab:')) {
       setBankTearSheetTab(target.slice(4));
@@ -14201,6 +14875,8 @@
 
   function renderAccountDetailsSummary(values, status) {
     const address = [values.address, [values.city, values.state, values.zip].filter(Boolean).join(', ')].filter(Boolean).join(' · ');
+    // Only populated facts earn a cell — most banks carry no affiliate trio,
+    // and six fixed '—' cells burned a row of prime space above the tabs.
     const cells = [
       ['Account Team Members', status.owner],
       ['Phone', values.phone ? { html: phoneLinkHtml(values.phone) } : ''],
@@ -14208,7 +14884,7 @@
       ['Affiliate', status.affiliate],
       ['Affiliate Status', status.affiliateStatus],
       ['Affiliate Rep', status.affiliateRep]
-    ];
+    ].filter(([, value]) => value !== null && value !== undefined && value !== '');
     return `
       <section class="bank-account-coverage-summary" id="bankAccountDetailsSummary">
         <div class="bank-account-coverage-title">
@@ -14218,14 +14894,14 @@
           </div>
           <em class="bank-pill ${coverageClass(status.status)}">${escapeHtml(status.status || 'Open')}</em>
         </div>
-        <div class="bank-account-coverage-summary-grid">
+        ${cells.length ? `<div class="bank-account-coverage-summary-grid">
           ${cells.map(([label, value]) => `
             <div>
               <span>${escapeHtml(label)}</span>
               <strong>${value && typeof value === 'object' && value.html ? value.html : escapeHtml(value || '—')}</strong>
             </div>
           `).join('')}
-        </div>
+        </div>` : ''}
       </section>
     `;
   }
@@ -14277,7 +14953,17 @@
   function loadBankFromHashRoute() {
     const params = hashParamsForPage('banks');
     const bankId = params.get('bank');
-    if (!bankId) return;
+    if (!bankId) {
+      // "Find bank" links (e.g. unmatched THC import records) arrive as
+      // '#banks?q=<name>' — seed the search box and run the search.
+      const q = (params.get('q') || '').trim();
+      if (q) {
+        const input = document.getElementById('bankSearchInput');
+        if (input) input.value = q;
+        searchBanks(q);
+      }
+      return;
+    }
     const openStrategyRequest = params.get('strategy') === '1';
     if (String(selectedBankId() || '') === String(bankId)) {
       if (openStrategyRequest) openBankStrategyRequestPanel();
@@ -14307,7 +14993,7 @@
     selectedBank = null;
     selectedBankAccountStatus = null;
     resetSelectedBankTransientState();
-    if (options.collapseResults) clearBankSearchResults();
+    if (options.collapseResults) collapseBankSearchResults();
     const profile = document.getElementById('bankProfile');
     if (profile) profile.innerHTML = bankProfileSkeletonHtml();
     try {
@@ -14469,10 +15155,9 @@
       ['Primary Regulator', values.primaryRegulator],
       ['FTEs', formatBankValue(values.fullTimeEmployees, 'number')],
       ['Subchapter S Election?', values.subchapterS],
-      ['Number of Offices', formatBankValue(values.numberOfOffices, 'number')],
-      ['Affiliate', accountStatus.affiliate],
-      ['Affiliate Status', accountStatus.affiliateStatus],
-      ['Affiliate Rep', accountStatus.affiliateRep]
+      ['Number of Offices', formatBankValue(values.numberOfOffices, 'number')]
+      // Affiliate / Affiliate Status / Affiliate Rep live in the Account
+      // Details band above the tabs — don't triplicate them here.
     ];
 
     profile.innerHTML = `
@@ -14486,26 +15171,29 @@
           <div class="bank-profile-actions">
             <select id="bankTearSheetStatus" class="bank-action-select" aria-label="Bank account status">${coverageSelectOptions(BANK_COVERAGE_STATUSES, currentBankAccountStatus().status || 'Open')}</select>
             <select id="bankTearSheetPriority" class="bank-action-select" aria-label="Coverage priority" title="Coverage priority">${coverageSelectOptions(BANK_COVERAGE_PRIORITIES, (selectedTearSheetCoverage && selectedTearSheetCoverage.priority) || 'Medium')}</select>
-            <input type="text" id="bankTearSheetOwner" class="bank-action-input" value="${escapeHtml(currentBankAccountStatus().owner || '')}" placeholder="Account owner" aria-label="Account owner">
+            <input type="text" id="bankTearSheetOwner" class="bank-action-input" list="fbbsRepList" value="${escapeHtml(currentBankAccountStatus().owner || '')}" placeholder="Account owner" aria-label="Account owner">
             <button type="button" class="small-btn bank-action-btn" id="bankSaveBtn">Save Coverage</button>
             <button type="button" class="small-btn bank-action-btn" id="bankWatchBtn" title="Add this bank to my watchlist">&#9734; Watch</button>
             <button type="button" class="small-btn bank-action-btn" id="bankPrintBtn">Print</button>
             <button type="button" class="small-btn bank-action-btn" id="bankExportBtn">Export CSV</button>
           </div>
           <div class="bank-period-badge">
-            <strong>${escapeHtml(latest.endDate || latest.period || '—')}</strong>
+            <strong>${escapeHtml(formatNumericDate(latest.endDate || latest.period))}${bankPeriodInterimBadge(latest)}</strong>
             <span>${escapeHtml(meta.latestPeriod || latest.period || '')}</span>
           </div>
         </div>
       </div>
+      ${bank.isStale ? `<div class="sd-banner warn bank-stale-warning" role="note">${escapeHtml(`Latest call report ${latest.period || '—'} is behind the ${meta.latestPeriod || 'current'} freshness cutoff — this bank may be merged, closed, or renamed. It is excluded from bank search and maps.`)}</div>` : ''}
       ${renderAccountDetailsSummary(values, accountStatus)}
+      <div class="bank-signal-strip" id="bankSignalStrip">${renderBankSignalStrip()}</div>
+      <div class="bank-cdroll-drawer" id="bankCdRollDrawer" hidden></div>
       <div class="bank-tab-bar" id="bankTabBar" role="tablist" aria-label="Tear sheet sections">
         <button type="button" role="tab" data-bank-tab="callreport" aria-selected="${bankTearSheetTab === 'callreport'}" class="${bankTearSheetTab === 'callreport' ? 'active' : ''}">Call Report &amp; Portfolio</button>
         <button type="button" role="tab" data-bank-tab="sales" aria-selected="${bankTearSheetTab === 'sales'}" class="${bankTearSheetTab === 'sales' ? 'active' : ''}">Sales Workspace</button>
       </div>
       <div class="bank-tab-panel" data-bank-tab-panel="sales" ${bankTearSheetTab === 'sales' ? '' : 'hidden'}>
         <div class="bank-workspace-toolbar">
-          <div class="bank-signal-strip" id="bankSignalStrip">${renderBankSignalStrip()}</div>
+          <div></div>
           <div class="bank-workspace-actions">
             <button type="button" class="small-btn bank-action-btn" id="bankOfferingFitsBtn" title="What in today's inventory fits this bank?">Today's Fits</button>
             <button type="button" class="small-btn bank-action-btn" id="bankThcUpdateBtn" title="Ask operations for an updated THC ALM, bond accounting, or trade simulation package">Request THC Update</button>
@@ -14520,6 +15208,7 @@
         ${renderBankContactsPanel()}
         ${renderBankPershingPanel()}
         ${renderBankPershingTradesPanel()}
+        ${renderBankTradeHistoryPanel()}
         ${renderBankAssistantPanel()}
         ${renderBankProductFitPanel()}
         <div class="bank-services-pair">
@@ -14553,9 +15242,11 @@
       </div>
     `;
     updateBankSaveButton();
+    loadKnownReps(); // fills the shared #fbbsRepList datalist behind the owner input
     const saveBtn = document.getElementById('bankSaveBtn');
     const strategyToggleBtn = document.getElementById('bankStrategyToggleBtn');
     const statusSelect = document.getElementById('bankTearSheetStatus');
+    const prioritySelect = document.getElementById('bankTearSheetPriority');
     const ownerInput = document.getElementById('bankTearSheetOwner');
     const strategySubmitBtn = document.getElementById('bankStrategySubmitBtn');
     const strategyCancelBtn = document.getElementById('bankStrategyCancelBtn');
@@ -14569,8 +15260,15 @@
     if (strategyCancelBtn) strategyCancelBtn.addEventListener('click', hideBankStrategyRequestPanel);
     if (peerReportBtn) peerReportBtn.addEventListener('click', () => openBankReportBuilder('bank-peer'));
     if (portfolioReportBtn) portfolioReportBtn.addEventListener('click', () => openBankReportBuilder('portfolio-peer'));
-    if (statusSelect) statusSelect.addEventListener('change', updateTearSheetCoverageSignal);
-    if (ownerInput) ownerInput.addEventListener('input', updateTearSheetCoverageSignal);
+    // An edited control is marked dirty so a late coverage fetch can't clobber
+    // it, and the Save button flips to "Save changes" until the POST lands.
+    const markCoverageControlEdited = el => {
+      el.dataset.dirty = '1';
+      updateBankSaveButton();
+    };
+    if (statusSelect) statusSelect.addEventListener('change', () => markCoverageControlEdited(statusSelect));
+    if (prioritySelect) prioritySelect.addEventListener('change', () => markCoverageControlEdited(prioritySelect));
+    if (ownerInput) ownerInput.addEventListener('input', () => markCoverageControlEdited(ownerInput));
     if (printBtn) printBtn.addEventListener('click', printBankProfile);
     const oneOffBondInput = document.getElementById('bankOneOffBondAccountingInput');
     if (oneOffBondInput) oneOffBondInput.addEventListener('change', () => uploadBankOneOffBondAccounting(oneOffBondInput));
@@ -14601,6 +15299,7 @@
     loadBankOpportunities(bank.id);
     loadBankPershing(bank.id);
     loadBankPershingTrades(bank.id);
+    loadBankTradeHistory(bank.id);
     loadBankFdicCheck(bank.id);
     loadBankIntelligence(bank.id);
     profile.querySelectorAll('[data-bank-assistant-action]').forEach(btn => {
@@ -14938,14 +15637,24 @@
   }
 
   function thcSummaryScenarioList(summary) {
-    const rows = Array.isArray(summary && summary.scenarioResults) ? summary.scenarioResults.slice(0, 6) : [];
+    // The store caps scenarioResults at 20 rows — render the full ladder,
+    // grouped by kind (EVE / NII / fallback) and sorted by shock.
+    const rows = Array.isArray(summary && summary.scenarioResults) ? summary.scenarioResults : [];
     if (!rows.length) return '<div class="bank-search-empty">No THC scenario summary imported.</div>';
-    return `<div class="thc-scenario-list">
-      ${rows.map(row => `
-        <div>
+    const groups = new Map();
+    rows.forEach(row => {
+      const key = String((row && row.kind) || '').trim().toLowerCase() || 'other';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    });
+    const shockOf = row => {
+      const n = Number(row && row.shockBp);
+      return row && row.shockBp != null && isFinite(n) ? n : Number.POSITIVE_INFINITY; // no-shock rows sort last
+    };
+    const renderRow = row => `
+        <div${row.withinPolicy === false || row.exception ? ' class="exception"' : ''}>
           <strong>${escapeHtml(row.shockBp != null ? `${row.shockBp > 0 ? '+' : ''}${row.shockBp} bp` : row.metric || 'Scenario')}</strong>
           <span>${escapeHtml([
-            row.kind,
             row.metric,
             row.pctChange != null ? `${formatPercentTile(row.pctChange, 2)} change` : '',
             row.policyLimit != null ? `limit ${formatPercentTile(row.policyLimit, 2)}` : '',
@@ -14955,8 +15664,17 @@
             row.exception
           ].filter(Boolean).join(' · '))}</span>
         </div>
-      `).join('')}
-    </div>`;
+      `;
+    const kindLabels = { eve: 'EVE', nii: 'NII', other: 'Scenario' };
+    const soleFallbackGroup = groups.size === 1 && groups.has('other');
+    return [...groups.entries()].map(([key, groupRows]) => {
+      const sorted = groupRows.slice().sort((a, b) => shockOf(a) - shockOf(b));
+      const label = kindLabels[key] || key.toUpperCase();
+      return `<div class="thc-scenario-group">
+        ${soleFallbackGroup ? '' : `<span class="thc-scenario-group-label">${escapeHtml(label)}</span>`}
+        <div class="thc-scenario-list">${sorted.map(renderRow).join('')}</div>
+      </div>`;
+    }).join('');
   }
 
   function thcTradeImpactRows(trade) {
@@ -14991,10 +15709,15 @@
   function renderBankThcSummaryPanel(bank) {
     const summary = bank && bank.thcSummary;
     if (!summary || !summary.available) {
+      // Route each audience to its actual next step: admins can import,
+      // reps can only ask operations via Request THC Update.
+      const emptyCopy = isAdminUiAllowed()
+        ? 'No sales-safe THC summary is imported for this bank yet — <a href="#reports/data">import one from Reports · Data Sources</a>.'
+        : 'No THC summary for this bank yet — use &ldquo;Request THC Update&rdquo; on the Sales Workspace tab to ask operations for one.';
       return `
         <section class="bank-section bank-thc-summary-section">
           <h3 class="bank-section-title">THC Report Status</h3>
-          <div class="bank-search-empty">No sales-safe THC summary is imported for this bank yet. Admins can load a safe summary file from Reports Data Sources.</div>
+          <div class="bank-search-empty">${emptyCopy}</div>
         </section>
       `;
     }
@@ -15004,6 +15727,11 @@
       summary.asOfDate ? `As of ${formatShortDate(summary.asOfDate)}` : '',
       summary.importedAt ? `Imported ${formatImportedDate(summary.importedAt)}` : ''
     ].filter(Boolean).join(' · ');
+    // Quarterly-cycle staleness bands: fresh ≤100d, aging ≤190d, stale beyond.
+    const summaryAge = thcSummaryAgeDays(summary);
+    const ageChip = summaryAge != null
+      ? ` <em class="thc-age-chip ${summaryAge <= 100 ? 'ready' : summaryAge <= 190 ? 'aging' : 'warn'}" title="THC summary age from ${summary.asOfDate ? 'as-of date' : 'import date'} — fresh ≤100d, aging ≤190d">${escapeHtml(summaryAge === 0 ? 'Today' : `${summaryAge}d old`)}</em>`
+      : '';
     const posture = summary.posture || {};
     const adminLink = isAdminUiAllowed() && summary.adminLink
       ? `<a class="text-btn" href="${escapeHtml(summary.adminLink)}" target="_blank" rel="noopener">Open in THC</a>`
@@ -15017,7 +15745,7 @@
         <div class="bank-thc-summary-head">
           <div>
             <strong>${escapeHtml(summary.sourceSystem || 'THC Analytics')}</strong>
-            <span>${escapeHtml(headerMeta || 'Imported summary')}</span>
+            <span>${escapeHtml(headerMeta || 'Imported summary')}${ageChip}</span>
           </div>
           <div>
             <strong>${escapeHtml(trade.status || (trade.id ? 'Trade simulation linked' : 'Trade simulation not linked'))}</strong>
@@ -16498,15 +17226,39 @@
     };
   }
 
+  // Unsaved edit check for the header Status / Priority / Owner controls,
+  // compared against the saved coverage + imported account status.
+  function bankCoverageFormDirty() {
+    const statusSelect = document.getElementById('bankTearSheetStatus');
+    const prioritySelect = document.getElementById('bankTearSheetPriority');
+    const ownerInput = document.getElementById('bankTearSheetOwner');
+    if (!statusSelect && !prioritySelect && !ownerInput) return false;
+    const baseline = currentBankAccountStatus();
+    if (statusSelect && statusSelect.value !== (baseline.status || 'Open')) return true;
+    if (prioritySelect && prioritySelect.value !== ((selectedTearSheetCoverage && selectedTearSheetCoverage.priority) || 'Medium')) return true;
+    if (ownerInput && ownerInput.value.trim() !== String(baseline.owner || '').trim()) return true;
+    return false;
+  }
+
   function updateBankSaveButton() {
     const btn = document.getElementById('bankSaveBtn');
     const statusSelect = document.getElementById('bankTearSheetStatus');
     const prioritySelect = document.getElementById('bankTearSheetPriority');
     const ownerInput = document.getElementById('bankTearSheetOwner');
-    if (btn) btn.textContent = selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Coverage';
-    if (statusSelect) statusSelect.value = currentBankAccountStatus().status || 'Open';
-    if (prioritySelect) prioritySelect.value = (selectedTearSheetCoverage && selectedTearSheetCoverage.priority) || 'Medium';
-    if (ownerInput) ownerInput.value = currentBankAccountStatus().owner || '';
+    // Hydrate from server data only when the rep isn't mid-edit: never reset
+    // the focused control or one carrying an unsaved change (data-dirty).
+    const active = document.activeElement;
+    const canHydrate = el => el && el !== active && el.dataset.dirty !== '1';
+    if (canHydrate(statusSelect)) statusSelect.value = currentBankAccountStatus().status || 'Open';
+    if (canHydrate(prioritySelect)) prioritySelect.value = (selectedTearSheetCoverage && selectedTearSheetCoverage.priority) || 'Medium';
+    if (canHydrate(ownerInput)) ownerInput.value = currentBankAccountStatus().owner || '';
+    if (btn) {
+      const dirty = bankCoverageFormDirty();
+      btn.textContent = dirty
+        ? 'Save changes'
+        : (selectedTearSheetCoverage && selectedTearSheetCoverage.bankId ? 'Saved' : 'Save Coverage');
+      btn.classList.toggle('dirty', dirty);
+    }
     updateTearSheetCoverageSignal();
   }
 
@@ -16553,7 +17305,16 @@
         selectedBank.bank.summary.accountStatus = selectedBankAccountStatus;
       }
       selectedTearSheetCoverage = data.saved;
+      // Status/owner are baked into the map's cached rows — refetch on the
+      // next #maps visit (the server already invalidated its own cache).
+      mapsState.dirty = true;
       await loadSavedBanks();
+      // The form now matches the saved record — clear the dirty flags so the
+      // button reverts to "Saved" and hydration resumes.
+      ['bankTearSheetStatus', 'bankTearSheetPriority', 'bankTearSheetOwner'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) delete el.dataset.dirty;
+      });
       updateBankSaveButton();
       if (selectedBankId()) loadBankActivity(selectedBankId());
       showToast('Saved bank coverage');
@@ -16756,6 +17517,100 @@
     refreshBankPershingTradesPanel();
   }
 
+  // ============ Trade History panel (Salesforce Trade__c blotter) ============
+  // Per-bank line-item trade history from the trade store (trade-store.js) via
+  // GET /api/banks/:id/trades. Empty ("No trade history imported yet") until
+  // scripts/import-trade-export.js --apply runs — the panel ships safely ahead
+  // of the extract per docs/salesforce-trade-store-handoff-2026-06-28.md.
+
+  function renderBankTradeHistoryPanel() {
+    const data = selectedBankTradeHistory;
+    const status = data && data.status ? data.status : null;
+    const trades = data && Array.isArray(data.trades) ? data.trades : [];
+    const total = data ? Number(data.total || 0) : 0;
+    let body = '';
+    if (!data) {
+      body = '<p class="bank-activity-empty">Checking trade history...</p>';
+    } else if (!status || !status.importedAt) {
+      body = '<p class="bank-activity-empty">No trade history imported yet.</p>';
+    } else if (!trades.length) {
+      body = '<p class="bank-activity-empty">No imported trades are linked to this bank.</p>';
+    } else {
+      const rollup = data.rollup || {};
+      const sectors = (rollup.sectors || []).slice(0, 3).map(s => `${s.code} ×${s.count}`).join(', ');
+      const rollupBits = [
+        `${formatNumber(rollup.tradeCount || total)} trades`,
+        rollup.latestTradeDate ? `last ${formatActivityDate(rollup.latestTradeDate)}` : '',
+        rollup.lastBuyDate ? `last buy ${formatActivityDate(rollup.lastBuyDate)}` : '',
+        rollup.lastSellDate ? `last sell ${formatActivityDate(rollup.lastSellDate)}` : '',
+        sectors ? `top: ${sectors}` : ''
+      ].filter(Boolean).join(' · ');
+      const rows = trades.map(trade => `
+        <tr>
+          <td>${escapeHtml(formatActivityDate(trade.tradeDate) || trade.tradeDate || '—')}</td>
+          <td><span class="bank-pershing-side ${escapeHtml((trade.buySell || '').toLowerCase())}">${escapeHtml(trade.buySell || '—')}</span></td>
+          <td class="bank-pershing-number">${trade.cusip ? `<button type="button" class="text-btn bank-trade-cusip-btn" data-goto="all-offerings" data-cusip="${escapeHtml(trade.cusip)}" title="Find this CUSIP in today's inventory">${escapeHtml(trade.cusip)}</button>` : '—'}</td>
+          <td>${escapeHtml(trade.issuer || trade.description || '—')}</td>
+          <td class="num">${escapeHtml(formatPershingTradePct(trade.coupon))}</td>
+          <td>${escapeHtml(formatActivityDate(trade.maturity) || trade.maturity || '—')}</td>
+          <td class="num">${escapeHtml(formatPershingTradePct(trade.yield))}</td>
+          <td class="num">${escapeHtml(formatPershingTradeNumber(trade.price, 3))}</td>
+          <td class="num">${escapeHtml(formatPershingTradeNumber(trade.qty))}</td>
+          <td>${escapeHtml(trade.owner1Name || trade.owner2Name || '—')}</td>
+        </tr>
+      `).join('');
+      const moreBtn = total > trades.length
+        ? ` <button type="button" class="text-btn" id="bankTradeHistoryMoreBtn">Show more</button>`
+        : '';
+      body = `
+        <p class="bank-pershing-foot">${escapeHtml(rollupBits)}</p>
+        <div class="bank-pershing-trades-wrap">
+          <table class="bank-pershing-trades">
+            <thead><tr><th>Date</th><th>Side</th><th>CUSIP</th><th>Issuer</th><th class="num">Coupon</th><th>Maturity</th><th class="num">Yield</th><th class="num">Price</th><th class="num">Qty</th><th>Owner</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="bank-pershing-foot">Showing newest ${escapeHtml(formatNumber(trades.length))} of ${escapeHtml(formatNumber(total))} trades.${moreBtn}</p>
+      `;
+    }
+    return `
+      <section class="bank-section bank-pershing-section" id="bankTradeHistoryPanel">
+        <div class="bank-section-title">Trade History</div>
+        ${body}
+      </section>
+    `;
+  }
+
+  function refreshBankTradeHistoryPanel() {
+    const panel = document.getElementById('bankTradeHistoryPanel');
+    if (!panel) return;
+    panel.outerHTML = renderBankTradeHistoryPanel();
+    const moreBtn = document.getElementById('bankTradeHistoryMoreBtn');
+    if (moreBtn) moreBtn.addEventListener('click', () => {
+      bankTradeHistoryLimit += 50;
+      loadBankTradeHistory(bankTradeHistoryBankId || selectedBankId());
+    });
+  }
+
+  async function loadBankTradeHistory(bankId) {
+    if (!bankId) {
+      selectedBankTradeHistory = null;
+      bankTradeHistoryBankId = null;
+      refreshBankTradeHistoryPanel();
+      return;
+    }
+    bankTradeHistoryBankId = bankId;
+    try {
+      const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/trades?limit=${encodeURIComponent(bankTradeHistoryLimit)}`, { cache: 'no-store' }).then(readBankJson);
+      if (bankTradeHistoryBankId !== bankId) return;
+      selectedBankTradeHistory = data;
+    } catch (_) {
+      if (bankTradeHistoryBankId !== bankId) return;
+      selectedBankTradeHistory = { status: null, total: 0, trades: [] };
+    }
+    refreshBankTradeHistoryPanel();
+  }
+
   // ============ Bank Contacts (tear sheet) ============
 
   function renderBankContactsPanel() {
@@ -16821,7 +17676,7 @@
   }
 
   function renderBankContactForm(contact, { mode } = { mode: 'add' }) {
-    const c = contact || { name: '', role: '', phone: '', email: '', isPrimary: false, notes: '' };
+    const c = contact || { name: '', role: '', phone: '', email: '', isPrimary: false, notes: '', doNotCall: false, optOutEmail: false, emailBounced: false };
     const submitLabel = mode === 'edit' ? 'Save' : 'Add Contact';
     const idAttr = contact ? ` data-contact-form-id="${escapeHtml(contact.id)}"` : '';
     return `
@@ -16853,6 +17708,18 @@
         <label class="bank-contact-form-checkbox">
           <input type="checkbox" name="isPrimary" ${c.isPrimary ? 'checked' : ''}>
           <span>Primary contact for this bank</span>
+        </label>
+        <label class="bank-contact-form-checkbox">
+          <input type="checkbox" name="doNotCall" ${c.doNotCall ? 'checked' : ''}>
+          <span>Do not call</span>
+        </label>
+        <label class="bank-contact-form-checkbox">
+          <input type="checkbox" name="optOutEmail" ${c.optOutEmail ? 'checked' : ''}>
+          <span>Opted out of email</span>
+        </label>
+        <label class="bank-contact-form-checkbox">
+          <input type="checkbox" name="emailBounced" ${c.emailBounced ? 'checked' : ''}>
+          <span>Email bounced</span>
         </label>
         <div class="bank-contact-form-actions">
           <button type="submit" class="small-btn">${escapeHtml(submitLabel)}</button>
@@ -16920,7 +17787,10 @@
       phone: String(fd.get('phone') || '').trim(),
       email: String(fd.get('email') || '').trim(),
       notes: String(fd.get('notes') || '').trim(),
-      isPrimary: fd.get('isPrimary') === 'on'
+      isPrimary: fd.get('isPrimary') === 'on',
+      doNotCall: fd.get('doNotCall') === 'on',
+      optOutEmail: fd.get('optOutEmail') === 'on',
+      emailBounced: fd.get('emailBounced') === 'on'
     };
   }
 
@@ -17111,7 +17981,8 @@
     { kind: 'call', label: 'Call', icon: '☎' },
     { kind: 'email', label: 'Email', icon: '✉' },
     { kind: 'meeting', label: 'Meeting', icon: '📅' },
-    { kind: 'task', label: 'Task', icon: '✓' }
+    { kind: 'task', label: 'Task', icon: '✓' },
+    { kind: 'note', label: 'Note', icon: '📝' }
   ];
   const ACTIVITY_FILTERS = [
     { id: 'all', label: 'All' },
@@ -17159,40 +18030,54 @@
     return items.filter(it => it.kind === bankActivityFilter);
   }
 
+  function captureBankActivityDraft(bankId) {
+    return {
+      bankId: String(bankId || bankActivityBankId || selectedBankId() || ''),
+      subject: (document.getElementById('bankActivitySubject') || {}).value || '',
+      body: (document.getElementById('bankActivityBody') || {}).value || '',
+      activityDate: (document.getElementById('bankActivityDate') || {}).value || '',
+      loggedBy: (document.getElementById('bankActivityLoggedBy') || {}).value || '',
+      contactId: (document.getElementById('bankActivityContact') || {}).value || '',
+      followupDate: (document.getElementById('bankActivityFollowupDate') || {}).value || ''
+    };
+  }
+
   function renderBankActivityLogForm() {
     const contacts = selectedBankContacts || [];
     const today = new Date().toISOString().slice(0, 10);
     const repName = (meState.rep && meState.rep.displayName) || '';
+    const bankId = String(bankActivityBankId || selectedBankId() || '');
+    const draft = bankActivityDraft && bankActivityDraft.bankId === bankId ? bankActivityDraft : null;
     const pills = ACTIVITY_TYPE_OPTIONS.map(opt => `
       <button type="button" class="activity-type-pill ${opt.kind === bankActivityLogKind ? 'is-active' : ''}"
         data-activity-type="${escapeHtml(opt.kind)}" aria-pressed="${opt.kind === bankActivityLogKind ? 'true' : 'false'}">
         <span aria-hidden="true">${opt.icon}</span> ${escapeHtml(opt.label)}
       </button>`).join('');
     const contactOptions = ['<option value="">No contact</option>']
-      .concat(contacts.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(contactPickerLabel(c))}</option>`))
+      .concat(contacts.map(c => `<option value="${escapeHtml(c.id)}" ${draft && draft.contactId === String(c.id) ? 'selected' : ''}>${escapeHtml(contactPickerLabel(c))}</option>`))
       .join('');
     return `
       <form class="bank-activity-log" id="bankActivityForm">
         <input type="hidden" id="bankActivityKind" value="${escapeHtml(bankActivityLogKind)}">
         <div class="activity-type-pills" role="group" aria-label="Activity type">${pills}</div>
         <label class="activity-log-field">Subject
-          <input type="text" id="bankActivitySubject" maxlength="300" placeholder="e.g. Bought 1mm T 4 1/2, discussed CD ladder" required>
+          <input type="text" id="bankActivitySubject" maxlength="300" placeholder="e.g. Bought 1mm T 4 1/2, discussed CD ladder" value="${escapeHtml(draft ? draft.subject : '')}" required>
         </label>
         <label class="activity-log-field">Notes / outcome
-          <textarea id="bankActivityBody" rows="3" maxlength="4000" placeholder="What happened, next steps, objections..."></textarea>
+          <textarea id="bankActivityBody" rows="3" maxlength="4000" placeholder="What happened, next steps, objections...">${escapeHtml(draft ? draft.body : '')}</textarea>
         </label>
         <div class="activity-log-row">
           <label class="activity-log-field">Date
-            <input type="date" id="bankActivityDate" value="${escapeHtml(today)}" max="${escapeHtml(today)}">
+            <input type="date" id="bankActivityDate" value="${escapeHtml(draft ? draft.activityDate : today)}" max="${escapeHtml(today)}">
           </label>
           <label class="activity-log-field">Logged by
-            <input type="text" id="bankActivityLoggedBy" maxlength="200" value="${escapeHtml(repName)}" placeholder="Your name">
+            <input type="text" id="bankActivityLoggedBy" maxlength="200" value="${escapeHtml(draft ? draft.loggedBy : repName)}" placeholder="Your name">
           </label>
           <label class="activity-log-field">Contact
             <select id="bankActivityContact">${contactOptions}</select>
           </label>
           <label class="activity-log-field">Follow-up due
-            <input type="date" id="bankActivityFollowupDate" min="${escapeHtml(today)}" title="Also create a follow-up task due this date">
+            <input type="date" id="bankActivityFollowupDate" value="${escapeHtml(draft ? draft.followupDate : '')}" min="${escapeHtml(today)}" title="Also create a follow-up task due this date">
           </label>
         </div>
         <div class="activity-log-actions">
@@ -17224,11 +18109,22 @@
   async function loadBankFdicCheck(bankId) {
     const bar = document.getElementById('bankFdicCheck');
     if (!bar || !bankId) return;
+    // A silent failure would leave the freshness cue absent — reps couldn't
+    // tell "workbook is current" from "the live check never ran".
+    const renderUnavailable = () => {
+      const workbookPeriod = selectedBank && selectedBank.bank && selectedBank.bank.summary ? selectedBank.bank.summary.period : '';
+      bar.innerHTML = `<span class="fdic-label">FDIC live check unavailable${workbookPeriod ? ` — workbook period ${escapeHtml(workbookPeriod)}` : ''}</span>`;
+      bar.hidden = false;
+      if (bankSignalState.bankId === bankId || !bankSignalState.bankId) {
+        bankSignalState.fdic = { unavailable: true };
+        updateBankSignalStrip();
+      }
+    };
     try {
       const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/fdic-check`, { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok) return renderUnavailable();
       const data = await res.json();
-      if (!data.fdic || !data.fdic.latest) return;
+      if (!data.fdic || !data.fdic.latest) return renderUnavailable();
       const f = data.fdic.latest;
       const stats = [
         ['Assets', compactMoneyThousands(f.totalAssets)],
@@ -17249,7 +18145,7 @@
         <span class="fdic-label">FDIC live ${periodNote}</span>
         <span class="fdic-stats">${stats}</span>`;
       bar.hidden = false;
-    } catch (_) { /* live check is best-effort */ }
+    } catch (_) { renderUnavailable(); }
   }
 
   // ============ Bank opportunities panel (sales pipeline) ============
@@ -17261,11 +18157,61 @@
   const OPP_STAGES = ['Prospect', 'Qualified', 'Proposed', 'Won', 'Lost'];
   const OPP_PRODUCTS = ['Securities Purchase', 'Brokered CDs', 'Bond Swap', 'Muni Credit / BCIS', 'ALM / IRR', 'Portfolio Accounting', 'CECL Analysis', 'CD Funding', 'Other'];
 
+  // Shared field markup for the add (POST) and inline-edit (PATCH) forms —
+  // only one of the two renders at a time, so the field ids can be shared.
+  function bankOppFormFieldsHtml(o, { isEdit } = {}) {
+    const today = new Date().toISOString().slice(0, 10);
+    const productOptions = OPP_PRODUCTS.map(p => `<option${o && o.product === p ? ' selected' : ''}>${p}</option>`).join('');
+    return `
+        <div class="activity-log-row">
+          <label class="activity-log-field">Product
+            <select id="bankOppProduct">${productOptions}</select>
+          </label>
+          <label class="activity-log-field">Est. value $
+            <input type="number" id="bankOppValue" min="0" step="500" placeholder="e.g. 25000" value="${escapeHtml(o && o.estValue != null ? String(o.estValue) : '')}">
+          </label>
+          <label class="activity-log-field">Expected close
+            <input type="date" id="bankOppClose"${isEdit ? '' : ` min="${escapeHtml(today)}"`} value="${escapeHtml(o && o.closeDate ? o.closeDate : '')}">
+          </label>
+        </div>
+        <label class="activity-log-field">Notes
+          <input type="text" id="bankOppDesc" maxlength="2000" placeholder="What's the angle — runoff to reinvest, CD wall, exam pressure..." value="${escapeHtml(o && o.description ? o.description : '')}">
+        </label>`;
+  }
+
   function renderBankOpportunitiesPanel() {
-    const rows = (selectedBankOpps || []).map(o => {
-      const stageOptions = OPP_STAGES.map(s => `<option${s === o.stage ? ' selected' : ''}>${s}</option>`).join('');
-      return `
-        <li class="bank-opp-item">
+    let rows;
+    if (selectedBankOpps === null) {
+      // null = loading (or a failed load) — never the true-empty copy, so a
+      // fetch failure can't read as "no pipeline".
+      rows = bankOppsLoadError
+        ? `<li class="bank-activity-empty">Couldn&rsquo;t load opportunities. <button type="button" class="text-btn" id="bankOppsRetryBtn">Retry</button></li>`
+        : '<li class="bank-activity-empty">Loading…</li>';
+    } else {
+      rows = (selectedBankOpps || []).map(o => {
+        if (o.id === bankOppEditingId) {
+          return `
+        <li class="bank-opp-item is-editing">
+          <form class="bank-task-form" id="bankOppEditForm" data-opp-id="${escapeHtml(o.id)}">
+            ${bankOppFormFieldsHtml(o, { isEdit: true })}
+            <div class="activity-log-actions">
+              <button type="submit" class="small-btn" id="bankOppEditSaveBtn">Save</button>
+              <button type="button" class="text-btn" id="bankOppEditCancelBtn">Cancel</button>
+            </div>
+          </form>
+        </li>`;
+        }
+        const closed = o.stage === 'Won' || o.stage === 'Lost';
+        const stageOptions = OPP_STAGES.map(s => `<option${s === o.stage ? ' selected' : ''}>${s}</option>`).join('');
+        // Closed rows are read-only — Reopen (PATCH back to Proposed) is the
+        // recovery path for a mis-clicked Won/Lost.
+        const controls = closed
+          ? `<span class="bank-opp-stage stage-${escapeHtml(o.stage.toLowerCase())}">${escapeHtml(o.stage)}</span>
+            <button type="button" class="text-btn" data-opp-reopen="${escapeHtml(o.id)}">Reopen</button>`
+          : `<select class="bank-opp-stage stage-${escapeHtml(o.stage.toLowerCase())}" data-opp-stage="${escapeHtml(o.id)}" aria-label="Opportunity stage">${stageOptions}</select>
+            <button type="button" class="text-btn" data-opp-edit="${escapeHtml(o.id)}">Edit</button>`;
+        return `
+        <li class="bank-opp-item${closed ? ' is-closed' : ''}">
           <div class="bank-opp-body">
             <p class="bank-opp-title">${escapeHtml(o.product)}${o.estValue ? ` <span class="bank-opp-value">${escapeHtml(formatMoney(o.estValue, 0))}</span>` : ''}</p>
             ${o.description ? `<p class="bank-task-notes">${escapeHtml(o.description).replace(/\n/g, '<br>')}</p>` : ''}
@@ -17274,27 +18220,13 @@
               ${o.ownerDisplay || o.owner ? `<span>${escapeHtml(o.ownerDisplay || o.owner)}</span>` : ''}
             </p>
           </div>
-          <select class="bank-opp-stage stage-${escapeHtml(o.stage.toLowerCase())}" data-opp-stage="${escapeHtml(o.id)}" aria-label="Opportunity stage">${stageOptions}</select>
+          <div class="bank-opp-controls">${controls}</div>
         </li>`;
-    }).join('');
-    const today = new Date().toISOString().slice(0, 10);
-    const productOptions = OPP_PRODUCTS.map(p => `<option>${p}</option>`).join('');
+      }).join('') || `<li class="bank-activity-empty">No ${bankOppShowClosed ? '' : 'open '}opportunities yet.</li>`;
+    }
     const form = bankOppAdding ? `
       <form class="bank-task-form" id="bankOppForm">
-        <div class="activity-log-row">
-          <label class="activity-log-field">Product
-            <select id="bankOppProduct">${productOptions}</select>
-          </label>
-          <label class="activity-log-field">Est. value $
-            <input type="number" id="bankOppValue" min="0" step="500" placeholder="e.g. 25000">
-          </label>
-          <label class="activity-log-field">Expected close
-            <input type="date" id="bankOppClose" min="${escapeHtml(today)}">
-          </label>
-        </div>
-        <label class="activity-log-field">Notes
-          <input type="text" id="bankOppDesc" maxlength="2000" placeholder="What's the angle — runoff to reinvest, CD wall, exam pressure...">
-        </label>
+        ${bankOppFormFieldsHtml(null)}
         <div class="activity-log-actions">
           <button type="submit" class="small-btn" ${bankOppSaving ? 'disabled' : ''}>${bankOppSaving ? 'Saving…' : 'Add Opportunity'}</button>
           <button type="button" class="text-btn" id="bankOppCancelBtn">Cancel</button>
@@ -17303,10 +18235,13 @@
     return `
       <section class="bank-section bank-opps-section" id="bankOppsPanel">
         <div class="bank-section-title"><span>Opportunities</span>
-          <button type="button" class="small-btn" id="bankOppAddBtn" ${bankOppAdding ? 'hidden' : ''}>+ Opportunity</button>
+          <span>
+            <button type="button" class="text-btn" id="bankOppShowClosedBtn">${bankOppShowClosed ? 'Hide closed' : 'Show closed'}</button>
+            <button type="button" class="small-btn" id="bankOppAddBtn" ${bankOppAdding ? 'hidden' : ''}>+ Opportunity</button>
+          </span>
         </div>
         ${form}
-        <ol class="bank-task-list">${rows || '<li class="bank-activity-empty">No open opportunities yet.</li>'}</ol>
+        <ol class="bank-task-list">${rows}</ol>
       </section>
     `;
   }
@@ -17323,11 +18258,32 @@
     const panel = document.getElementById('bankOppsPanel');
     if (!panel) return;
     const addBtn = document.getElementById('bankOppAddBtn');
-    if (addBtn) addBtn.addEventListener('click', () => { bankOppAdding = true; refreshBankOppsPanel(); });
+    if (addBtn) addBtn.addEventListener('click', () => { bankOppAdding = true; bankOppEditingId = null; refreshBankOppsPanel(); });
     const cancelBtn = document.getElementById('bankOppCancelBtn');
     if (cancelBtn) cancelBtn.addEventListener('click', () => { bankOppAdding = false; refreshBankOppsPanel(); });
+    const showClosedBtn = document.getElementById('bankOppShowClosedBtn');
+    if (showClosedBtn) showClosedBtn.addEventListener('click', () => {
+      bankOppShowClosed = !bankOppShowClosed;
+      loadBankOpportunities(bankOppsBankId || selectedBankId());
+    });
+    const retryBtn = document.getElementById('bankOppsRetryBtn');
+    if (retryBtn) retryBtn.addEventListener('click', () => loadBankOpportunities(bankOppsBankId || selectedBankId()));
     const form = document.getElementById('bankOppForm');
     if (form) form.addEventListener('submit', submitBankOpportunity);
+    const editForm = document.getElementById('bankOppEditForm');
+    if (editForm) editForm.addEventListener('submit', submitBankOpportunityEdit);
+    const editCancelBtn = document.getElementById('bankOppEditCancelBtn');
+    if (editCancelBtn) editCancelBtn.addEventListener('click', () => { bankOppEditingId = null; refreshBankOppsPanel(); });
+    panel.querySelectorAll('[data-opp-edit]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        bankOppEditingId = btn.getAttribute('data-opp-edit');
+        bankOppAdding = false;
+        refreshBankOppsPanel();
+      });
+    });
+    panel.querySelectorAll('[data-opp-reopen]').forEach(btn => {
+      btn.addEventListener('click', () => reopenBankOpportunity(btn.getAttribute('data-opp-reopen')));
+    });
     panel.querySelectorAll('[data-opp-stage]').forEach(select => {
       select.addEventListener('change', () => moveBankOpportunityStage(select.getAttribute('data-opp-stage'), select.value));
     });
@@ -17336,12 +18292,17 @@
   async function loadBankOpportunities(bankId) {
     if (!bankId) { selectedBankOpps = []; bankOppsBankId = null; refreshBankOppsPanel(); return; }
     bankOppsBankId = bankId;
+    selectedBankOpps = null; // null = loading
+    bankOppsLoadError = false;
+    refreshBankOppsPanel();
     try {
-      const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/opportunities`, { cache: 'no-store' }).then(readBankJson);
+      const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/opportunities${bankOppShowClosed ? '?includeClosed=1' : ''}`, { cache: 'no-store' }).then(readBankJson);
       if (bankOppsBankId !== bankId) return;
       selectedBankOpps = data.opportunities || [];
     } catch (_) {
-      selectedBankOpps = [];
+      if (bankOppsBankId !== bankId) return; // stale failure — don't wipe the new bank's panel
+      selectedBankOpps = null;
+      bankOppsLoadError = true;
     }
     refreshBankOppsPanel();
   }
@@ -17380,6 +18341,14 @@
 
   async function moveBankOpportunityStage(oppId, stage) {
     if (!oppId || !stage) return;
+    // Won/Lost closes the deal and drops it from the open list — one accidental
+    // scroll-wheel tick shouldn't silently move pipeline. Cancel snaps the
+    // select back via the re-render.
+    if (stage === 'Won' || stage === 'Lost') {
+      const opp = (selectedBankOpps || []).find(o => o.id === oppId);
+      const what = opp ? `${opp.estValue ? `${formatMoney(opp.estValue, 0)} ` : ''}${opp.product} deal` : 'this deal';
+      if (!window.confirm(`Mark ${what} ${stage}?`)) { refreshBankOppsPanel(); return; }
+    }
     try {
       const res = await fetch(`/api/bank-opportunities/${encodeURIComponent(oppId)}`, {
         method: 'PATCH',
@@ -17389,7 +18358,11 @@
       const data = await readBankJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (stage === 'Won' || stage === 'Lost') {
-        selectedBankOpps = (selectedBankOpps || []).filter(o => o.id !== oppId);
+        if (bankOppShowClosed && data.opportunity) {
+          selectedBankOpps = (selectedBankOpps || []).map(o => o.id === oppId ? data.opportunity : o);
+        } else {
+          selectedBankOpps = (selectedBankOpps || []).filter(o => o.id !== oppId);
+        }
         showToast(stage === 'Won' ? 'Marked won 🎉' : 'Marked lost');
       } else if (data.opportunity) {
         selectedBankOpps = (selectedBankOpps || []).map(o => o.id === oppId ? data.opportunity : o);
@@ -17401,6 +18374,59 @@
     }
   }
 
+  // Inline edit (product / est value / close date / notes) — the PATCH route
+  // and store already support every field; only the stage was wired before.
+  async function submitBankOpportunityEdit(event) {
+    if (event) event.preventDefault();
+    const form = document.getElementById('bankOppEditForm');
+    const oppId = form ? form.getAttribute('data-opp-id') : '';
+    if (!oppId) return;
+    const payload = {
+      product: (document.getElementById('bankOppProduct') || {}).value || '',
+      estValue: (document.getElementById('bankOppValue') || {}).value || null,
+      closeDate: (document.getElementById('bankOppClose') || {}).value || '',
+      description: (document.getElementById('bankOppDesc') || {}).value || ''
+    };
+    // Disable in place instead of re-rendering so a failed PATCH keeps the
+    // rep's typed edits.
+    const saveBtn = document.getElementById('bankOppEditSaveBtn');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+    try {
+      const res = await fetch(`/api/bank-opportunities/${encodeURIComponent(oppId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      bankOppEditingId = null;
+      if (data.opportunity) selectedBankOpps = (selectedBankOpps || []).map(o => o.id === oppId ? data.opportunity : o);
+      refreshBankOppsPanel();
+      showToast('Opportunity updated');
+    } catch (e) {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+      showToast(e.message || 'Could not update opportunity', true);
+    }
+  }
+
+  async function reopenBankOpportunity(oppId) {
+    if (!oppId) return;
+    try {
+      const res = await fetch(`/api/bank-opportunities/${encodeURIComponent(oppId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: 'Proposed' })
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.opportunity) selectedBankOpps = (selectedBankOpps || []).map(o => o.id === oppId ? data.opportunity : o);
+      refreshBankOppsPanel();
+      showToast('Opportunity reopened');
+    } catch (e) {
+      showToast(e.message || 'Could not reopen opportunity', true);
+    }
+  }
+
   // ============ Bank tasks panel (CRM task engine) ============
   // Open follow-up tasks on the selected bank: add (title + due + priority +
   // assignee), complete, and overdue/due-today highlighting. Backed by
@@ -17408,25 +18434,34 @@
 
   function renderBankTasksPanel() {
     const today = new Date().toISOString().slice(0, 10);
-    const rows = (selectedBankTasks || []).map(t => {
-      let dueChip = '';
-      if (t.dueDate) {
-        const cls = t.dueDate < today ? 'task-due-overdue' : (t.dueDate === today ? 'task-due-today' : '');
-        const label = t.dueDate < today ? `Overdue · ${formatActivityDate(t.dueDate)}`
-          : (t.dueDate === today ? 'Due today' : `Due ${formatActivityDate(t.dueDate)}`);
-        dueChip = `<span class="task-due-chip ${cls}">${escapeHtml(label)}</span>`;
-      }
-      const who = t.assignedDisplay || t.assignedTo || '';
-      return `
+    let rows;
+    if (selectedBankTasks === null) {
+      // null = loading (or a failed load) — never the true-empty copy, so a
+      // fetch failure can't read as a clean slate.
+      rows = bankTasksLoadError
+        ? `<li class="bank-activity-empty">Couldn&rsquo;t load tasks. <button type="button" class="text-btn" id="bankTasksRetryBtn">Retry</button></li>`
+        : '<li class="bank-activity-empty">Loading…</li>';
+    } else {
+      rows = (selectedBankTasks || []).map(t => {
+        let dueChip = '';
+        if (t.dueDate) {
+          const cls = t.dueDate < today ? 'task-due-overdue' : (t.dueDate === today ? 'task-due-today' : '');
+          const label = t.dueDate < today ? `Overdue · ${formatActivityDate(t.dueDate)}`
+            : (t.dueDate === today ? 'Due today' : `Due ${formatActivityDate(t.dueDate)}`);
+          dueChip = `<span class="task-due-chip ${cls}">${escapeHtml(label)}</span>`;
+        }
+        const who = t.assignedDisplay || t.assignedTo || '';
+        return `
         <li class="bank-task-item">
           <button type="button" class="bank-task-complete" data-task-complete="${escapeHtml(t.id)}" title="Mark done" aria-label="Mark task done"></button>
           <div class="bank-task-body">
             <p class="bank-task-title">${escapeHtml(t.title)}${t.priority === 'High' ? ' <span class="task-priority-high">High</span>' : ''}</p>
             ${t.body ? `<p class="bank-task-notes">${escapeHtml(t.body).replace(/\n/g, '<br>')}</p>` : ''}
-            <p class="bank-task-meta">${dueChip}${who ? `<span>${escapeHtml(who)}</span>` : ''}</p>
+            <p class="bank-task-meta">${dueChip}${who ? `<span>${escapeHtml(who)}</span>` : ''}<button type="button" class="text-btn" data-task-push="${escapeHtml(t.id)}" title="Push the due date out one week">Push 1w</button></p>
           </div>
         </li>`;
-    }).join('');
+      }).join('') || '<li class="bank-activity-empty">No open tasks. Add a follow-up so it can’t slip.</li>';
+    }
     const repUser = (meState.rep && meState.rep.username) || '';
     const form = bankTaskAdding ? `
       <form class="bank-task-form" id="bankTaskForm">
@@ -17441,7 +18476,8 @@
             <select id="bankTaskPriority"><option>Normal</option><option>High</option><option>Low</option></select>
           </label>
           <label class="activity-log-field">Assign to
-            <input type="text" id="bankTaskAssignee" maxlength="80" value="${escapeHtml(repUser)}" placeholder="rep username">
+            <input type="text" id="bankTaskAssignee" maxlength="80" list="fbbsRepList" value="${escapeHtml(repUser)}" placeholder="rep username">
+            <span class="bank-task-assignee-warn" id="bankTaskAssigneeWarn" hidden>Not a known rep — this task won&rsquo;t appear in anyone&rsquo;s My Work</span>
           </label>
         </div>
         <div class="activity-log-actions">
@@ -17455,7 +18491,7 @@
           <button type="button" class="small-btn" id="bankTaskAddBtn" ${bankTaskAdding ? 'hidden' : ''}>+ Task</button>
         </div>
         ${form}
-        <ol class="bank-task-list">${rows || '<li class="bank-activity-empty">No open tasks. Add a follow-up so it can’t slip.</li>'}</ol>
+        <ol class="bank-task-list">${rows}</ol>
       </section>
     `;
   }
@@ -17468,6 +18504,21 @@
     updateBankSignalStrip();
   }
 
+  // Warn inline when the typed assignee matches no roster entry — My Work /
+  // Pulse match assignee exactly, so a typo silently orphans the follow-up.
+  function updateBankTaskAssigneeWarning() {
+    const input = document.getElementById('bankTaskAssignee');
+    const warn = document.getElementById('bankTaskAssigneeWarn');
+    if (!input || !warn) return;
+    const roster = meState.knownReps || [];
+    if (!roster.length) { warn.hidden = true; return; } // roster not loaded — don't false-flag
+    const value = (input.value || '').trim().toLowerCase();
+    const known = !value || roster.some(rep =>
+      String(rep.username || '').toLowerCase() === value ||
+      String(rep.displayName || '').toLowerCase() === value);
+    warn.hidden = known;
+  }
+
   function wireBankTaskControls() {
     const panel = document.getElementById('bankTasksPanel');
     if (!panel) return;
@@ -17475,22 +18526,39 @@
     if (addBtn) addBtn.addEventListener('click', () => { bankTaskAdding = true; refreshBankTasksPanel(); const el = document.getElementById('bankTaskTitle'); if (el) el.focus(); });
     const cancelBtn = document.getElementById('bankTaskCancelBtn');
     if (cancelBtn) cancelBtn.addEventListener('click', () => { bankTaskAdding = false; refreshBankTasksPanel(); });
+    const retryBtn = document.getElementById('bankTasksRetryBtn');
+    if (retryBtn) retryBtn.addEventListener('click', () => loadBankTasks(bankTasksBankId || selectedBankId()));
     const form = document.getElementById('bankTaskForm');
     if (form) form.addEventListener('submit', submitBankTask);
+    const assigneeInput = document.getElementById('bankTaskAssignee');
+    if (assigneeInput) {
+      // Fills #fbbsRepList and meState.knownReps, then re-checks the warning.
+      loadKnownReps().then(updateBankTaskAssigneeWarning);
+      assigneeInput.addEventListener('input', updateBankTaskAssigneeWarning);
+      updateBankTaskAssigneeWarning();
+    }
     panel.querySelectorAll('[data-task-complete]').forEach(btn => {
       btn.addEventListener('click', () => completeBankTask(btn.getAttribute('data-task-complete')));
+    });
+    panel.querySelectorAll('[data-task-push]').forEach(btn => {
+      btn.addEventListener('click', () => pushBankTaskOneWeek(btn.getAttribute('data-task-push')));
     });
   }
 
   async function loadBankTasks(bankId) {
     if (!bankId) { selectedBankTasks = []; bankTasksBankId = null; refreshBankTasksPanel(); return; }
     bankTasksBankId = bankId;
+    selectedBankTasks = null; // null = loading
+    bankTasksLoadError = false;
+    refreshBankTasksPanel();
     try {
       const data = await fetch(`/api/banks/${encodeURIComponent(bankId)}/tasks`, { cache: 'no-store' }).then(readBankJson);
       if (bankTasksBankId !== bankId) return; // user moved on
       selectedBankTasks = data.tasks || [];
     } catch (_) {
-      selectedBankTasks = [];
+      if (bankTasksBankId !== bankId) return; // stale failure — don't wipe the new bank's panel
+      selectedBankTasks = null;
+      bankTasksLoadError = true;
     }
     refreshBankTasksPanel();
   }
@@ -17501,11 +18569,19 @@
     if (!bankId) return showToast('Select a bank first', true);
     const title = (document.getElementById('bankTaskTitle') || {}).value || '';
     if (!title.trim()) return showToast('Give the task a title', true);
+    // The roster datalist offers display names, but My Work / Pulse buckets
+    // match assigned_to against the rep USERNAME exactly — translate a roster
+    // pick back to its username so the follow-up lands in the right buckets.
+    const assigneeRaw = ((document.getElementById('bankTaskAssignee') || {}).value || '').trim();
+    const rosterMatch = assigneeRaw ? (meState.knownReps || []).find(rep =>
+      String(rep.displayName || '').toLowerCase() === assigneeRaw.toLowerCase() ||
+      String(rep.username || '').toLowerCase() === assigneeRaw.toLowerCase()) : null;
     const payload = {
       title: title.trim(),
       dueDate: (document.getElementById('bankTaskDue') || {}).value || '',
       priority: (document.getElementById('bankTaskPriority') || {}).value || 'Normal',
-      assignedTo: ((document.getElementById('bankTaskAssignee') || {}).value || '').trim()
+      assignedTo: rosterMatch ? rosterMatch.username : assigneeRaw,
+      assignedDisplay: rosterMatch ? (rosterMatch.displayName || rosterMatch.username) : assigneeRaw
     };
     bankTaskSaving = true;
     refreshBankTasksPanel();
@@ -17541,9 +18617,58 @@
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       selectedBankTasks = (selectedBankTasks || []).filter(t => t.id !== taskId);
       refreshBankTasksPanel();
-      showToast('Task completed');
+      showToast('Task completed', false, { label: 'Undo', onClick: () => undoCompleteBankTask(taskId) });
     } catch (e) {
       showToast(e.message || 'Could not complete task', true);
+    }
+  }
+
+  // Undo a just-completed task: PATCH status back to Open (the store clears
+  // completed_at/by) and re-insert the row if the rep is still on that bank.
+  async function undoCompleteBankTask(taskId) {
+    if (!taskId) return;
+    try {
+      const res = await fetch(`/api/bank-tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Open' })
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.task && String(data.task.bankId) === String(bankTasksBankId)) {
+        selectedBankTasks = (selectedBankTasks || []).filter(t => t.id !== taskId).concat([data.task]);
+        refreshBankTasksPanel();
+      }
+      showToast('Task reopened');
+    } catch (e) {
+      showToast(e.message || 'Could not reopen task', true);
+    }
+  }
+
+  // "Client asked me to call next week instead" — push the due date out 7 days
+  // (from the current due date if it's still ahead, else from today).
+  async function pushBankTaskOneWeek(taskId) {
+    if (!taskId) return;
+    const task = (selectedBankTasks || []).find(t => t.id === taskId);
+    if (!task) return;
+    const today = localTodayYmd();
+    const base = task.dueDate && task.dueDate > today ? task.dueDate : today;
+    const baseDate = new Date(`${base}T00:00:00`);
+    baseDate.setDate(baseDate.getDate() + 7);
+    const dueDate = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
+    try {
+      const res = await fetch(`/api/bank-tasks/${encodeURIComponent(taskId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dueDate })
+      });
+      const data = await readBankJson(res);
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.task) selectedBankTasks = (selectedBankTasks || []).map(t => t.id === taskId ? data.task : t);
+      refreshBankTasksPanel();
+      showToast(`Pushed to ${formatActivityDate(dueDate)}`);
+    } catch (e) {
+      showToast(e.message || 'Could not push the task', true);
     }
   }
 
@@ -17578,7 +18703,9 @@
     const body = manual && item.body
       ? `<p class="bank-activity-text">${escapeHtml(item.body).replace(/\n/g, '<br>')}</p>`
       : '';
-    const deleteButton = item.id
+    // Only rep-logged touches are retractable (the DELETE route rejects system
+    // kinds too) — the system audit narrative stays intact for everyone.
+    const deleteButton = item.id && manual
       ? `<button type="button" class="text-btn danger bank-activity-delete-btn" data-activity-delete="${escapeHtml(item.id)}">Delete</button>`
       : '';
     return `
@@ -17645,24 +18772,27 @@
     if (event) event.preventDefault();
     const bankId = bankActivityBankId || selectedBankId();
     if (!bankId) return showToast('Select a bank first', true);
+    const draft = captureBankActivityDraft(bankId);
     const subjectEl = document.getElementById('bankActivitySubject');
-    const subject = subjectEl ? subjectEl.value.trim() : '';
+    const subject = draft.subject.trim();
     if (!subject) { if (subjectEl) subjectEl.focus(); return showToast('Add a subject for the activity', true); }
     const payload = {
       kind: bankActivityLogKind,
       subject,
-      body: (document.getElementById('bankActivityBody') || {}).value || '',
-      activityDate: (document.getElementById('bankActivityDate') || {}).value || '',
-      loggedBy: (document.getElementById('bankActivityLoggedBy') || {}).value || '',
-      contactId: (document.getElementById('bankActivityContact') || {}).value || ''
+      body: draft.body,
+      activityDate: draft.activityDate,
+      loggedBy: draft.loggedBy,
+      contactId: draft.contactId
     };
-    const contact = payload.contactId ? (selectedBankContacts || []).find(c => c.id === payload.contactId) : null;
+    const followupDate = draft.followupDate;
+    const contact = payload.contactId ? (selectedBankContacts || []).find(c => String(c.id) === String(payload.contactId)) : null;
     if (contact && payload.kind === 'call' && contact.doNotCall) {
       return showToast('This contact is marked Do not call.', true);
     }
     if (contact && payload.kind === 'email' && (contact.optOutEmail || contact.emailBounced)) {
       return showToast(contact.emailBounced ? 'This contact email is marked bounced.' : 'This contact opted out of email.', true);
     }
+    bankActivityDraft = draft;
     bankActivitySaving = true;
     refreshBankActivityPanel();
     try {
@@ -17673,11 +18803,9 @@
       });
       const data = await readBankJson(res);
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      bankActivitySaving = false;
       if (data.activity) selectedBankActivities = [data.activity].concat(selectedBankActivities || []);
       // "Log call → set follow-up" in one motion: a filled follow-up date also
       // creates an open task due that day, assigned to the acting rep.
-      const followupDate = (document.getElementById('bankActivityFollowupDate') || {}).value || '';
       if (followupDate) {
         try {
           const taskRes = await fetch(`/api/banks/${encodeURIComponent(bankId)}/tasks`, {
@@ -17694,6 +18822,8 @@
       }
       // Surface the newly-logged kind so the rep sees it land.
       if (bankActivityFilter !== 'all' && bankActivityFilter !== payload.kind) bankActivityFilter = 'all';
+      bankActivityDraft = null;
+      bankActivitySaving = false;
       refreshBankActivityPanel();
       showToast(`Logged ${bankActivityKindLabel(payload.kind).toLowerCase()}`);
     } catch (e) {
@@ -17726,6 +18856,7 @@
   async function loadBankActivity(bankId) {
     if (!bankId) {
       selectedBankActivities = [];
+      selectedBankLastManualTouch = '';
       bankActivityBankId = null;
       refreshBankActivityPanel();
       return;
@@ -17733,13 +18864,15 @@
     bankActivityBankId = bankId;
     const reqId = ++bankActivityRequestId;
     try {
-      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity?limit=50`, { cache: 'no-store' });
+      const res = await fetch(`/api/banks/${encodeURIComponent(bankId)}/activity?limit=200`, { cache: 'no-store' });
       const data = await readBankJson(res);
       if (reqId !== bankActivityRequestId) return;
       selectedBankActivities = Array.isArray(data.activities) ? data.activities : [];
+      selectedBankLastManualTouch = data.lastManualTouch || '';
     } catch (e) {
       if (reqId !== bankActivityRequestId) return;
       selectedBankActivities = [];
+      selectedBankLastManualTouch = '';
       showToast("Couldn't load this bank's activity timeline.", true);
     }
     refreshBankActivityPanel();
@@ -17763,11 +18896,32 @@
     loadBankActivity(bankId);
   }
 
+  // Closed <details> content isn't rendered by the browser, so a collapsed
+  // Portfolio Snapshot panel silently drops out of the printout. Open every
+  // closed one for the print pass and restore afterwards.
+  function openBankProfileDetailsForPrint() {
+    document.querySelectorAll('#bankProfile details:not([open])').forEach(d => {
+      d.dataset.printOpened = '1';
+      d.open = true;
+    });
+  }
+
+  function restoreBankProfileDetailsAfterPrint() {
+    document.querySelectorAll('#bankProfile details[data-print-opened]').forEach(d => {
+      delete d.dataset.printOpened;
+      d.open = false;
+    });
+  }
+
+  window.addEventListener('beforeprint', openBankProfileDetailsForPrint);
+  window.addEventListener('afterprint', restoreBankProfileDetailsAfterPrint);
+
   function printBankProfile() {
     if (!selectedBank || !selectedBank.bank) return showToast('No bank tear sheet loaded', true);
     // The portfolio panel loads asynchronously; printing mid-load would capture
     // its placeholder. Let the rep wait or print anyway.
     if (bankIntelligenceLoading && !confirm('The portfolio panel is still loading — print anyway?')) return;
+    openBankProfileDetailsForPrint(); // beforeprint also fires, but not in every browser path
     window.print();
   }
 
@@ -17846,8 +19000,8 @@
   function bankBalanceSheetRows() {
     return [
       { label: 'Total Assets ($000)', key: 'totalAssets', type: 'money', value: values => formatCallReportValue(values.totalAssets, 'money') },
-      { label: 'Total Securities (AFS-FV) ($000/ %)', key: 'afsTotal', type: 'money', value: values => formatCallReportMoneyShare(values.afsTotal, values.afsTotal) },
-      { label: 'Total Securities (HTM-FV) ($000/ %)', key: 'htmTotal', type: 'money', value: values => formatCallReportMoneyShare(values.htmTotal, values.htmTotal) },
+      { label: 'Total Securities (AFS-FV) ($000/ %)', key: 'afsTotal', type: 'money', value: values => formatCallReportMoneyShare(values.afsTotal, sumBankValues(values, ['afsTotal', 'htmTotal'])) },
+      { label: 'Total Securities (HTM-FV) ($000/ %)', key: 'htmTotal', type: 'money', value: values => formatCallReportMoneyShare(values.htmTotal, sumBankValues(values, ['afsTotal', 'htmTotal'])) },
       { label: 'Total Securities / Total Assets (%)', key: 'securitiesToAssets', type: 'percent', value: values => formatCallReportValue(values.securitiesToAssets, 'percent') },
       { label: 'Total Loans & Leases (HFI, HFS) ($000)', key: 'totalLoans', type: 'money', value: values => formatCallReportValue(values.totalLoans, 'money') },
       { label: 'Total Loans / Assets (%)', key: 'loansToAssets', type: 'percent', value: values => formatCallReportValue(values.loansToAssets, 'percent') },
@@ -18134,7 +19288,7 @@
             <thead>
               <tr class="bank-call-report-header-row">
                 <th class="bank-call-report-section-title">${escapeHtml(title)}</th>
-                ${visiblePeriods.map(period => `<th>${escapeHtml(formatCallReportPeriod(period))}</th>`).join('')}
+                ${visiblePeriods.map(period => `<th>${escapeHtml(formatCallReportPeriod(period))}${bankPeriodInterimBadge(period)}</th>`).join('')}
                 ${sectionHasPeerRow ? `<th class="bank-peer-col" title="${escapeHtml(peerColumnTooltip(peerComparison))}">Peer Avg</th>` : ''}
               </tr>
             </thead>
@@ -18159,10 +19313,12 @@
       return '<td class="bank-peer-col bank-peer-cell-empty">—</td>';
     }
     const peerValue = Number(peer.peerValue);
+    // Bank percent cells render bare numbers (the row label carries '(%)') —
+    // match that convention here instead of suffixing '%'.
     const peerDisplay = row.type === 'money'
       ? formatCallReportValue(peerValue, 'money')
       : row.type === 'percent'
-        ? `${formatCallReportValue(peerValue, 'percent')}%`
+        ? formatCallReportValue(peerValue, 'percent')
         : formatCallReportNumber(peerValue, 2);
     const latestValues = latestPeriod && latestPeriod.values ? latestPeriod.values : {};
     const bankValueRaw = typeof row.bankPeerValue === 'function'
@@ -18216,8 +19372,17 @@
     return formatNumericDate(period && (period.endDate || period.period));
   }
 
+  // Interim FDIC/FFIEC sync periods carry a partial ~30-field subset — badge
+  // them so reps can tell a stopgap quarter from a full FedFis quarter.
+  function bankPeriodInterimBadge(period) {
+    const source = period && period.values && typeof period.values.source === 'string'
+      ? period.values.source.toLowerCase() : '';
+    if (source !== 'fdic' && source !== 'ffiec') return '';
+    return ` <em class="bank-period-interim" title="Interim ${escapeHtml(source.toUpperCase())} sync — partial fields only; the next full workbook import supersedes this period.">${escapeHtml(source.toUpperCase())}</em>`;
+  }
+
   function formatCallReportValue(value, type) {
-    if (value == null || value === '') return '-';
+    if (value == null || value === '') return '—';
     const n = Number(value);
     if (!isFinite(n)) return String(value);
     if (type === 'money') return formatCallReportNumber(n, 0);
@@ -18227,7 +19392,7 @@
 
   function formatCallReportNumber(value, digits) {
     const n = Number(value);
-    if (!isFinite(n)) return '-';
+    if (!isFinite(n)) return '—';
     const formatted = Math.abs(n).toLocaleString('en-US', {
       maximumFractionDigits: digits,
       minimumFractionDigits: digits
@@ -18251,8 +19416,8 @@
   function formatCallReportMoneyShare(value, total) {
     const amount = Number(value);
     const denominator = Number(total);
-    if (!isFinite(amount) || amount === 0) return '- / -';
-    const pct = isFinite(denominator) && denominator !== 0 ? `${((amount / denominator) * 100).toFixed(0)}%` : '-';
+    if (!isFinite(amount) || amount === 0) return '— / —';
+    const pct = isFinite(denominator) && denominator !== 0 ? `${((amount / denominator) * 100).toFixed(0)}%` : '—';
     return `${formatCallReportValue(amount, 'money')} / ${pct}`;
   }
 
@@ -18716,6 +19881,12 @@
           Failed to load weekly CD recap: ${escapeHtml(err.message)}
         </td></tr>`;
       }
+      // Take the hero + status tiles out of their skeleton/loading state too —
+      // otherwise the page reads as stuck mid-load forever.
+      if (grid) grid.innerHTML = '<div class="stat-tile"><span>Weekly Recap</span><strong>Unavailable</strong></div>';
+      if (stat) stat.textContent = '—';
+      if (sub) sub.textContent = 'Could not load the weekly CD recap.';
+      if (kicker) kicker.textContent = '';
       renderCdRecapCharts(null);
       showToast('Could not load weekly CD recap: ' + err.message, true);
     }
@@ -19054,7 +20225,12 @@
       if (!res.ok) throw new Error('HTTP ' + res.status);
       data = await res.json();
     } catch (e) {
+      // Reset every region — leaving the previous load's rows/stats up would
+      // show another rep's watchlist after an acting-rep switch fails.
       secBody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--danger)">Failed to load watchlist: ${escapeHtml(e.message)}</td></tr>`;
+      if (bankBody) bankBody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--danger)">Watchlist unavailable.</td></tr>';
+      setText('watchlistStat', '—');
+      setText('watchlistSub', 'Watchlist unavailable — try again in a moment.');
       return;
     }
     if (!data.rep) {
@@ -19163,6 +20339,7 @@
 
   let contactsDirectoryRows = [];
   let contactsDirectoryTotal = 0;
+  let contactsLoadSeq = 0; // discard out-of-order search responses
   let contactsDirectoryPage = 0;
   const CONTACTS_PAGE_SIZE_KEY = 'fbbs.contacts.pageSize.v1';
   const CONTACTS_PAGE_SIZE_OPTIONS = [100, 250, 500];
@@ -19222,10 +20399,13 @@
     if (!body) return;
     wireContactsDirectoryControls();
     const q = (document.getElementById('contactsSearch') || {}).value || '';
+    const seq = ++contactsLoadSeq;
     try {
       const res = await fetch(`/api/contacts?q=${encodeURIComponent(q.trim())}`, { cache: 'no-store' });
+      if (seq !== contactsLoadSeq) return; // a newer search superseded this one
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
+      if (seq !== contactsLoadSeq) return;
       contactsDirectoryRows = data.contacts || [];
       contactsDirectoryTotal = Number(data.total || contactsDirectoryRows.length || 0);
       contactsDirectoryPage = 0;
@@ -19234,6 +20414,7 @@
         q.trim() ? `${contactsDirectoryRows.length.toLocaleString()} of ${contactsDirectoryTotal.toLocaleString()} contacts match` : `${contactsDirectoryTotal.toLocaleString()} contacts across your banks`;
       renderContactsDirectoryRows();
     } catch (e) {
+      if (seq !== contactsLoadSeq) return;
       contactsDirectoryRows = [];
       contactsDirectoryTotal = 0;
       contactsDirectoryPage = 0;
@@ -19911,7 +21092,13 @@
     // Non-blocking banners.
     const banners = [];
     if (dash.modelError) banners.push(`<p class="sd-banner warn">AI prose unavailable (${escapeHtml(dash.modelError)}) — showing the deterministic, desk-grounded relative-value read.</p>`);
-    if (data.stale) banners.push(`<p class="sd-banner warn">An AI read is cached for ${escapeHtml(data.aiCachedDate || 'a prior package')}; this is today's live relative-value read. Click <strong>Generate</strong> for today's AI-ranked calls &amp; talking points.</p>`);
+    if (data.stale) {
+      // Non-admins can't see the Generate button (applyAdminActionUi hides
+      // it) — don't hand them a dead instruction.
+      banners.push(isAdminUiAllowed()
+        ? `<p class="sd-banner warn">An AI read is cached for ${escapeHtml(data.aiCachedDate || 'a prior package')}; this is today's live relative-value read. Click <strong>Generate</strong> for today's AI-ranked calls &amp; talking points.</p>`
+        : `<p class="sd-banner warn">An AI read is cached for ${escapeHtml(data.aiCachedDate || 'a prior package')}; today's live relative-value board below is current. An admin can refresh the AI talking points.</p>`);
+    }
     if (data.customTax) banners.push('<p class="sd-banner">Custom tax-rate lens — rankings recomputed live from the desk\'s yields. (Deterministic; the AI prose reflects the per-client rates.)</p>');
 
     // Benchmark legend — names the live benchmark sources.
@@ -20035,7 +21222,11 @@
         bits.push(dash.model || 'deterministic');
       } else {
         bits.push('Live deterministic idea engine');
-        bits.push(data.configured ? 'Generate for AI calls' : 'Add an Anthropic key for AI calls');
+        // The Generate button is admin-only — the rep-facing meta line says the
+        // live board is current instead of pointing at a hidden control.
+        bits.push(isAdminUiAllowed()
+          ? (data.configured ? 'Generate for AI calls' : 'Add an Anthropic key for AI calls')
+          : 'Live board is current — an admin can layer the AI read');
       }
       metaEl.textContent = bits.join(' · ');
     }
@@ -20077,6 +21268,11 @@
     }
   }
 
+  // Sequence token so overlapping tax-lens fetches can never render out of
+  // order — custom-lens GETs recompute the full RV ranking server-side, so a
+  // slower stale response could otherwise win over the selected lens.
+  let sdLoadSeq = 0;
+
   async function loadSalesDashboard() {
     const card = document.getElementById('salesDashboardCard');
     if (!card) return;
@@ -20096,13 +21292,42 @@
         custom.addEventListener('input', () => { clearTimeout(t); t = setTimeout(() => loadSalesDashboard(), 450); });
       }
     }
+    loadMarketSnapshotStrip('salesDashSnapshotStrip'); // canonical desk-vs-live band, non-blocking
+    const body = document.getElementById('salesDashboardBody');
+    const seq = ++sdLoadSeq;
+    if (!salesDashboardData) {
+      // First load: the RV board is computed live server-side — show visible
+      // progress instead of leaving the card hidden below the hero.
+      card.hidden = false;
+      if (body) body.innerHTML = '<p class="daily-summary-empty">Computing today&rsquo;s relative-value board&hellip;</p>';
+    } else if (body) {
+      // Lens refetch: keep the existing board visible but flagged busy.
+      body.setAttribute('aria-busy', 'true');
+      body.style.opacity = '0.55';
+    }
     try {
       const res = await fetch('/api/sales-dashboard' + sdTaxParams(), { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      renderSalesDashboard(await res.json());
+      const data = await res.json();
+      if (seq !== sdLoadSeq) return; // superseded by a newer lens fetch
+      renderSalesDashboard(data);
     } catch (e) {
-      const body = document.getElementById('salesDashboardBody');
-      if (body) body.innerHTML = `<p class="sd-banner warn">Sales Dashboard could not load${e && e.message ? ': ' + escapeHtml(e.message) : '.'}</p>`;
+      if (seq !== sdLoadSeq) return;
+      card.hidden = false;
+      if (!body) return;
+      if (salesDashboardData && salesDashboardData.dashboard) {
+        // A lens refetch failed — keep the last good board and flag it
+        // instead of replacing the whole page with an error.
+        body.querySelectorAll('[data-sd-load-error]').forEach(el => el.remove());
+        body.insertAdjacentHTML('afterbegin', `<p class="sd-banner warn" data-sd-load-error>Refresh failed${e && e.message ? ': ' + escapeHtml(e.message) : ''} — showing the previous board.</p>`);
+      } else {
+        body.innerHTML = `<p class="sd-banner warn">Sales Dashboard could not load${e && e.message ? ': ' + escapeHtml(e.message) : '.'}</p>`;
+      }
+    } finally {
+      if (seq === sdLoadSeq && body) {
+        body.removeAttribute('aria-busy');
+        body.style.opacity = '';
+      }
     }
   }
 
@@ -21815,7 +23040,7 @@
     const termSelect = document.getElementById('ef-term');
     const keepTerm = termSelect.value;
     termSelect.innerHTML = '<option value="">All terms</option>' +
-      sortedTerms.map(t => `<option value="${t}">${t}</option>`).join('');
+      sortedTerms.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
     termSelect.value = keepTerm;
 
     // States
@@ -21823,7 +23048,7 @@
     const stateSelect = document.getElementById('ef-state');
     const keepState = stateSelect.value;
     stateSelect.innerHTML = '<option value="">All states</option>' +
-      states.map(s => `<option value="${s}">${s}</option>`).join('');
+      states.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
     stateSelect.value = keepState;
 
     const asOf = offeringsData.asOfDate
@@ -22146,7 +23371,7 @@
     const stateSelect = document.getElementById('mf-state');
     const keepState = stateSelect.value;
     stateSelect.innerHTML = '<option value="">All states</option>' +
-      states.map(s => `<option value="${s}">${s}</option>`).join('');
+      states.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
     stateSelect.value = keepState;
 
     const asOf = muniData.asOfDate
@@ -23531,6 +24756,15 @@
   async function loadMbsCmo() {
     const body = document.getElementById('mbsCmoBody');
     if (!body) return;
+    // Deep links (jump search, All Offerings "Open", dashboard picks) arrive as
+    // '#mbs-cmo?q=<cusip>' — seed the search filter like the other explorers.
+    const deepLinkQuery = hashParamsForPage('mbs-cmo').get('q');
+    if (deepLinkQuery) {
+      mbsCmoFilters.search = deepLinkQuery.trim();
+      // #mf-search also exists in the muni-explorer template — scope to this page.
+      const searchInput = document.querySelector('#p-mbs-cmo #mf-search');
+      if (searchInput) searchInput.value = mbsCmoFilters.search;
+    }
     try {
       const res = await fetch('/api/mbs-cmo', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -23775,6 +25009,13 @@
   async function loadStructuredNotes() {
     const body = document.getElementById('structuredNotesBody');
     if (!body) return;
+    // Deep links arrive as '#structured-notes?q=<cusip>' — seed the search
+    // filter like the other explorers.
+    const deepLinkQuery = hashParamsForPage('structured-notes').get('q');
+    if (deepLinkQuery) {
+      structuredNotesFilters.search = deepLinkQuery.trim();
+      setControlValue('sn-search', structuredNotesFilters.search);
+    }
     try {
       const res = await fetch('/api/structured-notes', { cache: 'no-store' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -23886,12 +25127,21 @@
   async function loadMarketColor() {
     const list = document.getElementById('mcArticleList');
     if (!list) return;
-    // The hub degrades by half: a wire outage still shows desk emails, and an
-    // empty inbox still shows the live wire band + headlines.
+    if (!marketColorWire) {
+      const cardsEl = document.getElementById('mcWireCards');
+      if (cardsEl && !cardsEl.childElementCount) cardsEl.innerHTML = marketSkeletonCards(6);
+      const auctionsEl = document.getElementById('mcAuctions');
+      if (auctionsEl && !auctionsEl.childElementCount) {
+        auctionsEl.innerHTML = '<div class="home-wire-card"><p class="home-wire-card-sub">Loading auctions…</p></div>';
+      }
+    }
+    // The hub degrades by half: a wire outage still shows the news feed, and a
+    // feed outage still shows the live wire band + headlines.
     const [inboxRes, wireRes] = await Promise.allSettled([
       fetch('/api/market-color', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
       fetch('/api/market/wire', { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     ]);
+    marketColorLoadError = inboxRes.status === 'rejected';
     if (inboxRes.status === 'fulfilled') {
       marketColorData = inboxRes.value;
     } else if (!marketColorData) {
@@ -23922,6 +25172,12 @@
     return `<a class="small-btn mc-read-btn" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">Open ↗</a>`;
   }
 
+  function marketColorTitleHtml(item) {
+    const title = escapeHtml((item && (item.title || item.subject)) || 'Market color');
+    if (!item || !item.url) return title;
+    return `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener">${title}</a>`;
+  }
+
   function renderMarketColorWire() {
     const cardsEl = document.getElementById('mcWireCards');
     if (!cardsEl) return;
@@ -23934,8 +25190,9 @@
     const headlines = wire && Array.isArray(wire.headlines) ? wire.headlines : [];
 
     const cards = [];
-    if (rates && rates.tenYear != null) cards.push(marketWireCard('10Y Treasury', rates.tenYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['10Y'])));
-    if (rates && rates.twoYear != null) cards.push(marketWireCard('2Y Treasury', rates.twoYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['2Y'])));
+    const curveAsOf = rates && rates.asOfDate ? ' · ' + rates.asOfDate : '';
+    if (rates && rates.tenYear != null) cards.push(marketWireCard('10Y Treasury', rates.tenYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['10Y']) + curveAsOf));
+    if (rates && rates.twoYear != null) cards.push(marketWireCard('2Y Treasury', rates.twoYear.toFixed(2) + '%', marketWireChange(rates.changes && rates.changes['2Y']) + curveAsOf));
     if (rates && rates.spread2s10sBp != null) cards.push(marketWireCard('2s10s', rates.spread2s10sBp + 'bp', 'As of ' + (rates.asOfDate || '')));
     if (ind && ind.cpiYoY) cards.push(marketWireCard('CPI YoY', ind.cpiYoY.value.toFixed(1) + '%', ind.cpiYoY.period));
     if (ind && ind.unemployment) cards.push(marketWireCard('Unemployment', ind.unemployment.value.toFixed(1) + '%', ind.unemployment.period));
@@ -23975,7 +25232,7 @@
     const updatedEl = document.getElementById('mcWireUpdated');
     if (updatedEl) {
       const at = (wire && wire.fetchedAt) || (ind && ind.fetchedAt) || null;
-      const stale = Boolean(wire && wire.stale);
+      const stale = Boolean(wire && wire.stale) || Boolean(ind && ind.stale);
       updatedEl.textContent = at
         ? `Fed · FDIC · SEC · BLS · TreasuryDirect — updated ${formatRelativeAt(at)}${stale ? ' (showing cached)' : ''}`
         : 'Fed · FDIC · SEC · BLS · TreasuryDirect';
@@ -23986,10 +25243,16 @@
 
   function marketColorFilteredItems(items) {
     const tag = marketColorFilters.tag;
-    const q = marketColorFilters.search.toLowerCase();
+    // Word-boundary tokens so short desk terms stay on-topic — 'SEC' must not
+    // hit 'SpaceX', 'CD' must not hit 'decade'. All tokens must match.
+    const tokens = marketColorFilters.search.split(/\s+/).filter(Boolean)
+      .map(t => new RegExp('\\b' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
     return items.filter(item => {
       if (tag !== 'all' && !(item.tags || []).includes(tag)) return false;
-      if (q && !`${item.title || ''} ${item.summary || ''} ${item.source || ''}`.toLowerCase().includes(q)) return false;
+      if (tokens.length) {
+        const hay = `${item.title || ''} ${item.summary || ''} ${item.source || ''}`;
+        if (!tokens.every(re => re.test(hay))) return false;
+      }
       return true;
     });
   }
@@ -24040,9 +25303,9 @@
     decorateWorkspaceContextRail(rail);
   }
 
-  // Email previews carry bracketed link annotations — often enormous
-  // security-proxy (safe-link) URLs that drown out the actual text. Strip
-  // URLs from the preview; the full body stays available in the reading pane.
+  // RSS summaries occasionally carry bracketed link annotations or raw URLs
+  // that drown out the actual text. Strip URLs from the preview; the headline
+  // links out to the publisher for the full story (we never republish bodies).
   function marketColorPreviewText(preview) {
     return String(preview || '')
       .replace(/\[?\bhttps?:\/\/\S+\]?/gi, '')
@@ -24056,7 +25319,8 @@
     if (!list || !marketColorData) return;
     const items = Array.isArray(marketColorData.items) ? marketColorData.items : [];
     setText('marketColorStat', formatNumber(items.length));
-    setText('marketColorKicker', marketColorData.updatedAt ? `Updated ${formatFullTimestamp(marketColorData.updatedAt)}${marketColorData.stale ? ' (cached)' : ''}` : 'No market color yet');
+    const kickerBase = marketColorData.updatedAt ? `Updated ${formatFullTimestamp(marketColorData.updatedAt)}${marketColorData.stale ? ' (cached)' : ''}` : 'No market color yet';
+    setText('marketColorKicker', kickerBase + (marketColorLoadError ? ' — refresh failed, showing earlier items' : ''));
     setText('marketColorSub', 'Live market wire, official headlines, and market-color news from CNBC & MarketWatch in one place.');
 
     const chipsEl = document.getElementById('mcTagChips');
@@ -24096,7 +25360,7 @@
           <span class="mc-article-from">${escapeHtml(marketColorSenderName(lead))}</span>
           <span class="mc-article-when">${escapeHtml(marketColorEmailWhen(lead))}</span>
         </div>
-        <h4 class="mc-lead-title">${escapeHtml(lead.title || lead.subject || 'Market color')}</h4>
+        <h4 class="mc-lead-title">${marketColorTitleHtml(lead)}</h4>
         <p class="mc-lead-preview">${escapeHtml(marketColorPreviewText(lead.summary || lead.preview))}</p>
         <div class="mc-article-foot">
           <span class="mc-article-tags">${(lead.tags || []).map(tag => `<span class="rank-chip">${escapeHtml(tag)}</span>`).join(' ')}</span>
@@ -24114,7 +25378,7 @@
           <span class="mc-article-from">${escapeHtml(marketColorSenderName(item))}</span>
           <span class="mc-article-when">${escapeHtml(marketColorEmailWhen(item))}</span>
         </div>
-        <h5 class="mc-article-title">${escapeHtml(item.title || item.subject || 'Market color')}</h5>
+        <h5 class="mc-article-title">${marketColorTitleHtml(item)}</h5>
         <p class="mc-article-preview">${escapeHtml(marketColorPreviewText(item.summary || item.preview).slice(0, 220))}</p>
       </div>
       <div class="mc-article-foot">
@@ -24158,13 +25422,6 @@
         marketColorActiveId = '';
         renderMarketColor();
       });
-    }
-    const backdrop = document.getElementById('mcReaderBackdrop');
-    if (backdrop) {
-      backdrop.addEventListener('click', e => { if (e.target === backdrop) backdrop.hidden = true; });
-      const close = document.getElementById('mcReaderClose');
-      if (close) close.addEventListener('click', () => { backdrop.hidden = true; });
-      document.addEventListener('keydown', e => { if (e.key === 'Escape' && !backdrop.hidden) backdrop.hidden = true; });
     }
   }
 
@@ -25535,6 +26792,7 @@
 
   const PACKAGE_POLL_MS = 3 * 60 * 1000;
   const PULSE_REFRESH_MS = 5 * 60 * 1000;
+  const MARKET_COLOR_REFRESH_MS = 15 * 60 * 1000;
 
   function packageFingerprint(pkg) {
     if (!pkg || typeof pkg !== 'object') return '';
@@ -25588,6 +26846,15 @@
       const pulse = document.getElementById('p-pulse');
       if (pulse && pulse.classList.contains('active')) loadCrmPulse(true);
     }, PULSE_REFRESH_MS);
+
+    // Market Color hub: refresh headlines/cards while it's the open page so a
+    // rep parking it on a second monitor gets honest timestamps all day.
+    // Server-side TTLs (30m feed/headlines, 1h auctions) absorb the polling.
+    setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      const hub = document.getElementById('p-market-color');
+      if (hub && hub.classList.contains('active')) loadMarketColor();
+    }, MARKET_COLOR_REFRESH_MS);
   }
 
   // ============ Market Wire (live headlines + economic numbers) ============
@@ -26046,7 +27313,7 @@
     if (status === 'client') return '#ba2f25';
     if (status === 'prospect') return '#1597c7';
     if (status === 'open') return '#7c3bc7';
-    if (status === 'watchlist') return '#6b3d2e';
+    if (status === 'watchlist') return '#B87524'; // keep in sync with --maps-watchlist
     if (status === 'dormant') return '#6D7A72';
     return '#345F4A';
   }
@@ -26786,12 +28053,34 @@
     });
   }
 
+  // A location pin can hold banks of mixed status — color it by the most
+  // sales-relevant one so a Client can't hide under an Open-colored cluster.
+  const MAPS_GROUP_STATUS_LADDER = ['Client', 'Prospect', 'Watchlist', 'Open', 'Dormant'];
+
+  function mapsGroupStatus(group) {
+    const present = new Set((group && group.banks || []).map(mapsAccountStatusLabel));
+    return MAPS_GROUP_STATUS_LADDER.find(s => present.has(s)) || mapsAccountStatusLabel(group && group.banks && group.banks[0]);
+  }
+
+  function mapsGroupStatusMix(group) {
+    const counts = {};
+    for (const bank of (group && group.banks) || []) {
+      const status = mapsAccountStatusLabel(bank);
+      counts[status] = (counts[status] || 0) + 1;
+    }
+    return MAPS_GROUP_STATUS_LADDER.filter(s => counts[s]).concat(Object.keys(counts).filter(s => !MAPS_GROUP_STATUS_LADDER.includes(s)))
+      .map(s => `${counts[s]} ${s}`).join(' · ');
+  }
+
   function mapsSelectedLocationGroup() {
     const bank = mapsFindBank(mapsState.selectedBankId);
     const key = mapsState.selectedLocationKey || mapsLocationKey(bank);
     if (!key) return null;
-    return mapsLocationGroups(mapsState.visibleBanks.length ? mapsState.visibleBanks : mapsState.banks)
-      .find(group => group.key === key) || null;
+    // No all-banks fallback while filters are active: the selection must
+    // resolve against the same set the pins/list show, or a filtered-out
+    // bank appears in the detail panel.
+    const pool = mapsState.visibleBanks.length || mapsShouldShowMarkers() ? mapsState.visibleBanks : mapsState.banks;
+    return mapsLocationGroups(pool).find(group => group.key === key) || null;
   }
 
   function mapsSelectBank(bank, group) {
@@ -26856,6 +28145,12 @@
   async function loadMaps() {
     const subtitle = document.getElementById('mapsSubtitle');
     if (mapsState.loading) return;
+    if (mapsState.dirty) {
+      // A coverage save changed status/owner since the last fetch — the cached
+      // rows are stale (server side already invalidated its map cache).
+      mapsState.loaded = false;
+      mapsState.dirty = false;
+    }
     if (mapsState.loaded) {
       renderMapsView();
       mapsApplyHashDeal();
@@ -26909,6 +28204,17 @@
       if (subtitle) subtitle.textContent = err.message || 'Failed to load bank data';
       const body = document.getElementById('mapsBankBody');
       if (body) body.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:30px;color:var(--text3)">${escapeHtml(err.message || 'Failed to load')}</td></tr>`;
+      // The plot area is the dominant visual — explain the failure there too,
+      // with one-click recovery (loading/loaded flags permit re-entry).
+      const plot = document.getElementById('mapsPlot');
+      if (plot) {
+        plot.innerHTML = `<div class="bank-search-empty" style="padding:40px;text-align:center">
+          <p>${escapeHtml(err.message || 'Bank map data could not be loaded.')}</p>
+          <button type="button" class="small-btn" id="mapsRetryBtn">Retry</button>
+        </div>`;
+        const retry = document.getElementById('mapsRetryBtn');
+        if (retry) retry.addEventListener('click', () => loadMaps());
+      }
     } finally {
       mapsState.loading = false;
       mapsSetLoadingState(false);
@@ -27081,11 +28387,12 @@
       hovertemplate: groups.map(group => {
         const first = group.banks[0];
         const bankLabel = group.banks.length === 1 ? mapsBankListName(first) : `${group.banks.length} banks`;
-        return `<b>${escapeHtml(bankLabel)}</b><br>${escapeHtml(group.label || '')}<extra></extra>`;
+        const mix = group.banks.length > 1 ? `<br>${escapeHtml(mapsGroupStatusMix(group))}` : '';
+        return `<b>${escapeHtml(bankLabel)}</b><br>${escapeHtml(group.label || '')}${mix}<extra></extra>`;
       }),
       marker: {
         size: groups.map(group => group.key === selectedKey ? 24 : Math.min(28, 14 + Math.sqrt(group.banks.length) * 3.5)),
-        color: groups.map(group => mapsStatusColor(mapsAccountStatusLabel(group.banks[0]))),
+        color: groups.map(group => mapsStatusColor(mapsGroupStatus(group))),
         opacity: 0.9,
         line: {
           color: '#ffffff',
@@ -27300,15 +28607,18 @@
   function renderMapsStatusFilters() {
     const el = document.getElementById('mapsLegend');
     if (!el) return;
-    const counts = mapsStatusCounts();
-    // Show every status that actually appears in the data (canonical order
-    // first, then any unexpected ones) so the legend stays complete and
-    // filterable as Watchlist/Dormant banks get tagged.
-    const statuses = MAPS_STATUS_ORDER.filter(s => counts[s]);
-    Object.keys(counts).forEach(s => { if (!statuses.includes(s)) statuses.push(s); });
+    // Counts reflect the current territory/owner/search filters (computed in
+    // applyMapsFilters, status filter excluded); fall back to firm-wide counts
+    // before the first filter pass runs.
+    const counts = mapsState.preStatusCounts || mapsStatusCounts();
+    // Show every status that appears firm-wide (canonical order first, then
+    // any unexpected ones) so chips don't vanish when a filter zeroes them.
+    const firmCounts = mapsStatusCounts();
+    const statuses = MAPS_STATUS_ORDER.filter(s => firmCounts[s]);
+    Object.keys(firmCounts).forEach(s => { if (!statuses.includes(s)) statuses.push(s); });
     if (!statuses.length) statuses.push('Open', 'Prospect', 'Client');
     const allActive = mapsState.selectedStatuses.size === 0;
-    const total = mapsState.banks.length;
+    const total = Object.values(counts).reduce((n, c) => n + c, 0);
     el.innerHTML = [
       `<div class="maps-legend-title">Status</div>`,
       `<button type="button" class="maps-legend-item${allActive ? ' active' : ''}" data-maps-status-filter="">
@@ -27371,9 +28681,12 @@
     const maxAssets = mapsNumber(mapsState.territory.maxAssets);
     const rows = [];
     const drilldownRows = [];
+    // Status counts over rows passing every filter EXCEPT status itself, so
+    // the legend answers "how many of MY filtered banks are Prospects" while
+    // clicking a status chip still shows the other statuses' sizes.
+    const preStatusCounts = {};
     for (const b of mapsState.banks) {
       if (sel.size > 0 && !sel.has(b.state)) continue;
-      if (statusSel.size > 0 && !statusSel.has(mapsAccountStatusLabel(b))) continue;
       if (ownerFilter && !mapsOwnerMatches(b, ownerFilter)) continue;
       const assetsMm = mapsAssetsMm(b);
       if (minAssets !== null && (assetsMm === null || assetsMm < minAssets)) continue;
@@ -27390,12 +28703,24 @@
         if (!hay.includes(q)) continue;
       }
       if (!rowMatchesAdvanced(b)) continue;
+      const statusLabel = mapsAccountStatusLabel(b);
+      preStatusCounts[statusLabel] = (preStatusCounts[statusLabel] || 0) + 1;
+      if (statusSel.size > 0 && !statusSel.has(statusLabel)) continue;
       drilldownRows.push(b);
       if (!mapsLocationFilterMatches(b)) continue;
       rows.push(b);
     }
+    mapsState.preStatusCounts = preStatusCounts;
     mapsSortRows(rows, area);
     mapsState.visibleBanks = rows;
+    renderMapsStatusFilters();
+    // An active area search sorts by distance and ignores the sort dropdown —
+    // say so instead of leaving a control that silently does nothing.
+    const sortSelect = document.getElementById('mapsSortSelect');
+    if (sortSelect) {
+      sortSelect.disabled = Boolean(area);
+      sortSelect.title = area ? 'Area search active — results are sorted by distance from the searched location' : '';
+    }
     renderMapsSubtitle();
     renderMapsStateSummary();
     renderMapsDrilldown(drilldownRows);
@@ -27434,8 +28759,16 @@
     if (rowCountEl) {
       const total = rows.length.toLocaleString();
       const areaPrefix = area ? `within ${formatNumber(area.radiusMiles)} mi · ` : '';
+      const sortLabels = {
+        opportunity: 'top by priority score',
+        name: 'A–Z',
+        securities: 'top by securities/assets',
+        loans: 'top by loans/deposits',
+        assets: 'top by assets'
+      };
+      const truncNote = area ? 'nearest first' : (sortLabels[mapsState.territory.sort || 'opportunity'] || 'by current sort');
       rowCountEl.textContent = rows.length > limit
-        ? `${areaPrefix}${shown.length.toLocaleString()} of ${total} bank(s) shown (top by assets)`
+        ? `${areaPrefix}${shown.length.toLocaleString()} of ${total} bank(s) shown (${truncNote})`
         : `${areaPrefix}${total} bank(s) shown`;
     }
     if (area) {
@@ -27619,11 +28952,15 @@
   function renderMapsFullView() {
     const backdrop = document.getElementById('mapsFullBackdrop');
     if (!backdrop || backdrop.hidden) return;
-    const rows = mapsState.visibleBanks.length ? mapsState.visibleBanks : mapsState.banks;
+    // With any filter active, honor the filtered set even when it's empty —
+    // falling back to ALL banks here contradicted the list's "No banks match".
+    const rows = mapsState.visibleBanks.length || mapsShouldShowMarkers() ? mapsState.visibleBanks : mapsState.banks;
     const subtitle = document.getElementById('mapsFullSubtitle');
     if (subtitle) {
       const states = mapsState.selectedStates.size ? Array.from(mapsState.selectedStates).sort().join(', ') : 'all states';
-      subtitle.textContent = `${formatNumber(rows.length)} banks shown · ${states}`;
+      subtitle.textContent = rows.length
+        ? `${formatNumber(rows.length)} banks shown · ${states}`
+        : 'No banks match the current filters';
     }
     renderMapsMarkerMap(rows, { plotId: 'mapsFullPlot', full: true });
     renderMapsFullDetail();
@@ -27815,11 +29152,18 @@
       });
       ownerSelect.dataset.bound = '1';
     }
+    // Same debounce as the bank search box — a full filter + 1,000-row
+    // rebuild + Plotly.react per keystroke made typing "1500" cost four cycles.
+    let assetsFilterTimer = null;
+    const debouncedAssetsFilter = () => {
+      clearTimeout(assetsFilterTimer);
+      assetsFilterTimer = setTimeout(applyMapsFilters, 160);
+    };
     const minAssets = document.getElementById('mapsMinAssets');
     if (minAssets && !minAssets.dataset.bound) {
       minAssets.addEventListener('input', () => {
         mapsState.territory.minAssets = minAssets.value;
-        applyMapsFilters();
+        debouncedAssetsFilter();
       });
       minAssets.dataset.bound = '1';
     }
@@ -27827,7 +29171,7 @@
     if (maxAssets && !maxAssets.dataset.bound) {
       maxAssets.addEventListener('input', () => {
         mapsState.territory.maxAssets = maxAssets.value;
-        applyMapsFilters();
+        debouncedAssetsFilter();
       });
       maxAssets.dataset.bound = '1';
     }
