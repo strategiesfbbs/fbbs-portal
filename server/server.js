@@ -12100,7 +12100,7 @@ const server = http.createServer(async (req, res) => {
           event: 'sales-dashboard-refresh', packageDate: record.packageDate, cached: record.cached,
           degraded: record.degraded, coverage: record.coverage, flags: (record.flags || []).length,
           candidateCount: record.candidateCount, model: record.model, usage: record.usage || null,
-          benchmarks: record.benchmarks ? { treasury: record.benchmarks.treasury, fdicCd: record.benchmarks.fdicCd, priorSnapshot: record.benchmarks.priorSnapshot } : null,
+          benchmarks: record.benchmarks ? { treasury: record.benchmarks.treasury, deskCd: record.benchmarks.deskCd, priorSnapshot: record.benchmarks.priorSnapshot } : null,
           cacheError: record.cacheError || null, modelError: record.modelError || null,
         });
         return sendJSON(res, 200, { ok: true, configured: claudeClient.isConfigured(), dashboard: record, sources, catalysts, cached: record.cached, customTax: !!taxRates });

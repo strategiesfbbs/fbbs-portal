@@ -56,7 +56,7 @@ const ROWS = [
   { assetClass: 'Corporate', type: 'corporate', page: 'corporates', cusip: '00000SHRT3', description: 'ShortCo 3y', sector: 'Industrial', state: '', coupon: 4.9, yield: 4.90, ytm: 4.90, ytnc: null, price: 100.0, maturity: '2029-06-15', callDate: null, availabilityK: 1500, sp: 'A' },
   // Long agency bullet, 30y, HIGH raw yield (5.10) but thin spread — RIA/banks.
   { assetClass: 'Agency', type: 'agency', page: 'agencies', cusip: '3130LONG30', description: 'FHLB 30y bullet', sector: 'Bullet', state: '', coupon: 5.10, yield: 5.10, ytm: 5.10, ytnc: null, price: 99.0, maturity: '2056-06-15', callDate: null, availabilityK: 5000 },
-  // 12m FDIC CD at 4.55 — cheap to FDIC avg, mildly cheap to UST.
+  // 12m brokered CD at 4.55 — mildly cheap to UST; sole CD, so it defines the 12m desk median.
   { assetClass: 'CD Offering', type: 'cd', page: 'explorer', cusip: '06251FET2', description: 'Bank Hapoalim · 12m', sector: 'CD', state: 'NY', coupon: null, yield: 4.55, price: null, maturity: '2027-06-16', callDate: null, availabilityK: null },
   // Callable agency worked to a near call, through Treasuries — should screen rich.
   { assetClass: 'Agency', type: 'agency', page: 'agencies', cusip: '3130RICH00', description: 'FHLB callable', sector: 'Callable', state: '', coupon: 4.65, yield: 3.90, ytm: 4.35, ytnc: 3.90, price: 99.65, maturity: '2032-05-19', callDate: '2027-05-19', availabilityK: 4370 },
@@ -93,11 +93,22 @@ test('workoutTenor prices premium/low-YTNC callables to the call', () => {
   assert.strictEqual(matured.statedYears, null);
 });
 
-test('fdicCdRateForTerm interpolates between published terms', () => {
-  const map = rv.fdicCdRateMap(FRED);
-  assert.strictEqual(rv.fdicCdRateForTerm(map, 12), 1.80);
-  assert.ok(approx(rv.fdicCdRateForTerm(map, 18), (1.80 + 1.50) / 2, 0.001)); // 12↔24
-  assert.strictEqual(rv.fdicCdRateForTerm(map, 1), 0.50);  // below 3m → flat
+test('deskCdMedianMap medians per term; cdBenchmarkRateForTerm interpolates', () => {
+  const cdRows = [
+    { ytw: 4.40, rv: { cdTermMonths: 12 } },
+    { ytw: 4.50, rv: { cdTermMonths: 12 } },
+    { ytw: 4.90, rv: { cdTermMonths: 12 } }, // median 4.50 — outlier can't skew it
+    { ytw: 4.20, rv: { cdTermMonths: 24 } },
+    { ytw: 4.30, rv: { cdTermMonths: 24 } }, // even count → mean of middle two
+    { ytw: null, rv: { cdTermMonths: 24 } }, // no yield → ignored
+    { ytw: 4.10, rv: { cdTermMonths: null } }, // no parsed term → ignored
+  ];
+  const map = rv.deskCdMedianMap(cdRows);
+  assert.strictEqual(map[12], 4.50);
+  assert.strictEqual(map[24], 4.25);
+  assert.ok(approx(rv.cdBenchmarkRateForTerm(map, 18), (4.50 + 4.25) / 2, 0.001)); // 12↔24
+  assert.strictEqual(rv.cdBenchmarkRateForTerm(map, 6), 4.50);  // below shortest → flat
+  assert.strictEqual(rv.cdBenchmarkRateForTerm(map, 60), 4.25); // beyond longest → flat
 });
 
 test('rating parsing maps Moody/S&P notches into coarse buckets', () => {
@@ -117,12 +128,13 @@ test('matched-Treasury spread is grounded in the interpolated curve', () => {
   assert.ok(approx(short.rv.ustSpreadBps, 115, 6));
 });
 
-test('CD carries both Treasury and FDIC spreads + spread-per-month', () => {
+test('CD carries Treasury spread + desk-median benchmark + spread-per-month', () => {
   const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF });
-  const cd = find(set, '06251FET2'); // 4.55 vs 1Y UST 4.00, vs FDIC 12m 1.80
+  const cd = find(set, '06251FET2'); // 4.55 vs 1Y UST 4.00; the sole CD IS the 12m median
   assert.strictEqual(cd.rv.cdTermMonths, 12);
   assert.ok(approx(cd.rv.ustSpreadBps, 55, 6));
-  assert.ok(approx(cd.rv.fdicSpreadBps, 275, 6));
+  assert.strictEqual(cd.rv.deskCdRate, 4.55);
+  assert.strictEqual(cd.rv.deskCdSpreadBps, 0); // on-market for its term on today's list
   assert.ok(cd.rv.spreadPerMonthBps > 4 && cd.rv.spreadPerMonthBps < 5);
   assert.strictEqual(rv.cdTermMonths({ description: '' }, 0.01), null);
 });
@@ -287,12 +299,14 @@ test('muni cheap-to-MMD uses the grade-matched MMD scale', () => {
 test('benchmarks block reports availability honestly (MMD optional)', () => {
   const set = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), curve: CURVE, fred: FRED, asOf: ASOF });
   assert.strictEqual(set.benchmarks.treasury, true);
-  assert.strictEqual(set.benchmarks.fdicCd, true);
+  assert.strictEqual(set.benchmarks.deskCd, true);
   assert.strictEqual(set.benchmarks.mmd, false); // not supplied here
   // Degrades cleanly with no curve / no fred / no mmd.
   const bare = rv.buildRelativeValue({ candidateSet: dd.buildCandidateSet(ROWS), asOf: ASOF });
   assert.strictEqual(bare.benchmarks.treasury, false);
   assert.strictEqual(bare.benchmarks.mmd, false);
+  // Desk CD medians come from the candidate set itself — available even bare.
+  assert.strictEqual(bare.benchmarks.deskCd, true);
   assert.ok(Array.isArray(bare.leaders));
 });
 

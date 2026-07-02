@@ -9,7 +9,10 @@
  * set plus three grounded benchmark inputs and attaches a relative-value read to
  * every candidate:
  *   - curve     : the official Treasury par yield curve (market-rates.js tenors)
- *   - fdicCd     : FDIC national average CD rates by term (fred-series.js, NDR*MCD)
+ *   - deskCd    : median brokered-CD rate per term from TODAY'S OWN CD list —
+ *                 the desk's real funding level. (Replaced the FDIC national
+ *                 retail average, which prints far below where issuer banks
+ *                 actually fund and made every brokered CD look rich.)
  *   - priorMap  : the prior package's per-CUSIP snapshot (for trend detection)
  *
  * The cheapness read, per security:
@@ -18,8 +21,9 @@
  *   - for munis, the muni/Treasury yield RATIO and a taxable-equivalent spread
  *     (we have no licensed MMD feed, so ratio + same-rating/maturity peer spread
  *     stand in for "cheap to MMD" — both grounded in our own data + the UST curve);
- *   - for CDs, spread over matched Treasury AND over the FDIC national term rate,
- *     plus spread-per-month-of-term (the short-end reinvestment screen);
+ *   - for CDs, spread over matched Treasury AND over the desk's same-day
+ *     brokered-CD term median, plus spread-per-month-of-term (the short-end
+ *     reinvestment screen);
  *   - a same-sector / same-maturity / same-rating PEER spread (intra-set value);
  *   - a single RISK-ADJUSTED composite (rvBps) that DOCKS long maturity, call
  *     risk, deep premiums and tiny blocks, so a 30Y never out-ranks a short CD
@@ -88,12 +92,6 @@ const TENOR_YEARS = {
   '1M': 1 / 12, '2M': 2 / 12, '3M': 0.25, '4M': 4 / 12, '6M': 0.5,
   '1Y': 1, '2Y': 2, '3Y': 3, '5Y': 5, '7Y': 7, '10Y': 10, '20Y': 20, '30Y': 30,
 };
-
-// FDIC national CD term (months) → fred-series key.
-const FDIC_CD_TERMS = [
-  { months: 3, key: 'ndr3m' }, { months: 6, key: 'ndr6m' }, { months: 12, key: 'ndr12m' },
-  { months: 24, key: 'ndr24m' }, { months: 36, key: 'ndr36m' }, { months: 60, key: 'ndr60m' },
-];
 
 function num(v) {
   if (v == null || v === '') return null;
@@ -171,14 +169,26 @@ function interpolateCurve(tenors, years) {
   return pts[pts.length - 1].v;
 }
 
-/** Build a months→rate map from a fred-series indicators payload. {} if absent. */
-function fdicCdRateMap(fred) {
+/**
+ * Desk brokered-CD term benchmark: months → median YTW across TODAY'S OWN CD
+ * candidates at that exact term. Self-referential by design — "cheap for its
+ * term on today's list" is the read the desk wants; an external retail average
+ * (the old FDIC NDR series) sits far below real brokered/FHLB funding levels.
+ * Input rows need only { rv: { cdTermMonths }, ytw } shape. {} if no CDs.
+ */
+function deskCdMedianMap(cdRows) {
+  const byTerm = new Map();
+  for (const c of cdRows || []) {
+    const months = c && c.rv && num(c.rv.cdTermMonths);
+    const y = c && num(c.ytw);
+    if (!months || y == null) continue;
+    if (!byTerm.has(months)) byTerm.set(months, []);
+    byTerm.get(months).push(y);
+  }
   const out = {};
-  if (!fred) return out;
-  for (const t of FDIC_CD_TERMS) {
-    const s = fred[t.key];
-    const v = s && num(s.value);
-    if (v != null) out[t.months] = v;
+  for (const [months, ys] of byTerm) {
+    const med = median(ys);
+    if (med != null) out[months] = round(med, 2);
   }
   return out;
 }
@@ -218,8 +228,8 @@ function interpolateMmd(mmdCurve, gradeKey, years) {
   return pts[pts.length - 1].v;
 }
 
-/** Nearest-then-interpolated FDIC national CD rate for a term in months. */
-function fdicCdRateForTerm(map, months) {
+/** Nearest-then-interpolated benchmark CD rate for a term in months. */
+function cdBenchmarkRateForTerm(map, months) {
   const terms = Object.keys(map).map(Number).sort((a, b) => a - b);
   if (!terms.length || months == null) return null;
   if (months <= terms[0]) return map[terms[0]];
@@ -513,7 +523,7 @@ function caveatsFor(c, w, rv) {
  * Returns the `rv` object (see module header). Pure.
  */
 function rvForCandidate(c, ctx) {
-  const { curve, fdicMap, mmdCurve, asOf, cof } = ctx;
+  const { curve, mmdCurve, asOf, cof } = ctx;
   const ytw = num(c.ytw);
   const w = workoutTenor(c, asOf);
   const bucket = bucketForYears(w.effYears);
@@ -534,8 +544,8 @@ function rvForCandidate(c, ctx) {
     mmdSpreadBps: null,
     mmdGrade: null,
     mmdAssumedGrade: false,
-    fdicRate: null,
-    fdicSpreadBps: null,
+    deskCdRate: null,
+    deskCdSpreadBps: null,
     spreadPerMonthBps: null,
     cdTermMonths: null,
     ratingBucket: ratingBucket(c),
@@ -594,15 +604,12 @@ function rvForCandidate(c, ctx) {
     }
   }
 
-  // CD: spread over the FDIC national term rate + spread-per-month of term.
+  // CD: term months + spread-per-month. The desk-median term benchmark needs
+  // the WHOLE candidate set, so buildRelativeValue fills deskCdRate/
+  // deskCdSpreadBps in its own pass after per-candidate enrichment.
   if (isCdClass(c) && ytw != null) {
     const months = cdTermMonths(c, w.effYears);
     rv.cdTermMonths = months;
-    const fdic = fdicCdRateForTerm(fdicMap, months);
-    if (fdic != null) {
-      rv.fdicRate = round(fdic, 2);
-      rv.fdicSpreadBps = round((ytw - fdic) * 100, 0);
-    }
     if (ustSpreadBps != null && months) rv.spreadPerMonthBps = round(ustSpreadBps / months, 2);
   }
 
@@ -641,8 +648,9 @@ function peerKey(c, rv) {
 function compositeRvBps(c, rv, w) {
   let base;
   if (isCdClass(c)) {
-    // A CD is value only if it beats BOTH Treasury and the FDIC benchmark.
-    const parts = [rv.ustSpreadBps, rv.fdicSpreadBps].filter(v => v != null);
+    // A CD is value only if it beats BOTH Treasury and the desk's own
+    // same-day brokered term median.
+    const parts = [rv.ustSpreadBps, rv.deskCdSpreadBps].filter(v => v != null);
     base = parts.length ? Math.min(...parts) : (rv.ustSpreadBps != null ? rv.ustSpreadBps : 0);
   } else if (isMuniClass(c)) {
     // Compare munis on a bank's taxable-equivalent basis (their natural buyer);
@@ -784,7 +792,7 @@ function moverChipText(rv) {
 /** Up to 3 glanceable outlier chips per row — the score's strongest signals. */
 function chipsFor(c, rv) {
   const chips = [];
-  if (isCdClass(c) && rv.fdicSpreadBps != null) chips.push(`${rv.fdicSpreadBps >= 0 ? '+' : ''}${rv.fdicSpreadBps}bp FDIC`);
+  if (isCdClass(c) && rv.deskCdSpreadBps != null) chips.push(`${rv.deskCdSpreadBps >= 0 ? '+' : ''}${rv.deskCdSpreadBps}bp vs desk med`);
   else if (isMuniClass(c) && rv.mmdSpreadBps != null) chips.push(`${rv.mmdSpreadBps >= 0 ? '+' : ''}${rv.mmdSpreadBps}bp ${rv.mmdGrade} MMD`);
   else if (rv.ustSpreadBps != null) chips.push(`${rv.ustSpreadBps >= 0 ? '+' : ''}${rv.ustSpreadBps}bp UST`);
   if (isMuniClass(c) && rv.notchesCheap >= 1 && rv.impliedGrade) chips.push(`yields like ${rv.impliedGrade}`);
@@ -1029,7 +1037,6 @@ function buildRelativeValue(opts) {
     throw new Error('buildRelativeValue requires opts.candidateSet');
   }
   const curve = o.curve || null;
-  const fdicMap = fdicCdRateMap(o.fred);
   const mmdCurve = (o.mmd && Array.isArray(o.mmd.curve) && o.mmd.curve.length) ? o.mmd : null;
   const asOf = o.asOf || null;
   const priorMap = o.priorMap || null;
@@ -1040,13 +1047,28 @@ function buildRelativeValue(opts) {
   const perBoardN = num(o.perBoardN) || 8;
 
   const tenors = curve ? (curve.tenors || curve) : null;
-  const ctx = { curve: tenors ? { tenors } : null, fdicMap, mmdCurve, asOf, cof };
+  const ctx = { curve: tenors ? { tenors } : null, mmdCurve, asOf, cof };
 
   // Pass 1 — per-candidate RV + workout, collected for peer grouping.
   const enriched = candidateSet.candidates.map(c => {
     const { rv, w } = rvForCandidate(c, ctx);
     return Object.assign({}, c, { rv, _w: w });
   });
+
+  // Pass 1b — desk brokered-CD term benchmark: median YTW per term from
+  // today's own CD list, then each CD's spread to its (interpolated) term
+  // median. This is the desk's real funding level — the FDIC national retail
+  // average it replaced read ~cheap and flattered every brokered offering.
+  const deskCdMap = deskCdMedianMap(enriched.filter(isCdClass));
+  for (const c of enriched) {
+    if (!isCdClass(c)) continue;
+    const bench = cdBenchmarkRateForTerm(deskCdMap, c.rv.cdTermMonths);
+    const y = num(c.ytw);
+    if (bench != null && y != null) {
+      c.rv.deskCdRate = round(bench, 2);
+      c.rv.deskCdSpreadBps = round((y - bench) * 100, 0);
+    }
+  }
 
   // Pass 2 — peer spreads (median YTW within sector/bucket/rating peer group).
   const groups = new Map();
@@ -1234,8 +1256,8 @@ function buildRelativeValue(opts) {
     benchmarks: {
       treasury: !!tenors,
       treasuryAsOf: curve && curve.asOfDate ? curve.asOfDate : null,
-      fdicCd: Object.keys(fdicMap).length > 0,
-      fdicTerms: fdicMap,
+      deskCd: Object.keys(deskCdMap).length > 0,
+      deskCdTerms: deskCdMap,
       priorSnapshot: !!(priorMap && Object.keys(priorMap || {}).length),
       priorPackage: movers ? { date: movers.priorDate, daysAgo: movers.daysAgo, matched: movers.matched, curveMoveBp: movers.curveMoveBp } : null,
       mmd: !!mmdCurve, // the desk's daily MMD scale (the `mmd` package slot), by grade
@@ -1275,8 +1297,8 @@ module.exports = {
   yearsBetween,
   bucketForYears,
   interpolateCurve,
-  fdicCdRateMap,
-  fdicCdRateForTerm,
+  deskCdMedianMap,
+  cdBenchmarkRateForTerm,
   interpolateMmd,
   interpolateTreasuryRatio,
   bqFactorFor,

@@ -21,8 +21,11 @@ const path = require('path');
 const FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations';
 
 // `group` drives where the frontend surfaces a series (core wire cards vs.
-// the Market Color hub's extended band vs. the CD national-rate strip);
+// the Market Color hub's extended band);
 // `format: 'bp'` marks OAS series quoted in percent but displayed in bp.
+// (The FDIC national-average CD series (NDR*MCD) were removed 2026-07-02 —
+// a retail branch-rate survey far below where FBBS issuers actually fund;
+// the desk's own daily brokered-CD medians replaced them everywhere.)
 const SERIES = [
   { id: 'SOFR', key: 'sofr', label: 'SOFR', group: 'core' },
   { id: 'DFF', key: 'fedFunds', label: 'Fed Funds (effective)', group: 'core' },
@@ -38,13 +41,6 @@ const SERIES = [
   // Inflation expectations beyond the 10Y breakeven.
   { id: 'T5YIE', key: 'breakeven5Y', label: '5Y Breakeven', group: 'extended' },
   { id: 'T5YIFR', key: 'fwd5y5y', label: '5y5y Fwd Inflation', group: 'extended' },
-  // FDIC national average CD rates by term (monthly; sourced FDIC via FRED).
-  { id: 'NDR3MCD', key: 'ndr3m', label: '3m CD', group: 'deposit', term: '3m' },
-  { id: 'NDR6MCD', key: 'ndr6m', label: '6m CD', group: 'deposit', term: '6m' },
-  { id: 'NDR12MCD', key: 'ndr12m', label: '12m CD', group: 'deposit', term: '12m' },
-  { id: 'NDR24MCD', key: 'ndr24m', label: '24m CD', group: 'deposit', term: '24m' },
-  { id: 'NDR36MCD', key: 'ndr36m', label: '36m CD', group: 'deposit', term: '36m' },
-  { id: 'NDR60MCD', key: 'ndr60m', label: '60m CD', group: 'deposit', term: '60m' },
 ];
 
 const CACHE_FILENAME = 'fred-indicators.json';

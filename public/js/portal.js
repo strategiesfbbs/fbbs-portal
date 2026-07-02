@@ -6909,7 +6909,9 @@
         cdRolloverState.ownerTouched = true;
       }
       renderCdRolloverWall();
-      renderFdicNationalStrip('cdRolloverNational', null);
+      fetchDeskCdMedians()
+        .then(d => renderDeskCdMedianStrip('cdRolloverNational', d))
+        .catch(() => { /* benchmark strip is optional */ });
     } catch (err) {
       if (seq !== cdRolloverLoadSeq) return;
       app.innerHTML = '<p class="error-note">Could not load the rollover wall: ' + escapeHtml(err.message) + '</p>';
@@ -21105,7 +21107,7 @@
     const legendBits = [];
     legendBits.push(bm.treasury ? `Treasury par curve${bm.treasuryAsOf ? ' ' + escapeHtml(bm.treasuryAsOf) : ''}` : 'Treasury curve unavailable');
     legendBits.push(bm.mmd ? `MMD scale${bm.mmdAsOf ? ' ' + escapeHtml(bm.mmdAsOf) : ''} (by grade)` : 'MMD scale unavailable');
-    legendBits.push(bm.fdicCd ? 'FDIC national CD averages' : 'FDIC CD averages unavailable');
+    legendBits.push(bm.deskCd ? 'desk brokered-CD medians (today’s list)' : 'desk CD medians unavailable');
     legendBits.push('same sector/maturity/rating peers');
     const mmdNote = bm.mmd ? '' : ' Munis fall back to the muni/Treasury ratio + rating &amp; maturity peers.';
     const legend = `<p class="sd-legend">Benchmarks: ${legendBits.join(' · ')}.${mmdNote} Every figure is the desk's own; spreads are computed live.</p>`;
@@ -21180,7 +21182,7 @@
     if (rv) {
       const boards = `<div class="sd-board-grid">
         <div class="sd-board-cell">${sdSection('Cheap to Treasury', 'Biggest spread over the matched Treasury', sdBoardTable(rv.cheapToTreasury, 'treasury'))}</div>
-        <div class="sd-board-cell">${sdSection('CD Value Board', 'Beats Treasury AND the FDIC national average — ranked by spread per month of term', sdBoardTable(rv.cdBoard, 'cd'))}</div>
+        <div class="sd-board-cell">${sdSection('CD Value Board', 'Beats Treasury AND today’s desk brokered-CD median for its term — ranked by spread per month of term', sdBoardTable(rv.cdBoard, 'cd'))}</div>
         <div class="sd-board-cell">${sdSection('Munis — cheap to MMD & peers', 'Spread to the grade-matched MMD scale, the muni/Treasury ratio, and rating/maturity peers', sdBoardTable(rv.muniValue, 'muni'))}</div>
         <div class="sd-board-cell">${sdSection('Bank capital shelf', 'Agencies, Treasuries and MBS/CMO names that screen for bank portfolios', sdBoardTable(rv.bankCapital, 'capital'))}</div>
         <div class="sd-board-cell">${sdSection('RIA taxable credit / structured', 'Corporate and structured-note yield ideas kept separate from bank muni/CD screens', sdBoardTable(rv.creditYield, 'credit'))}</div>
@@ -23026,7 +23028,10 @@
     populateOfferingsFilters();
     hydrateOfferingsFiltersFromUrl();
     renderOfferings();
-    renderFdicNationalStrip('cdNationalStrip', deskCdMediansByMonths(offeringsData.offerings));
+    renderDeskCdMedianStrip('cdNationalStrip', {
+      medians: deskCdMediansByMonths(offeringsData.offerings),
+      asOfDate: offeringsData.asOfDate || ''
+    });
   }
 
   function populateOfferingsFilters() {
@@ -25226,7 +25231,13 @@
           ${upcomingRows ? `<p class="home-wire-auction-head">Coming up</p>${upcomingRows}` : ''}
         </div>`;
       }
-      auctionsEl.innerHTML = auctionsCard + fdicNationalCard(fred);
+      auctionsEl.innerHTML = auctionsCard;
+      fetchDeskCdMedians().then(d => {
+        // Guard the async append — a newer render may have already added it.
+        if (!auctionsEl.querySelector('.mc-desk-cd-card')) {
+          auctionsEl.insertAdjacentHTML('beforeend', deskCdMedianCard(d));
+        }
+      }).catch(() => { /* desk medians card is optional */ });
     }
 
     const updatedEl = document.getElementById('mcWireUpdated');
@@ -26906,7 +26917,6 @@
 
   const CORE_FRED_KEYS = ['sofr', 'fedFunds', 'breakeven10Y', 'igOas', 'hyOas'];
   const EXTENDED_FRED_KEYS = ['sofr30', 'sofr90', 'iorb', 'prime', 'breakeven5Y', 'fwd5y5y'];
-  const FDIC_NDR_KEYS = ['ndr3m', 'ndr6m', 'ndr12m', 'ndr24m', 'ndr36m', 'ndr60m'];
 
   function fredWireCards(fred, keys) {
     if (!fred) return [];
@@ -26916,54 +26926,73 @@
     }).filter(Boolean);
   }
 
-  const FDIC_TERM_MONTHS = { ndr3m: 3, ndr6m: 6, ndr12m: 12, ndr24m: 24, ndr36m: 36, ndr60m: 60 };
+  // The desk's own daily brokered-CD list is the CD term benchmark. (It
+  // replaced the FDIC national retail average, which prints far below where
+  // FBBS issuer banks actually fund — brokered/FHLB levels — and made every
+  // brokered offering look artificially rich.)
+
+  // Median desk CD rate per distinct term (months) from today's parsed offerings.
+  function deskCdMediansByMonths(offerings) {
+    const byTerm = new Map();
+    for (const o of offerings || []) {
+      const months = Number(o.termMonths);
+      const rate = Number(o.rate);
+      if (!Number.isFinite(months) || months <= 0 || !Number.isFinite(rate)) continue;
+      if (!byTerm.has(months)) byTerm.set(months, []);
+      byTerm.get(months).push(rate);
+    }
+    const map = new Map();
+    for (const months of [...byTerm.keys()].sort((a, b) => a - b)) {
+      const rates = byTerm.get(months).sort((a, b) => a - b);
+      const mid = Math.floor(rates.length / 2);
+      map.set(months, rates.length % 2 ? rates[mid] : (rates[mid - 1] + rates[mid]) / 2);
+    }
+    return map;
+  }
+
+  function deskCdTermLabel(months) {
+    return months % 12 === 0 && months >= 12 ? `${months / 12}y` : `${months}m`;
+  }
+
+  // One short-lived cached fetch of today's CD slot for the medians — the
+  // Rollover Wall and Market Color rail don't otherwise load CD offerings.
+  let deskCdMediansCache = null;
+  async function fetchDeskCdMedians() {
+    if (deskCdMediansCache && Date.now() - deskCdMediansCache.at < 5 * 60 * 1000) {
+      return deskCdMediansCache.data;
+    }
+    const res = await fetch('/api/offerings', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const out = { medians: deskCdMediansByMonths(data.offerings), asOfDate: data.asOfDate || '' };
+    deskCdMediansCache = { data: out, at: Date.now() };
+    return out;
+  }
 
   // Rail card for the Market Color hub (matches the auctions card styling).
-  function fdicNationalCard(fred) {
-    const rows = FDIC_NDR_KEYS.map(k => fred && fred[k]).filter(e => e && e.value != null);
-    if (!rows.length) return '';
-    return `<div class="home-wire-card home-wire-auctions">
-      <p class="home-wire-card-label">FDIC National CD Rates</p>
-      <p class="home-wire-auction-head">National average by term · ${escapeHtml(rows[0].date || '')}</p>
-      ${rows.map(e => `<div class="home-wire-auction-row"><span>${escapeHtml(e.label)}</span><span>${escapeHtml(Number(e.value).toFixed(2))}%</span></div>`).join('')}
+  function deskCdMedianCard(mediansData) {
+    const medians = mediansData && mediansData.medians;
+    if (!medians || !medians.size) return '';
+    return `<div class="home-wire-card home-wire-auctions mc-desk-cd-card">
+      <p class="home-wire-card-label">Desk Brokered CD Medians</p>
+      <p class="home-wire-auction-head">Median rate by term · today's list${mediansData.asOfDate ? ` · ${escapeHtml(mediansData.asOfDate)}` : ''}</p>
+      ${[...medians.entries()].map(([months, rate]) => `<div class="home-wire-auction-row"><span>${escapeHtml(deskCdTermLabel(months))} CD</span><span>${escapeHtml(Number(rate).toFixed(2))}%</span></div>`).join('')}
     </div>`;
   }
 
-  // Inline strip for the CD explorer / rollover wall: national average by
-  // term, with an optional desk-median comparison (Map of termMonths → rate).
-  async function renderFdicNationalStrip(elId, deskMedianByMonths) {
+  // Inline strip for the CD explorer / rollover wall: today's brokered-CD
+  // median per term — the desk's real funding benchmark.
+  function renderDeskCdMedianStrip(elId, mediansData) {
     const el = document.getElementById(elId);
     if (!el) return;
-    let fred = null;
-    try { fred = (await fetchMarketWire()).fred; } catch (_) { /* strip is optional */ }
-    const entries = Object.entries(FDIC_TERM_MONTHS)
-      .map(([key, months]) => ({ entry: fred && fred[key], months }))
-      .filter(x => x.entry && x.entry.value != null);
-    if (!entries.length) { el.hidden = true; return; }
-    const tiles = entries.map(({ entry, months }) => {
-      const med = deskMedianByMonths ? deskMedianByMonths.get(months) : null;
-      const diffBp = med != null ? Math.round((med - entry.value) * 100) : null;
-      return `<div class="cd-nat-tile">
-        <span class="cd-nat-term">${escapeHtml(entry.label)}</span>
-        <span class="cd-nat-rate">${escapeHtml(Number(entry.value).toFixed(2))}%</span>
-        ${med != null ? `<span class="cd-nat-desk">desk ${escapeHtml(med.toFixed(2))}% <em class="${diffBp >= 0 ? 'cd-nat-pos' : 'cd-nat-neg'}">${diffBp >= 0 ? '+' : ''}${escapeHtml(diffBp)}bp</em></span>` : ''}
-      </div>`;
-    }).join('');
-    el.innerHTML = `<span class="cd-nat-head">FDIC national avg CD rates${entries[0].entry.date ? ` (${escapeHtml(entries[0].entry.date)})` : ''}${deskMedianByMonths ? ' vs desk median' : ''}</span><div class="cd-nat-tiles">${tiles}</div>`;
+    const medians = mediansData && mediansData.medians;
+    if (!medians || !medians.size) { el.hidden = true; return; }
+    const tiles = [...medians.entries()].map(([months, rate]) => `<div class="cd-nat-tile">
+        <span class="cd-nat-term">${escapeHtml(deskCdTermLabel(months))}</span>
+        <span class="cd-nat-rate">${escapeHtml(Number(rate).toFixed(2))}%</span>
+      </div>`).join('');
+    el.innerHTML = `<span class="cd-nat-head">Desk brokered CD medians${mediansData.asOfDate ? ` (${escapeHtml(mediansData.asOfDate)})` : ''} · median rate by term from today's list</span><div class="cd-nat-tiles">${tiles}</div>`;
     el.hidden = false;
-  }
-
-  // Median desk CD rate per standard term from today's parsed offerings.
-  function deskCdMediansByMonths(offerings) {
-    const map = new Map();
-    for (const months of Object.values(FDIC_TERM_MONTHS)) {
-      const rates = (offerings || [])
-        .filter(o => Number(o.termMonths) === months && o.rate != null && Number.isFinite(Number(o.rate)))
-        .map(o => Number(o.rate))
-        .sort((a, b) => a - b);
-      if (rates.length) map.set(months, rates[Math.floor(rates.length / 2)]);
-    }
-    return map;
   }
 
   function marketWireCard(label, value, sub, spark) {

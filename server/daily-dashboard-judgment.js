@@ -69,7 +69,8 @@ const SYSTEM_PROMPT =
   'an exempt muni up to, otherwise the YTW), AND a RELATIVE-VALUE read computed by the ' +
   'desk: ustSpreadBps (spread over the matched Treasury), rvScore (0-100, a risk-' +
   'ADJUSTED cheapness percentile that already docks long maturity, call risk, deep ' +
-  'premiums and tiny blocks), fdicSpreadBps and perMonthBps (CDs), mmdSpreadBps (a ' +
+  'premiums and tiny blocks), deskCdSpreadBps (spread vs the desk\'s same-day brokered-CD ' +
+  'term median) and perMonthBps (CDs), mmdSpreadBps (a ' +
   'muni\'s spread to the MMD scale for its grade — the desk\'s true muni cheapness) and ' +
   'ratioPct (muni/Treasury yield ratio), peerSpreadBps (vs same sector/maturity/rating peers), bucket ' +
   '(maturity band), rating, trend (new/wider/improved/repeat vs the prior run), and ' +
@@ -200,7 +201,7 @@ function compactCandidate(c) {
     bucket: rv.bucketLabel,
     rating: rv.ratingLabel && rv.ratingLabel !== 'NR' ? rv.ratingLabel : undefined,
     ustSpreadBps: rv.ustSpreadBps,
-    fdicSpreadBps: rv.fdicSpreadBps,
+    deskCdSpreadBps: rv.deskCdSpreadBps,
     perMonthBps: rv.spreadPerMonthBps,
     ratioPct: rv.ratioPct,
     mmdSpreadBps: rv.mmdSpreadBps,
@@ -452,7 +453,7 @@ function benchmarkLine(rv, cls) {
   const c = String(cls || '').toLowerCase();
   if (/cd|certificate/.test(c)) {
     if (rv.ustSpreadBps != null) parts.push(`${fmtBps(rv.ustSpreadBps)} vs matched UST`);
-    if (rv.fdicSpreadBps != null) parts.push(`${fmtBps(rv.fdicSpreadBps)} vs FDIC ${rv.cdTermMonths || ''}m avg`);
+    if (rv.deskCdSpreadBps != null) parts.push(`${fmtBps(rv.deskCdSpreadBps)} vs desk ${rv.cdTermMonths || ''}m median`);
     if (rv.spreadPerMonthBps != null) parts.push(`${rv.spreadPerMonthBps}bp/mo`);
   } else if (/muni/.test(c)) {
     if (rv.mmdSpreadBps != null) parts.push(`${fmtBps(rv.mmdSpreadBps)} vs ${rv.mmdGrade || 'AAA'} MMD${rv.mmdAssumedGrade ? '*' : ''}`);
@@ -487,8 +488,8 @@ function talkingPointLine(row) {
   const rv = row.rv;
   if (!rv) return 'Screens cheap for its maturity and structure on today\'s run.';
   const c = String(row.assetClass || '').toLowerCase();
-  if (/cd|certificate/.test(c) && rv.fdicSpreadBps != null) {
-    return `This ${rv.cdTermMonths || ''}-month CD pays about ${fmtBps(rv.fdicSpreadBps)} over the FDIC national average${rv.ustSpreadBps != null ? ` and ${fmtBps(rv.ustSpreadBps)} over the matched Treasury` : ''} — hard to beat for insured short money.`;
+  if (/cd|certificate/.test(c) && rv.deskCdSpreadBps != null) {
+    return `This ${rv.cdTermMonths || ''}-month CD pays about ${fmtBps(rv.deskCdSpreadBps)} over today's brokered-CD median for its term${rv.ustSpreadBps != null ? ` and ${fmtBps(rv.ustSpreadBps)} over the matched Treasury` : ''} — hard to beat for insured short money.`;
   }
   if (/muni/.test(c)) {
     if (rv.mmdSpreadBps != null && rv.mmdSpreadBps > 0) {
