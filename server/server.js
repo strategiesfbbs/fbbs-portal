@@ -191,6 +191,7 @@ const {
 const swapMath = require('./swap-math');
 const swapStore = require('./swap-store');
 const reportStore = require('./report-store');
+const salesforceTaskImport = require('./salesforce-task-import');
 const { renderProposalHtml } = require('./swap-render');
 const { renderPortfolioReviewHtml } = require('./portfolio-review-render');
 const { renderOfferingSheetHtml } = require('./offering-sheet-render');
@@ -7212,6 +7213,21 @@ function handleActivitySummaryReport(req, res, query) {
   }
 }
 
+// Salesforce Activity Import report — shows the staged/imported rows from the
+// Salesforce Task export migration, including matched projections and rows that
+// stayed unmatched or report-only. The write path is the CLI, not this route.
+function handleSalesforceActivityReport(req, res, query) {
+  try {
+    const target = String(query.get('target') || 'all').trim();
+    const limit = Math.max(1, Math.min(1000, parseInt(query.get('limit'), 10) || 250));
+    const data = salesforceTaskImport.getSalesforceTaskReport(BANK_REPORTS_DIR, { target, limit });
+    return sendJSON(res, 200, data);
+  } catch (err) {
+    log('error', 'Salesforce activity import report failed:', err.message);
+    return sendJSON(res, 500, { error: err.message || 'Could not build Salesforce activity import report' });
+  }
+}
+
 // Account Touch Report — covered banks with no manual activity in N days
 // (or ever), most neglected first.
 function handleAccountTouchReport(req, res, query) {
@@ -12534,6 +12550,9 @@ const server = http.createServer(async (req, res) => {
     // Aggregation reports (Phase 4) — named routes BEFORE the :id regex.
     if (pathname === '/api/reports/activity-summary' && req.method === 'GET') {
       return handleActivitySummaryReport(req, res, query);
+    }
+    if (pathname === '/api/reports/salesforce-activity' && req.method === 'GET') {
+      return handleSalesforceActivityReport(req, res, query);
     }
     if (pathname === '/api/reports/account-touch' && req.method === 'GET') {
       return handleAccountTouchReport(req, res, query);

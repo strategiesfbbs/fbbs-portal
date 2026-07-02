@@ -102,7 +102,19 @@ function ensureStrategyDatabase(outputDir) {
   if (!columns.includes('thc_summary')) {
     runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN thc_summary TEXT;');
   }
+  if (!columns.includes('source_system')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN source_system TEXT;');
+  }
+  if (!columns.includes('source_id')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN source_id TEXT;');
+  }
+  if (!columns.includes('source_file')) {
+    runSqlite(dbPath, 'ALTER TABLE strategy_requests ADD COLUMN source_file TEXT;');
+  }
   runSqlite(dbPath, 'CREATE INDEX IF NOT EXISTS idx_strategy_archive ON strategy_requests(archived_at, updated_at DESC);');
+  runSqlite(dbPath, `CREATE UNIQUE INDEX IF NOT EXISTS idx_strategy_source
+    ON strategy_requests(source_system, source_id)
+    WHERE source_system IS NOT NULL AND source_id IS NOT NULL;`);
   return dbPath;
 }
 
@@ -565,6 +577,7 @@ module.exports = {
   addStrategyRequestFile,
   createStrategyRequest,
   deleteStrategyRequest,
+  ensureStrategyDatabase,
   getStrategyRequestFile,
   getStrategyRequest,
   listStrategyRequests,

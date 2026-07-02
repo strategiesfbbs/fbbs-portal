@@ -198,6 +198,7 @@ function ensureCoverageDatabase(outputDir) {
     );
   `);
   migrateBankActivityColumns(dbPath);
+  migrateBankTaskColumns(dbPath);
   migrateBankContactColumns(dbPath);
   migrateCoverageWorkspaceData(dbPath);
   backfillSalesforceContactIds(dbPath);
@@ -273,6 +274,12 @@ function migrateBankActivityColumns(dbPath) {
     ['body', 'TEXT'],
     ['activity_date', 'TEXT'],
     ['contact_id', 'TEXT'],
+    // Source lineage for one-way imports such as the Salesforce task history.
+    // Manual rep-entered rows leave these NULL; the partial unique index below
+    // makes re-imports idempotent without constraining manual CRM activity.
+    ['source_system', 'TEXT'],
+    ['source_id', 'TEXT'],
+    ['source_file', 'TEXT'],
     // Soft-delete (compliance): activities at a regulated BD are never hard-
     // deleted. Deleted rows keep their content but carry who/when/why and are
     // filtered out of every read path via activitySelectSql.
@@ -285,6 +292,30 @@ function migrateBankActivityColumns(dbPath) {
       runSqlite(dbPath, `ALTER TABLE bank_activities ADD COLUMN ${name} ${type};`);
     }
   }
+  runSqlite(dbPath, `CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_activities_source
+    ON bank_activities(source_system, source_id)
+    WHERE source_system IS NOT NULL AND source_id IS NOT NULL;`);
+}
+
+// Imported task rows need the same lineage/idempotency treatment as activities.
+// The existing create/update helpers ignore these columns; the Salesforce task
+// importer writes them directly when projecting staged rows into bank_tasks.
+function migrateBankTaskColumns(dbPath) {
+  const columns = querySqliteJson(dbPath, `PRAGMA table_info(bank_tasks);`);
+  const have = new Set(columns.map(col => col.name));
+  const additions = [
+    ['source_system', 'TEXT'],
+    ['source_id', 'TEXT'],
+    ['source_file', 'TEXT']
+  ];
+  for (const [name, type] of additions) {
+    if (!have.has(name)) {
+      runSqlite(dbPath, `ALTER TABLE bank_tasks ADD COLUMN ${name} ${type};`);
+    }
+  }
+  runSqlite(dbPath, `CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_tasks_source
+    ON bank_tasks(source_system, source_id)
+    WHERE source_system IS NOT NULL AND source_id IS NOT NULL;`);
 }
 
 // One-shot consolidation of the retired Coverage Workspace (2026-06-12): the

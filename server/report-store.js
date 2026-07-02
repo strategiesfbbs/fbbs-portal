@@ -27,7 +27,7 @@ const path = require('path');
 const sqliteDb = require('./sqlite-db');
 
 const REPORTS_DATABASE_FILENAME = 'reports.sqlite';
-const REPORT_TYPES = new Set(['custom-bank', 'bank-peer', 'portfolio-peer', 'opportunity', 'coverage', 'billing-queue', 'activity-by-rep', 'account-touch', 'pershing-dormant']);
+const REPORT_TYPES = new Set(['custom-bank', 'bank-peer', 'portfolio-peer', 'opportunity', 'coverage', 'billing-queue', 'activity-by-rep', 'salesforce-activity', 'account-touch', 'pershing-dormant']);
 
 function reportsDatabasePathForDir(outputDir) {
   return path.join(outputDir, REPORTS_DATABASE_FILENAME);

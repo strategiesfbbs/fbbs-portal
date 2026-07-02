@@ -181,7 +181,7 @@
   const VALID_PAGES = ['home', 'exec-summary', 'daily-intelligence', 'pulse', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
                        'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
                        'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
+                       'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'account-activity', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'];
 
   const NAV_GROUPS = [
     {
@@ -224,6 +224,7 @@
       items: [
         { page: 'banks', label: 'Bank Tear Sheets', description: 'Search call report balance sheet and tear sheet data', aliases: 'bank call report balance sheet snl cert account coverage services' },
         { page: 'contacts', label: 'Contacts', description: 'Firm-wide contacts directory — every contact across every bank', aliases: 'contacts directory people phone email rolodex cfo president treasurer decision maker' },
+        { page: 'account-activity', label: 'Account Activity', description: 'Imported Salesforce activity history, follow-ups, strategy requests, and unmatched cleanup rows', aliases: 'account activity salesforce tasks calls history follow ups timeline imported crm activity' },
         { page: 'views', label: 'Saved Views', description: 'Salesforce-style filtered bank lists and custom bank views', aliases: 'views saved views bank lists custom reports clients prospects open accounts stale follow-ups' },
         { page: 'reports', label: 'Reports', description: 'Generate peer, portfolio, opportunity, coverage, and billing reports', aliases: 'reports peer analysis averaged series bond accounting portfolio coverage billing exports' },
         { page: 'peer-groups', label: 'Peer Groups', description: 'Curate peer cohorts by asset size, region, structure, and loan mix', aliases: 'peer group cohort comparison snl averaged series sub s ag focused custom' },
@@ -416,6 +417,14 @@
       category: 'Sales',
       folder: 'Sales Strategy',
       description: 'Call, email, meeting, and task volume logged by each rep over a date range — or flipped to per-bank attention.'
+    },
+    'salesforce-activity': {
+      slug: 'salesforce-activity',
+      name: 'Salesforce Activity Import',
+      shortName: 'SF Activity',
+      category: 'Sales',
+      folder: 'Sales Strategy',
+      description: 'Review migrated Salesforce task/activity history, imported follow-ups, strategy requests, and unmatched cleanup rows.'
     },
     'account-touch': {
       slug: 'account-touch',
@@ -1262,6 +1271,7 @@
     if (type === 'portfolio-peer') return exportPortfolioReviewCsv();
     if (type === 'billing-queue') return exportBillingQueueCsv();
     if (type === 'activity-by-rep') return exportActivityReportCsv();
+    if (type === 'salesforce-activity') return exportSalesforceActivityCsv();
     if (type === 'account-touch') return exportAccountTouchCsv();
     if (type === 'pershing-dormant') return exportPershingDormantCsv();
     return showToast('CSV export is not available for this report type yet', true);
@@ -1807,6 +1817,7 @@
     if (pageName === 'all-offerings') loadAllOfferings();
     if (pageName === 'watchlist') loadWatchlistPage();
     if (pageName === 'contacts') loadContactsDirectory();
+    if (pageName === 'account-activity') loadAccountActivityPage();
     if (pageName === 'treasury-explorer') loadTreasuryNotes();
     if (pageName === 'explorer') loadOfferings();
     if (pageName === 'muni-explorer') loadMuniOfferings();
@@ -11022,6 +11033,7 @@
     if (type === 'coverage') return '<div id="reportsCoverageBookMount"></div>';
     if (type === 'billing-queue') return '<div id="reportsBillingQueueMount"></div>';
     if (type === 'activity-by-rep') return '<div id="reportsActivityMount"></div>';
+    if (type === 'salesforce-activity') return '<div id="reportsSalesforceActivityMount"></div>';
     if (type === 'account-touch') return '<div id="reportsAccountTouchMount"></div>';
     if (type === 'pershing-dormant') return '<div id="reportsPershingDormantMount"></div>';
     return '<p class="reports-muted">Select a report type to begin.</p>';
@@ -11066,7 +11078,7 @@
           <footer class="reports-builder-footer">
             <a class="small-btn secondary" href="#reports">Cancel</a>
             <button type="button" class="small-btn secondary" data-reports-save-view="${escapeHtml(type)}" ${type === 'custom-bank' ? '' : 'disabled title="Save View is available for Custom Bank Lists"'}>Save View</button>
-            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'account-touch', 'pershing-dormant'].includes(type) ? 'title="Exports in the selected output format (CSV unless XLSX / Print is chosen)"' : 'disabled title="Export not available for this report type yet"'}>Export</button>
+            <button type="button" class="small-btn secondary" data-reports-export="${escapeHtml(type)}" ${['custom-bank', 'bank-peer', 'opportunity', 'portfolio-peer', 'billing-queue', 'activity-by-rep', 'salesforce-activity', 'account-touch', 'pershing-dormant'].includes(type) ? 'title="Exports in the selected output format (CSV unless XLSX / Print is chosen)"' : 'disabled title="Export not available for this report type yet"'}>Export</button>
             <button type="button" class="small-btn" data-reports-run="${escapeHtml(type)}">Run</button>
           </footer>
         </main>
@@ -12096,6 +12108,7 @@
       if (type === 'coverage') renderCoverageBookMount();
       if (type === 'billing-queue') renderBillingQueueMount();
       if (type === 'activity-by-rep') renderActivityReportMount();
+      if (type === 'salesforce-activity') renderSalesforceActivityMount();
       if (type === 'account-touch') renderAccountTouchMount();
       if (type === 'pershing-dormant') renderPershingDormantMount();
       if (autorun && !handledAutorun) setTimeout(() => runReportBuilder(type), 0);
@@ -12520,6 +12533,18 @@
     scopeRep: null
   };
 
+  let salesforceActivityState = {
+    loading: false,
+    loaded: false,
+    target: 'all',
+    limit: 250,
+    status: null,
+    byTarget: [],
+    byAction: [],
+    byStatus: [],
+    rows: []
+  };
+
   let accountTouchState = {
     loading: false,
     loaded: false,
@@ -12658,6 +12683,136 @@
       ? [row.displayName, row.city, row.state, row.owner, row.call, row.email, row.meeting, row.task, row.note, row.total, row.lastDate]
       : [row.repDisplay || row.rep, row.call, row.email, row.meeting, row.task, row.note, row.total, row.lastDate]);
     downloadCsv(`activity_summary_${s.from}_${s.to}.csv`, [header, ...body]);
+    showToast(`Exported ${formatNumber(s.rows.length)} rows`);
+  }
+
+  function salesforceBreakdownHtml(title, rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return '';
+    return `
+      <div class="reports-mini-breakdown">
+        <strong>${escapeHtml(title)}</strong>
+        ${list.map(row => `<span>${escapeHtml(row.key || 'Blank')}: ${escapeHtml(formatNumber(row.count || 0))}</span>`).join('')}
+      </div>
+    `;
+  }
+
+  function salesforceTargetLabel(value) {
+    return ({
+      all: 'All staged rows',
+      bank_task: 'Imported follow-ups',
+      bank_activity: 'Imported activities',
+      strategy: 'Strategy requests',
+      unmatched: 'Unmatched cleanup',
+      report_only: 'Report-only rows'
+    })[value] || value || 'All staged rows';
+  }
+
+  function renderSalesforceActivityMount() {
+    const mount = document.getElementById('reportsSalesforceActivityMount');
+    if (!mount) return;
+    const s = salesforceActivityState;
+    const status = s.status || {};
+    const targetOptions = ['all', 'bank_task', 'bank_activity', 'strategy', 'unmatched', 'report_only'];
+    const statusNote = status.available
+      ? `<p class="reports-muted">Imported ${escapeHtml(formatNumber(status.totalRows || 0))} Salesforce task rows · ${escapeHtml(formatNumber(status.matchedRows || 0))} matched to portal banks · ${escapeHtml(formatNumber(status.unmatchedRows || 0))} unmatched${status.importedAt ? ` · last import ${escapeHtml(formatFullTimestamp(status.importedAt))}` : ''}.</p>`
+      : '<p class="reports-muted">Run the Salesforce task importer to populate this report.</p>';
+    const body = s.loading
+      ? '<div class="bank-search-empty">Loading Salesforce activity import...</div>'
+      : !s.loaded
+        ? '<div class="bank-search-empty">Choose a slice and run the report.</div>'
+        : !s.rows.length
+          ? '<div class="bank-search-empty">No Salesforce task rows match that slice.</div>'
+          : `
+            <div class="reports-list-wrap">
+              <table class="reports-list">
+                <thead><tr><th>Target</th><th>Action</th><th>Date</th><th>Rep / Owner</th><th>Status</th><th>Subject</th><th>Match</th><th></th></tr></thead>
+                <tbody>
+                  ${s.rows.map(row => `
+                    <tr>
+                      <td>${escapeHtml(salesforceTargetLabel(row.targetKind))}</td>
+                      <td>${escapeHtml(row.importAction || 'staged')}</td>
+                      <td>${escapeHtml(row.activityDate || (row.completedAt || row.createdAt || '').slice(0, 10) || '—')}</td>
+                      <td>${escapeHtml(row.ownerDisplay || row.ownerUsername || '—')}</td>
+                      <td>${escapeHtml([row.status, row.taskSubtype].filter(Boolean).join(' / ') || '—')}</td>
+                      <td><strong>${escapeHtml(row.subject || 'Salesforce task')}</strong><span class="reports-desc">${escapeHtml([row.callType, row.frequencyOfRun, row.corpElection].filter(Boolean).join(' · '))}</span></td>
+                      <td>${escapeHtml(row.bankId ? (row.matchVia || 'bank') : (row.matchReason || 'unmatched'))}</td>
+                      <td>${row.bankId ? `<button type="button" class="text-btn" data-custom-bank-open="${escapeHtml(row.bankId)}">Open</button>` : ''}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `;
+    mount.innerHTML = `
+      <div class="activity-report-builder">
+        <div class="custom-report-grid">
+          <label>Slice
+            <select id="salesforceActivityTarget">
+              ${targetOptions.map(opt => `<option value="${escapeHtml(opt)}" ${s.target === opt ? 'selected' : ''}>${escapeHtml(salesforceTargetLabel(opt))}</option>`).join('')}
+            </select>
+          </label>
+          <label>Rows
+            <input type="number" id="salesforceActivityLimit" min="25" max="1000" step="25" value="${escapeHtml(String(s.limit || 250))}">
+          </label>
+        </div>
+        ${statusNote}
+        <div class="reports-import-breakdowns">
+          ${salesforceBreakdownHtml('Targets', s.byTarget)}
+          ${salesforceBreakdownHtml('Actions', s.byAction)}
+          ${salesforceBreakdownHtml('Statuses', s.byStatus)}
+        </div>
+        <div id="salesforceActivityOutput">${body}</div>
+      </div>
+    `;
+  }
+
+  async function runSalesforceActivityReport() {
+    const s = salesforceActivityState;
+    s.loading = true;
+    renderSalesforceActivityMount();
+    try {
+      const params = new URLSearchParams();
+      params.set('target', s.target || 'all');
+      params.set('limit', String(s.limit || 250));
+      const data = await fetch(`/api/reports/salesforce-activity?${params}`, { cache: 'no-store' }).then(readBankJson);
+      s.status = data.status || null;
+      s.byTarget = Array.isArray(data.byTarget) ? data.byTarget : [];
+      s.byAction = Array.isArray(data.byAction) ? data.byAction : [];
+      s.byStatus = Array.isArray(data.byStatus) ? data.byStatus : [];
+      s.rows = Array.isArray(data.rows) ? data.rows : [];
+      s.loaded = true;
+      addSessionReport('salesforce-activity');
+      showToast('Salesforce activity import report ready');
+    } catch (e) {
+      showToast(e.message || 'Could not build Salesforce activity report', true);
+    } finally {
+      s.loading = false;
+      renderSalesforceActivityMount();
+    }
+  }
+
+  function exportSalesforceActivityCsv() {
+    const s = salesforceActivityState;
+    if (!s.rows.length) return showToast('Run the Salesforce activity report first', true);
+    const header = ['Salesforce Task ID', 'Target', 'Action', 'Bank ID', 'Match', 'Rep/Owner', 'Activity Date', 'Completed At', 'Status', 'Subtype', 'Call Type', 'Priority', 'Subject', 'Source File'];
+    const body = s.rows.map(row => [
+      row.salesforceTaskId,
+      row.targetKind,
+      row.importAction,
+      row.bankId,
+      row.matchVia || row.matchReason,
+      row.ownerDisplay || row.ownerUsername,
+      row.activityDate,
+      row.completedAt,
+      row.status,
+      row.taskSubtype,
+      row.callType,
+      row.priority,
+      row.subject,
+      row.sourceFile
+    ]);
+    downloadCsv(`salesforce_activity_${s.target || 'all'}_${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body]);
     showToast(`Exported ${formatNumber(s.rows.length)} rows`);
   }
 
@@ -13086,6 +13241,15 @@
         else kinds.delete(kind);
         activityReportState.kinds = ACTIVITY_REPORT_KINDS.filter(k => kinds.has(k));
       }
+      if (target.id === 'salesforceActivityTarget') {
+        salesforceActivityState.target = target.value || 'all';
+        salesforceActivityState.loaded = false;
+        salesforceActivityState.rows = [];
+        renderSalesforceActivityMount();
+      }
+      if (target.id === 'salesforceActivityLimit') {
+        salesforceActivityState.limit = Math.max(25, Math.min(1000, parseInt(target.value, 10) || 250));
+      }
       if (target.id === 'accountTouchDays') accountTouchState.days = Math.max(0, parseInt(target.value, 10) || 0);
       if (target.id === 'accountTouchStates') accountTouchState.states = target.value || '';
       if (target.id === 'accountTouchStatusFilter') {
@@ -13485,6 +13649,9 @@
     }
     if (type === 'activity-by-rep') {
       runActivityReport();
+    }
+    if (type === 'salesforce-activity') {
+      runSalesforceActivityReport();
     }
     if (type === 'account-touch') {
       runAccountTouchReport();
@@ -20334,6 +20501,162 @@
         btn.disabled = false;
       }
     });
+  }
+
+  // ============ Account Activity page ============
+  let accountActivityPageState = {
+    target: 'all',
+    limit: 250,
+    rows: [],
+    status: null,
+    byTarget: [],
+    byAction: [],
+    byStatus: [],
+    loading: false,
+    loaded: false
+  };
+  let accountActivityEventsBound = false;
+
+  function accountActivityBreakdownsHtml(state) {
+    return [
+      salesforceBreakdownHtml('Targets', state.byTarget),
+      salesforceBreakdownHtml('Actions', state.byAction),
+      salesforceBreakdownHtml('Statuses', state.byStatus)
+    ].join('');
+  }
+
+  function renderAccountActivityRows() {
+    const body = document.getElementById('accountActivityBody');
+    if (!body) return;
+    const s = accountActivityPageState;
+    if (s.loading) {
+      body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text2)">Loading activity history...</td></tr>';
+      return;
+    }
+    if (!s.loaded) {
+      body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text2)">Choose a slice and refresh.</td></tr>';
+      return;
+    }
+    if (!s.rows.length) {
+      body.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text2)">No rows match that slice.</td></tr>';
+      return;
+    }
+    body.innerHTML = s.rows.map(row => {
+      const bankLabel = row.displayName || row.bankId || 'Unmatched';
+      const loc = [row.city, row.state].filter(Boolean).join(', ');
+      const desc = [row.callType, row.frequencyOfRun, row.corpElection].filter(Boolean).join(' · ');
+      const date = row.activityDate || (row.completedAt || row.createdAt || '').slice(0, 10) || '';
+      return `
+        <tr>
+          <td>${escapeHtml(salesforceTargetLabel(row.targetKind))}</td>
+          <td>${escapeHtml(row.importAction || 'staged')}</td>
+          <td>${escapeHtml(date || '—')}</td>
+          <td>${escapeHtml(row.ownerDisplay || row.ownerUsername || '—')}</td>
+          <td>${escapeHtml([row.status, row.taskSubtype].filter(Boolean).join(' / ') || '—')}</td>
+          <td><strong>${escapeHtml(row.subject || 'Salesforce task')}</strong>${desc ? `<span class="reports-desc">${escapeHtml(desc)}</span>` : ''}</td>
+          <td><strong>${escapeHtml(bankLabel)}</strong>${loc ? `<span class="reports-desc">${escapeHtml(loc)}</span>` : ''}</td>
+          <td>${row.bankId ? `<button type="button" class="text-btn" data-account-activity-bank="${escapeHtml(row.bankId)}">Open</button>` : ''}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  function renderAccountActivitySummary() {
+    const s = accountActivityPageState;
+    const stat = document.getElementById('accountActivityStat');
+    const sub = document.getElementById('accountActivitySub');
+    const breakdowns = document.getElementById('accountActivityBreakdowns');
+    const status = s.status || {};
+    if (stat) stat.textContent = status.available ? formatNumber(status.totalRows || 0) : '—';
+    if (sub) {
+      sub.textContent = status.available
+        ? `${formatNumber(status.matchedRows || 0)} matched to portal banks · ${formatNumber(status.unmatchedRows || 0)} unmatched cleanup rows`
+        : 'Imported Salesforce calls, tasks, follow-ups, and strategy requests.';
+    }
+    if (breakdowns) breakdowns.innerHTML = status.available ? accountActivityBreakdownsHtml(s) : '';
+  }
+
+  async function loadAccountActivityPage(options = {}) {
+    const target = document.getElementById('accountActivityTarget');
+    const limit = document.getElementById('accountActivityLimit');
+    if (target) {
+      target.value = accountActivityPageState.target || 'all';
+      target.onchange = () => {
+        accountActivityPageState.target = target.value || 'all';
+        loadAccountActivityPage({ refresh: true });
+      };
+    }
+    if (limit) {
+      limit.value = String(accountActivityPageState.limit || 250);
+      limit.onchange = () => {
+        accountActivityPageState.limit = Math.max(25, Math.min(1000, parseInt(limit.value, 10) || 250));
+      };
+    }
+    const refresh = document.getElementById('accountActivityRefresh');
+    if (refresh) refresh.onclick = () => loadAccountActivityPage({ refresh: true });
+    const exportBtn = document.getElementById('accountActivityExport');
+    if (exportBtn) exportBtn.onclick = exportAccountActivityPageCsv;
+    if (!accountActivityEventsBound) {
+      accountActivityEventsBound = true;
+      document.addEventListener('click', event => {
+        const btn = event.target && event.target.closest ? event.target.closest('[data-account-activity-bank]') : null;
+        if (!btn) return;
+        navigateToHash(bankDeepLinkHash(btn.getAttribute('data-account-activity-bank')), loadBankFromHashRoute);
+      });
+    }
+
+    if (accountActivityPageState.loaded && !options.refresh) {
+      renderAccountActivitySummary();
+      renderAccountActivityRows();
+      return;
+    }
+    accountActivityPageState.loading = true;
+    renderAccountActivityRows();
+    try {
+      const params = new URLSearchParams();
+      params.set('target', accountActivityPageState.target || 'all');
+      params.set('limit', String(accountActivityPageState.limit || 250));
+      const data = await fetch(`/api/reports/salesforce-activity?${params}`, { cache: 'no-store' }).then(readBankJson);
+      accountActivityPageState.status = data.status || null;
+      accountActivityPageState.byTarget = Array.isArray(data.byTarget) ? data.byTarget : [];
+      accountActivityPageState.byAction = Array.isArray(data.byAction) ? data.byAction : [];
+      accountActivityPageState.byStatus = Array.isArray(data.byStatus) ? data.byStatus : [];
+      accountActivityPageState.rows = Array.isArray(data.rows) ? data.rows : [];
+      accountActivityPageState.loaded = true;
+      renderAccountActivitySummary();
+    } catch (e) {
+      accountActivityPageState.rows = [];
+      showToast(e.message || 'Could not load account activity', true);
+    } finally {
+      accountActivityPageState.loading = false;
+      renderAccountActivityRows();
+    }
+  }
+
+  function exportAccountActivityPageCsv() {
+    const s = accountActivityPageState;
+    if (!s.rows.length) return showToast('Load account activity before exporting', true);
+    const header = ['Salesforce Task ID', 'Target', 'Action', 'Bank', 'City', 'State', 'Match', 'Rep/Owner', 'Activity Date', 'Completed At', 'Status', 'Subtype', 'Call Type', 'Priority', 'Subject', 'Source File'];
+    const body = s.rows.map(row => [
+      row.salesforceTaskId,
+      row.targetKind,
+      row.importAction,
+      row.displayName || row.bankId,
+      row.city,
+      row.state,
+      row.matchVia || row.matchReason,
+      row.ownerDisplay || row.ownerUsername,
+      row.activityDate,
+      row.completedAt,
+      row.status,
+      row.taskSubtype,
+      row.callType,
+      row.priority,
+      row.subject,
+      row.sourceFile
+    ]);
+    downloadCsv(`account_activity_${s.target || 'all'}_${new Date().toISOString().slice(0, 10)}.csv`, [header, ...body]);
+    showToast(`Exported ${formatNumber(s.rows.length)} activity rows`);
   }
 
   // ============ Contacts directory ============

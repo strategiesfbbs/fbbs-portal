@@ -1850,6 +1850,70 @@
   </div>
 </div>
 
+<div class="page" id="p-account-activity">
+  <section class="page-hero">
+    <div class="page-hero-inner">
+      <div>
+        <h2>Account <strong>Activity</strong></h2>
+        <p class="hero-sub" id="accountActivitySub">Imported Salesforce calls, tasks, follow-ups, and strategy requests.</p>
+      </div>
+      <div class="hero-stat">
+        <div class="num" id="accountActivityStat">&mdash;</div>
+        <div class="lbl">Rows Staged</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="container">
+    <div class="section-title-bar">
+      <h3>Salesforce activity history</h3>
+      <div class="kicker">Matched rows link back to bank tear sheets</div>
+    </div>
+
+    <div class="explorer-filters">
+      <label class="ef-field">
+        <span>Slice</span>
+        <select id="accountActivityTarget">
+          <option value="all">All staged rows</option>
+          <option value="bank_activity">Imported activities</option>
+          <option value="bank_task">Imported follow-ups</option>
+          <option value="strategy">Strategy requests</option>
+          <option value="unmatched">Unmatched cleanup</option>
+          <option value="report_only">Report-only rows</option>
+        </select>
+      </label>
+      <label class="ef-field">
+        <span>Rows</span>
+        <input type="number" id="accountActivityLimit" min="25" max="1000" step="25" value="250">
+      </label>
+      <div class="ef-field ef-actions">
+        <button type="button" class="small-btn" id="accountActivityRefresh">Refresh</button>
+        <button type="button" class="small-btn secondary" id="accountActivityExport">Export CSV</button>
+      </div>
+    </div>
+
+    <div class="reports-import-breakdowns" id="accountActivityBreakdowns"></div>
+
+    <div class="explorer-table-wrap">
+      <table class="explorer-table" id="accountActivityTable">
+        <thead>
+          <tr>
+            <th>Target</th>
+            <th>Action</th>
+            <th>Date</th>
+            <th>Rep / Owner</th>
+            <th>Status</th>
+            <th>Subject</th>
+            <th>Bank</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="accountActivityBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <div class="page" id="p-all-offerings">
   <section class="page-hero">
     <div class="page-hero-inner">

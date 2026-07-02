@@ -8653,6 +8653,39 @@ body {
   text-decoration: none;
 }
 
+.reports-import-breakdowns {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin: 10px 0;
+}
+
+.reports-mini-breakdown {
+  background: #f8faf8;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px 10px;
+}
+
+.reports-mini-breakdown strong {
+  color: var(--text);
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+.reports-mini-breakdown span {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 7px;
+}
+
 .reports-name-cell {
   cursor: pointer;
 }

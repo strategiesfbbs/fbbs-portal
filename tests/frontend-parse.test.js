@@ -37,7 +37,7 @@ function testRoutePreservation() {
       'home', 'exec-summary', 'daily-intelligence', 'pulse', 'mmd', 'treasuryNotes', 'cd', 'cdoffers', 'munioffers',
       'sales-dashboard', 'all-offerings', 'watchlist', 'treasury-explorer',
       'cd-recap', 'cd-internal', 'explorer', 'muni-explorer', 'agencies', 'corporates',
-      'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'
+      'mbs-cmo', 'structured-notes', 'market-color', 'banks', 'contacts', 'account-activity', 'maps', 'reports', 'peer-groups', 'maturity-calendar', 'cd-rollover', 'strategies', 'bond-swap', 'views', 'archive', 'upload', 'package-qa', 'admin'
     ];
     assert.deepStrictEqual(actual, expected);
     passed++;
