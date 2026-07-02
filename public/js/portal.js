@@ -2483,7 +2483,9 @@
     // so the next visit refetches under the new identity.
     crmPulseState.data = null;
     if (activePage === 'pulse') loadCrmPulse(true);
-    if (mapsState.loaded) mapsApplyActingRepTerritory({ force: true });
+    // Follow mode: the map re-points to the new rep's territory ONLY while the
+    // user hasn't pinned an explicit choice (All / another rep / clear-all).
+    if (mapsState.loaded) mapsApplyActingRepTerritory({ follow: true });
     if (activePage === 'maps') {
       if (mapsState.loaded) applyMapsFilters();
       else loadMaps();
@@ -27157,7 +27159,10 @@
     muniDeal: null,
     muniAnchorCache: new Map(),
     locationFilter: null,
-    territory: { owner: '', ownerTouched: false, minAssets: '', maxAssets: '', sort: 'opportunity' },
+    // ownerPinned: true = user explicitly chose All or another rep (acting-rep
+    // follow disarmed); false = default or explicit "My territory" (follow armed).
+    territory: { owner: '', ownerPinned: false, minAssets: '', maxAssets: '', sort: 'opportunity' },
+    scopedCount: null, // banks passing the owner filter alone (scope banner)
     advanced: [],
     viewport: null,
     mapRevision: 0
@@ -27361,23 +27366,19 @@
     return String(bank && bank.accountStatus && bank.accountStatus.owner || '').trim();
   }
 
+  // Owner matching + scope policy live in the pure, node-tested module
+  // (public/js/modules/maps-scope.js) — the "map trapped in rep territory"
+  // bug class was a policy bug in exactly this logic.
   function mapsNormalizeOwnerName(value) {
-    return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    return window.FbbsMapsScope.normalizeOwnerName(value);
   }
 
   function mapsOwnerKey(value) {
     return mapsNormalizeOwnerName(value);
   }
 
-  function mapsOwnerIdentityKey(value) {
-    return mapsNormalizeOwnerName(value).replace(/[^a-z0-9]+/g, '');
-  }
-
   function mapsSplitOwnerString(value) {
-    return String(value || '')
-      .split(/[,;\/|]|\s+and\s+/i)
-      .map(part => part.trim())
-      .filter(Boolean);
+    return window.FbbsMapsScope.splitOwnerString(value);
   }
 
   function mapsOwnerParts(bank) {
@@ -27388,27 +27389,15 @@
   }
 
   function mapsOwnerNameMatches(candidate, ownerFilter) {
-    const wantedName = mapsNormalizeOwnerName(ownerFilter);
-    const wantedKey = mapsOwnerIdentityKey(ownerFilter);
-    const candidateName = mapsNormalizeOwnerName(candidate);
-    const candidateKey = mapsOwnerIdentityKey(candidate);
-    if (!wantedName || !candidateName) return false;
-    return candidateName === wantedName || (wantedKey && candidateKey === wantedKey);
+    return window.FbbsMapsScope.ownerNameMatches(candidate, ownerFilter);
   }
 
   function mapsOwnerMatches(bank, ownerFilter) {
-    if (!ownerFilter) return true;
-    const raw = mapsCoverageOwner(bank);
-    if (!raw) return false;
-    if (mapsOwnerNameMatches(raw, ownerFilter)) return true;
-    return mapsOwnerParts(bank).some(part => mapsOwnerNameMatches(part, ownerFilter));
+    return window.FbbsMapsScope.ownerStringMatches(mapsCoverageOwner(bank), ownerFilter);
   }
 
   function mapsRepOwnerNames(rep) {
-    if (!rep) return [];
-    return [rep.displayName, rep.username]
-      .map(value => String(value || '').trim())
-      .filter(Boolean);
+    return window.FbbsMapsScope.repOwnerNames(rep);
   }
 
   function mapsAssetsMm(bank) {
@@ -27489,38 +27478,129 @@
   }
 
   function mapsApplyActingRepTerritory(options = {}) {
-    const force = options.force === true;
-    const rep = meState.rep;
     if (!mapsState.loaded) return false;
-    if (!rep) {
-      if (force) {
-        const changed = Boolean(mapsState.territory.owner || mapsState.territory.ownerTouched);
-        mapsState.territory.owner = '';
-        mapsState.territory.ownerTouched = false;
-        mapsResetTerritoryFocus();
-        renderMapsOwnerOptions();
-        return changed;
-      }
-      return false;
+    const rep = meState.rep;
+    const repOwner = rep ? mapsFindOwnerForRep(rep) : '';
+    if (options.follow === true) {
+      // Acting-rep switch: re-point ONLY while the user hasn't pinned a choice
+      // (pinned = they explicitly picked All or another rep this session).
+      const next = window.FbbsMapsScope.territoryAfterRepSwitch(mapsState.territory, repOwner);
+      if (!next.changed) { renderMapsScopeBar(); return false; }
+      mapsState.territory.owner = next.owner;
+      mapsState.territory.ownerPinned = next.ownerPinned;
+      mapsResetTerritoryFocus();
+      renderMapsOwnerOptions();
+      renderMapsScopeBar();
+      return true;
     }
-    if (!force && (mapsState.territory.owner || mapsState.territory.ownerTouched)) return false;
-    const owner = mapsFindOwnerForRep(rep);
-    if (!owner) {
-      if (force) {
-        const changed = Boolean(mapsState.territory.owner || mapsState.territory.ownerTouched);
-        mapsState.territory.owner = '';
-        mapsState.territory.ownerTouched = false;
-        mapsResetTerritoryFocus();
-        renderMapsOwnerOptions();
-        return changed;
-      }
-      return false;
-    }
-    mapsState.territory.owner = owner;
-    mapsState.territory.ownerTouched = false;
+    // One-shot default on first load — never overwrites an existing choice
+    // (also inert on a mapsState.dirty refetch: owner or pinned will be set).
+    if (mapsState.territory.owner || mapsState.territory.ownerPinned) return false;
+    if (!repOwner) return false;
+    mapsState.territory.owner = repOwner;
+    mapsState.territory.ownerPinned = false;
     mapsResetTerritoryFocus();
     renderMapsOwnerOptions();
     return true;
+  }
+
+  /** Derived scope — never stored, so it can't disagree with the owner select. */
+  function mapsScope() {
+    return window.FbbsMapsScope.resolveScope(mapsState.territory.owner, meState.rep);
+  }
+
+  /**
+   * The ONLY writer of territory.owner/ownerPinned for explicit user actions
+   * (segmented control, banner link, owner select). kind: 'all'|'mine'|'rep'.
+   */
+  function mapsSetScope(kind, opts = {}) {
+    const owner = opts.owner !== undefined
+      ? opts.owner
+      : (kind === 'mine' ? mapsFindOwnerForRep(meState.rep) : '');
+    const next = window.FbbsMapsScope.territoryForScope(kind, { owner, rep: meState.rep });
+    const changed = next.owner !== mapsState.territory.owner;
+    mapsState.territory.owner = next.owner;
+    mapsState.territory.ownerPinned = next.ownerPinned;
+    const select = document.getElementById('mapsOwnerSelect');
+    if (select) select.value = next.owner;
+    // Narrowing to a territory refocuses the map; widening to All keeps the
+    // user's states/filters (they asked for more, not for a reset).
+    if (changed && kind !== 'all') mapsResetTerritoryFocus();
+    renderMapsScopeBar();
+    if (opts.apply !== false) applyMapsFilters();
+    return changed;
+  }
+
+  /**
+   * The one true reset: owner/territory, states, statuses, search, advanced
+   * conditions, assets, area/muni search, selection, ?deal= param, viewport.
+   * Reset US stays viewport-only; this is the everything button.
+   */
+  function mapsClearAllFilters() {
+    mapsState.territory = { owner: '', ownerPinned: true, minAssets: '', maxAssets: '', sort: 'opportunity' };
+    mapsState.selectedStatuses.clear();
+    mapsState.search = '';
+    mapsState.advanced = [];
+    const searchBox = document.getElementById('mapsSearchBox');
+    if (searchBox) searchBox.value = '';
+    const minAssets = document.getElementById('mapsMinAssets');
+    if (minAssets) minAssets.value = '';
+    const maxAssets = document.getElementById('mapsMaxAssets');
+    if (maxAssets) maxAssets.value = '';
+    const sortSelect = document.getElementById('mapsSortSelect');
+    if (sortSelect) sortSelect.value = 'opportunity';
+    const ownerSelect = document.getElementById('mapsOwnerSelect');
+    if (ownerSelect) ownerSelect.value = '';
+    renderMapsScopeBar();
+    // Delegates the geography half: states, area/muni DOM, deal hash param,
+    // selection, viewport — and ends in applyMapsFilters().
+    mapsClearAll();
+  }
+
+  /** Scope strip: segmented control + banner + count. Null-safe off-page. */
+  function renderMapsScopeBar() {
+    const segsEl = document.getElementById('mapsScopeSegs');
+    const bannerEl = document.getElementById('mapsScopeBanner');
+    if (!segsEl && !bannerEl) return;
+    const scope = mapsScope();
+    const rep = meState.rep;
+    const myOwner = rep ? mapsFindOwnerForRep(rep) : '';
+    if (segsEl) {
+      const seg = (kind, label, disabled, title) =>
+        `<button type="button" class="maps-scope-seg${scope === kind ? ' is-active' : ''}"
+          data-maps-scope="${kind}"${disabled ? ' disabled' : ''}${title ? ` title="${escapeHtml(title)}"` : ''}
+          aria-pressed="${scope === kind}">${escapeHtml(label)}</button>`;
+      segsEl.innerHTML =
+        seg('all', 'All current banks') +
+        seg('mine', 'My territory', !myOwner,
+          !rep ? 'Pick a rep in “Acting as” to use My territory'
+            : (!myOwner ? `No coverage owner matches ${rep.displayName || rep.username}` : ''));
+      // The Rep <select> (#mapsOwnerSelect) is static markup beside the
+      // segments — re-rendering it here would destroy its change listener.
+      const select = document.getElementById('mapsOwnerSelect');
+      if (select && select.value !== mapsState.territory.owner) select.value = mapsState.territory.owner;
+      const repWrap = select && select.closest('.maps-scope-rep');
+      if (repWrap) repWrap.classList.toggle('is-active', scope === 'rep');
+    }
+    if (bannerEl) {
+      const universe = mapsState.banks.length;
+      const scoped = scope === 'all'
+        ? universe
+        : (mapsState.scopedCount != null ? mapsState.scopedCount : universe);
+      let text = window.FbbsMapsScope.scopeBannerText(scope, mapsState.territory.owner, scoped, universe);
+      const escape = scope !== 'all'
+        ? ' <button type="button" class="text-btn" data-maps-scope="all">View all banks</button>'
+        : (!mapsShouldShowMarkers() ? ' <span class="maps-scope-hint">— pick a state, status, or search to drop pins</span>' : '');
+      bannerEl.innerHTML = `<span class="maps-scope-text${scope !== 'all' ? ' is-scoped' : ''}">${escapeHtml(text)}</span>${escape}`;
+    }
+    const fullChip = document.getElementById('mapsFullScopeChip');
+    if (fullChip) {
+      const universe = mapsState.banks.length;
+      const scoped = scope === 'all' ? universe : (mapsState.scopedCount != null ? mapsState.scopedCount : universe);
+      fullChip.textContent = scope === 'all'
+        ? `All current banks · ${formatNumber(universe)}`
+        : `${mapsState.territory.owner} · ${formatNumber(scoped)} of ${formatNumber(universe)}`;
+    }
   }
 
   function mapsLocationFilterMatches(bank) {
@@ -27907,6 +27987,10 @@
       showToast('That muni deal isn’t in the current map inventory.', true);
       return;
     }
+    // A shared deal link answers "who is around this deal" — widen to all
+    // current banks (pinned) instead of silently ANDing with the viewer's
+    // territory. The scope banner makes the widening visible.
+    if (mapsState.territory.owner) mapsSetScope('all', { apply: false });
     const box = document.getElementById('mapsAreaSearchBox');
     if (box) box.value = muni.cusip || '';
     mapsState.muniMatches = [muni];
@@ -28281,14 +28365,20 @@
       : hasArea
         ? 'Showing banks around the searched muni deal area.'
       : 'Choose a territory, state, status, area search, or bank search to drop pins.';
-    subtitle.textContent = mapsState.latestPeriod
-      ? `Period ${mapsState.latestPeriod} · ${mapsState.banks.length.toLocaleString()} current banks${mapsState.excludedStaleBankCount ? ` · ${mapsState.excludedStaleBankCount.toLocaleString()} stale/inactive hidden` : ''} · ${mapsState.mappedCount.toLocaleString()} mapped · ${tail}`
-      : `${mapsState.banks.length.toLocaleString()} banks · ${tail}`;
+    // Universe stats only — never filter-dependent. The scope strip carries
+    // the scoped count; the row count under the list carries the filtered one.
+    subtitle.textContent = `${window.FbbsMapsScope.universeSubtitle({
+      latestPeriod: mapsState.latestPeriod,
+      currentBankCount: mapsState.banks.length,
+      staleBankCount: mapsState.excludedStaleBankCount,
+      mappedCount: mapsState.mappedCount
+    })} · ${tail}`;
   }
 
   function renderMapsView() {
     const countEl = document.getElementById('mapsBankCount');
     if (countEl) countEl.textContent = mapsState.banks.length.toLocaleString();
+    renderMapsScopeBar();
     renderMapsSubtitle();
     renderMapsStateChips();
     renderMapsStatusFilters();
@@ -28552,15 +28642,14 @@
     if (!el) return;
     const states = Array.from(mapsState.selectedStates).sort();
     const area = mapsAreaIsActive() ? mapsState.areaSearch : null;
-    const owner = mapsState.territory.owner;
     const filter = mapsState.locationFilter;
     const parts = [];
+    // Owner/territory context lives in the page-level scope strip now — this
+    // block only summarizes the geography focus.
     if (states.length) parts.push(`<strong>${escapeHtml(states.join(', '))}</strong><span>Click a selected state again to remove it.</span>`);
     else if (area) parts.push(`<strong>${escapeHtml(area.label || area.query)}</strong><span>${formatNumber(area.radiusMiles)} mile area search.</span>`);
-    else if (owner) parts.push(`<strong>${escapeHtml(owner)} territory</strong><span>Coverage across all states, including clients and prospects.</span>`);
-    else parts.push('<strong>All states</strong><span>Choose a territory, state, status, area search, or bank search to focus the map.</span>');
+    else parts.push('<strong>All states</strong><span>Add a state, status, area search, or bank search to focus the list.</span>');
     if (filter) parts.push(`<span>Drilldown: ${escapeHtml(filter.label)}</span>`);
-    if (owner) parts.push(`<span>Owner: ${escapeHtml(owner)}</span>`);
     if (mapsState.selectedStatuses.size) parts.push(`<span>Status: ${escapeHtml(Array.from(mapsState.selectedStatuses).sort().join(', '))}</span>`);
     el.innerHTML = parts.join('');
   }
@@ -28714,9 +28803,13 @@
     // the legend answers "how many of MY filtered banks are Prospects" while
     // clicking a status chip still shows the other statuses' sizes.
     const preStatusCounts = {};
+    // Owner-scope count for the scope banner: banks passing the owner filter
+    // ALONE (invariant: filtered ≤ scoped ≤ universe).
+    let scopedCount = 0;
     for (const b of mapsState.banks) {
-      if (sel.size > 0 && !sel.has(b.state)) continue;
       if (ownerFilter && !mapsOwnerMatches(b, ownerFilter)) continue;
+      scopedCount += 1;
+      if (sel.size > 0 && !sel.has(b.state)) continue;
       const assetsMm = mapsAssetsMm(b);
       if (minAssets !== null && (assetsMm === null || assetsMm < minAssets)) continue;
       if (maxAssets !== null && (assetsMm === null || assetsMm > maxAssets)) continue;
@@ -28740,9 +28833,11 @@
       rows.push(b);
     }
     mapsState.preStatusCounts = preStatusCounts;
+    mapsState.scopedCount = ownerFilter ? scopedCount : mapsState.banks.length;
     mapsSortRows(rows, area);
     mapsState.visibleBanks = rows;
     renderMapsStatusFilters();
+    renderMapsScopeBar();
     // An active area search sorts by distance and ignores the sort dropdown —
     // say so instead of leaving a control that silently does nothing.
     const sortSelect = document.getElementById('mapsSortSelect');
@@ -29021,7 +29116,7 @@
       return (def ? def.label : f.field) + ' ' + f.op + ' ' + f.value;
     });
     if (mapsState.locationFilter) parts.push(`Location ${mapsState.locationFilter.label}`);
-    if (mapsState.territory.owner) parts.push(`Owner ${mapsState.territory.owner}`);
+    // Owner scope is announced by the page-level scope strip, not repeated here.
     if (mapsState.territory.minAssets) parts.push(`Assets >= ${mapsState.territory.minAssets}MM`);
     if (mapsState.territory.maxAssets) parts.push(`Assets <= ${mapsState.territory.maxAssets}MM`);
     el.textContent = parts.length ? 'Active filter: ' + parts.join(' AND ') : '';
@@ -29174,12 +29269,32 @@
     const ownerSelect = document.getElementById('mapsOwnerSelect');
     if (ownerSelect && !ownerSelect.dataset.bound) {
       ownerSelect.addEventListener('change', () => {
-        mapsState.territory.owner = ownerSelect.value;
-        mapsState.territory.ownerTouched = true;
-        mapsResetTerritoryFocus();
-        applyMapsFilters();
+        // Empty = All (pinned); picking yourself reads as "My territory"
+        // (mapsSetScope treats a self-pick as unpinned so following stays armed).
+        mapsSetScope(ownerSelect.value ? 'rep' : 'all', { owner: ownerSelect.value });
       });
       ownerSelect.dataset.bound = '1';
+    }
+    const scopeBar = document.getElementById('mapsScopeBar');
+    if (scopeBar && !scopeBar.dataset.bound) {
+      scopeBar.addEventListener('click', e => {
+        const btn = e.target.closest('[data-maps-scope]');
+        if (!btn || btn.disabled) return;
+        mapsSetScope(btn.dataset.mapsScope);
+      });
+      scopeBar.dataset.bound = '1';
+    }
+    // The banner's "View all banks" link can also render inside the full-view
+    // chip area later — bind clear-all in both places.
+    const clearAllBtn = document.getElementById('mapsClearAllBtn');
+    if (clearAllBtn && !clearAllBtn.dataset.bound) {
+      clearAllBtn.addEventListener('click', mapsClearAllFilters);
+      clearAllBtn.dataset.bound = '1';
+    }
+    const fullClearAllBtn = document.getElementById('mapsFullClearAllBtn');
+    if (fullClearAllBtn && !fullClearAllBtn.dataset.bound) {
+      fullClearAllBtn.addEventListener('click', mapsClearAllFilters);
+      fullClearAllBtn.dataset.bound = '1';
     }
     // Same debounce as the bank search box — a full filter + 1,000-row
     // rebuild + Plotly.react per keystroke made typing "1500" cost four cycles.
@@ -29211,18 +29326,6 @@
         applyMapsFilters();
       });
       sortSelect.dataset.bound = '1';
-    }
-    const clearTerritory = document.getElementById('mapsClearTerritory');
-    if (clearTerritory && !clearTerritory.dataset.bound) {
-      clearTerritory.addEventListener('click', () => {
-        mapsState.territory = { owner: '', ownerTouched: true, minAssets: '', maxAssets: '', sort: 'opportunity' };
-        if (ownerSelect) ownerSelect.value = '';
-        if (minAssets) minAssets.value = '';
-        if (maxAssets) maxAssets.value = '';
-        if (sortSelect) sortSelect.value = 'opportunity';
-        applyMapsFilters();
-      });
-      clearTerritory.dataset.bound = '1';
     }
     const advBtn = document.getElementById('mapsAdvancedBtn');
     if (advBtn && !advBtn.dataset.bound) {

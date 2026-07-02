@@ -2928,13 +2928,24 @@
   </section>
 
   <div class="container">
+    <div class="maps-scope-strip" id="mapsScopeBar" aria-label="Map scope">
+      <div class="maps-scope-segs" id="mapsScopeSegs"></div>
+      <label class="maps-scope-rep">Rep
+        <select id="mapsOwnerSelect" aria-label="Filter map by coverage owner">
+          <option value="">All owners</option>
+        </select>
+      </label>
+      <span class="maps-scope-banner" id="mapsScopeBanner"></span>
+      <button id="mapsClearAllBtn" type="button" class="small-btn maps-clear-all"
+        title="Reset scope, states, statuses, search, advanced conditions, assets, and area search">Clear all filters</button>
+    </div>
     <div class="maps-split">
       <section class="maps-panel">
         <div class="maps-panel-head">
           <h3>Bank Marker Map</h3>
           <div class="maps-head-actions">
             <button id="mapsFitResultsBtn" type="button" class="small-btn">Fit Results</button>
-            <button id="mapsResetViewBtn" type="button" class="small-btn">Reset US</button>
+            <button id="mapsResetViewBtn" type="button" class="small-btn" title="Reset the viewport only — filters are unchanged">Reset US</button>
             <button id="mapsFullViewBtn" type="button" class="small-btn">Open Full View</button>
           </div>
         </div>
@@ -2963,28 +2974,22 @@
 
       <section class="maps-panel">
         <h3>Bank List</h3>
-        <div id="mapsStateSummary" class="maps-state-summary"></div>
-        <div id="mapsStateDrilldown" class="maps-drilldown" hidden></div>
         <div class="maps-controls">
           <div class="maps-control-row">
-            <span class="maps-control-label">Selected states:</span>
+            <span class="maps-control-label">States:</span>
             <select id="mapsStateSelect" aria-label="Add state to map filter">
               <option value="">Add State...</option>
             </select>
             <div id="mapsStateChips" class="maps-chips"></div>
-            <button id="mapsClearStates" type="button" class="small-btn">Clear</button>
+            <button id="mapsClearStates" type="button" class="small-btn" title="Clear selected states, area search, and the selected bank — scope and filters stay">Clear selections</button>
           </div>
           <div class="maps-control-row">
             <input type="search" id="mapsSearchBox" placeholder="Search bank, FDIC, city&hellip;" autocomplete="off">
             <button id="mapsAdvancedBtn" type="button" class="small-btn">Advanced filter&hellip;</button>
             <span id="mapsActiveFilters" class="maps-active-filters"></span>
-            <span id="mapsRowCount" class="maps-row-count">&mdash;</span>
           </div>
           <div class="maps-control-row maps-territory-row">
-            <span class="maps-control-label">Territory:</span>
-            <select id="mapsOwnerSelect" aria-label="Filter map by coverage owner">
-              <option value="">All owners</option>
-            </select>
+            <span class="maps-control-label">Assets:</span>
             <input type="number" id="mapsMinAssets" min="0" step="1" placeholder="Min assets $MM" aria-label="Minimum assets in millions">
             <input type="number" id="mapsMaxAssets" min="0" step="1" placeholder="Max assets $MM" aria-label="Maximum assets in millions">
             <select id="mapsSortSelect" aria-label="Prioritize bank list">
@@ -2994,9 +2999,11 @@
               <option value="loans">Loans / Deposits</option>
               <option value="name">Bank name</option>
             </select>
-            <button id="mapsClearTerritory" type="button" class="small-btn">Clear</button>
           </div>
         </div>
+        <div id="mapsStateSummary" class="maps-state-summary"></div>
+        <div id="mapsStateDrilldown" class="maps-drilldown" hidden></div>
+        <div class="maps-list-count" id="mapsRowCountWrap"><span id="mapsRowCount" class="maps-row-count">&mdash;</span></div>
         <div class="maps-tablewrap">
           <table id="mapsBankTable" class="maps-table">
             <thead>
@@ -3053,8 +3060,11 @@
           <span><i class="maps-pin-dormant"></i>Dormant</span>
         </div>
         <div class="maps-head-actions">
+          <span class="maps-full-scope-chip" id="mapsFullScopeChip"></span>
+          <button type="button" class="small-btn" id="mapsFullClearAllBtn"
+            title="Reset scope, states, statuses, search, advanced conditions, assets, and area search">Clear all filters</button>
           <button type="button" class="small-btn" id="mapsFullFitResultsBtn">Fit Results</button>
-          <button type="button" class="small-btn" id="mapsFullResetViewBtn">Reset US</button>
+          <button type="button" class="small-btn" id="mapsFullResetViewBtn" title="Reset the viewport only — filters are unchanged">Reset US</button>
           <button type="button" class="small-btn" id="mapsFullClose">Close</button>
         </div>
       </header>
@@ -3264,6 +3274,7 @@
 
 <script src="/js/modules/muni-tax.js?v=2026-06-01a"></script>
 <script src="/js/modules/report-logic.js?v=2026-06-10a"></script>
+<script src="/js/modules/maps-scope.js?v=2026-07-02a"></script>
 <script src="/js/portal.js?v=morning-review-2026-06-30"></script>
 <script src="/js/modules/breadcrumbs.js?v=2026-05-28d"></script>
 </body>
