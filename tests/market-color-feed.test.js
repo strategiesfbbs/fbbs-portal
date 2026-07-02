@@ -195,6 +195,33 @@ async function testStaleOnFailure() {
   console.log('  ✓ getMarketColorFeed: stale-on-failure serves cache');
 }
 
+// ---------- zero-item parse keeps the feed's cache ----------
+
+// [market-color#3]: a fulfilled 200 that parses to zero items (consent/error
+// page, markup change) must NOT wipe that feed's cached articles or stamp its
+// slot fresh — mirror of the market-wire.js guard.
+async function testZeroItemParseKeepsCache() {
+  const dir = tmpDir();
+  const good = rssFixture([{ title: 'Cached Treasury story', link: 'https://www.cnbc.com/c.html', desc: 'Yields fell after the Fed remarks.', pubDate: 'Wed, 18 Jun 2026 10:00:00 GMT' }]);
+  const now = Date.parse('2026-06-18T15:00:00Z');
+  await feed.getMarketColorFeed({ marketDir: dir, fetchImpl: makeFetch([['15839069', good]]), now });
+
+  // Past TTL: cnbc-markets returns a 200 page that parses to zero items while
+  // another feed succeeds (so the refresh completes and rewrites the cache).
+  const other = rssFixture([{ title: 'New muni issuance story', link: 'https://www.marketwatch.com/n.html', desc: 'Municipal bond issuance jumped.', pubDate: 'Wed, 18 Jun 2026 16:00:00 GMT' }]);
+  const res = await feed.getMarketColorFeed({
+    marketDir: dir,
+    fetchImpl: makeFetch([['15839069', '<html>consent required</html>'], ['mw_topstories', other]]),
+    now: now + 60 * 60 * 1000
+  });
+  const titles = res.items.map(i => i.title);
+  assert.ok(titles.includes('Cached Treasury story'), 'zero-item parse keeps the prior cached articles');
+  assert.ok(titles.includes('New muni issuance story'), 'successful feed still refreshes');
+  const markets = res.sources.find(s => s.key === 'cnbc-markets');
+  assert.strictEqual(markets.fetchedAt, new Date(now).toISOString(), 'zero-item feed keeps its old fetchedAt stamp');
+  console.log('  ✓ getMarketColorFeed: zero-item parse keeps prior feed cache');
+}
+
 // ---------- never throws with no cache ----------
 
 async function testNoCacheNoThrow() {
@@ -214,6 +241,7 @@ async function testNoCacheNoThrow() {
   await testFetchDedupSortCache();
   testCachedPersonalFinanceFilter();
   await testStaleOnFailure();
+  await testZeroItemParseKeepsCache();
   await testNoCacheNoThrow();
   console.log('market-color-feed tests passed');
 })().catch(err => { console.error(err); process.exit(1); });

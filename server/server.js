@@ -64,6 +64,7 @@ const {
   getBankSummariesByIds,
   importBankWorkbook,
   listBankSummaries,
+  listCurrentBankIds,
   queryBankMapDataset,
   searchBankDatabase,
   BANK_FIELDS
@@ -120,13 +121,16 @@ const {
   deleteBankContact,
   deleteProductFit,
   enqueueBilling,
+  getBankActivityById,
   getBankContact,
   getBankCoverage,
   getBillingItem,
+  getBillingItemByRef,
   getPreferredPeerGroup,
   getProductFitById,
   getSavedBankCoverageMap,
   lastActivityByBank,
+  lastManualTouchForBank,
   listActivitiesForBank,
   listAllContacts,
   listBillingQueue,
@@ -1504,7 +1508,16 @@ function readJsonBody(req, limit = 1024 * 1024) {
       const text = Buffer.concat(chunks).toString('utf-8').trim();
       if (!text) return resolve({});
       try {
-        resolve(JSON.parse(text));
+        const parsed = JSON.parse(text);
+        // JSON `null`/scalars parse fine but every handler dereferences the
+        // body — reject here so routes 400 instead of 500 on a TypeError.
+        // (Arrays are typeof 'object' and still pass.)
+        if (parsed === null || typeof parsed !== 'object') {
+          const err = new Error('Request body must be a JSON object');
+          err.statusCode = 400;
+          return reject(err);
+        }
+        resolve(parsed);
       } catch (err) {
         err.statusCode = 400;
         err.message = 'Request body must be valid JSON';
@@ -2818,9 +2831,8 @@ const bankSearchCache = new Map();
 const bankDetailCache = new Map();
 
 function currentBankIdSet() {
-  return new Set((listBankSummaries(BANK_REPORTS_DIR) || [])
-    .map(row => String(row.id || ''))
-    .filter(Boolean));
+  // Id-only scan — membership checks never need the summary_json parse.
+  return new Set(listCurrentBankIds(BANK_REPORTS_DIR));
 }
 
 function filterCurrentBankRows(rows, key = 'bankId') {
@@ -2892,6 +2904,9 @@ function getBankById(id, options = {}) {
       ...data,
       bank: {
         ...data.bank,
+        // Latest call report behind the freshness cutoff — the tear sheet's
+        // cue that this bank may be merged/closed (search already hides it).
+        isStale: Boolean(data.isStale),
         summary: enrichBankSummary(data.bank.summary, statuses, coverageMap),
         bondAccounting: getBondAccountingForBank(BANK_REPORTS_DIR, data.bank.id),
         thcSummary: getThcSummaryForBank(BANK_REPORTS_DIR, data.bank.summary || data.bank, {
@@ -5332,7 +5347,10 @@ async function handleLogBankActivity(req, res, bankId) {
         return sendJSON(res, 400, { error: 'This contact cannot receive email activity' });
       }
     }
-    upsertSavedBank(BANK_REPORTS_DIR, summary, body.coverage || {});
+    // Guarantees a coverage row exists for the activity; {} preserves existing
+    // status/priority/owner. Coverage mutations must flow through
+    // POST /api/bank-coverage, which audits and syncs the status overlay.
+    upsertSavedBank(BANK_REPORTS_DIR, summary, {});
     const rep = resolveRequestRep(req);
     const activity = recordManualActivity(BANK_REPORTS_DIR, {
       bankId,
@@ -5551,11 +5569,23 @@ async function handleUpdateBankContact(req, res, contactId) {
 
 function handleDeleteBankContact(req, res, contactId) {
   try {
+    // Compliance flags (DNC / email opt-out / bounce) power the server-side
+    // activity block — deleting the contact would erase the record that
+    // enforces it (and delete + re-add would silently clear the block).
+    const existing = getBankContact(BANK_REPORTS_DIR, contactId);
+    if (existing && (existing.doNotCall || existing.optOutEmail || existing.emailBounced)) {
+      return sendJSON(res, 400, {
+        error: 'This contact carries a Do-Not-Call / email opt-out / bounced flag — edit the contact instead of deleting the compliance record.'
+      });
+    }
     const removed = deleteBankContact(BANK_REPORTS_DIR, contactId);
     appendAuditLog({
       event: 'bank-contact-delete',
       bankId: removed && removed.bankId,
-      contactId: removed && removed.id
+      contactId: removed && removed.id,
+      doNotCall: Boolean(existing && existing.doNotCall),
+      optOutEmail: Boolean(existing && existing.optOutEmail),
+      emailBounced: Boolean(existing && existing.emailBounced)
     });
     if (removed && removed.bankId) {
       logBankActivity(req, {
@@ -5802,6 +5832,26 @@ function handleDeleteStrategyRequest(req, res, id) {
       requestType: request.requestType,
       status: request.status
     });
+    // A billing item keyed to this strategy would otherwise dangle as
+    // permanently Pending — resolve it as Waived so the queue stays honest.
+    try {
+      const billing = getBillingItemByRef(BANK_REPORTS_DIR, 'strategy', request.id);
+      if (billing && billing.state === 'Pending') {
+        const waived = updateBillingItem(BANK_REPORTS_DIR, billing.id, {
+          state: 'Waived',
+          notes: 'Source strategy request deleted'
+        });
+        appendAuditLog({
+          event: 'billing-update',
+          billingId: waived.id,
+          state: waived.state,
+          bankId: waived.bankId,
+          reason: 'strategy-request-delete'
+        });
+      }
+    } catch (billingErr) {
+      log('warn', 'Billing resolution after strategy delete failed:', billingErr.message);
+    }
     logBankActivity(req, {
       bankId: request.bankId,
       certNumber: request.certNumber,
@@ -7178,6 +7228,23 @@ function handleAccountTouchReport(req, res, query) {
     const scopedRep = scope.enforced ? scope.rep : null;
     const today = new Date().toISOString().slice(0, 10);
     const lastTouch = lastActivityByBank(BANK_REPORTS_DIR);
+    // "Next Action" comes from the task engine (bank_coverage.next_action_date
+    // was cleared by the 2026-06-12 consolidation): earliest open-task due
+    // date per bank, rep-scoped by assignee like the Stale Follow-ups view.
+    const nextActionByBank = new Map();
+    try {
+      const taskUsername = scopedRep ? scopedRep.username : null;
+      const openTasks = listOverdueOpenTasks(BANK_REPORTS_DIR, { username: taskUsername, today })
+        .concat(listUpcomingOpenTasks(BANK_REPORTS_DIR, { username: taskUsername, today, horizon: '9999-12-31', limit: 5000 }));
+      for (const task of openTasks) {
+        if (!task.bankId || !task.dueDate) continue;
+        const key = String(task.bankId);
+        const existing = nextActionByBank.get(key);
+        if (!existing || String(task.dueDate) < existing) nextActionByBank.set(key, String(task.dueDate));
+      }
+    } catch (taskErr) {
+      log('warn', 'Account touch next-action lookup failed:', taskErr.message);
+    }
     const dayMs = 86400000;
     const rows = filterCurrentBankRows(listSavedBanks(BANK_REPORTS_DIR) || [])
       .filter(row => {
@@ -7201,7 +7268,7 @@ function handleAccountTouchReport(req, res, query) {
           owner: row.owner || '',
           lastActivityDate: last,
           daysSinceContact: daysSince,
-          nextActionDate: row.nextActionDate || ''
+          nextActionDate: nextActionByBank.get(String(row.bankId)) || ''
         };
       })
       .filter(row => row.daysSinceContact === null || row.daysSinceContact >= thresholdDays)
@@ -7255,12 +7322,30 @@ function handlePershingDormantReport(req, res, query) {
   }
 }
 
+// Destructive report writes (overwrite-by-id / PATCH / DELETE) are
+// creator-or-admin gated. Reads stay firm-wide (Soft-A); a definition with no
+// recorded creator is shared and stays writable by everyone.
+function canMutateReportDefinition(existing, rep, auth) {
+  if (!existing) return true;
+  const owner = String(existing.createdBy || '').trim();
+  if (!owner) return true;
+  if (auth && auth.isAdmin) return true;
+  return Boolean(rep && normalizeUsername(rep.username) === normalizeUsername(owner));
+}
+
 async function handleCreateReport(req, res) {
   try {
     const body = await readJsonBody(req, 256 * 1024);
-    const rep = resolveRequestRep(req);
+    const { rep, auth } = authInfoForRequest(req);
+    // POST with a client-supplied id is an upsert — guard the overwrite path
+    // the same way DELETE is guarded, and audit it as an update.
+    const suppliedId = String((body && body.id) || '').trim();
+    const existing = suppliedId ? reportStore.getReportDefinition(BANK_REPORTS_DIR, suppliedId) : null;
+    if (existing && !canMutateReportDefinition(existing, rep, auth)) {
+      return sendJSON(res, 409, { error: 'A report with this id belongs to another rep' });
+    }
     const report = reportStore.createReportDefinition(BANK_REPORTS_DIR, body, rep);
-    appendAuditLog({ event: 'report-create', reportId: report.id, type: report.type, rep: rep ? rep.username : null });
+    appendAuditLog({ event: existing ? 'report-update' : 'report-create', reportId: report.id, type: report.type, rep: rep ? rep.username : null });
     return sendJSON(res, 200, { report });
   } catch (err) {
     log('error', 'Report create failed:', err.message);
@@ -7271,9 +7356,15 @@ async function handleCreateReport(req, res) {
 async function handleUpdateReport(req, res, id) {
   try {
     const body = await readJsonBody(req, 256 * 1024);
+    const { rep, auth } = authInfoForRequest(req);
+    const existing = reportStore.getReportDefinition(BANK_REPORTS_DIR, id);
+    if (!existing) return sendJSON(res, 404, { error: 'Report not found' });
+    if (!canMutateReportDefinition(existing, rep, auth)) {
+      return sendJSON(res, 403, { error: 'This report belongs to another rep' });
+    }
     const report = reportStore.updateReportDefinition(BANK_REPORTS_DIR, id, body);
     if (!report) return sendJSON(res, 404, { error: 'Report not found' });
-    appendAuditLog({ event: 'report-update', reportId: id });
+    appendAuditLog({ event: 'report-update', reportId: id, rep: rep ? rep.username : null });
     return sendJSON(res, 200, { report });
   } catch (err) {
     log('error', 'Report update failed:', err.message);
@@ -7283,9 +7374,15 @@ async function handleUpdateReport(req, res, id) {
 
 function handleDeleteReport(req, res, id) {
   try {
+    const { rep, auth } = authInfoForRequest(req);
+    const existing = reportStore.getReportDefinition(BANK_REPORTS_DIR, id);
+    if (!existing) return sendJSON(res, 404, { error: 'Report not found' });
+    if (!canMutateReportDefinition(existing, rep, auth)) {
+      return sendJSON(res, 403, { error: 'This report belongs to another rep' });
+    }
     const deleted = reportStore.deleteReportDefinition(BANK_REPORTS_DIR, id);
     if (!deleted) return sendJSON(res, 404, { error: 'Report not found' });
-    appendAuditLog({ event: 'report-delete', reportId: id });
+    appendAuditLog({ event: 'report-delete', reportId: id, rep: rep ? rep.username : null });
     return sendJSON(res, 200, { deleted: true, id });
   } catch (err) {
     log('error', 'Report delete failed:', err.message);
@@ -9443,7 +9540,7 @@ async function handleBankOneOffBondAccountingUpload(req, res, bankId) {
   }
 }
 
-async function handleThcSummaryUpload(req, res) {
+async function handleThcSummaryUpload(req, res, query) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   if (!boundaryMatch) return sendJSON(res, 400, { error: 'Expected multipart/form-data upload' });
@@ -9465,10 +9562,24 @@ async function handleThcSummaryUpload(req, res) {
     if (!bankSummaries.length) {
       return sendJSON(res, 400, { error: 'Import bank call report data before importing THC summaries.' });
     }
-    const manifest = importThcSummaryPayload(BANK_REPORTS_DIR, payload, {
+    const dryRun = Boolean(query && (query.get('dryRun') === '1' || query.get('dryRun') === 'true'));
+    const result = importThcSummaryPayload(BANK_REPORTS_DIR, payload, {
       bankSummaries,
-      sourceFile: sanitizeFilename(file.filename || 'thc-summary.json')
+      sourceFile: sanitizeFilename(file.filename || 'thc-summary.json'),
+      dryRun
     });
+    if (dryRun) {
+      // Preview only: every contract violation + match counts, nothing written.
+      return sendJSON(res, 200, {
+        success: !result.violations.length,
+        dryRun: true,
+        violations: result.violations,
+        recordCount: result.recordCount,
+        matchedCount: result.matchedCount,
+        unmatchedCount: result.unmatchedCount
+      });
+    }
+    const manifest = result;
     appendAuditLog({
       event: 'thc-summary-import',
       sourceFile: sanitizeFilename(file.filename || ''),
@@ -9477,10 +9588,36 @@ async function handleThcSummaryUpload(req, res) {
       unmatchedCount: manifest.unmatchedCount
     });
     invalidateBankCaches();
-    return sendJSON(res, 200, { success: true, manifest });
+    // Surface open "THO Report" strategy requests whose bank just refreshed so
+    // the queue loop can be closed by hand (auto-fulfil stays roadmap work).
+    let openThcRequests = [];
+    try {
+      const matched = (manifest.records || []).filter(r => r.matched && r.bankId);
+      const matchedIds = new Set(matched.map(r => String(r.bankId)));
+      if (matchedIds.size) {
+        const cycles = new Map(matched.map(r => [String(r.bankId), r.cycle || '']));
+        const strategyResult = listStrategyRequests(BANK_REPORTS_DIR, { archived: '' }) || { requests: [] };
+        openThcRequests = (strategyResult.requests || [])
+          .filter(r => r.requestType === 'THO Report'
+            && (r.status === 'Open' || r.status === 'In Progress')
+            && matchedIds.has(String(r.bankId || '')))
+          .map(r => ({
+            id: r.id,
+            bankId: r.bankId,
+            bankName: r.displayName || '',
+            status: r.status,
+            thcCycle: cycles.get(String(r.bankId)) || ''
+          }));
+      }
+    } catch (openErr) {
+      log('warn', 'THC open-request lookup failed:', openErr.message);
+    }
+    return sendJSON(res, 200, { success: true, manifest, openThcRequests });
   } catch (err) {
     log('error', 'THC summary import failed:', err.message);
-    return sendJSON(res, err.statusCode || 500, { error: err.message || 'THC summary import failed' });
+    const body = { error: err.message || 'THC summary import failed' };
+    if (Array.isArray(err.violations)) body.violations = err.violations;
+    return sendJSON(res, err.statusCode || 500, body);
   } finally {
     cleanupMultipartFiles(parsed);
   }
@@ -11447,7 +11584,9 @@ function buildCrmDashboard(rep) {
   });
 
   const strategyResult = listStrategyRequests(BANK_REPORTS_DIR, { archived: '' }) || { requests: [] };
-  const openStatuses = new Set(['Open', 'In Progress']);
+  // Same not-yet-done definition as My Work (buildMyWorkResponse), so Home and
+  // Pulse agree on what "open strategies" means.
+  const openStatuses = new Set(['Open', 'In Progress', 'Needs Billed']);
   const openStrategies = (strategyResult.requests || []).filter(req => {
     if (!openStatuses.has(req.status)) return false;
     if (!rep) return true;
@@ -11463,8 +11602,9 @@ function buildCrmDashboard(rep) {
   const bankNames = new Map(savedBanks.map(b => [b.bankId, b.displayName]));
   let recentActivities = [];
   try {
-    recentActivities = listRecentManualActivities(BANK_REPORTS_DIR, { limit: 20 })
-      .filter(item => !rep || String(item.actorUsername || '').toLowerCase() === String(rep.username || '').toLowerCase())
+    // Rep scope is applied INSIDE the query (before the LIMIT) — filtering a
+    // firm-wide top-20 sample under-reported busy-office reps to zero.
+    recentActivities = listRecentManualActivities(BANK_REPORTS_DIR, { limit: 20, username: rep ? rep.username : null })
       .map(item => ({
         at: item.at,
         activityDate: item.activityDate || String(item.at || '').slice(0, 10),
@@ -11476,6 +11616,26 @@ function buildCrmDashboard(rep) {
       }));
   } catch (err) {
     log('warn', 'CRM dashboard activities failed:', err.message);
+  }
+
+  // Banks never saved to coverage still deserve a real display name — resolve
+  // the leftovers with one batched summary lookup instead of showing raw ids.
+  try {
+    const unresolved = [...new Set(
+      recentActivities.filter(r => r.bankName === r.bankId).map(r => r.bankId)
+        .concat(upcoming.filter(u => u.displayName === u.bankId).map(u => u.bankId))
+    )].filter(Boolean);
+    if (unresolved.length) {
+      const summaries = getBankSummariesByIds(BANK_REPORTS_DIR, unresolved);
+      const nameOf = id => {
+        const s = summaries.get(String(id));
+        return s ? (s.displayName || s.legalName || '') : '';
+      };
+      recentActivities.forEach(r => { if (r.bankName === r.bankId) r.bankName = nameOf(r.bankId) || r.bankId; });
+      upcoming.forEach(u => { if (u.displayName === u.bankId) u.displayName = nameOf(u.bankId) || u.bankId; });
+    }
+  } catch (err) {
+    log('warn', 'CRM dashboard bank-name lookup failed:', err.message);
   }
 
   let taskCounts = { open: 0, overdue: 0 };
@@ -12665,7 +12825,10 @@ const server = http.createServer(async (req, res) => {
       if (!bankId) return sendJSON(res, 400, { error: 'Invalid bank ID' });
       const limit = query.get('limit');
       return sendJSON(res, 200, {
-        activities: listActivitiesForBank(BANK_REPORTS_DIR, bankId, { limit })
+        activities: listActivitiesForBank(BANK_REPORTS_DIR, bankId, { limit }),
+        // Server-computed so the last-touch read is correct even when system
+        // rows push the last manual activity out of the timeline window.
+        lastManualTouch: lastManualTouchForBank(BANK_REPORTS_DIR, bankId)
       });
     }
     if (bankActivityMatch && req.method === 'POST') {
@@ -12682,6 +12845,13 @@ const server = http.createServer(async (req, res) => {
       // Soft delete with a required reason — the row is retained for audit.
       const reason = String(query.get('reason') || '').trim();
       if (!reason) return sendJSON(res, 400, { error: 'A removal reason is required' });
+      // Only rep-logged touches are retractable; the system audit narrative
+      // (coverage saves, task/opp/billing rows) stays intact for everyone.
+      const existingActivity = getBankActivityById(BANK_REPORTS_DIR, bankId, activityId);
+      if (!existingActivity) return sendJSON(res, 404, { error: 'Activity not found' });
+      if (!MANUAL_ACTIVITY_KINDS.includes(String(existingActivity.kind || ''))) {
+        return sendJSON(res, 400, { error: "System entries can't be removed from the timeline" });
+      }
       const rep = resolveRequestRep(req);
       const removed = deleteBankActivity(BANK_REPORTS_DIR, bankId, activityId, {
         deletedBy: rep ? (rep.displayName || rep.username) : '',
@@ -13056,7 +13226,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/api/banks/thc-summary/upload' && req.method === 'POST') {
-      return await handleThcSummaryUpload(req, res);
+      return await handleThcSummaryUpload(req, res, query);
     }
 
     if (pathname === '/api/banks/thc-summary' && req.method === 'GET') {
@@ -13136,7 +13306,7 @@ const server = http.createServer(async (req, res) => {
       if ((IS_IIS_AUTH_MODE || ADMIN_USERS.size > 0) && !auth.isAdmin) {
         return sendJSON(res, 403, { error: 'Admin permission is required for this view.' });
       }
-      const limit = Math.min(parseInt(query.get('limit'), 10) || 200, 1000);
+      const limit = Math.max(1, Math.min(parseInt(query.get('limit'), 10) || 200, 1000));
       return sendJSON(res, 200, readAuditLog({ limit }));
     }
 

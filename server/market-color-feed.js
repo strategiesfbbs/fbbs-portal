@@ -267,11 +267,14 @@ async function getMarketColorFeed(opts) {
       let succeeded = 0;
       for (let i = 0; i < results.length; i++) {
         const r = results[i];
-        if (r.status === 'fulfilled') {
+        // Same guard as market-wire.js: a 200 that parses to zero items
+        // (consent/error page, markup change) must not wipe the feed's cached
+        // articles or stamp the cache fresh.
+        if (r.status === 'fulfilled' && r.value.items.length) {
           feeds[r.value.feed.key] = { fetchedAt: new Date(now).toISOString(), items: r.value.items };
           succeeded += 1;
         } else {
-          const reason = r.reason.message;
+          const reason = r.status === 'rejected' ? r.reason.message : 'no items parsed';
           log('warn', `market-color feed ${FEEDS[i].key} failed:`, reason);
         }
       }

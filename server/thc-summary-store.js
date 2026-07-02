@@ -148,7 +148,11 @@ function normalizeReportStatus(input) {
   const source = input && typeof input === 'object' ? input : {};
   const out = {};
   for (const type of REPORT_TYPES) {
-    const aliasKeys = [type, type.toLowerCase(), REPORT_TYPE_ALIASES[type.toLowerCase()]].filter(Boolean);
+    // The alias table maps input-alias → canonical, so aliases for this
+    // canonical type are the KEYS whose value is `type` (looking up BY the
+    // canonical name only ever returned the canonical name again, silently
+    // dropping snake_case module keys like income_risk).
+    const aliasKeys = [type, type.toLowerCase(), ...Object.keys(REPORT_TYPE_ALIASES).filter(key => REPORT_TYPE_ALIASES[key] === type)];
     const row = aliasKeys.map(key => source[key]).find(value => value !== undefined && value !== null) || null;
     if (row && typeof row === 'object') {
       out[type] = {
@@ -249,6 +253,45 @@ function containsForbiddenKey(value, pathParts = []) {
   return null;
 }
 
+// Collector variants of the two forbidden scans: walk the WHOLE payload and
+// return every violation instead of stopping at the first, so an admin fixing
+// a multi-bank THC export sees the complete list in one pass.
+function collectForbiddenKeys(value, pathParts = [], out = []) {
+  if (!value || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) collectForbiddenKeys(value[i], pathParts.concat(`[${i}]`), out);
+    return out;
+  }
+  for (const key of Object.keys(value)) {
+    if (FORBIDDEN_KEYS.has(key)) out.push({ path: pathParts.concat(key).join('.'), type: `forbidden raw-detail field "${key}"` });
+    collectForbiddenKeys(value[key], pathParts.concat(key), out);
+  }
+  return out;
+}
+
+function collectForbiddenValues(value, pathParts = [], out = []) {
+  if (typeof value === 'string') {
+    const found = findForbiddenValue(value, pathParts);
+    if (found) out.push({ path: found.path, type: `forbidden ${found.type}` });
+    return out;
+  }
+  if (!value || typeof value !== 'object') return out;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i += 1) collectForbiddenValues(value[i], pathParts.concat(`[${i}]`), out);
+    return out;
+  }
+  for (const key of Object.keys(value)) collectForbiddenValues(value[key], pathParts.concat(key), out);
+  return out;
+}
+
+// "records.[3].summary" / "[3].summary" → 3, so a violation can carry the
+// offending record's bank identity.
+function violationRecordIndex(pathText) {
+  const m = String(pathText || '').match(/^(?:records|banks|summaries)\.\[(\d+)\]/)
+    || String(pathText || '').match(/^\[(\d+)\]/);
+  return m ? Number(m[1]) : null;
+}
+
 function recordsFromPayload(payload) {
   if (Array.isArray(payload)) return payload;
   if (payload && Array.isArray(payload.records)) return payload.records;
@@ -301,18 +344,24 @@ function normalizeSummaryRecord(raw, bankById, bankByCert) {
 }
 
 function importThcSummaryPayload(bankReportsDir, payload, options = {}) {
-  const forbidden = containsForbiddenKey(payload);
-  if (forbidden) {
-    const err = new Error(`THC summary import rejected: forbidden raw-detail field "${forbidden}" is present.`);
+  const rows = recordsFromPayload(payload);
+  if (!rows.length) {
+    const err = new Error('THC summary import requires a JSON array or { records: [...] }.');
     err.statusCode = 400;
     throw err;
   }
-  const forbiddenValue = findForbiddenValue(payload);
-  if (forbiddenValue) {
-    const err = new Error(`THC summary import rejected: forbidden ${forbiddenValue.type} at "${forbiddenValue.path}".`);
-    err.statusCode = 400;
-    throw err;
-  }
+  // Every contract violation, each annotated with the offending record's bank
+  // identity when the path sits under a record.
+  const violations = [...collectForbiddenKeys(payload), ...collectForbiddenValues(payload)].map(v => {
+    const idx = violationRecordIndex(v.path);
+    const row = idx != null && rows[idx] && typeof rows[idx] === 'object' ? rows[idx] : null;
+    return {
+      ...v,
+      recordIndex: idx,
+      bankName: row ? cleanText(row.bankName || row.name || '', 300) : '',
+      certNumber: row ? cleanDigits(row.certNumber || row.fdicCert || row.certificate || row.cert) : ''
+    };
+  });
   const bankSummaries = options.bankSummaries || [];
   const bankById = new Map(bankSummaries.map(row => [String(row.id || ''), row]));
   const bankByCert = new Map();
@@ -320,22 +369,32 @@ function importThcSummaryPayload(bankReportsDir, payload, options = {}) {
     const cert = cleanDigits(row.certNumber);
     if (cert && !bankByCert.has(cert)) bankByCert.set(cert, row);
   });
-  const rows = recordsFromPayload(payload);
-  if (!rows.length) {
-    const err = new Error('THC summary import requires a JSON array or { records: [...] }.');
-    err.statusCode = 400;
-    throw err;
-  }
   const importedAt = new Date().toISOString();
   const records = rows.map(row => normalizeSummaryRecord(row, bankById, bankByCert))
     .filter(row => row.bankId || row.certNumber || row.bankDisplayName);
+  const counts = {
+    recordCount: records.length,
+    matchedCount: records.filter(row => row.matched).length,
+    unmatchedCount: records.filter(row => !row.matched).length
+  };
+  // Dry run: preview the full violation list + match counts, never write.
+  if (options.dryRun) {
+    return { dryRun: true, violations, ...counts };
+  }
+  // A real import still hard-rejects when any violation exists.
+  if (violations.length) {
+    const first = violations[0];
+    const more = violations.length - 1;
+    const err = new Error(`THC summary import rejected: ${first.type} at "${first.path}"${more ? ` (+${more} more violation${more === 1 ? '' : 's'})` : ''}.`);
+    err.statusCode = 400;
+    err.violations = violations;
+    throw err;
+  }
   const manifest = {
     schemaVersion: 1,
     importedAt,
     sourceFile: cleanText(options.sourceFile || '', 180),
-    recordCount: records.length,
-    matchedCount: records.filter(row => row.matched).length,
-    unmatchedCount: records.filter(row => !row.matched).length,
+    ...counts,
     contract: {
       allowed: [
         'bankId/certNumber',
@@ -434,6 +493,8 @@ module.exports = {
   thcSummaryDirForReportsDir,
   thcSummaryManifestPathForReportsDir,
   _private: {
+    collectForbiddenKeys,
+    collectForbiddenValues,
     containsForbiddenKey,
     findForbiddenValue,
     normalizeSummaryRecord,

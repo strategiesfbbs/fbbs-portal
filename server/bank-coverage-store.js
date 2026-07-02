@@ -999,12 +999,29 @@ function listActivitiesForBank(outputDir, bankId, options = {}) {
   const id = String(bankId || '');
   if (!id) return [];
   const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 100), 500));
+  // Order by the business date (rep-chosen activity_date, else the insert day)
+  // so a backdated "logged last Thursday's meeting today" reads in story order;
+  // insert time + id break ties within a day.
   const rows = querySqliteJson(dbPath, `
     ${activitySelectSql('bank_id = ?')}
-    ORDER BY at DESC, id DESC
+    ORDER BY COALESCE(activity_date, substr(at, 1, 10)) DESC, at DESC, id DESC
     LIMIT ?;
   `, [id, limit]);
   return rows.map(mapActivityRow);
+}
+
+// Single-row fetch (soft-deleted rows excluded) — used by the DELETE route to
+// inspect the kind before removing anything from the timeline.
+function getBankActivityById(outputDir, bankId, activityId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(activityId || '');
+  const bank = String(bankId || '');
+  if (!id || !bank) return null;
+  const rows = querySqliteJson(dbPath, `
+    ${activitySelectSql('id = ? AND bank_id = ?')}
+    LIMIT 1;
+  `, [id, bank]);
+  return mapActivityRow(rows[0]);
 }
 
 // Soft delete: the row stays in bank_activities (content intact) but is
@@ -1051,17 +1068,26 @@ function listRecentActivitiesByActor(outputDir, actorUsername, options = {}) {
 }
 
 // Most recent manual CRM activities across all banks — feeds the CRM
-// dashboard's "recent activity" widget.
+// dashboard's "recent activity" widget. Optional `username` scopes to one
+// rep's activities INSIDE the query (before the LIMIT), so a rep-scoped
+// dashboard sees their own last N touches, not a filtered firm-wide sample.
 function listRecentManualActivities(outputDir, options = {}) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const kinds = sanitizeManualKinds(options.kinds);
   const inList = kinds.map(() => '?').join(', ');
   const limit = Math.max(1, Math.min(Math.trunc(Number(options.limit) || 20), 100));
+  const params = [...kinds];
+  let where = `kind IN (${inList})`;
+  const username = String(options.username || '').toLowerCase();
+  if (username) {
+    where += ` AND LOWER(COALESCE(actor_username, '')) = ?`;
+    params.push(username);
+  }
   const rows = querySqliteJson(dbPath, `
-    ${activitySelectSql(`kind IN (${inList})`)}
+    ${activitySelectSql(where)}
     ORDER BY at DESC
     LIMIT ?;
-  `, [...kinds, limit]);
+  `, [...params, limit]);
   return rows.map(mapActivityRow);
 }
 
@@ -1133,6 +1159,23 @@ function lastActivityByBank(outputDir, options = {}) {
   const map = {};
   rows.forEach(row => { if (row.bankId) map[row.bankId] = row.lastDate || ''; });
   return map;
+}
+
+// Single-bank variant of lastActivityByBank — the latest manual-touch date for
+// one bank regardless of how many system rows sit above it in the timeline
+// window. Powers the tear sheet's server-computed lastManualTouch.
+function lastManualTouchForBank(outputDir, bankId, options = {}) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const id = String(bankId || '');
+  if (!id) return '';
+  const kinds = sanitizeManualKinds(options.kinds);
+  const inList = kinds.map(() => '?').join(', ');
+  const rows = querySqliteJson(dbPath, `
+    SELECT MAX(COALESCE(activity_date, substr(at, 1, 10))) AS lastDate
+    FROM bank_activities
+    WHERE deleted_at IS NULL AND kind IN (${inList}) AND bank_id = ?;
+  `, [...kinds, id]);
+  return (rows[0] && rows[0].lastDate) || '';
 }
 
 // Per-rep manual-activity counts by kind within an optional date window
@@ -1389,6 +1432,18 @@ function listBillingQueue(outputDir, options = {}) {
 function getBillingItem(outputDir, id) {
   const dbPath = ensureCoverageDatabase(outputDir);
   const rows = querySqliteJson(dbPath, `${billingSelectSql('id = ?')} LIMIT 1;`, [String(id || '')]);
+  return rows.length ? mapBillingRow(rows[0]) : null;
+}
+
+// Billing item by its source reference (UNIQUE(ref_type, ref_id)) — lets a
+// source delete (e.g. a strategy request) resolve its queue entry instead of
+// leaving a dangling Pending item.
+function getBillingItemByRef(outputDir, refType, refId) {
+  const dbPath = ensureCoverageDatabase(outputDir);
+  const type = cleanText(refType, 40);
+  const ref = cleanText(refId, 80);
+  if (!type || !ref) return null;
+  const rows = querySqliteJson(dbPath, `${billingSelectSql('ref_type = ? AND ref_id = ?')} LIMIT 1;`, [type, ref]);
   return rows.length ? mapBillingRow(rows[0]) : null;
 }
 
@@ -2016,14 +2071,17 @@ module.exports = {
   deleteProductFit,
   enqueueBilling,
   ensureCoverageDatabase,
+  getBankActivityById,
   getBankContact,
   getBankCoverage,
   getBillingItem,
+  getBillingItemByRef,
   getPreferredPeerGroup,
   getProductFitById,
   getContactsBySalesforceIds,
   getSavedBankCoverageMap,
   lastActivityByBank,
+  lastManualTouchForBank,
   listActivitiesForBank,
   listAllContacts,
   listBillingQueue,

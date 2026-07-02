@@ -15,7 +15,7 @@ const {
   listBankAccountStatuses
 } = require('./bank-account-status-store');
 const {
-  listBankSummaries
+  listCurrentBankIds
 } = require('./bank-data-importer');
 const {
   getSavedBankCoverageMap,
@@ -153,13 +153,10 @@ function summarizeStrategy(row) {
 const ACCOUNT_VIEW_FETCH_LIMIT = 8000;
 
 function currentBankIdSet(outputDir) {
-  return new Set((listBankSummaries(outputDir) || [])
-    .map(row => String(row.id || ''))
-    .filter(Boolean));
+  return new Set(listCurrentBankIds(outputDir));
 }
 
-function filterCurrentBankRows(outputDir, rows, key = 'bankId') {
-  const currentIds = currentBankIdSet(outputDir);
+function filterCurrentBankRows(rows, currentIds, key = 'bankId') {
   if (!currentIds.size) return [];
   return (rows || []).filter(row => currentIds.has(String(row[key] || '')));
 }
@@ -174,18 +171,30 @@ function safeLastActivityMap(outputDir) {
   }
 }
 
-function runAccountStatusView(view, { outputDir, rep, limit = ACCOUNT_VIEW_FETCH_LIMIT }) {
+// Optional per-call context so listBankViewSummaries can run all its count-only
+// view runs off ONE id scan and skip last-activity work entirely.
+function sharedCurrentIds(outputDir, shared) {
+  return (shared && shared.currentIds) || currentBankIdSet(outputDir);
+}
+
+function sharedLastActivityMap(outputDir, shared) {
+  if (shared && shared.countOnly) return {};
+  if (shared && shared.lastActivity) return shared.lastActivity;
+  return safeLastActivityMap(outputDir);
+}
+
+function runAccountStatusView(view, { outputDir, rep, limit = ACCOUNT_VIEW_FETCH_LIMIT, shared }) {
   const rows = listBankAccountStatuses(outputDir, {
     status: view.statusFilter,
     limit,
     maxLimit: ACCOUNT_VIEW_FETCH_LIMIT,
     sort: 'bank'
   });
-  const currentRows = filterCurrentBankRows(outputDir, rows);
+  const currentRows = filterCurrentBankRows(rows, sharedCurrentIds(outputDir, shared));
   const filtered = (view.requiresRep || (view.supportsRep && rep))
     ? currentRows.filter(r => ownerStringContainsRep(r.owner, rep))
     : currentRows;
-  const lastActivity = safeLastActivityMap(outputDir);
+  const lastActivity = sharedLastActivityMap(outputDir, shared);
   return {
     rows: filtered.map(row => ({
       ...summarizeBank(row),
@@ -196,9 +205,9 @@ function runAccountStatusView(view, { outputDir, rep, limit = ACCOUNT_VIEW_FETCH
   };
 }
 
-function runStrategiesView(view, { outputDir, rep }) {
+function runStrategiesView(view, { outputDir, rep, shared }) {
   const result = listStrategyRequests(outputDir, { status: view.statusFilter });
-  const currentIds = currentBankIdSet(outputDir);
+  const currentIds = sharedCurrentIds(outputDir, shared);
   const matches = (result.requests || []).filter(r => {
     if (r.bankId && !currentIds.has(String(r.bankId))) return false;
     if (view.supportsRep && rep) {
@@ -219,7 +228,7 @@ function runStrategiesView(view, { outputDir, rep }) {
 // Rep-scoped by task assignee when a rep is selected. nextActionDate carries
 // the earliest overdue due date per bank, so the existing column set renders
 // unchanged.
-function runFollowUpsView(view, { outputDir, rep }) {
+function runFollowUpsView(view, { outputDir, rep, shared }) {
   const username = view.supportsRep && rep ? rep.username : null;
   const overdue = listOverdueOpenTasks(outputDir, { username }) || [];
   const byBank = new Map();
@@ -229,9 +238,9 @@ function runFollowUpsView(view, { outputDir, rep }) {
     if (!existing || String(task.dueDate) < String(existing.dueDate)) byBank.set(task.bankId, task);
   }
   const bankIds = [...byBank.keys()];
-  const currentIds = currentBankIdSet(outputDir);
+  const currentIds = sharedCurrentIds(outputDir, shared);
   const coverage = getSavedBankCoverageMap(outputDir, bankIds) || new Map();
-  const lastActivity = safeLastActivityMap(outputDir);
+  const lastActivity = sharedLastActivityMap(outputDir, shared);
   const rows = bankIds.filter(bankId => currentIds.has(String(bankId))).map(bankId => {
     const task = byBank.get(bankId);
     const cov = coverage.get(String(bankId)) || {};
@@ -276,7 +285,7 @@ function runBillingView(view, { outputDir }) {
   };
 }
 
-function runBankView({ outputDir, viewId, rep, limit }) {
+function runBankView({ outputDir, viewId, rep, limit, shared }) {
   const view = getViewDefinition(viewId);
   if (!view) return null;
   if (view.requiresRep && !rep) {
@@ -290,9 +299,9 @@ function runBankView({ outputDir, viewId, rep, limit }) {
     };
   }
   let projected;
-  if (view.kind === 'account-status') projected = runAccountStatusView(view, { outputDir, rep, limit });
-  else if (view.kind === 'strategies') projected = runStrategiesView(view, { outputDir, rep });
-  else if (view.kind === 'follow-ups') projected = runFollowUpsView(view, { outputDir, rep });
+  if (view.kind === 'account-status') projected = runAccountStatusView(view, { outputDir, rep, limit, shared });
+  else if (view.kind === 'strategies') projected = runStrategiesView(view, { outputDir, rep, shared });
+  else if (view.kind === 'follow-ups') projected = runFollowUpsView(view, { outputDir, rep, shared });
   else if (view.kind === 'billing') projected = runBillingView(view, { outputDir });
   else return null;
   return {
@@ -307,16 +316,19 @@ function runBankView({ outputDir, viewId, rep, limit }) {
   };
 }
 
-function countBankView({ outputDir, view, rep }) {
+function countBankView({ outputDir, view, rep, shared }) {
   if (view.requiresRep && !rep) return null;
   if (view.kind === 'billing') {
     return listBillingQueue(outputDir, { state: view.stateFilter }).length;
   }
-  const result = runBankView({ outputDir, viewId: view.id, rep });
+  const result = runBankView({ outputDir, viewId: view.id, rep, shared });
   return result ? result.count : 0;
 }
 
 function listBankViewSummaries({ outputDir, rep }) {
+  // One id-only scan shared by every count run; countOnly skips the
+  // last-activity GROUP BY entirely (counts never read lastActivityDate).
+  const shared = { currentIds: currentBankIdSet(outputDir), countOnly: true };
   return VIEW_DEFINITIONS.map(view => ({
     id: view.id,
     label: view.label,
@@ -324,7 +336,7 @@ function listBankViewSummaries({ outputDir, rep }) {
     supportsRep: !!view.supportsRep,
     requiresRep: !!view.requiresRep,
     kind: view.kind,
-    count: countBankView({ outputDir, view, rep })
+    count: countBankView({ outputDir, view, rep, shared })
   }));
 }
 

@@ -723,7 +723,13 @@ function getBankFromDatabase(outputDir, id, options = {}) {
   );
   if (!rows.length) return null;
   if (!options.includeStale && !isCurrentBankPeriod(rows[0].period, freshness)) return null;
-  return { metadata, bank: JSON.parse(rows[0].detail_json) };
+  // isStale lets includeStale callers (tear-sheet fetch by known id) flag a
+  // bank whose latest call report sits behind the freshness cutoff.
+  return {
+    metadata,
+    bank: JSON.parse(rows[0].detail_json),
+    isStale: !isCurrentBankPeriod(rows[0].period, freshness)
+  };
 }
 
 // Batched lookup of the slim summary blob for many banks in one query — avoids
@@ -758,6 +764,19 @@ function listBankSummaries(outputDir, options = {}) {
   const activeFilter = options.includeStale ? { sql: '1 = 1', params: [] } : currentBankSqlFilter(freshness);
   return querySqliteJson(dbPath, `SELECT summary_json FROM banks WHERE ${activeFilter.sql};`, activeFilter.params)
     .map(row => JSON.parse(row.summary_json));
+}
+
+// Id-only projection of the current (freshness-filtered) bank universe — no
+// summary_json parse. For membership checks (currentBankIdSet callers) where
+// listBankSummaries' full-table JSON.parse is pure overhead.
+function listCurrentBankIds(outputDir) {
+  const dbPath = databasePathForDir(outputDir);
+  if (!fs.existsSync(dbPath)) return [];
+  const freshness = getBankFreshnessStats(dbPath);
+  const activeFilter = currentBankSqlFilter(freshness);
+  return querySqliteJson(dbPath, `SELECT id FROM banks WHERE ${activeFilter.sql};`, activeFilter.params)
+    .map(row => String(row.id || ''))
+    .filter(Boolean);
 }
 
 const MAP_FIELD_KEYS = [
@@ -924,6 +943,7 @@ module.exports = {
   importBankWorkbook,
   isCurrentBankPeriod,
   listBankSummaries,
+  listCurrentBankIds,
   parseBankWorkbook,
   periodRank,
   queryBankMapDataset,
