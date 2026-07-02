@@ -163,6 +163,102 @@ test('screenBanks: non-numeric value on a numeric field is IGNORED, never a sile
   assert.ok(r2.ignoredFilters.some(f => f.includes('no acting rep')));
 });
 
+// ---------- numeric grounding (Codex P1) ----------
+
+test('grounding: ungrounded figures are detected; grounded/rescaled/rounded/small ones pass', () => {
+  const set = sa.buildGroundedNumberSet(['Total assets $500.0MM · yield 4.62% · count 122', '{"afsTotal":150000}']);
+  // Grounded, rescaled ($000↔MM), rounded, small ints, years → all fine.
+  assert.deepStrictEqual(sa.findUngroundedNumbers('500MM assets, 500,000 in $000, 4.6% yield, 122 banks, 3 ideas, due 2027', set), []);
+  assert.deepStrictEqual(sa.findUngroundedNumbers('$150MM combined securities', set), []);
+  // Invented figures get caught.
+  const bad = sa.findUngroundedNumbers('ROA is 1.37% and deposits are $612MM', set);
+  assert.ok(bad.includes('1.37') && bad.includes('612'), JSON.stringify(bad));
+});
+
+test('grounding: askAssistant retries once with a correction, then flags what remains', async () => {
+  const calls = [];
+  const fake = async req => {
+    calls.push(req);
+    if (calls.length === 1) {
+      return { toolInput: { answer: 'Alpha Bank has $500.0MM assets and ROA of 9.99%.' }, toolName: 'respond' };
+    }
+    // The retry still sneaks one invented number through.
+    return { toolInput: { answer: 'Alpha Bank has $500.0MM assets; ROA prints 9.99% per my estimate.' }, toolName: 'respond' };
+  };
+  const r = await sa.askAssistant({
+    question: 'Assets and ROA?',
+    context: { rep: REP, bank: BANKS[0], universeCount: 3 },
+    banks: BANKS, rep: REP, createMessage: fake,
+  });
+  assert.strictEqual(calls.length, 2, 'one corrective retry');
+  assert.ok(String(calls[1].messages[calls[1].messages.length - 1].content).includes('9.99'), 'correction names the figure');
+  assert.ok(r.ungroundedNumbers.includes('9.99'));
+  assert.ok(r.answer.includes('Verify before quoting'), 'flagged answer carries the caveat');
+});
+
+test('grounding: a clean answer makes exactly one call and carries no caveat', async () => {
+  let calls = 0;
+  const fake = async () => { calls += 1; return { toolInput: { answer: 'Alpha Bank has $500.0MM in assets.' }, toolName: 'respond' }; };
+  const r = await sa.askAssistant({ question: 'Assets?', context: { rep: REP, bank: BANKS[0], universeCount: 3 }, banks: BANKS, rep: REP, createMessage: fake });
+  assert.strictEqual(calls, 1);
+  assert.deepStrictEqual(r.ungroundedNumbers, []);
+  assert.ok(!r.answer.includes('Verify before quoting'));
+});
+
+// ---------- deterministic rep scope (Codex P1/P2) ----------
+
+test('enforceOwnerScope overrides the model\'s firm-wide screen with the rep\'s book', async () => {
+  const calls = [];
+  const fake = async req => {
+    calls.push(req);
+    if (calls.length === 1) {
+      // Model "forgets" to scope: asks firm-wide.
+      return { toolInput: { conditions: [], ownerScope: 'any' }, toolName: 'screen_banks' };
+    }
+    const toolResult = JSON.parse(req.messages[req.messages.length - 1].content[0].content);
+    return { toolInput: { answer: `${toolResult.count} bank(s) in your book.` }, toolName: 'respond' };
+  };
+  const r = await sa.askAssistant({
+    question: 'Which of my prospects look like good calls?',
+    context: { rep: REP, universeCount: 3 }, banks: BANKS, rep: REP,
+    enforceOwnerScope: true, createMessage: fake,
+  });
+  assert.strictEqual(r.screened.count, 1, 'only Bryce\'s bank counted despite the model asking firm-wide');
+  assert.ok(r.screened.appliedFilters.some(f => f.includes('enforced server-side')));
+  assert.ok(r.answer.includes('1 bank'));
+});
+
+// ---------- rollover / maturity context blocks (Codex P2) ----------
+
+test('rollover + maturity + pershing context blocks render rep-scoped and count-honest', () => {
+  const ctx = sa.buildAssistantContext({
+    rep: REP,
+    bank: { ...BANKS[0] },
+    pershing: { accountCount: 2, mostRecentTradeDate: '2026-06-20' },
+    rollover: {
+      available: true, windowDays: 180,
+      totals: { cdCount: 5, issuerCount: 3 },
+      issuers: [
+        { name: 'Alpha Bank', bankName: 'Alpha Bank', status: 'Client', owner: 'Bryce Martin', cdCount: 2, nearestDays: 14, avgRate: 4.35 },
+        { name: 'Delta Bank', bankName: 'Delta Bank', status: 'Prospect', owner: 'Jane Doe', cdCount: 3, nearestDays: 30, avgRate: 4.1 },
+      ],
+    },
+    maturity: {
+      available: true, windowDays: 90,
+      totals: { par: 12500000, bankCount: 2, maturityPar: 9000000, callPar: 3500000 },
+      banks: [{ name: 'Alpha Bank', status: 'Client', owner: 'Bryce Martin', maturityPar: 4000000, callPar: 1000000, lotCount: 7 }],
+    },
+    universeCount: 3,
+  });
+  assert.ok(ctx.text.includes('rollover wall'));
+  assert.ok(ctx.text.includes('COUNT-based'), 'no invented sizes');
+  assert.ok(ctx.text.includes('Rolling at banks the rep covers'));
+  assert.ok(ctx.text.includes('Alpha Bank') && ctx.text.includes('nearest in 14d'));
+  assert.ok(ctx.text.includes('maturity calendar') && ctx.text.includes('$12.5MM'));
+  assert.ok(ctx.text.includes('Pershing brokerage footprint: 2 accounts'));
+  assert.ok(ctx.sources.some(s => s.includes('Rollover')));
+});
+
 test('askAssistant folds history into ONE user message as untrusted data (no forged turns)', async () => {
   const calls = [];
   const fake = async req => {
@@ -243,4 +339,4 @@ test('askAssistant: draft-only — result carries drafts, and the module exposes
   }
 });
 
-schedule(18);
+schedule(23);

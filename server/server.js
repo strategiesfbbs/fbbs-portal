@@ -12161,6 +12161,26 @@ const server = http.createServer(async (req, res) => {
         context.market = market;
       } catch (_) { /* market context is optional */ }
 
+      // Lane-conditional grounding blocks (kept out of unrelated questions to
+      // bound prompt size): CD rollover wall + client-portfolio maturities.
+      if (/\broll|\bcds?\b|matur|reprice|funding|renew/i.test(question)) {
+        try { context.rollover = buildCdRolloverWall(new URLSearchParams({ window: '180' })); } catch (_) { /* optional */ }
+      }
+      if (/matur|calendar|runoff|coming due|call(ed|able)?\b|portfolio/i.test(question)) {
+        try { context.maturity = buildMaturityCalendar(new URLSearchParams({ window: '90' }), null); } catch (_) { /* optional */ }
+      }
+      if (bankId && context.bank) {
+        try {
+          const rollups = getPershingRollupsForBanks(BANK_REPORTS_DIR, [bankId], {});
+          const r = rollups.get(String(bankId));
+          if (r) context.pershing = { accountCount: r.accountCount, mostRecentTradeDate: r.mostRecentTradeDate };
+        } catch (_) { /* optional */ }
+      }
+
+      // Possessive questions are rep-scoped by SERVER decision, not model
+      // choice (any screen_banks round runs owner-scoped regardless).
+      const possessive = Boolean(rep) && /\b(my|mine)\b|\bi (cover|own)\b/i.test(question);
+
       try {
         const result = await salesAssistant.askAssistant({
           question,
@@ -12168,6 +12188,7 @@ const server = http.createServer(async (req, res) => {
           context,
           banks,
           rep,
+          enforceOwnerScope: possessive,
           createMessage: claudeClient.createMessage,
           log,
         });
@@ -12178,6 +12199,8 @@ const server = http.createServer(async (req, res) => {
           bankId: bankId || undefined,
           intent: result.intent,
           screened: result.screened ? result.screened.count : undefined,
+          scopeEnforced: possessive || undefined,
+          ungrounded: result.ungroundedNumbers && result.ungroundedNumbers.length ? result.ungroundedNumbers.length : undefined,
           model: result.model,
           usage: result.usage || null,
         });

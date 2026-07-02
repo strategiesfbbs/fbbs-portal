@@ -27570,7 +27570,10 @@
         }),
       });
       const data = await res.json().catch(() => ({}));
-      if (gen !== assistantState.generation) return;
+      if (gen !== assistantState.generation) {
+        if (sendBtn && assistantState.enabled !== false) sendBtn.disabled = false;
+        return;
+      }
       assistantState.busy = false;
       if (res.status === 503 && data && data.enabled === false) {
         assistantState.enabled = false;
@@ -27585,7 +27588,10 @@
         drafts: data.drafts || [],
       });
     } catch (e) {
-      if (gen !== assistantState.generation) return;
+      if (gen !== assistantState.generation) {
+        if (sendBtn && assistantState.enabled !== false) sendBtn.disabled = false;
+        return;
+      }
       assistantState.busy = false;
       // The error row remembers ITS question so Retry re-asks the right one.
       assistantState.history.push({ role: 'assistant', error: true, question: q, text: e.message || 'The assistant hit an error.' });
@@ -27641,6 +27647,8 @@
       assistantState.history = [];
       assistantState.lastQuestion = '';
       assistantState.busy = false;
+      const sendBtn = document.getElementById('assistantSendBtn');
+      if (sendBtn && assistantState.enabled !== false) sendBtn.disabled = false;
       renderAssistantMessages();
     });
     document.addEventListener('keydown', e => {
